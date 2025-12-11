@@ -378,10 +378,10 @@ class DocumentIngestionPipeline:
             if not audio_path.exists():
                 raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
-            # Configure with language auto-detection
+            # Configure with default English (auto-detect not supported with None)
             asr_options = InlineAsrNativeWhisperOptions(
                 repo_id="turbo",
-                language=None,  # Auto-detect language
+                language="en",  # Default to English
                 timestamps=True,
                 word_timestamps=True,
                 verbose=True,

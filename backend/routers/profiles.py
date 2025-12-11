@@ -1,7 +1,7 @@
 """Profile management router."""
 
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from backend.models.schemas import (
     ProfileConfig, ProfileListResponse, ProfileSwitchRequest,
@@ -86,27 +86,41 @@ async def get_active_profile():
 
 
 @router.post("/switch", response_model=SuccessResponse)
-async def switch_profile(request: ProfileSwitchRequest):
+async def switch_profile(request: Request, switch_request: ProfileSwitchRequest):
     """
     Switch to a different profile.
     
     Changes the active profile which affects database and document folder settings.
+    Also switches the database connection to use the new profile's database.
     """
     try:
         pm = get_profile_manager()
         
-        if request.profile_key not in pm.list_profiles():
+        if switch_request.profile_key not in pm.list_profiles():
             raise HTTPException(
                 status_code=404,
-                detail=f"Profile '{request.profile_key}' not found"
+                detail=f"Profile '{switch_request.profile_key}' not found"
             )
         
-        success = pm.switch_profile(request.profile_key)
+        success = pm.switch_profile(switch_request.profile_key)
         
         if success:
+            # Get the new profile's database settings
+            new_profile = pm.active_profile
+            
+            # Switch the database connection
+            db = request.app.state.db
+            await db.switch_database(
+                database=new_profile.database,
+                docs_collection=new_profile.collection_documents,
+                chunks_collection=new_profile.collection_chunks
+            )
+            
+            logger.info(f"Switched to profile '{switch_request.profile_key}' with database '{new_profile.database}'")
+            
             return SuccessResponse(
                 success=True,
-                message=f"Switched to profile: {request.profile_key}"
+                message=f"Switched to profile: {switch_request.profile_key} (database: {new_profile.database})"
             )
         else:
             raise HTTPException(

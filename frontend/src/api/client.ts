@@ -143,6 +143,44 @@ export interface Document {
   metadata: Record<string, unknown>
 }
 
+export interface DocumentChunk {
+  id: string
+  content: string
+  chunk_index: number
+  token_count?: number
+  metadata: Record<string, unknown>
+  created_at?: string
+  has_embedding: boolean
+  embedding_dimensions?: number
+}
+
+export interface DocumentFullInfo {
+  id: string
+  title: string
+  source: string
+  content: string
+  content_length: number
+  created_at?: string
+  metadata: Record<string, unknown>
+  file_path: string
+  file_exists: boolean
+  file_stats?: {
+    size_bytes: number
+    modified_time: number
+    extension: string
+  }
+  chunks: DocumentChunk[]
+  chunks_count: number
+  total_tokens: number
+}
+
+export interface OpenExplorerResponse {
+  success: boolean
+  message: string
+  file_path?: string
+  source?: string
+}
+
 export interface DocumentListResponse {
   documents: Document[]
   total: number
@@ -172,6 +210,63 @@ export interface SystemStats {
     embedding_dimension: number
     default_match_count: number
     database: string
+  }
+}
+
+export interface LLMModel {
+  id: string
+  owned_by: string
+  created?: number
+}
+
+export interface LLMModelsResponse {
+  models: LLMModel[]
+  provider: string
+  cached: boolean
+  fallback?: boolean
+}
+
+export interface EmbeddingModel {
+  id: string
+  dimension: number
+  provider: string
+}
+
+export interface EmbeddingModelsResponse {
+  models: EmbeddingModel[]
+  provider: string
+}
+
+export interface ConfigOptions {
+  current: {
+    llm_model: string
+    embedding_model: string
+    embedding_dimension: number
+    default_match_count: number
+  }
+  options: {
+    embedding_models: EmbeddingModel[]
+    match_count_options: number[]
+    embedding_dimensions: number[]
+  }
+}
+
+export interface ConfigUpdateRequest {
+  llm_model?: string
+  embedding_model?: string
+  embedding_dimension?: number
+  default_match_count?: number
+}
+
+export interface ConfigUpdateResponse {
+  success: boolean
+  message: string
+  updated?: Record<string, unknown>
+  current?: {
+    llm_model: string
+    embedding_model: string
+    embedding_dimension: number
+    default_match_count: number
   }
 }
 
@@ -302,9 +397,30 @@ export const documentsApi = {
     return response.data
   },
 
+  getFullInfo: async (documentId: string): Promise<DocumentFullInfo> => {
+    const response = await api.get(`/ingestion/documents/${documentId}/info`)
+    return response.data
+  },
+
   delete: async (documentId: string) => {
     const response = await api.delete(`/ingestion/documents/${documentId}`)
     return response.data
+  },
+
+  openInExplorer: async (documentId: string): Promise<OpenExplorerResponse> => {
+    const response = await api.post(`/ingestion/documents/${documentId}/open-explorer`)
+    return response.data
+  },
+
+  getFileUrl: (documentId: string): string => {
+    return `${API_BASE}/ingestion/documents/${documentId}/file`
+  },
+
+  findBySource: async (source: string): Promise<Document | null> => {
+    // Search through documents to find by source
+    const response = await api.get('/ingestion/documents', { params: { page: 1, page_size: 100 } })
+    const docs = response.data.documents as Document[]
+    return docs.find(d => d.source === source || d.title === source) || null
   },
 }
 
@@ -378,6 +494,26 @@ export const systemApi = {
 
   databaseStats: async () => {
     const response = await api.get('/system/database-stats')
+    return response.data
+  },
+
+  listLLMModels: async (): Promise<LLMModelsResponse> => {
+    const response = await api.get('/system/models/llm')
+    return response.data
+  },
+
+  listEmbeddingModels: async (): Promise<EmbeddingModelsResponse> => {
+    const response = await api.get('/system/models/embedding')
+    return response.data
+  },
+
+  getConfigOptions: async (): Promise<ConfigOptions> => {
+    const response = await api.get('/system/config/options')
+    return response.data
+  },
+
+  updateConfig: async (update: ConfigUpdateRequest): Promise<ConfigUpdateResponse> => {
+    const response = await api.post('/system/config/update', update)
     return response.data
   },
 }

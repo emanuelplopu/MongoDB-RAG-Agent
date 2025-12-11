@@ -448,6 +448,202 @@ async def delete_document(request: Request, document_id: str):
     )
 
 
+@router.post("/documents/{document_id}/open-explorer")
+async def open_in_explorer(request: Request, document_id: str):
+    """
+    Open the document's folder in OS file explorer.
+    
+    This only works when the backend is running locally (not in Docker).
+    For Docker, it returns the file path for the user to navigate manually.
+    """
+    import subprocess
+    import platform
+    
+    db = request.app.state.db
+    
+    try:
+        doc = await db.documents_collection.find_one({"_id": ObjectId(document_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid document ID format")
+    
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Get the source path from metadata or document source
+    file_path = doc.get("metadata", {}).get("file_path", "")
+    source = doc.get("source", "")
+    
+    if not file_path:
+        # Try to reconstruct from source and profile settings
+        return {
+            "success": False,
+            "message": "File path not available in document metadata",
+            "source": source
+        }
+    
+    # Check if file exists
+    if not os.path.exists(file_path):
+        return {
+            "success": False,
+            "message": f"File not found at: {file_path}",
+            "file_path": file_path
+        }
+    
+    try:
+        folder_path = os.path.dirname(file_path)
+        system = platform.system()
+        
+        if system == "Windows":
+            # Open folder and select the file
+            subprocess.Popen(['explorer', '/select,', file_path])
+        elif system == "Darwin":  # macOS
+            subprocess.Popen(['open', '-R', file_path])
+        else:  # Linux
+            subprocess.Popen(['xdg-open', folder_path])
+        
+        return {
+            "success": True,
+            "message": "Opened in file explorer",
+            "file_path": file_path
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Failed to open explorer: {str(e)}",
+            "file_path": file_path
+        }
+
+
+@router.get("/documents/{document_id}/file")
+async def get_document_file(request: Request, document_id: str):
+    """
+    Serve the document file for browser preview.
+    
+    Returns the file content with appropriate content type for browser display.
+    Supports: PDF, images, text files, HTML, markdown.
+    """
+    from fastapi.responses import FileResponse, Response
+    import mimetypes
+    
+    db = request.app.state.db
+    
+    try:
+        doc = await db.documents_collection.find_one({"_id": ObjectId(document_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid document ID format")
+    
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    file_path = doc.get("metadata", {}).get("file_path", "")
+    
+    if not file_path or not os.path.exists(file_path):
+        # Return the stored content as fallback
+        content = doc.get("content", "")
+        return Response(
+            content=content,
+            media_type="text/plain; charset=utf-8",
+            headers={"Content-Disposition": f'inline; filename="{doc.get("title", "document")}.txt"'}
+        )
+    
+    # Get MIME type
+    mime_type, _ = mimetypes.guess_type(file_path)
+    if mime_type is None:
+        mime_type = "application/octet-stream"
+    
+    # For certain file types, return as FileResponse for direct viewing
+    viewable_types = [
+        "application/pdf",
+        "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml",
+        "text/plain", "text/html", "text/markdown", "text/css", "text/javascript",
+        "application/json", "application/xml"
+    ]
+    
+    filename = os.path.basename(file_path)
+    
+    if mime_type in viewable_types or mime_type.startswith("text/"):
+        return FileResponse(
+            path=file_path,
+            media_type=mime_type,
+            filename=filename,
+            headers={"Content-Disposition": f'inline; filename="{filename}"'}
+        )
+    else:
+        # For non-viewable types (Word, Excel, etc.), return download
+        return FileResponse(
+            path=file_path,
+            media_type=mime_type,
+            filename=filename,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+
+
+@router.get("/documents/{document_id}/info")
+async def get_document_full_info(request: Request, document_id: str):
+    """
+    Get complete document information including all chunks with embeddings metadata.
+    
+    Returns comprehensive data from both documents and chunks collections.
+    """
+    db = request.app.state.db
+    
+    try:
+        doc = await db.documents_collection.find_one({"_id": ObjectId(document_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid document ID format")
+    
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Get all chunks with full details
+    chunks_cursor = db.chunks_collection.find(
+        {"document_id": ObjectId(document_id)}
+    ).sort("chunk_index", 1)
+    
+    chunks = []
+    async for chunk in chunks_cursor:
+        chunk_data = {
+            "id": str(chunk["_id"]),
+            "content": chunk["content"],
+            "chunk_index": chunk.get("chunk_index", 0),
+            "token_count": chunk.get("token_count"),
+            "metadata": chunk.get("metadata", {}),
+            "created_at": chunk.get("created_at"),
+            "has_embedding": "embedding" in chunk and chunk["embedding"] is not None,
+            "embedding_dimensions": len(chunk["embedding"]) if chunk.get("embedding") else None
+        }
+        chunks.append(chunk_data)
+    
+    file_path = doc.get("metadata", {}).get("file_path", "")
+    file_exists = os.path.exists(file_path) if file_path else False
+    
+    # Get file stats if available
+    file_stats = None
+    if file_exists:
+        stat = os.stat(file_path)
+        file_stats = {
+            "size_bytes": stat.st_size,
+            "modified_time": stat.st_mtime,
+            "extension": os.path.splitext(file_path)[1].lower()
+        }
+    
+    return {
+        "id": str(doc["_id"]),
+        "title": doc.get("title", "Untitled"),
+        "source": doc.get("source", "Unknown"),
+        "content": doc.get("content", ""),
+        "content_length": len(doc.get("content", "")),
+        "created_at": doc.get("created_at"),
+        "metadata": doc.get("metadata", {}),
+        "file_path": file_path,
+        "file_exists": file_exists,
+        "file_stats": file_stats,
+        "chunks": chunks,
+        "chunks_count": len(chunks),
+        "total_tokens": sum(c.get("token_count") or 0 for c in chunks)
+    }
+
+
 @router.post("/setup-indexes", response_model=SuccessResponse)
 async def setup_indexes(request: Request):
     """

@@ -3,6 +3,7 @@ import Layout from './components/Layout'
 import ChatPage from './pages/ChatPage'
 import SearchPage from './pages/SearchPage'
 import DocumentsPage from './pages/DocumentsPage'
+import DocumentPreviewPage from './pages/DocumentPreviewPage'
 import ProfilesPage from './pages/ProfilesPage'
 import SystemPage from './pages/SystemPage'
 
@@ -14,6 +15,7 @@ function App() {
         <Route path="chat" element={<ChatPage />} />
         <Route path="search" element={<SearchPage />} />
         <Route path="documents" element={<DocumentsPage />} />
+        <Route path="documents/:documentId" element={<DocumentPreviewPage />} />
         <Route path="profiles" element={<ProfilesPage />} />
         <Route path="system" element={<SystemPage />} />
       </Route>

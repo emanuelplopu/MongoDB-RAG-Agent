@@ -10,10 +10,24 @@ import {
   ExclamationTriangleIcon,
   TrashIcon,
   ClockIcon,
+  Cog6ToothIcon,
 } from '@heroicons/react/24/outline'
-import { systemApi, ingestionApi, SystemStats, IngestionStatus, LogEntry } from '../api/client'
+import { 
+  systemApi, 
+  ingestionApi, 
+  SystemStats, 
+  IngestionStatus, 
+  LogEntry,
+  LLMModel,
+  EmbeddingModel,
+  ConfigUpdateRequest,
+} from '../api/client'
 
 const MAX_LOG_LINES = 50000
+
+// Fallback options
+const FALLBACK_MATCH_COUNTS = [5, 10, 15, 20, 25, 50, 100]
+const FALLBACK_EMBEDDING_DIMENSIONS = [256, 512, 768, 1024, 1536, 3072]
 
 export default function SystemPage() {
   const [stats, setStats] = useState<SystemStats | null>(null)
@@ -26,6 +40,20 @@ export default function SystemPage() {
   const [showLogs, setShowLogs] = useState(false)
   const logsEndRef = useRef<HTMLDivElement>(null)
   const logsContainerRef = useRef<HTMLDivElement>(null)
+
+  // Config state
+  const [llmModels, setLlmModels] = useState<LLMModel[]>([])
+  const [embeddingModels, setEmbeddingModels] = useState<EmbeddingModel[]>([])
+  const [matchCountOptions, setMatchCountOptions] = useState<number[]>(FALLBACK_MATCH_COUNTS)
+  const [isLoadingModels, setIsLoadingModels] = useState(false)
+  const [configValues, setConfigValues] = useState({
+    llm_model: '',
+    embedding_model: '',
+    embedding_dimension: 1536,
+    default_match_count: 10,
+  })
+  const [isSavingConfig, setIsSavingConfig] = useState(false)
+  const [configMessage, setConfigMessage] = useState<string | null>(null)
 
   const fetchData = async () => {
     setIsLoading(true)
@@ -66,7 +94,61 @@ export default function SystemPage() {
 
   useEffect(() => {
     fetchData()
+    fetchModels()
   }, [])
+
+  const fetchModels = async () => {
+    setIsLoadingModels(true)
+    try {
+      const [llmRes, embeddingRes, optionsRes] = await Promise.all([
+        systemApi.listLLMModels(),
+        systemApi.listEmbeddingModels(),
+        systemApi.getConfigOptions(),
+      ])
+      
+      setLlmModels(llmRes.models)
+      setEmbeddingModels(embeddingRes.models)
+      setMatchCountOptions(optionsRes.options.match_count_options)
+      
+      // Set current values
+      setConfigValues({
+        llm_model: optionsRes.current.llm_model,
+        embedding_model: optionsRes.current.embedding_model,
+        embedding_dimension: optionsRes.current.embedding_dimension,
+        default_match_count: optionsRes.current.default_match_count,
+      })
+    } catch (err) {
+      console.error('Error fetching models:', err)
+    } finally {
+      setIsLoadingModels(false)
+    }
+  }
+
+  const handleSaveConfig = async () => {
+    setIsSavingConfig(true)
+    setConfigMessage(null)
+    try {
+      const update: ConfigUpdateRequest = {
+        llm_model: configValues.llm_model,
+        embedding_model: configValues.embedding_model,
+        embedding_dimension: configValues.embedding_dimension,
+        default_match_count: configValues.default_match_count,
+      }
+      const result = await systemApi.updateConfig(update)
+      if (result.success) {
+        setConfigMessage('Configuration saved (runtime only)')
+        fetchData() // Refresh stats
+      } else {
+        setConfigMessage(result.message || 'Failed to save configuration')
+      }
+      setTimeout(() => setConfigMessage(null), 3000)
+    } catch (err) {
+      console.error('Error saving config:', err)
+      setConfigMessage('Failed to save configuration')
+    } finally {
+      setIsSavingConfig(false)
+    }
+  }
 
   // Auto-scroll logs to bottom
   useEffect(() => {
@@ -155,12 +237,12 @@ export default function SystemPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-primary-900">System Status</h2>
-          <p className="text-sm text-secondary">Monitor and manage your RAG system</p>
+          <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-200">System Status</h2>
+          <p className="text-sm text-secondary dark:text-gray-400">Monitor and manage your RAG system</p>
         </div>
         <button
           onClick={fetchData}
-          className="flex items-center gap-2 rounded-xl bg-surface-variant px-4 py-2 text-sm font-medium text-primary-700 transition-all hover:bg-primary-100"
+          className="flex items-center gap-2 rounded-xl bg-surface-variant dark:bg-gray-700 px-4 py-2 text-sm font-medium text-primary-700 dark:text-primary-300 transition-all hover:bg-primary-100 dark:hover:bg-gray-600"
         >
           <ArrowPathIcon className="h-4 w-4" />
           Refresh
@@ -169,76 +251,76 @@ export default function SystemPage() {
 
       {/* Error */}
       {error && (
-        <div className="rounded-2xl bg-red-50 p-4 text-red-700">{error}</div>
+        <div className="rounded-2xl bg-red-50 dark:bg-red-900/30 p-4 text-red-700 dark:text-red-400">{error}</div>
       )}
 
       {/* Stats cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {/* Documents */}
-        <div className="rounded-2xl bg-surface p-5 shadow-elevation-1">
+        <div className="rounded-2xl bg-surface dark:bg-gray-800 p-5 shadow-elevation-1">
           <div className="flex items-center gap-3 mb-3">
-            <div className="rounded-xl bg-primary-100 p-2">
+            <div className="rounded-xl bg-primary-100 dark:bg-primary-900/50 p-2">
               <DocumentTextIcon className="h-5 w-5 text-primary" />
             </div>
-            <span className="text-sm font-medium text-secondary">Documents</span>
+            <span className="text-sm font-medium text-secondary dark:text-gray-400">Documents</span>
           </div>
-          <p className="text-2xl font-semibold text-primary-900">
+          <p className="text-2xl font-semibold text-primary-900 dark:text-gray-200">
             {stats?.database.documents.count || 0}
           </p>
-          <p className="text-xs text-secondary mt-1">
+          <p className="text-xs text-secondary dark:text-gray-500 mt-1">
             {formatBytes(stats?.database.documents.size_bytes || 0)}
           </p>
         </div>
 
         {/* Chunks */}
-        <div className="rounded-2xl bg-surface p-5 shadow-elevation-1">
+        <div className="rounded-2xl bg-surface dark:bg-gray-800 p-5 shadow-elevation-1">
           <div className="flex items-center gap-3 mb-3">
-            <div className="rounded-xl bg-primary-100 p-2">
+            <div className="rounded-xl bg-primary-100 dark:bg-primary-900/50 p-2">
               <CpuChipIcon className="h-5 w-5 text-primary" />
             </div>
-            <span className="text-sm font-medium text-secondary">Chunks</span>
+            <span className="text-sm font-medium text-secondary dark:text-gray-400">Chunks</span>
           </div>
-          <p className="text-2xl font-semibold text-primary-900">
+          <p className="text-2xl font-semibold text-primary-900 dark:text-gray-200">
             {stats?.database.chunks.count || 0}
           </p>
-          <p className="text-xs text-secondary mt-1">
+          <p className="text-xs text-secondary dark:text-gray-500 mt-1">
             {formatBytes(stats?.database.chunks.size_bytes || 0)}
           </p>
         </div>
 
         {/* Database */}
-        <div className="rounded-2xl bg-surface p-5 shadow-elevation-1">
+        <div className="rounded-2xl bg-surface dark:bg-gray-800 p-5 shadow-elevation-1">
           <div className="flex items-center gap-3 mb-3">
-            <div className="rounded-xl bg-primary-100 p-2">
+            <div className="rounded-xl bg-primary-100 dark:bg-primary-900/50 p-2">
               <CircleStackIcon className="h-5 w-5 text-primary" />
             </div>
-            <span className="text-sm font-medium text-secondary">Database</span>
+            <span className="text-sm font-medium text-secondary dark:text-gray-400">Database</span>
           </div>
-          <p className="text-lg font-semibold text-primary-900">
+          <p className="text-lg font-semibold text-primary-900 dark:text-gray-200">
             {stats?.database.database || 'N/A'}
           </p>
         </div>
 
         {/* Model */}
-        <div className="rounded-2xl bg-surface p-5 shadow-elevation-1">
+        <div className="rounded-2xl bg-surface dark:bg-gray-800 p-5 shadow-elevation-1">
           <div className="flex items-center gap-3 mb-3">
-            <div className="rounded-xl bg-primary-100 p-2">
+            <div className="rounded-xl bg-primary-100 dark:bg-primary-900/50 p-2">
               <ServerIcon className="h-5 w-5 text-primary" />
             </div>
-            <span className="text-sm font-medium text-secondary">LLM Model</span>
+            <span className="text-sm font-medium text-secondary dark:text-gray-400">LLM Model</span>
           </div>
-          <p className="text-sm font-semibold text-primary-900 truncate">
+          <p className="text-sm font-semibold text-primary-900 dark:text-gray-200 truncate">
             {stats?.config.llm_model || 'N/A'}
           </p>
-          <p className="text-xs text-secondary mt-1">{stats?.config.llm_provider}</p>
+          <p className="text-xs text-secondary dark:text-gray-500 mt-1">{stats?.config.llm_provider}</p>
         </div>
       </div>
 
       {/* Indexes */}
-      <div className="rounded-2xl bg-surface p-6 shadow-elevation-1">
-        <h3 className="text-lg font-medium text-primary-900 mb-4">Search Indexes</h3>
+      <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+        <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200 mb-4">Search Indexes</h3>
         {stats?.indexes?.error ? (
-          <div className="rounded-xl bg-amber-50 p-4 text-amber-700">
+          <div className="rounded-xl bg-amber-50 dark:bg-amber-900/30 p-4 text-amber-700 dark:text-amber-400">
             <p className="font-medium">Indexes not available</p>
             <p className="text-sm mt-1">Run ingestion to create the required collections and indexes.</p>
           </div>
@@ -247,22 +329,22 @@ export default function SystemPage() {
             {stats.indexes.indexes.map((index, i) => (
               <div
                 key={i}
-                className="flex items-center justify-between rounded-xl bg-surface-variant p-4"
+                className="flex items-center justify-between rounded-xl bg-surface-variant dark:bg-gray-700 p-4"
               >
                 <div>
-                  <p className="font-medium text-primary-900">{index.name}</p>
-                  <p className="text-sm text-secondary">{index.type}</p>
+                  <p className="font-medium text-primary-900 dark:text-gray-200">{index.name}</p>
+                  <p className="text-sm text-secondary dark:text-gray-400">{index.type}</p>
                 </div>
                 <div className="flex items-center gap-2">
                   {index.status === 'READY' ? (
                     <>
                       <CheckCircleIcon className="h-5 w-5 text-green-500" />
-                      <span className="text-sm font-medium text-green-700">Ready</span>
+                      <span className="text-sm font-medium text-green-700 dark:text-green-400">Ready</span>
                     </>
                   ) : (
                     <>
                       <ExclamationTriangleIcon className="h-5 w-5 text-amber-500" />
-                      <span className="text-sm font-medium text-amber-700">{index.status}</span>
+                      <span className="text-sm font-medium text-amber-700 dark:text-amber-400">{index.status}</span>
                     </>
                   )}
                 </div>
@@ -270,14 +352,14 @@ export default function SystemPage() {
             ))}
           </div>
         ) : (
-          <p className="text-secondary">No indexes found. Run ingestion to create search indexes.</p>
+          <p className="text-secondary dark:text-gray-400">No indexes found. Run ingestion to create search indexes.</p>
         )}
       </div>
 
       {/* Ingestion */}
-      <div className="rounded-2xl bg-surface p-6 shadow-elevation-1">
+      <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-medium text-primary-900">Ingestion</h3>
+          <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Ingestion</h3>
           <div className="flex gap-2">
             <button
               onClick={() => handleStartIngestion(true)}
@@ -290,7 +372,7 @@ export default function SystemPage() {
             <button
               onClick={() => handleStartIngestion(false)}
               disabled={isIngesting}
-              className="flex items-center gap-2 rounded-xl bg-surface-variant px-4 py-2 text-sm font-medium text-primary-700 transition-all hover:bg-primary-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 rounded-xl bg-surface-variant dark:bg-gray-700 px-4 py-2 text-sm font-medium text-primary-700 dark:text-primary-300 transition-all hover:bg-primary-100 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Full Reindex
             </button>
@@ -305,12 +387,12 @@ export default function SystemPage() {
                 <span
                   className={`inline-flex items-center gap-1 rounded-lg px-3 py-1 text-sm font-medium ${
                     ingestionStatus.status === 'completed'
-                      ? 'bg-green-100 text-green-700'
+                      ? 'bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-400'
                       : ingestionStatus.status === 'running'
-                      ? 'bg-primary-100 text-primary-700'
+                      ? 'bg-primary-100 dark:bg-primary-900/50 text-primary-700 dark:text-primary-300'
                       : ingestionStatus.status === 'failed'
-                      ? 'bg-red-100 text-red-700'
-                      : 'bg-surface-variant text-secondary'
+                      ? 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-400'
+                      : 'bg-surface-variant dark:bg-gray-700 text-secondary dark:text-gray-400'
                   }`}
                 >
                   {ingestionStatus.status === 'running' && (
@@ -323,12 +405,12 @@ export default function SystemPage() {
               {/* Time info */}
               {(ingestionStatus.status === 'running' || ingestionStatus.elapsed_seconds > 0) && (
                 <div className="flex items-center gap-4 text-sm">
-                  <div className="flex items-center gap-1 text-secondary">
+                  <div className="flex items-center gap-1 text-secondary dark:text-gray-400">
                     <ClockIcon className="h-4 w-4" />
                     <span>Elapsed: {formatTime(ingestionStatus.elapsed_seconds)}</span>
                   </div>
                   {ingestionStatus.status === 'running' && ingestionStatus.estimated_remaining_seconds && (
-                    <div className="text-secondary">
+                    <div className="text-secondary dark:text-gray-400">
                       ETA: {formatTime(ingestionStatus.estimated_remaining_seconds)}
                     </div>
                   )}
@@ -339,7 +421,7 @@ export default function SystemPage() {
             {ingestionStatus.status === 'running' && (
               <>
                 {/* Progress bar */}
-                <div className="w-full rounded-full bg-surface-variant h-3">
+                <div className="w-full rounded-full bg-surface-variant dark:bg-gray-700 h-3">
                   <div
                     className="bg-primary h-3 rounded-full transition-all flex items-center justify-end pr-2"
                     style={{ width: `${Math.max(ingestionStatus.progress_percent, 2)}%` }}
@@ -355,22 +437,22 @@ export default function SystemPage() {
                 {/* Stats grid */}
                 <div className="grid grid-cols-4 gap-4 text-sm">
                   <div>
-                    <p className="text-secondary">Processed</p>
-                    <p className="font-medium text-primary-900">
+                    <p className="text-secondary dark:text-gray-400">Processed</p>
+                    <p className="font-medium text-primary-900 dark:text-gray-200">
                       {ingestionStatus.processed_files} / {ingestionStatus.total_files}
                     </p>
                   </div>
                   <div>
-                    <p className="text-secondary">Chunks Created</p>
-                    <p className="font-medium text-primary-900">{ingestionStatus.chunks_created}</p>
+                    <p className="text-secondary dark:text-gray-400">Chunks Created</p>
+                    <p className="font-medium text-primary-900 dark:text-gray-200">{ingestionStatus.chunks_created}</p>
                   </div>
                   <div>
-                    <p className="text-secondary">Failed Files</p>
-                    <p className="font-medium text-primary-900">{ingestionStatus.failed_files}</p>
+                    <p className="text-secondary dark:text-gray-400">Failed Files</p>
+                    <p className="font-medium text-primary-900 dark:text-gray-200">{ingestionStatus.failed_files}</p>
                   </div>
                   <div>
-                    <p className="text-secondary">Current File</p>
-                    <p className="font-medium text-primary-900 truncate" title={ingestionStatus.current_file || 'N/A'}>
+                    <p className="text-secondary dark:text-gray-400">Current File</p>
+                    <p className="font-medium text-primary-900 dark:text-gray-200 truncate" title={ingestionStatus.current_file || 'N/A'}>
                       {ingestionStatus.current_file?.split('/').pop() || 'N/A'}
                     </p>
                   </div>
@@ -379,9 +461,9 @@ export default function SystemPage() {
             )}
 
             {ingestionStatus.errors.length > 0 && (
-              <div className="rounded-xl bg-red-50 p-4">
-                <p className="font-medium text-red-700 mb-2">Errors ({ingestionStatus.errors.length})</p>
-                <ul className="space-y-1 text-sm text-red-600 max-h-32 overflow-y-auto">
+              <div className="rounded-xl bg-red-50 dark:bg-red-900/30 p-4">
+                <p className="font-medium text-red-700 dark:text-red-400 mb-2">Errors ({ingestionStatus.errors.length})</p>
+                <ul className="space-y-1 text-sm text-red-600 dark:text-red-400 max-h-32 overflow-y-auto">
                   {ingestionStatus.errors.slice(0, 10).map((err, i) => (
                     <li key={i}>{err}</li>
                   ))}
@@ -394,21 +476,21 @@ export default function SystemPage() {
 
       {/* Logs Panel */}
       {(showLogs || logs.length > 0) && (
-        <div className="rounded-2xl bg-surface p-6 shadow-elevation-1">
+        <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-medium text-primary-900">
+            <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">
               Ingestion Logs ({logs.length.toLocaleString()} lines)
             </h3>
             <div className="flex gap-2">
               <button
                 onClick={() => setShowLogs(!showLogs)}
-                className="rounded-xl bg-surface-variant px-3 py-1.5 text-sm font-medium text-primary-700 transition-all hover:bg-primary-100"
+                className="rounded-xl bg-surface-variant dark:bg-gray-700 px-3 py-1.5 text-sm font-medium text-primary-700 dark:text-primary-300 transition-all hover:bg-primary-100 dark:hover:bg-gray-600"
               >
                 {showLogs ? 'Collapse' : 'Expand'}
               </button>
               <button
                 onClick={handleClearLogs}
-                className="flex items-center gap-1 rounded-xl bg-surface-variant px-3 py-1.5 text-sm font-medium text-red-600 transition-all hover:bg-red-100"
+                className="flex items-center gap-1 rounded-xl bg-surface-variant dark:bg-gray-700 px-3 py-1.5 text-sm font-medium text-red-600 dark:text-red-400 transition-all hover:bg-red-100 dark:hover:bg-red-900/30"
               >
                 <TrashIcon className="h-4 w-4" />
                 Clear
@@ -450,25 +532,123 @@ export default function SystemPage() {
       )}
 
       {/* Configuration */}
-      {stats?.config && (
-        <div className="rounded-2xl bg-surface p-6 shadow-elevation-1">
-          <h3 className="text-lg font-medium text-primary-900 mb-4">Configuration</h3>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            <div className="rounded-xl bg-surface-variant p-4">
-              <p className="text-sm text-secondary">Embedding Model</p>
-              <p className="font-medium text-primary-900">{stats.config.embedding_model || 'N/A'}</p>
-            </div>
-            <div className="rounded-xl bg-surface-variant p-4">
-              <p className="text-sm text-secondary">Embedding Dimension</p>
-              <p className="font-medium text-primary-900">{stats.config.embedding_dimension || 'N/A'}</p>
-            </div>
-            <div className="rounded-xl bg-surface-variant p-4">
-              <p className="text-sm text-secondary">Default Match Count</p>
-              <p className="font-medium text-primary-900">{stats.config.default_match_count || 'N/A'}</p>
-            </div>
+      <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Cog6ToothIcon className="h-5 w-5 text-primary" />
+            <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Configuration</h3>
+          </div>
+          <div className="flex items-center gap-2">
+            {isLoadingModels && (
+              <ArrowPathIcon className="h-4 w-4 animate-spin text-primary" />
+            )}
+            <button
+              onClick={handleSaveConfig}
+              disabled={isSavingConfig}
+              className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white transition-all hover:bg-primary-700 disabled:opacity-50"
+            >
+              {isSavingConfig ? 'Saving...' : 'Save Changes'}
+            </button>
           </div>
         </div>
-      )}
+
+        {configMessage && (
+          <div className={`mb-4 p-3 rounded-xl text-sm ${
+            configMessage.includes('Failed') 
+              ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
+              : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+          }`}>
+            {configMessage}
+          </div>
+        )}
+
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {/* LLM Model */}
+          <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+            <label className="block text-sm text-secondary dark:text-gray-400 mb-2">LLM Model</label>
+            <select
+              value={configValues.llm_model}
+              onChange={(e) => setConfigValues({ ...configValues, llm_model: e.target.value })}
+              className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+            >
+              {llmModels.length === 0 && configValues.llm_model && (
+                <option value={configValues.llm_model}>{configValues.llm_model}</option>
+              )}
+              {llmModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.id}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-secondary dark:text-gray-500 mt-1">
+              {llmModels.length} models available
+            </p>
+          </div>
+
+          {/* Embedding Model */}
+          <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+            <label className="block text-sm text-secondary dark:text-gray-400 mb-2">Embedding Model</label>
+            <select
+              value={configValues.embedding_model}
+              onChange={(e) => {
+                const model = embeddingModels.find(m => m.id === e.target.value)
+                setConfigValues({ 
+                  ...configValues, 
+                  embedding_model: e.target.value,
+                  embedding_dimension: model?.dimension || configValues.embedding_dimension
+                })
+              }}
+              className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+            >
+              {embeddingModels.length === 0 && configValues.embedding_model && (
+                <option value={configValues.embedding_model}>{configValues.embedding_model}</option>
+              )}
+              {embeddingModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.id} ({model.dimension}d)
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Embedding Dimension */}
+          <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+            <label className="block text-sm text-secondary dark:text-gray-400 mb-2">Embedding Dimension</label>
+            <select
+              value={configValues.embedding_dimension}
+              onChange={(e) => setConfigValues({ ...configValues, embedding_dimension: Number(e.target.value) })}
+              className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+            >
+              {FALLBACK_EMBEDDING_DIMENSIONS.map((dim) => (
+                <option key={dim} value={dim}>
+                  {dim}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Default Match Count */}
+          <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+            <label className="block text-sm text-secondary dark:text-gray-400 mb-2">Default Match Count</label>
+            <select
+              value={configValues.default_match_count}
+              onChange={(e) => setConfigValues({ ...configValues, default_match_count: Number(e.target.value) })}
+              className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+            >
+              {matchCountOptions.map((count) => (
+                <option key={count} value={count}>
+                  {count}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <p className="text-xs text-secondary dark:text-gray-500 mt-4">
+          Note: Changes are applied at runtime only and will reset on server restart. 
+          For permanent changes, update environment variables.
+        </p>
+      </div>
     </div>
   )
 }

@@ -2,8 +2,11 @@
 
 import logging
 import time
+import httpx
 from datetime import datetime
-from fastapi import APIRouter, Request
+from typing import Optional, List
+from fastapi import APIRouter, Request, HTTPException
+from pydantic import BaseModel
 
 from backend.models.schemas import (
     HealthResponse, SystemStatsResponse, ConfigResponse
@@ -16,6 +19,46 @@ router = APIRouter()
 
 # Track startup time
 _startup_time = datetime.now()
+
+# Available embedding models (fallback list for OpenAI)
+EMBEDDING_MODELS_FALLBACK = [
+    {"id": "text-embedding-3-small", "dimension": 1536, "provider": "openai"},
+    {"id": "text-embedding-3-large", "dimension": 3072, "provider": "openai"},
+    {"id": "text-embedding-ada-002", "dimension": 1536, "provider": "openai"},
+]
+
+# Known embedding model dimensions
+EMBEDDING_DIMENSIONS = {
+    "text-embedding-3-small": 1536,
+    "text-embedding-3-large": 3072,
+    "text-embedding-ada-002": 1536,
+    # New models may have different dimensions
+    "text-embedding-4": 3072,
+    "text-embedding-4-small": 1536,
+    "text-embedding-4-large": 3072,
+}
+
+# Default match count options
+MATCH_COUNT_OPTIONS = [5, 10, 15, 20, 25, 50, 100]
+
+
+class ConfigUpdateRequest(BaseModel):
+    llm_model: Optional[str] = None
+    embedding_model: Optional[str] = None
+    embedding_dimension: Optional[int] = None
+    default_match_count: Optional[int] = None
+
+
+class ModelInfo(BaseModel):
+    id: str
+    owned_by: str
+    created: Optional[int] = None
+
+
+class ModelsResponse(BaseModel):
+    models: List[ModelInfo]
+    provider: str
+    cached: bool = False
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -209,3 +252,272 @@ async def get_database_stats(request: Request):
     except Exception as e:
         logger.error(f"Failed to get database stats: {e}")
         return {"error": str(e)}
+
+
+# Cache for models list (expires after 5 minutes)
+_models_cache: dict = {
+    "models": [],
+    "timestamp": 0,
+    "ttl": 300  # 5 minutes
+}
+
+
+@router.get("/models/llm")
+async def list_llm_models():
+    """
+    List available LLM models from OpenAI.
+    
+    Fetches models from the OpenAI API and filters to show only chat models.
+    Results are cached for 5 minutes.
+    """
+    import time as time_module
+    
+    current_time = time_module.time()
+    
+    # Check cache
+    if _models_cache["models"] and (current_time - _models_cache["timestamp"]) < _models_cache["ttl"]:
+        return {
+            "models": _models_cache["models"],
+            "provider": "openai",
+            "cached": True
+        }
+    
+    # Fetch from OpenAI
+    api_key = settings.llm_api_key or settings.embedding_api_key
+    if not api_key:
+        # Return fallback list if no API key
+        fallback_models = [
+            {"id": "gpt-5.2", "owned_by": "openai", "created": None},
+            {"id": "gpt-5", "owned_by": "openai", "created": None},
+            {"id": "gpt-4o", "owned_by": "openai", "created": None},
+            {"id": "gpt-4o-mini", "owned_by": "openai", "created": None},
+            {"id": "gpt-4.1", "owned_by": "openai", "created": None},
+            {"id": "gpt-4-turbo", "owned_by": "openai", "created": None},
+            {"id": "gpt-4", "owned_by": "openai", "created": None},
+            {"id": "gpt-3.5-turbo", "owned_by": "openai", "created": None},
+            {"id": "o1-preview", "owned_by": "openai", "created": None},
+            {"id": "o1-mini", "owned_by": "openai", "created": None},
+        ]
+        return {
+            "models": fallback_models,
+            "provider": "openai",
+            "cached": False,
+            "fallback": True
+        }
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://api.openai.com/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=10.0
+            )
+            response.raise_for_status()
+            data = response.json()
+        
+        # Filter to show relevant chat/completion models
+        models = []
+        for model in data.get("data", []):
+            model_id = model.get("id", "")
+            # Include GPT models (all versions), O1 models, and other chat-capable models
+            if any(prefix in model_id.lower() for prefix in ["gpt-", "o1-", "o3-", "o4-", "chatgpt"]):
+                models.append({
+                    "id": model_id,
+                    "owned_by": model.get("owned_by", "unknown"),
+                    "created": model.get("created")
+                })
+        
+        # Sort by model ID (prefer gpt-5 first, then gpt-4o, then gpt-4, then others)
+        def sort_key(m):
+            mid = m["id"]
+            if "gpt-5" in mid:
+                return (0, mid)
+            elif "gpt-4o" in mid:
+                return (1, mid)
+            elif "gpt-4.1" in mid:
+                return (2, mid)
+            elif "gpt-4" in mid:
+                return (3, mid)
+            elif "o1-" in mid or "o3-" in mid:
+                return (4, mid)
+            elif "gpt-3.5" in mid:
+                return (5, mid)
+            return (9, mid)
+        
+        models.sort(key=sort_key)
+        
+        # Update cache
+        _models_cache["models"] = models
+        _models_cache["timestamp"] = current_time
+        
+        return {
+            "models": models,
+            "provider": "openai",
+            "cached": False
+        }
+        
+    except httpx.HTTPStatusError as e:
+        logger.error(f"OpenAI API error: {e.response.status_code}")
+        raise HTTPException(status_code=e.response.status_code, detail="Failed to fetch models from OpenAI")
+    except Exception as e:
+        logger.error(f"Failed to fetch models: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Cache for embedding models
+_embedding_models_cache = {
+    "models": None,
+    "timestamp": 0
+}
+
+
+@router.get("/models/embedding")
+async def list_embedding_models():
+    """
+    List available embedding models from OpenAI API.
+    
+    Returns embedding models with their dimensions, cached for 5 minutes.
+    """
+    current_time = time.time()
+    cache_ttl = 300  # 5 minutes
+    
+    # Check cache
+    if (_embedding_models_cache["models"] is not None and 
+        current_time - _embedding_models_cache["timestamp"] < cache_ttl):
+        return {
+            "models": _embedding_models_cache["models"],
+            "provider": "openai",
+            "cached": True
+        }
+    
+    # Try to fetch from OpenAI
+    api_key = settings.embedding_api_key or settings.llm_api_key
+    if not api_key:
+        return {
+            "models": EMBEDDING_MODELS_FALLBACK,
+            "provider": "openai",
+            "fallback": True
+        }
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://api.openai.com/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=10.0
+            )
+            response.raise_for_status()
+            data = response.json()
+        
+        # Filter for embedding models
+        models = []
+        for model in data.get("data", []):
+            model_id = model.get("id", "")
+            if "embed" in model_id.lower():
+                # Get dimension from known list or default
+                dimension = EMBEDDING_DIMENSIONS.get(model_id, 1536)
+                models.append({
+                    "id": model_id,
+                    "dimension": dimension,
+                    "provider": "openai"
+                })
+        
+        # Sort: prefer text-embedding-4 first, then 3, then ada
+        def sort_key(m):
+            mid = m["id"]
+            if "text-embedding-4" in mid:
+                return (0, mid)
+            elif "text-embedding-3-large" in mid:
+                return (1, mid)
+            elif "text-embedding-3-small" in mid:
+                return (2, mid)
+            elif "text-embedding-3" in mid:
+                return (3, mid)
+            return (9, mid)
+        
+        models.sort(key=sort_key)
+        
+        # Update cache
+        _embedding_models_cache["models"] = models
+        _embedding_models_cache["timestamp"] = current_time
+        
+        return {
+            "models": models if models else EMBEDDING_MODELS_FALLBACK,
+            "provider": "openai",
+            "cached": False
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to fetch embedding models: {e}")
+        return {
+            "models": EMBEDDING_MODELS_FALLBACK,
+            "provider": "openai",
+            "fallback": True,
+            "error": str(e)
+        }
+
+
+@router.get("/config/options")
+async def get_config_options():
+    """
+    Get available configuration options.
+    
+    Returns the current config values and available options for dropdowns.
+    """
+    return {
+        "current": {
+            "llm_model": settings.llm_model,
+            "embedding_model": settings.embedding_model,
+            "embedding_dimension": settings.embedding_dimension,
+            "default_match_count": settings.default_match_count,
+        },
+        "options": {
+            "embedding_models": EMBEDDING_MODELS_FALLBACK,
+            "match_count_options": MATCH_COUNT_OPTIONS,
+            "embedding_dimensions": [256, 512, 768, 1024, 1536, 3072],
+        }
+    }
+
+
+@router.post("/config/update")
+async def update_config(update: ConfigUpdateRequest):
+    """
+    Update runtime configuration.
+    
+    Updates configuration values in memory. These changes persist until restart.
+    For permanent changes, update environment variables.
+    """
+    updated = {}
+    
+    if update.llm_model is not None:
+        settings.llm_model = update.llm_model
+        updated["llm_model"] = update.llm_model
+    
+    if update.embedding_model is not None:
+        settings.embedding_model = update.embedding_model
+        updated["embedding_model"] = update.embedding_model
+    
+    if update.embedding_dimension is not None:
+        settings.embedding_dimension = update.embedding_dimension
+        updated["embedding_dimension"] = update.embedding_dimension
+    
+    if update.default_match_count is not None:
+        settings.default_match_count = update.default_match_count
+        updated["default_match_count"] = update.default_match_count
+    
+    if not updated:
+        return {"success": False, "message": "No fields to update"}
+    
+    logger.info(f"Configuration updated: {updated}")
+    
+    return {
+        "success": True,
+        "message": "Configuration updated (runtime only)",
+        "updated": updated,
+        "current": {
+            "llm_model": settings.llm_model,
+            "embedding_model": settings.embedding_model,
+            "embedding_dimension": settings.embedding_dimension,
+            "default_match_count": settings.default_match_count,
+        }
+    }
