@@ -8,6 +8,7 @@ dependencies = [
     "pydantic-settings>=2.7.0",
     "pydantic-ai>=0.1.0",
     "pymongo>=4.10.0",
+    "motor>=3.6.0",
     "openai>=1.58.0",
     "docling>=2.14.0",
     "docling-core>=2.4.0",
@@ -17,6 +18,9 @@ dependencies = [
     "aiofiles>=24.1.0",
     "openai-whisper>=20240930",
     "pyyaml>=6.0.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "httpx>=0.27.0",
 ]
 
 [build-system]
