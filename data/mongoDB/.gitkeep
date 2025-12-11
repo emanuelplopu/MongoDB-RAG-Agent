@@ -1,0 +1,2 @@
+# This file ensures the mongoDB data folder exists
+# The actual MongoDB data is git-ignored

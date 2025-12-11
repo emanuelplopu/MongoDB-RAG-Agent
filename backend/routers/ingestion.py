@@ -3,9 +3,11 @@
 import logging
 import asyncio
 import uuid
+from collections import deque
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from bson import ObjectId
 
 from backend.models.schemas import (
@@ -21,12 +23,54 @@ router = APIRouter()
 # Track ingestion jobs (use Redis in production)
 _ingestion_jobs: Dict[str, dict] = {}
 
+# Log buffer with max 50000 lines
+MAX_LOG_LINES = 50000
+_ingestion_logs: deque = deque(maxlen=MAX_LOG_LINES)
+
+
+class IngestionLogHandler(logging.Handler):
+    """Custom handler to capture logs during ingestion."""
+    
+    def emit(self, record: logging.LogRecord):
+        try:
+            log_entry = {
+                "timestamp": datetime.now().isoformat(),
+                "level": record.levelname,
+                "message": self.format(record),
+                "logger": record.name
+            }
+            _ingestion_logs.append(log_entry)
+        except Exception:
+            pass
+
+
+# Install log handler for ingestion
+_log_handler = IngestionLogHandler()
+_log_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+_log_handler.setLevel(logging.DEBUG)
+
 
 async def run_ingestion(job_id: str, config: dict):
     """Run ingestion in background."""
+    # Clear logs and add handler
+    _ingestion_logs.clear()
+    
+    # Add log handler to capture all ingestion logs
+    root_logger = logging.getLogger()
+    src_logger = logging.getLogger("src")
+    root_logger.addHandler(_log_handler)
+    src_logger.addHandler(_log_handler)
+    
     try:
         _ingestion_jobs[job_id]["status"] = IngestionStatus.RUNNING
         _ingestion_jobs[job_id]["started_at"] = datetime.now()
+        
+        _ingestion_logs.append({
+            "timestamp": datetime.now().isoformat(),
+            "level": "INFO",
+            "message": f"Starting ingestion job {job_id}",
+            "logger": "ingestion"
+        })
         
         # Import ingestion module
         from src.ingestion.ingest import DocumentIngestionPipeline, IngestionConfig
@@ -36,6 +80,12 @@ async def run_ingestion(job_id: str, config: dict):
         if config.get("profile"):
             pm = get_profile_manager()
             pm.switch_profile(config["profile"])
+            _ingestion_logs.append({
+                "timestamp": datetime.now().isoformat(),
+                "level": "INFO",
+                "message": f"Switched to profile: {config['profile']}",
+                "logger": "ingestion"
+            })
         
         # Create ingestion config
         ing_config = IngestionConfig(
@@ -54,10 +104,18 @@ async def run_ingestion(job_id: str, config: dict):
         )
         
         # Track progress
-        def progress_callback(current: int, total: int):
+        def progress_callback(current: int, total: int, current_file: str = None):
             _ingestion_jobs[job_id]["processed_files"] = current
             _ingestion_jobs[job_id]["total_files"] = total
             _ingestion_jobs[job_id]["progress_percent"] = (current / total * 100) if total > 0 else 0
+            if current_file:
+                _ingestion_jobs[job_id]["current_file"] = current_file
+                _ingestion_logs.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "level": "INFO",
+                    "message": f"Processing ({current}/{total}): {current_file}",
+                    "logger": "ingestion"
+                })
         
         # Run ingestion
         results = await pipeline.ingest_documents(
@@ -76,11 +134,28 @@ async def run_ingestion(job_id: str, config: dict):
         ][:20]  # Limit errors stored
         _ingestion_jobs[job_id]["progress_percent"] = 100.0
         
+        _ingestion_logs.append({
+            "timestamp": datetime.now().isoformat(),
+            "level": "INFO",
+            "message": f"Ingestion completed. Files: {len(results)}, Chunks: {_ingestion_jobs[job_id]['chunks_created']}",
+            "logger": "ingestion"
+        })
+        
     except Exception as e:
         logger.error(f"Ingestion job {job_id} failed: {e}")
         _ingestion_jobs[job_id]["status"] = IngestionStatus.FAILED
         _ingestion_jobs[job_id]["errors"] = [str(e)]
         _ingestion_jobs[job_id]["completed_at"] = datetime.now()
+        _ingestion_logs.append({
+            "timestamp": datetime.now().isoformat(),
+            "level": "ERROR",
+            "message": f"Ingestion failed: {str(e)}",
+            "logger": "ingestion"
+        })
+    finally:
+        # Remove log handler
+        root_logger.removeHandler(_log_handler)
+        src_logger.removeHandler(_log_handler)
 
 
 @router.post("/start", response_model=IngestionStatusResponse)
@@ -137,7 +212,8 @@ async def get_ingestion_status():
             job_id=None,
             total_files=0,
             processed_files=0,
-            progress_percent=0.0
+            progress_percent=0.0,
+            elapsed_seconds=0.0
         )
     
     # Get most recent job
@@ -146,7 +222,28 @@ async def get_ingestion_status():
         key=lambda j: j.get("started_at") or datetime.min
     )
     
-    return IngestionStatusResponse(**latest_job)
+    # Calculate elapsed time and ETA
+    elapsed_seconds = 0.0
+    estimated_remaining = None
+    
+    if latest_job.get("started_at"):
+        if latest_job.get("completed_at"):
+            elapsed_seconds = (latest_job["completed_at"] - latest_job["started_at"]).total_seconds()
+        else:
+            elapsed_seconds = (datetime.now() - latest_job["started_at"]).total_seconds()
+        
+        # Calculate ETA if running
+        if latest_job["status"] == IngestionStatus.RUNNING:
+            progress = latest_job.get("progress_percent", 0)
+            if progress > 0:
+                total_estimated = elapsed_seconds / (progress / 100)
+                estimated_remaining = max(0, total_estimated - elapsed_seconds)
+    
+    return IngestionStatusResponse(
+        **{k: v for k, v in latest_job.items() if k not in ["elapsed_seconds", "estimated_remaining_seconds"]},
+        elapsed_seconds=elapsed_seconds,
+        estimated_remaining_seconds=estimated_remaining
+    )
 
 
 @router.get("/status/{job_id}", response_model=IngestionStatusResponse)
@@ -197,6 +294,46 @@ async def list_ingestion_jobs():
             for job in _ingestion_jobs.values()
         ]
     }
+
+
+@router.get("/logs")
+async def get_ingestion_logs(since: int = 0, limit: int = 1000):
+    """
+    Get ingestion logs.
+    
+    Args:
+        since: Return logs after this index (for incremental fetching)
+        limit: Maximum number of logs to return (default 1000, max 5000)
+    
+    Returns:
+        List of log entries with their index
+    """
+    limit = min(limit, 5000)  # Cap at 5000 per request
+    logs_list = list(_ingestion_logs)
+    total = len(logs_list)
+    
+    # Return logs after 'since' index
+    if since > 0 and since < total:
+        logs_list = logs_list[since:since + limit]
+        start_index = since
+    else:
+        # Return latest logs
+        logs_list = logs_list[-limit:] if len(logs_list) > limit else logs_list
+        start_index = max(0, total - limit)
+    
+    return {
+        "logs": logs_list,
+        "total": total,
+        "start_index": start_index,
+        "max_lines": MAX_LOG_LINES
+    }
+
+
+@router.delete("/logs")
+async def clear_logs():
+    """Clear all ingestion logs."""
+    _ingestion_logs.clear()
+    return SuccessResponse(success=True, message="Logs cleared")
 
 
 @router.get("/documents", response_model=DocumentListResponse)

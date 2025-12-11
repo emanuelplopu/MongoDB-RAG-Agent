@@ -1,15 +1,23 @@
-# MongoDB RAG Agent - Docker Compose
-# Run locally with MongoDB Atlas Local (includes Vector Search support)
+# MongoDB RAG Agent - Full Stack Docker Compose
+# All services run on ports 11000-11100
+#
+# Port Assignments:
+#   - MongoDB:  11017
+#   - Backend:  11000
+#   - Frontend: 11080
 
 services:
-  # MongoDB Atlas Local - includes Vector Search & Atlas Search
+  # ===========================================
+  # MongoDB Atlas Local - Vector Search & Atlas Search
+  # ===========================================
   mongodb:
     image: mongodb/mongodb-atlas-local:8.0
-    container_name: mongodb-rag
+    container_name: rag-mongodb
     ports:
-      - "27017:27017"
+      - "11017:27017"
     volumes:
-      - mongodb_data:/data/db
+      - ./data/mongoDB/db:/data/db
+      - ./data/mongoDB/configdb:/data/configdb
       - ./scripts:/docker-entrypoint-initdb.d:ro
     environment:
       - DO_NOT_TRACK=1
@@ -21,26 +29,31 @@ services:
       start_period: 30s
     networks:
       - rag-network
+    restart: unless-stopped
 
-  # RAG Agent Application
-  app:
+  # ===========================================
+  # Backend - FastAPI REST API
+  # ===========================================
+  backend:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: rag-agent
+      dockerfile: backend/Dockerfile
+    container_name: rag-backend
+    ports:
+      - "11000:8000"
     depends_on:
       mongodb:
         condition: service_healthy
     environment:
-      # MongoDB connection (local container)
+      # MongoDB connection (internal container network)
       - MONGODB_URI=mongodb://mongodb:27017/?directConnection=true
       - MONGODB_DATABASE=${MONGODB_DATABASE:-rag_db}
       
-      # LLM Configuration (uses external API by default)
-      - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
+      # LLM Configuration
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
       - LLM_API_KEY=${LLM_API_KEY}
-      - LLM_MODEL=${LLM_MODEL:-anthropic/claude-haiku-4.5}
-      - LLM_BASE_URL=${LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4.1-mini}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.openai.com/v1}
       
       # Embedding Configuration
       - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-openai}
@@ -53,7 +66,57 @@ services:
       - PROFILES_PATH=/app/profiles.yaml
       - ACTIVE_PROFILE=${ACTIVE_PROFILE:-default}
     volumes:
-      # Mount documents and profiles for easy editing
+      - ./documents:/app/documents
+      - ./projects:/app/projects
+      - ./profiles.yaml:/app/profiles.yaml
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+  # ===========================================
+  # Frontend - React + Vite (served by nginx)
+  # ===========================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: rag-frontend
+    ports:
+      - "11080:80"
+    depends_on:
+      - backend
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+  # ===========================================
+  # CLI Agent (optional - for terminal access)
+  # ===========================================
+  cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag-cli
+    profiles:
+      - cli
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017/?directConnection=true
+      - MONGODB_DATABASE=${MONGODB_DATABASE:-rag_db}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4.1-mini}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.openai.com/v1}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-openai}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-https://api.openai.com/v1}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-1536}
+      - PROFILES_PATH=/app/profiles.yaml
+      - ACTIVE_PROFILE=${ACTIVE_PROFILE:-default}
+    volumes:
       - ./documents:/app/documents
       - ./projects:/app/projects
       - ./profiles.yaml:/app/profiles.yaml
@@ -61,10 +124,6 @@ services:
     tty: true
     networks:
       - rag-network
-
-volumes:
-  mongodb_data:
-    driver: local
 
 networks:
   rag-network:

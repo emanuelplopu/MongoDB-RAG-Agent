@@ -144,6 +144,11 @@ class ProfileManager:
         return self._config.active_profile if self._config else "default"
     
     @property
+    def active_profile_key(self) -> str:
+        """Get the key of the currently active profile (alias for active_profile_name)."""
+        return self.active_profile_name
+    
+    @property
     def active_profile(self) -> ProfileConfig:
         """Get the currently active profile configuration."""
         if not self._config:

@@ -1,0 +1,6 @@
+# Ignore MongoDB data files (keep folder structure)
+mongoDB/db/*
+mongoDB/configdb/*
+!mongoDB/.gitkeep
+!mongoDB/db/.gitkeep
+!mongoDB/configdb/.gitkeep

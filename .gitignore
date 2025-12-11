@@ -45,3 +45,4 @@ uv.lock
 
 # Logs
 *.log
+frontend/node_modules

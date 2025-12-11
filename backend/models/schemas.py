@@ -146,6 +146,8 @@ class IngestionStatusResponse(BaseModel):
     current_file: Optional[str] = None
     errors: List[str] = Field(default_factory=list)
     progress_percent: float = 0.0
+    elapsed_seconds: float = 0.0
+    estimated_remaining_seconds: Optional[float] = None
 
 
 class DocumentInfo(BaseModel):
