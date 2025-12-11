@@ -1,0 +1,32 @@
+active_profile: parhelion
+profiles:
+  default:
+    name: Default
+    description: Default project profile using the standard documents folder
+    documents_folders:
+    - documents
+    database: rag_db
+    collection_documents: documents
+    collection_chunks: chunks
+    vector_index: vector_index
+    text_index: text_index
+  parhelion:
+    name: Parhelion Energy
+    description: Parhelion Energy knowledge base
+    documents_folders:
+    - D:\parhelion.energy
+    database: rag_parhelion
+    collection_documents: documents
+    collection_chunks: chunks
+    vector_index: vector_index
+    text_index: text_index
+  example-project:
+    name: Example Project
+    description: Example project demonstrating profile separation
+    documents_folders:
+    - projects/example-project/documents
+    database: rag_example
+    collection_documents: documents
+    collection_chunks: chunks
+    vector_index: vector_index
+    text_index: text_index

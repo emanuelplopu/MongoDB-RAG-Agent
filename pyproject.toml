@@ -16,14 +16,15 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "aiofiles>=24.1.0",
     "openai-whisper>=20240930",
+    "pyyaml>=6.0.0",
 ]
 
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
     "black>=24.10.0",

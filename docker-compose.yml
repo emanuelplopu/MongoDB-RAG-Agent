@@ -1,0 +1,71 @@
+# MongoDB RAG Agent - Docker Compose
+# Run locally with MongoDB Atlas Local (includes Vector Search support)
+
+services:
+  # MongoDB Atlas Local - includes Vector Search & Atlas Search
+  mongodb:
+    image: mongodb/mongodb-atlas-local:8.0
+    container_name: mongodb-rag
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - ./scripts:/docker-entrypoint-initdb.d:ro
+    environment:
+      - DO_NOT_TRACK=1
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - rag-network
+
+  # RAG Agent Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag-agent
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      # MongoDB connection (local container)
+      - MONGODB_URI=mongodb://mongodb:27017/?directConnection=true
+      - MONGODB_DATABASE=${MONGODB_DATABASE:-rag_db}
+      
+      # LLM Configuration (uses external API by default)
+      - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_MODEL=${LLM_MODEL:-anthropic/claude-haiku-4.5}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      
+      # Embedding Configuration
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-openai}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-https://api.openai.com/v1}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-1536}
+      
+      # Profile configuration
+      - PROFILES_PATH=/app/profiles.yaml
+      - ACTIVE_PROFILE=${ACTIVE_PROFILE:-default}
+    volumes:
+      # Mount documents and profiles for easy editing
+      - ./documents:/app/documents
+      - ./projects:/app/projects
+      - ./profiles.yaml:/app/profiles.yaml
+    stdin_open: true
+    tty: true
+    networks:
+      - rag-network
+
+volumes:
+  mongodb_data:
+    driver: local
+
+networks:
+  rag-network:
+    driver: bridge

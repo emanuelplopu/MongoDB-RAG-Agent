@@ -1,12 +1,13 @@
 """Dependencies for MongoDB RAG Agent."""
 
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import logging
 from pymongo import AsyncMongoClient
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 import openai
 from src.settings import load_settings
+from src.profile import get_profile_manager
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,10 @@ class AgentDependencies:
     db: Optional[Any] = None
     openai_client: Optional[openai.AsyncOpenAI] = None
     settings: Optional[Any] = None
+
+    # Profile support
+    profile_name: Optional[str] = None
+    documents_folders: List[str] = field(default_factory=list)
 
     # Session context
     session_id: Optional[str] = None
@@ -38,6 +43,12 @@ class AgentDependencies:
         if not self.settings:
             self.settings = load_settings()
             logger.info("settings_loaded", database=self.settings.mongodb_database)
+
+        # Load profile information
+        profile_manager = get_profile_manager(self.settings.profiles_path)
+        self.profile_name = profile_manager.active_profile_name
+        self.documents_folders = profile_manager.get_all_document_folders()
+        logger.info(f"profile_loaded: {self.profile_name}, folders: {self.documents_folders}")
 
         # Initialize MongoDB client
         if not self.mongo_client:

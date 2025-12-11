@@ -7,6 +7,7 @@ from typing import List
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
+from rich.table import Table
 
 from pydantic_ai import Agent
 from pydantic_ai.messages import PartDeltaEvent, PartStartEvent, TextPartDelta
@@ -15,7 +16,8 @@ from dotenv import load_dotenv
 
 # Import our agent and dependencies
 from src.agent import rag_agent, RAGState
-from src.settings import load_settings
+from src.settings import load_settings, get_active_profile_name
+from src.profile import get_profile_manager
 
 # Load environment variables
 load_dotenv(override=True)
@@ -162,12 +164,15 @@ async def _stream_agent(
 def display_welcome():
     """Display welcome message with configuration info."""
     settings = load_settings()
+    profile_name = get_active_profile_name()
 
     welcome = Panel(
         "[bold blue]MongoDB RAG Agent[/bold blue]\n\n"
         "[green]Intelligent knowledge base search with MongoDB Atlas Vector Search[/green]\n"
-        f"[dim]LLM: {settings.llm_model}[/dim]\n\n"
-        "[dim]Type 'exit' to quit, 'info' for system info, 'clear' to clear screen[/dim]",
+        f"[dim]LLM: {settings.llm_model}[/dim]\n"
+        f"[dim]Profile: {profile_name} | Database: {settings.mongodb_database}[/dim]\n\n"
+        "[dim]Commands: 'exit' to quit, 'info' for system info, 'profiles' to list profiles[/dim]\n"
+        "[dim]          'switch <name>' to change profile, 'clear' to clear screen[/dim]",
         style="blue",
         padding=(1, 2)
     )
@@ -205,7 +210,11 @@ async def main():
 
                 elif user_input.lower() == 'info':
                     settings = load_settings()
+                    profile_manager = get_profile_manager()
                     console.print(Panel(
+                        f"[cyan]Active Profile:[/cyan] {profile_manager.active_profile_name}\n"
+                        f"[cyan]Database:[/cyan] {settings.mongodb_database}\n"
+                        f"[cyan]Document Folders:[/cyan] {', '.join(profile_manager.get_all_document_folders())}\n"
                         f"[cyan]LLM Provider:[/cyan] {settings.llm_provider}\n"
                         f"[cyan]LLM Model:[/cyan] {settings.llm_model}\n"
                         f"[cyan]Embedding Model:[/cyan] {settings.embedding_model}\n"
@@ -214,6 +223,42 @@ async def main():
                         title="System Configuration",
                         border_style="magenta"
                     ))
+                    continue
+
+                elif user_input.lower() == 'profiles':
+                    # List all available profiles
+                    profile_manager = get_profile_manager()
+                    profiles = profile_manager.list_profiles()
+                    active = profile_manager.active_profile_name
+                    
+                    table = Table(title="Available Profiles")
+                    table.add_column("Key", style="cyan")
+                    table.add_column("Name", style="green")
+                    table.add_column("Database", style="yellow")
+                    table.add_column("Document Folders", style="dim")
+                    table.add_column("Active", style="magenta")
+                    
+                    for key, profile in profiles.items():
+                        is_active = "*" if key == active else ""
+                        folders = ", ".join(profile.documents_folders[:2])
+                        if len(profile.documents_folders) > 2:
+                            folders += f" (+{len(profile.documents_folders) - 2} more)"
+                        table.add_row(key, profile.name, profile.database, folders, is_active)
+                    
+                    console.print(table)
+                    continue
+
+                elif user_input.lower().startswith('switch '):
+                    # Switch to a different profile
+                    profile_name = user_input[7:].strip()
+                    profile_manager = get_profile_manager()
+                    
+                    if profile_manager.switch_profile(profile_name):
+                        console.print(f"[green]Switched to profile: {profile_name}[/green]")
+                        console.print("[yellow]Note: Restart the CLI to apply the new profile settings.[/yellow]")
+                    else:
+                        console.print(f"[red]Profile '{profile_name}' not found.[/red]")
+                        console.print(f"[dim]Available profiles: {', '.join(profile_manager.list_profiles().keys())}[/dim]")
                     continue
 
                 elif user_input.lower() == 'clear':

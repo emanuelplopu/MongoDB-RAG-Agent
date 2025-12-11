@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 from src.ingestion.chunker import ChunkingConfig, create_chunker, DocumentChunk
 from src.ingestion.embedder import create_embedder
 from src.settings import load_settings
+from src.profile import get_profile_manager
 
 # Load environment variables
 load_dotenv()
@@ -55,23 +56,41 @@ class DocumentIngestionPipeline:
     def __init__(
         self,
         config: IngestionConfig,
-        documents_folder: str = "documents",
-        clean_before_ingest: bool = True
+        documents_folder: Optional[str] = None,
+        documents_folders: Optional[List[str]] = None,
+        clean_before_ingest: bool = True,
+        use_profile: bool = True
     ):
         """
         Initialize ingestion pipeline.
 
         Args:
             config: Ingestion configuration
-            documents_folder: Folder containing documents
+            documents_folder: Single folder containing documents (legacy support)
+            documents_folders: List of folders containing documents
             clean_before_ingest: Whether to clean existing data before ingestion
+            use_profile: Whether to use profile settings for folders
         """
         self.config = config
-        self.documents_folder = documents_folder
         self.clean_before_ingest = clean_before_ingest
 
         # Load settings
         self.settings = load_settings()
+        
+        # Determine document folders
+        if documents_folders:
+            self.documents_folders = documents_folders
+        elif documents_folder:
+            self.documents_folders = [documents_folder]
+        elif use_profile:
+            # Use profile's document folders
+            profile_manager = get_profile_manager(self.settings.profiles_path)
+            self.documents_folders = profile_manager.get_all_document_folders()
+        else:
+            self.documents_folders = ["documents"]
+        
+        # Legacy support - primary folder
+        self.documents_folder = self.documents_folders[0] if self.documents_folders else "documents"
 
         # Initialize MongoDB client and database references
         self.mongo_client: Optional[AsyncMongoClient] = None
@@ -118,7 +137,7 @@ class DocumentIngestionPipeline:
             )
 
         except (ConnectionFailure, ServerSelectionTimeoutError) as e:
-            logger.exception("mongodb_connection_failed", error=str(e))
+            logger.exception(f"mongodb_connection_failed: {str(e)}")
             raise
 
         self._initialized = True
@@ -135,15 +154,11 @@ class DocumentIngestionPipeline:
 
     def _find_document_files(self) -> List[str]:
         """
-        Find all supported document files in the documents folder.
+        Find all supported document files in all document folders.
 
         Returns:
             List of file paths
         """
-        if not os.path.exists(self.documents_folder):
-            logger.error(f"Documents folder not found: {self.documents_folder}")
-            return []
-
         # Supported file patterns - Docling + text formats + audio
         patterns = [
             "*.md", "*.markdown", "*.txt",  # Text formats
@@ -154,17 +169,26 @@ class DocumentIngestionPipeline:
             "*.html", "*.htm",  # HTML
             "*.mp3", "*.wav", "*.m4a", "*.flac",  # Audio formats
         ]
-        files = []
-
-        for pattern in patterns:
-            files.extend(
-                glob.glob(
-                    os.path.join(self.documents_folder, "**", pattern),
-                    recursive=True
+        
+        all_files = []
+        
+        for folder in self.documents_folders:
+            if not os.path.exists(folder):
+                logger.warning(f"Documents folder not found: {folder}")
+                continue
+            
+            for pattern in patterns:
+                all_files.extend(
+                    glob.glob(
+                        os.path.join(folder, "**", pattern),
+                        recursive=True
+                    )
                 )
-            )
-
-        return sorted(files)
+        
+        if not all_files:
+            logger.error(f"No document files found in folders: {self.documents_folders}")
+        
+        return sorted(all_files)
 
     def _read_document(self, file_path: str) -> tuple[str, Optional[Any]]:
         """
@@ -239,7 +263,91 @@ class DocumentIngestionPipeline:
 
     def _transcribe_audio(self, file_path: str) -> tuple[str, Optional[Any]]:
         """
-        Transcribe audio file using Whisper ASR via Docling.
+        Transcribe audio file using OpenAI Whisper API (fast cloud-based).
+
+        Args:
+            file_path: Path to the audio file
+
+        Returns:
+            Tuple of (markdown_content, None) - no DoclingDocument for API transcription
+        """
+        try:
+            from pathlib import Path
+            from openai import OpenAI
+            import os as os_module
+
+            audio_path = Path(file_path).resolve()
+            logger.info(
+                f"Transcribing audio via OpenAI Whisper API: {audio_path.name}"
+            )
+
+            # Verify file exists
+            if not audio_path.exists():
+                raise FileNotFoundError(f"Audio file not found: {audio_path}")
+
+            # Check file size (OpenAI limit is 25MB)
+            file_size_mb = audio_path.stat().st_size / (1024 * 1024)
+            if file_size_mb > 25:
+                logger.warning(
+                    f"Audio file {file_size_mb:.1f}MB exceeds 25MB limit, "
+                    "falling back to local Whisper"
+                )
+                return self._transcribe_audio_local(file_path)
+
+            # Initialize OpenAI client (use LLM API key which is OpenAI key)
+            client = OpenAI(api_key=self.settings.llm_api_key)
+
+            # Transcribe with OpenAI Whisper API
+            with open(audio_path, "rb") as audio_file:
+                transcription = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    response_format="verbose_json",  # Get timestamps
+                    timestamp_granularities=["segment"]
+                )
+
+            # Format as markdown with timestamps
+            markdown_lines = [f"# {audio_path.stem}\n"]
+            markdown_lines.append(f"**Source**: {audio_path.name}\n")
+            markdown_lines.append(f"**Language**: {transcription.language}\n")
+            markdown_lines.append(f"**Duration**: {transcription.duration:.1f}s\n")
+            markdown_lines.append("\n---\n\n")
+
+            # Add segments with timestamps
+            if hasattr(transcription, 'segments') and transcription.segments:
+                for segment in transcription.segments:
+                    start_time = segment.get('start', 0)
+                    end_time = segment.get('end', 0)
+                    text = segment.get('text', '').strip()
+                    
+                    # Format timestamp as [MM:SS]
+                    start_min, start_sec = divmod(int(start_time), 60)
+                    end_min, end_sec = divmod(int(end_time), 60)
+                    
+                    markdown_lines.append(
+                        f"[{start_min:02d}:{start_sec:02d} - {end_min:02d}:{end_sec:02d}] {text}\n\n"
+                    )
+            else:
+                # Fallback to plain text if no segments
+                markdown_lines.append(transcription.text)
+
+            markdown_content = "".join(markdown_lines)
+            logger.info(
+                f"Successfully transcribed {audio_path.name} "
+                f"(language: {transcription.language}, duration: {transcription.duration:.1f}s)"
+            )
+
+            return (markdown_content, None)
+
+        except Exception as e:
+            logger.error(f"OpenAI Whisper API failed for {file_path}: {e}")
+            logger.info("Falling back to local Whisper transcription...")
+            return self._transcribe_audio_local(file_path)
+
+    def _transcribe_audio_local(self, file_path: str) -> tuple[str, Optional[Any]]:
+        """
+        Fallback: Transcribe audio file using local Whisper via Docling.
+        Used when OpenAI API fails or file is too large.
 
         Args:
             file_path: Path to the audio file
@@ -254,23 +362,38 @@ class DocumentIngestionPipeline:
                 AudioFormatOption
             )
             from docling.datamodel.pipeline_options import AsrPipelineOptions
-            from docling.datamodel import asr_model_specs
             from docling.datamodel.base_models import InputFormat
             from docling.pipeline.asr_pipeline import AsrPipeline
+            from docling.datamodel.pipeline_options_asr_model import (
+                InlineAsrNativeWhisperOptions,
+                InferenceAsrFramework
+            )
+            from docling.datamodel.accelerator_options import AcceleratorDevice
 
-            # Use Path object - Docling expects this
             audio_path = Path(file_path).resolve()
             logger.info(
-                f"Transcribing audio file using Whisper Turbo: {audio_path.name}"
+                f"Transcribing audio locally with Whisper: {audio_path.name}"
             )
 
-            # Verify file exists
             if not audio_path.exists():
                 raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
-            # Configure ASR pipeline with Whisper Turbo model
+            # Configure with language auto-detection
+            asr_options = InlineAsrNativeWhisperOptions(
+                repo_id="turbo",
+                language=None,  # Auto-detect language
+                timestamps=True,
+                word_timestamps=True,
+                verbose=True,
+                temperature=0.0,
+                max_new_tokens=256,
+                max_time_chunk=30.0,
+                inference_framework=InferenceAsrFramework.WHISPER,
+                supported_devices=[AcceleratorDevice.CPU, AcceleratorDevice.CUDA],
+            )
+
             pipeline_options = AsrPipelineOptions()
-            pipeline_options.asr_options = asr_model_specs.WHISPER_TURBO
+            pipeline_options.asr_options = asr_options
 
             converter = DocumentConverter(
                 format_options={
@@ -281,18 +404,14 @@ class DocumentIngestionPipeline:
                 }
             )
 
-            # Transcribe the audio file
             result = converter.convert(audio_path)
-
-            # Export to markdown with timestamps
             markdown_content = result.document.export_to_markdown()
-            logger.info(f"Successfully transcribed {os.path.basename(file_path)}")
+            logger.info(f"Successfully transcribed {audio_path.name} locally")
 
-            # Return both markdown and DoclingDocument for HybridChunker
             return (markdown_content, result.document)
 
         except Exception as e:
-            logger.error(f"Failed to transcribe {file_path} with Whisper ASR: {e}")
+            logger.error(f"Local Whisper failed for {file_path}: {e}")
             return (
                 f"[Error: Could not transcribe audio file "
                 f"{os.path.basename(file_path)}]",
@@ -463,7 +582,13 @@ class DocumentIngestionPipeline:
         # Read document (returns tuple: content, docling_doc)
         document_content, docling_doc = self._read_document(file_path)
         document_title = self._extract_title(document_content, file_path)
-        document_source = os.path.relpath(file_path, self.documents_folder)
+        
+        # Find which documents folder this file belongs to for relative path
+        document_source = os.path.basename(file_path)
+        for folder in self.documents_folders:
+            if os.path.abspath(file_path).startswith(os.path.abspath(folder)):
+                document_source = os.path.relpath(file_path, folder)
+                break
 
         # Extract metadata from content
         document_metadata = self._extract_document_metadata(
@@ -524,15 +649,37 @@ class DocumentIngestionPipeline:
             errors=[]
         )
 
+    async def _get_existing_sources(self) -> set:
+        """
+        Get set of already-ingested document sources from MongoDB.
+        
+        Returns:
+            Set of source paths that are already in the database
+        """
+        documents_collection = self.db[
+            self.settings.mongodb_collection_documents
+        ]
+        
+        # Get all existing sources
+        cursor = documents_collection.find({}, {"source": 1})
+        existing = set()
+        async for doc in cursor:
+            if "source" in doc:
+                existing.add(doc["source"])
+        
+        return existing
+
     async def ingest_documents(
         self,
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[callable] = None,
+        incremental: bool = True
     ) -> List[IngestionResult]:
         """
         Ingest all documents from the documents folder.
 
         Args:
             progress_callback: Optional callback for progress updates
+            incremental: If True, skip already-ingested files (default: True)
 
         Returns:
             List of ingestion results
@@ -543,17 +690,53 @@ class DocumentIngestionPipeline:
         # Clean existing data if requested
         if self.clean_before_ingest:
             await self._clean_databases()
+            existing_sources = set()  # Nothing exists after cleaning
+        elif incremental:
+            # Get existing sources for incremental mode
+            existing_sources = await self._get_existing_sources()
+            logger.info(f"Found {len(existing_sources)} already-ingested documents")
+        else:
+            existing_sources = set()
 
         # Find all supported document files
         document_files = self._find_document_files()
 
         if not document_files:
             logger.warning(
-                f"No supported document files found in {self.documents_folder}"
+                f"No supported document files found in {self.documents_folders}"
             )
             return []
 
         logger.info(f"Found {len(document_files)} document files to process")
+
+        # Filter out already-ingested files in incremental mode
+        if incremental and existing_sources:
+            original_count = len(document_files)
+            document_files_to_process = []
+            
+            for file_path in document_files:
+                # Calculate the source path as stored in DB
+                document_source = os.path.basename(file_path)
+                for folder in self.documents_folders:
+                    if os.path.abspath(file_path).startswith(os.path.abspath(folder)):
+                        document_source = os.path.relpath(file_path, folder)
+                        break
+                
+                if document_source not in existing_sources:
+                    document_files_to_process.append(file_path)
+            
+            skipped_count = original_count - len(document_files_to_process)
+            if skipped_count > 0:
+                logger.info(
+                    f"Incremental mode: Skipping {skipped_count} already-ingested files"
+                )
+            document_files = document_files_to_process
+        
+        if not document_files:
+            logger.info("No new documents to ingest")
+            return []
+        
+        logger.info(f"Processing {len(document_files)} new documents")
 
         results = []
 
@@ -598,13 +781,28 @@ async def main() -> None:
     )
     parser.add_argument(
         "--documents", "-d",
-        default="documents",
-        help="Documents folder path"
+        default=None,
+        help="Documents folder path (overrides profile setting)"
+    )
+    parser.add_argument(
+        "--profile", "-p",
+        default=None,
+        help="Profile to use for ingestion"
+    )
+    parser.add_argument(
+        "--no-profile",
+        action="store_true",
+        help="Don't use profile settings, use defaults"
     )
     parser.add_argument(
         "--no-clean",
         action="store_true",
-        help="Skip cleaning existing data before ingestion"
+        help="Skip cleaning existing data before ingestion (enables incremental mode)"
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Force full re-ingestion, don't skip existing files"
     )
     parser.add_argument(
         "--chunk-size",
@@ -639,6 +837,15 @@ async def main() -> None:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
+    # Switch profile if specified
+    if args.profile:
+        profile_manager = get_profile_manager()
+        if not profile_manager.switch_profile(args.profile):
+            print(f"Error: Profile '{args.profile}' not found")
+            print(f"Available profiles: {list(profile_manager.list_profiles().keys())}")
+            return
+        print(f"Using profile: {args.profile}")
+
     # Create ingestion configuration
     config = IngestionConfig(
         chunk_size=args.chunk_size,
@@ -647,12 +854,21 @@ async def main() -> None:
         max_tokens=args.max_tokens
     )
 
-    # Create and run pipeline - clean by default unless --no-clean is specified
+    # Determine document folder
+    documents_folder = args.documents if args.documents else None
+    use_profile = not args.no_profile and documents_folder is None
+
+    # Create and run pipeline
     pipeline = DocumentIngestionPipeline(
         config=config,
-        documents_folder=args.documents,
-        clean_before_ingest=not args.no_clean  # Clean by default
+        documents_folder=documents_folder,
+        clean_before_ingest=not args.no_clean,
+        use_profile=use_profile
     )
+    
+    # Show which folders will be processed
+    print(f"Document folders: {pipeline.documents_folders}")
+    print(f"Database: {pipeline.settings.mongodb_database}")
 
     def progress_callback(current: int, total: int) -> None:
         print(f"Progress: {current}/{total} documents processed")
@@ -660,7 +876,10 @@ async def main() -> None:
     try:
         start_time = datetime.now()
 
-        results = await pipeline.ingest_documents(progress_callback)
+        results = await pipeline.ingest_documents(
+            progress_callback,
+            incremental=not args.full  # Incremental by default unless --full
+        )
 
         end_time = datetime.now()
         total_time = (end_time - start_time).total_seconds()

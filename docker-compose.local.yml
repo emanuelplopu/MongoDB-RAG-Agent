@@ -1,0 +1,67 @@
+# MongoDB RAG Agent - Fully Local Docker Compose
+# Run everything locally including LLM and embeddings via Ollama
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up
+#
+# This extends docker-compose.yml and adds Ollama for fully offline operation
+
+services:
+  # Ollama - Local LLM and Embeddings
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    networks:
+      - rag-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Override app configuration for local Ollama
+  app:
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    environment:
+      # MongoDB connection (local container)
+      - MONGODB_URI=mongodb://mongodb:27017/?directConnection=true
+      - MONGODB_DATABASE=${MONGODB_DATABASE:-rag_db}
+      
+      # LLM Configuration - use Ollama
+      - LLM_PROVIDER=ollama
+      - LLM_API_KEY=ollama
+      - LLM_MODEL=${LLM_MODEL:-llama3.2}
+      - LLM_BASE_URL=http://ollama:11434/v1
+      
+      # Embedding Configuration - use Ollama
+      - EMBEDDING_PROVIDER=ollama
+      - EMBEDDING_API_KEY=ollama
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+      - EMBEDDING_BASE_URL=http://ollama:11434/v1
+      - EMBEDDING_DIMENSION=768
+      
+      # Profile configuration
+      - PROFILES_PATH=/app/profiles.yaml
+      - ACTIVE_PROFILE=${ACTIVE_PROFILE:-default}
+
+volumes:
+  ollama_data:
+    driver: local

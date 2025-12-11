@@ -1,5 +1,6 @@
 """
 Document embedding generation for vector search.
+Supports OpenAI and Ollama embedding providers.
 """
 
 import logging
@@ -17,13 +18,27 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Initialize client with settings
-settings = load_settings()
-embedding_client = openai.AsyncOpenAI(
-    api_key=settings.embedding_api_key,
-    base_url=settings.embedding_base_url
-)
-EMBEDDING_MODEL = settings.embedding_model
+
+def get_embedding_client():
+    """Get embedding client based on provider configuration."""
+    settings = load_settings(use_profile=False)  # Use base settings for embedding client
+    
+    return openai.AsyncOpenAI(
+        api_key=settings.embedding_api_key,
+        base_url=settings.embedding_base_url
+    )
+
+
+# Initialize client lazily
+_embedding_client = None
+
+
+def get_client():
+    """Get or create embedding client."""
+    global _embedding_client
+    if _embedding_client is None:
+        _embedding_client = get_embedding_client()
+    return _embedding_client
 
 
 class EmbeddingGenerator:
@@ -31,30 +46,43 @@ class EmbeddingGenerator:
 
     def __init__(
         self,
-        model: str = EMBEDDING_MODEL,
+        model: Optional[str] = None,
         batch_size: int = 100
     ):
         """
         Initialize embedding generator.
 
         Args:
-            model: Embedding model to use
+            model: Embedding model to use (defaults to settings)
             batch_size: Number of texts to process in parallel
         """
-        self.model = model
+        settings = load_settings(use_profile=False)
+        self.model = model or settings.embedding_model
         self.batch_size = batch_size
+        self.provider = settings.embedding_provider.lower()
 
         # Model-specific configurations
         self.model_configs = {
+            # OpenAI models
             "text-embedding-3-small": {"dimensions": 1536, "max_tokens": 8191},
             "text-embedding-3-large": {"dimensions": 3072, "max_tokens": 8191},
-            "text-embedding-ada-002": {"dimensions": 1536, "max_tokens": 8191}
+            "text-embedding-ada-002": {"dimensions": 1536, "max_tokens": 8191},
+            # Ollama models
+            "nomic-embed-text": {"dimensions": 768, "max_tokens": 8192},
+            "mxbai-embed-large": {"dimensions": 1024, "max_tokens": 512},
+            "all-minilm": {"dimensions": 384, "max_tokens": 256},
+            "snowflake-arctic-embed": {"dimensions": 1024, "max_tokens": 512},
         }
 
-        self.config = self.model_configs.get(
-            model,
-            {"dimensions": 1536, "max_tokens": 8191}
-        )
+        # Use configured dimension or model default
+        default_config = {"dimensions": settings.embedding_dimension, "max_tokens": 8191}
+        self.config = self.model_configs.get(self.model, default_config)
+        
+        # Override with settings if specified
+        if settings.embedding_dimension:
+            self.config["dimensions"] = settings.embedding_dimension
+        
+        logger.info(f"Embedding generator initialized: model={self.model}, provider={self.provider}, dimensions={self.config['dimensions']}")
 
     async def generate_embedding(self, text: str) -> List[float]:
         """
@@ -70,7 +98,7 @@ class EmbeddingGenerator:
         if len(text) > self.config["max_tokens"] * 4:
             text = text[:self.config["max_tokens"] * 4]
 
-        response = await embedding_client.embeddings.create(
+        response = await get_client().embeddings.create(
             model=self.model,
             input=text
         )
@@ -97,7 +125,7 @@ class EmbeddingGenerator:
                 text = text[:self.config["max_tokens"] * 4]
             processed_texts.append(text)
 
-        response = await embedding_client.embeddings.create(
+        response = await get_client().embeddings.create(
             model=self.model,
             input=processed_texts
         )
@@ -179,12 +207,12 @@ class EmbeddingGenerator:
         return self.config["dimensions"]
 
 
-def create_embedder(model: str = EMBEDDING_MODEL, **kwargs) -> EmbeddingGenerator:
+def create_embedder(model: Optional[str] = None, **kwargs) -> EmbeddingGenerator:
     """
     Create embedding generator.
 
     Args:
-        model: Embedding model to use
+        model: Embedding model to use (defaults to settings)
         **kwargs: Additional arguments for EmbeddingGenerator
 
     Returns:
