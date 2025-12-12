@@ -1,0 +1,37 @@
+# Docker Compose Override - Additional Volume Mounts
+# This file is automatically loaded with docker-compose.yml
+# Contains user-specific volume mounts for external document folders
+#
+# HOW TO ADD NEW DRIVES:
+# 1. Add a volume mount below: - "X:/path/to/folder:/app/mounts/name:ro"
+# 2. Add a profile entry in profiles.yaml with path: /app/mounts/name
+# 3. Run: docker-compose up -d backend  (recreates container in ~2 seconds, no rebuild)
+#
+# NOTE: Google Drive File Stream virtual paths may not work - use local/network paths.
+
+services:
+  backend:
+    volumes:
+      # Default volumes (must be repeated as override replaces the list)
+      - ./documents:/app/documents
+      - ./projects:/app/projects
+      - ./profiles.yaml:/app/profiles.yaml
+      
+      # External document folders - add your drives here
+      - D:/parhelion.energy:/app/mounts/parhelion-energy:ro
+      - "G:/My Drive/root:/app/mounts/gdrive-root:ro"
+      # - E:/another-drive:/app/mounts/another-drive:ro
+      # - //server/share:/app/mounts/network-share:ro
+
+  cli:
+    volumes:
+      # Default volumes (must be repeated as override replaces the list)
+      - ./documents:/app/documents
+      - ./projects:/app/projects
+      - ./profiles.yaml:/app/profiles.yaml
+      
+      # External document folders - add your drives here
+      - D:/parhelion.energy:/app/mounts/parhelion-energy:ro
+      - "G:/My Drive/root:/app/mounts/gdrive-root:ro"
+      # - E:/another-drive:/app/mounts/another-drive:ro
+      # - //server/share:/app/mounts/network-share:ro

@@ -1,25 +1,35 @@
 import { Routes, Route } from 'react-router-dom'
+import { AuthProvider } from './contexts/AuthContext'
+import { ChatSidebarProvider } from './contexts/ChatSidebarContext'
 import Layout from './components/Layout'
-import ChatPage from './pages/ChatPage'
+import ChatPageNew from './pages/ChatPageNew'
 import SearchPage from './pages/SearchPage'
 import DocumentsPage from './pages/DocumentsPage'
 import DocumentPreviewPage from './pages/DocumentPreviewPage'
 import ProfilesPage from './pages/ProfilesPage'
 import SystemPage from './pages/SystemPage'
+import LoginPage from './pages/LoginPage'
+import NotFoundPage from './pages/NotFoundPage'
 
 function App() {
   return (
-    <Routes>
-      <Route path="/" element={<Layout />}>
-        <Route index element={<ChatPage />} />
-        <Route path="chat" element={<ChatPage />} />
-        <Route path="search" element={<SearchPage />} />
-        <Route path="documents" element={<DocumentsPage />} />
-        <Route path="documents/:documentId" element={<DocumentPreviewPage />} />
-        <Route path="profiles" element={<ProfilesPage />} />
-        <Route path="system" element={<SystemPage />} />
-      </Route>
-    </Routes>
+    <AuthProvider>
+      <ChatSidebarProvider>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/" element={<Layout />}>
+            <Route index element={<ChatPageNew />} />
+            <Route path="chat" element={<ChatPageNew />} />
+            <Route path="search" element={<SearchPage />} />
+            <Route path="documents" element={<DocumentsPage />} />
+            <Route path="documents/:documentId" element={<DocumentPreviewPage />} />
+            <Route path="profiles" element={<ProfilesPage />} />
+            <Route path="system" element={<SystemPage />} />
+          </Route>
+          <Route path="*" element={<NotFoundPage />} />
+        </Routes>
+      </ChatSidebarProvider>
+    </AuthProvider>
   )
 }
 

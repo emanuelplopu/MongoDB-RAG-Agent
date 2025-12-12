@@ -49,6 +49,11 @@ class ConfigUpdateRequest(BaseModel):
     default_match_count: Optional[int] = None
 
 
+# Collection name for persisted config
+CONFIG_COLLECTION = "system_config"
+CONFIG_DOC_ID = "active_config"
+
+
 class ModelInfo(BaseModel):
     id: str
     owned_by: str
@@ -485,7 +490,7 @@ async def update_config(update: ConfigUpdateRequest):
     Update runtime configuration.
     
     Updates configuration values in memory. These changes persist until restart.
-    For permanent changes, update environment variables.
+    For permanent changes, use /config/save to persist to database.
     """
     updated = {}
     
@@ -508,11 +513,11 @@ async def update_config(update: ConfigUpdateRequest):
     if not updated:
         return {"success": False, "message": "No fields to update"}
     
-    logger.info(f"Configuration updated: {updated}")
+    logger.info(f"Configuration updated (runtime): {updated}")
     
     return {
         "success": True,
-        "message": "Configuration updated (runtime only)",
+        "message": "Configuration updated (runtime only - will reset on restart)",
         "updated": updated,
         "current": {
             "llm_model": settings.llm_model,
@@ -521,3 +526,116 @@ async def update_config(update: ConfigUpdateRequest):
             "default_match_count": settings.default_match_count,
         }
     }
+
+
+@router.post("/config/save")
+async def save_config_to_db(request: Request, update: ConfigUpdateRequest):
+    """
+    Save configuration to database for persistence across restarts.
+    
+    This saves the config to MongoDB so it will be loaded automatically on startup.
+    """
+    db = request.app.state.db
+    
+    # Also update runtime settings
+    if update.llm_model is not None:
+        settings.llm_model = update.llm_model
+    if update.embedding_model is not None:
+        settings.embedding_model = update.embedding_model
+    if update.embedding_dimension is not None:
+        settings.embedding_dimension = update.embedding_dimension
+    if update.default_match_count is not None:
+        settings.default_match_count = update.default_match_count
+    
+    # Build config document
+    config_doc = {
+        "_id": CONFIG_DOC_ID,
+        "llm_model": settings.llm_model,
+        "embedding_model": settings.embedding_model,
+        "embedding_dimension": settings.embedding_dimension,
+        "default_match_count": settings.default_match_count,
+        "updated_at": datetime.now().isoformat(),
+    }
+    
+    try:
+        # Upsert config to database
+        collection = db.db[CONFIG_COLLECTION]
+        await collection.replace_one(
+            {"_id": CONFIG_DOC_ID},
+            config_doc,
+            upsert=True
+        )
+        
+        logger.info(f"Configuration saved to database: {config_doc}")
+        
+        return {
+            "success": True,
+            "message": "Configuration saved to database (will persist across restarts)",
+            "config": {
+                "llm_model": settings.llm_model,
+                "embedding_model": settings.embedding_model,
+                "embedding_dimension": settings.embedding_dimension,
+                "default_match_count": settings.default_match_count,
+            }
+        }
+    except Exception as e:
+        logger.error(f"Failed to save config to database: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save config: {str(e)}")
+
+
+@router.get("/config/saved")
+async def get_saved_config(request: Request):
+    """
+    Get the saved configuration from database.
+    
+    Returns the persisted config if it exists, otherwise returns None.
+    """
+    db = request.app.state.db
+    
+    try:
+        collection = db.db[CONFIG_COLLECTION]
+        doc = await collection.find_one({"_id": CONFIG_DOC_ID})
+        
+        if doc:
+            return {
+                "exists": True,
+                "config": {
+                    "llm_model": doc.get("llm_model"),
+                    "embedding_model": doc.get("embedding_model"),
+                    "embedding_dimension": doc.get("embedding_dimension"),
+                    "default_match_count": doc.get("default_match_count"),
+                    "updated_at": doc.get("updated_at"),
+                }
+            }
+        return {"exists": False, "config": None}
+    except Exception as e:
+        logger.error(f"Failed to get saved config: {e}")
+        return {"exists": False, "config": None, "error": str(e)}
+
+
+async def load_config_from_db(db) -> bool:
+    """
+    Load configuration from database at startup.
+    
+    Returns True if config was loaded, False otherwise.
+    """
+    try:
+        collection = db.db[CONFIG_COLLECTION]
+        doc = await collection.find_one({"_id": CONFIG_DOC_ID})
+        
+        if doc:
+            if doc.get("llm_model"):
+                settings.llm_model = doc["llm_model"]
+            if doc.get("embedding_model"):
+                settings.embedding_model = doc["embedding_model"]
+            if doc.get("embedding_dimension"):
+                settings.embedding_dimension = doc["embedding_dimension"]
+            if doc.get("default_match_count"):
+                settings.default_match_count = doc["default_match_count"]
+            
+            logger.info(f"Loaded configuration from database: llm={settings.llm_model}, embedding={settings.embedding_model}")
+            return True
+        return False
+    except Exception as e:
+        logger.warning(f"Failed to load config from database: {e}")
+        return False

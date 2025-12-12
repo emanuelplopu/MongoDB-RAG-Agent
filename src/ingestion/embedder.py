@@ -4,6 +4,7 @@ Supports OpenAI and Ollama embedding providers.
 """
 
 import logging
+import asyncio
 from typing import List, Optional
 from datetime import datetime
 
@@ -186,6 +187,10 @@ class EmbeddingGenerator:
                 progress_callback(current_batch, total_batches)
 
             logger.info(f"Processed batch {current_batch}/{total_batches}")
+            
+            # Yield control to event loop between batches
+            # This allows API requests to be processed during heavy ingestion
+            await asyncio.sleep(0)
 
         logger.info(f"Generated embeddings for {len(embedded_chunks)} chunks")
         return embedded_chunks

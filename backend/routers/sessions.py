@@ -1,0 +1,676 @@
+"""Chat sessions router - Manage chat sessions, folders, and message history."""
+
+import logging
+import time
+import uuid
+from datetime import datetime
+from typing import Optional, List, Dict, Any
+from fastapi import APIRouter, HTTPException, Request, Depends
+from pydantic import BaseModel, Field
+
+from backend.core.config import settings
+from backend.routers.auth import get_current_user, UserResponse
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+# ============== Model Pricing Data (per 1M tokens) ==============
+
+MODEL_PRICING: Dict[str, Dict[str, float]] = {
+    # GPT-5 series
+    "gpt-5.2": {"input": 5.00, "output": 15.00},
+    "gpt-5.2-pro": {"input": 10.00, "output": 30.00},
+    "gpt-5.1": {"input": 4.00, "output": 12.00},
+    "gpt-5": {"input": 3.00, "output": 10.00},
+    "gpt-5-mini": {"input": 0.50, "output": 1.50},
+    "gpt-5-nano": {"input": 0.10, "output": 0.30},
+    # GPT-4o series
+    "gpt-4o": {"input": 2.50, "output": 10.00},
+    "gpt-4o-mini": {"input": 0.15, "output": 0.60},
+    "gpt-4o-2024-11-20": {"input": 2.50, "output": 10.00},
+    # GPT-4.1 series  
+    "gpt-4.1": {"input": 2.00, "output": 8.00},
+    "gpt-4.1-mini": {"input": 0.40, "output": 1.60},
+    "gpt-4.1-nano": {"input": 0.10, "output": 0.40},
+    # GPT-4 series
+    "gpt-4-turbo": {"input": 10.00, "output": 30.00},
+    "gpt-4": {"input": 30.00, "output": 60.00},
+    # GPT-3.5 series
+    "gpt-3.5-turbo": {"input": 0.50, "output": 1.50},
+    # O1 series
+    "o1-preview": {"input": 15.00, "output": 60.00},
+    "o1-pro": {"input": 150.00, "output": 600.00},
+    "o1-mini": {"input": 3.00, "output": 12.00},
+    # Default fallback
+    "default": {"input": 2.50, "output": 10.00},
+}
+
+
+def get_model_pricing(model_id: str) -> Dict[str, float]:
+    """Get pricing for a model."""
+    # Try exact match first
+    if model_id in MODEL_PRICING:
+        return MODEL_PRICING[model_id]
+    # Try prefix match
+    for key in MODEL_PRICING:
+        if model_id.startswith(key):
+            return MODEL_PRICING[key]
+    return MODEL_PRICING["default"]
+
+
+def calculate_cost(model_id: str, input_tokens: int, output_tokens: int) -> float:
+    """Calculate cost in USD for token usage."""
+    pricing = get_model_pricing(model_id)
+    input_cost = (input_tokens / 1_000_000) * pricing["input"]
+    output_cost = (output_tokens / 1_000_000) * pricing["output"]
+    return input_cost + output_cost
+
+
+# ============== Pydantic Models ==============
+
+class MessageStats(BaseModel):
+    """Statistics for a single message."""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    cost_usd: float = 0.0
+    tokens_per_second: float = 0.0
+    latency_ms: float = 0.0
+
+
+class Message(BaseModel):
+    """Chat message with stats."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    role: str
+    content: str
+    timestamp: datetime = Field(default_factory=datetime.now)
+    stats: Optional[MessageStats] = None
+    model: Optional[str] = None
+    sources: Optional[List[Dict[str, Any]]] = None
+
+
+class SessionStats(BaseModel):
+    """Aggregated statistics for a session."""
+    total_messages: int = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
+    avg_tokens_per_second: float = 0.0
+    avg_latency_ms: float = 0.0
+
+
+class ChatSession(BaseModel):
+    """Chat session with folder support."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    title: str = "New Chat"
+    folder_id: Optional[str] = None
+    user_id: Optional[str] = None  # Owner of the session
+    model: str = Field(default_factory=lambda: settings.llm_model)
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+    messages: List[Message] = Field(default_factory=list)
+    stats: SessionStats = Field(default_factory=SessionStats)
+    is_pinned: bool = False
+    profile: Optional[str] = None
+
+
+class Folder(BaseModel):
+    """Folder for organizing chat sessions."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    user_id: Optional[str] = None  # Owner of the folder
+    color: str = "#6366f1"
+    created_at: datetime = Field(default_factory=datetime.now)
+    is_expanded: bool = True
+
+
+# ============== Request/Response Models ==============
+
+class CreateSessionRequest(BaseModel):
+    title: Optional[str] = "New Chat"
+    folder_id: Optional[str] = None
+    model: Optional[str] = None
+
+
+class UpdateSessionRequest(BaseModel):
+    title: Optional[str] = None
+    folder_id: Optional[str] = None
+    model: Optional[str] = None
+    is_pinned: Optional[bool] = None
+
+
+class SendMessageRequest(BaseModel):
+    content: str = Field(..., min_length=1)
+    search_type: str = "hybrid"
+    match_count: int = 10
+    include_sources: bool = True
+
+
+class CreateFolderRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    color: Optional[str] = "#6366f1"
+
+
+class UpdateFolderRequest(BaseModel):
+    name: Optional[str] = None
+    color: Optional[str] = None
+    is_expanded: Optional[bool] = None
+
+
+class ModelInfo(BaseModel):
+    id: str
+    pricing: Dict[str, float]
+
+
+class SessionListResponse(BaseModel):
+    sessions: List[ChatSession]
+    folders: List[Folder]
+
+
+# ============== Database Helpers ==============
+
+async def get_sessions_collection(request: Request):
+    """Get chat sessions collection."""
+    return request.app.state.db.db["chat_sessions"]
+
+
+async def get_folders_collection(request: Request):
+    """Get folders collection."""
+    return request.app.state.db.db["chat_folders"]
+
+
+# ============== Folder Endpoints ==============
+
+@router.get("/folders")
+async def list_folders(
+    request: Request,
+    user: Optional[UserResponse] = Depends(get_current_user)
+):
+    """List all folders for the current user."""
+    collection = await get_folders_collection(request)
+    
+    # Filter by user if authenticated
+    query = {}
+    if user:
+        query["user_id"] = user.id
+    else:
+        query["user_id"] = None  # Only show folders without owner if not logged in
+    
+    folders = []
+    async for doc in collection.find(query).sort("created_at", 1):
+        doc["id"] = str(doc["_id"])
+        del doc["_id"]
+        folders.append(Folder(**doc))
+    return {"folders": folders}
+
+
+@router.post("/folders")
+async def create_folder(
+    request: Request,
+    folder_request: CreateFolderRequest,
+    user: Optional[UserResponse] = Depends(get_current_user)
+):
+    """Create a new folder."""
+    collection = await get_folders_collection(request)
+    
+    folder = Folder(
+        name=folder_request.name,
+        color=folder_request.color or "#6366f1",
+        user_id=user.id if user else None
+    )
+    doc = folder.model_dump()
+    doc["_id"] = doc.pop("id")
+    
+    await collection.insert_one(doc)
+    return folder
+
+
+@router.put("/folders/{folder_id}")
+async def update_folder(
+    request: Request,
+    folder_id: str,
+    update: UpdateFolderRequest,
+    user: Optional[UserResponse] = Depends(get_current_user)
+):
+    """Update a folder."""
+    collection = await get_folders_collection(request)
+    
+    # Check ownership
+    query = {"_id": folder_id}
+    if user:
+        query["user_id"] = user.id
+    
+    update_dict = {k: v for k, v in update.model_dump().items() if v is not None}
+    if not update_dict:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    
+    result = await collection.update_one(query, {"$set": update_dict})
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    
+    return {"success": True}
+
+
+@router.delete("/folders/{folder_id}")
+async def delete_folder(
+    request: Request,
+    folder_id: str,
+    user: Optional[UserResponse] = Depends(get_current_user)
+):
+    """Delete a folder and move its sessions to unfiled."""
+    folders_collection = await get_folders_collection(request)
+    sessions_collection = await get_sessions_collection(request)
+    
+    # Check ownership
+    query = {"_id": folder_id}
+    if user:
+        query["user_id"] = user.id
+    
+    # Move sessions to no folder
+    session_query = {"folder_id": folder_id}
+    if user:
+        session_query["user_id"] = user.id
+    
+    await sessions_collection.update_many(
+        session_query,
+        {"$set": {"folder_id": None}}
+    )
+    
+    result = await folders_collection.delete_one(query)
+    
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    
+    return {"success": True}
+
+
+# ============== Session Endpoints ==============
+
+@router.get("")
+@router.get("/")
+async def list_sessions(
+    request: Request,
+    folder_id: Optional[str] = None,
+    user: Optional[UserResponse] = Depends(get_current_user)
+):
+    """List all chat sessions for the current user, optionally filtered by folder."""
+    sessions_collection = await get_sessions_collection(request)
+    folders_collection = await get_folders_collection(request)
+    
+    # Get sessions - filter by user
+    query = {}
+    if user:
+        query["user_id"] = user.id
+    else:
+        query["user_id"] = None  # Only show sessions without owner if not logged in
+    
+    if folder_id is not None:
+        query["folder_id"] = folder_id if folder_id != "none" else None
+    
+    sessions = []
+    async for doc in sessions_collection.find(query).sort("updated_at", -1):
+        doc["id"] = str(doc["_id"])
+        del doc["_id"]
+        # Don't return full messages in list view
+        doc["messages"] = []
+        sessions.append(ChatSession(**doc))
+    
+    # Get folders - filter by user
+    folder_query = {}
+    if user:
+        folder_query["user_id"] = user.id
+    else:
+        folder_query["user_id"] = None
+    
+    folders = []
+    async for doc in folders_collection.find(folder_query).sort("created_at", 1):
+        doc["id"] = str(doc["_id"])
+        del doc["_id"]
+        folders.append(Folder(**doc))
+    
+    return SessionListResponse(sessions=sessions, folders=folders)
+
+
+@router.post("")
+@router.post("/")
+async def create_session(
+    request: Request,
+    session_request: CreateSessionRequest,
+    user: Optional[UserResponse] = Depends(get_current_user)
+):
+    """Create a new chat session."""
+    collection = await get_sessions_collection(request)
+    
+    # Get active profile
+    try:
+        from src.profile import get_profile_manager
+        pm = get_profile_manager()
+        profile = pm.active_profile_key
+    except Exception:
+        profile = "default"
+    
+    session = ChatSession(
+        title=session_request.title or "New Chat",
+        folder_id=session_request.folder_id,
+        user_id=user.id if user else None,
+        model=session_request.model or settings.llm_model,
+        profile=profile
+    )
+    
+    doc = session.model_dump()
+    doc["_id"] = doc.pop("id")
+    
+    await collection.insert_one(doc)
+    return session
+
+
+@router.get("/{session_id}")
+async def get_session(
+    request: Request,
+    session_id: str,
+    user: Optional[UserResponse] = Depends(get_current_user)
+):
+    """Get a chat session with full message history."""
+    collection = await get_sessions_collection(request)
+    
+    # Check ownership
+    query = {"_id": session_id}
+    if user:
+        query["user_id"] = user.id
+    
+    doc = await collection.find_one(query)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    doc["id"] = str(doc["_id"])
+    del doc["_id"]
+    
+    return ChatSession(**doc)
+
+
+@router.put("/{session_id}")
+async def update_session(
+    request: Request,
+    session_id: str,
+    update: UpdateSessionRequest,
+    user: Optional[UserResponse] = Depends(get_current_user)
+):
+    """Update a chat session."""
+    collection = await get_sessions_collection(request)
+    
+    # Check ownership
+    query = {"_id": session_id}
+    if user:
+        query["user_id"] = user.id
+    
+    update_dict = {k: v for k, v in update.model_dump().items() if v is not None}
+    update_dict["updated_at"] = datetime.now()
+    
+    if not update_dict:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    
+    result = await collection.update_one(query, {"$set": update_dict})
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    return {"success": True}
+
+
+@router.delete("/{session_id}")
+async def delete_session(
+    request: Request,
+    session_id: str,
+    user: Optional[UserResponse] = Depends(get_current_user)
+):
+    """Delete a chat session."""
+    collection = await get_sessions_collection(request)
+    
+    # Check ownership
+    query = {"_id": session_id}
+    if user:
+        query["user_id"] = user.id
+    
+    result = await collection.delete_one(query)
+    
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    return {"success": True}
+
+
+# ============== Message Endpoints ==============
+
+@router.post("/{session_id}/messages")
+async def send_message(
+    request: Request,
+    session_id: str,
+    msg_request: SendMessageRequest,
+    user: Optional[UserResponse] = Depends(get_current_user)
+):
+    """Send a message in a chat session and get AI response."""
+    from openai import AsyncOpenAI
+    from backend.routers.chat import get_embedding, perform_search
+    from backend.models.schemas import SearchType
+    
+    start_time = time.time()
+    db = request.app.state.db
+    collection = await get_sessions_collection(request)
+    
+    # Get session - check ownership
+    query = {"_id": session_id}
+    if user:
+        query["user_id"] = user.id
+    
+    doc = await collection.find_one(query)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    session_model = doc.get("model", settings.llm_model)
+    
+    # Create user message
+    user_message = Message(
+        role="user",
+        content=msg_request.content
+    )
+    
+    # Perform search
+    search_type = SearchType(msg_request.search_type)
+    search_results = await perform_search(
+        db, msg_request.content, search_type, msg_request.match_count
+    )
+    
+    # Build context
+    context_parts = []
+    sources = []
+    for result in search_results:
+        context_parts.append(f"[Source: {result['document_title']}]\n{result['content']}")
+        if msg_request.include_sources:
+            sources.append({
+                "title": result["document_title"],
+                "source": result["document_source"],
+                "relevance": result["similarity"],
+                "excerpt": result["content"][:200] + "..." if len(result["content"]) > 200 else result["content"]
+            })
+    
+    context = "\n\n---\n\n".join(context_parts) if context_parts else "No relevant documents found."
+    
+    # Build messages for LLM
+    messages = doc.get("messages", [])
+    llm_messages = [
+        {
+            "role": "system",
+            "content": f"""You are a helpful assistant with access to a knowledge base. 
+Use the following context to answer questions. If the context doesn't contain relevant information, 
+say so and provide what help you can.
+
+CONTEXT FROM KNOWLEDGE BASE:
+{context}
+
+Always cite the document source when referencing information from the context."""
+        }
+    ]
+    
+    # Add conversation history (last 20 messages)
+    for msg in messages[-20:]:
+        llm_messages.append({"role": msg["role"], "content": msg["content"]})
+    
+    llm_messages.append({"role": "user", "content": msg_request.content})
+    
+    # Generate response
+    generation_start = time.time()
+    
+    client = AsyncOpenAI(
+        api_key=settings.llm_api_key,
+        base_url=settings.llm_base_url
+    )
+    
+    response = await client.chat.completions.create(
+        model=session_model,
+        messages=llm_messages,
+        temperature=0.7,
+        max_tokens=4000
+    )
+    
+    generation_time = time.time() - generation_start
+    total_time = time.time() - start_time
+    
+    # Extract token info
+    usage = response.usage
+    input_tokens = usage.prompt_tokens if usage else 0
+    output_tokens = usage.completion_tokens if usage else 0
+    total_tokens = usage.total_tokens if usage else 0
+    
+    # Calculate stats
+    tokens_per_second = output_tokens / generation_time if generation_time > 0 else 0
+    cost = calculate_cost(session_model, input_tokens, output_tokens)
+    
+    assistant_message = Message(
+        role="assistant",
+        content=response.choices[0].message.content,
+        model=session_model,
+        sources=sources if sources else None,
+        stats=MessageStats(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            cost_usd=cost,
+            tokens_per_second=round(tokens_per_second, 1),
+            latency_ms=round(total_time * 1000, 0)
+        )
+    )
+    
+    # Update session stats
+    current_stats = doc.get("stats", {})
+    new_stats = {
+        "total_messages": current_stats.get("total_messages", 0) + 2,
+        "total_input_tokens": current_stats.get("total_input_tokens", 0) + input_tokens,
+        "total_output_tokens": current_stats.get("total_output_tokens", 0) + output_tokens,
+        "total_tokens": current_stats.get("total_tokens", 0) + total_tokens,
+        "total_cost_usd": current_stats.get("total_cost_usd", 0) + cost,
+    }
+    
+    # Calculate averages
+    msg_count = new_stats["total_messages"] // 2  # Number of exchanges
+    if msg_count > 0:
+        new_stats["avg_tokens_per_second"] = round(
+            (current_stats.get("avg_tokens_per_second", 0) * (msg_count - 1) + tokens_per_second) / msg_count, 1
+        )
+        new_stats["avg_latency_ms"] = round(
+            (current_stats.get("avg_latency_ms", 0) * (msg_count - 1) + total_time * 1000) / msg_count, 0
+        )
+    
+    # Auto-generate title from first message
+    title_update = {}
+    if len(messages) == 0:
+        # Generate title from first message
+        first_words = msg_request.content.split()[:6]
+        title = " ".join(first_words)
+        if len(title) > 40:
+            title = title[:40] + "..."
+        title_update["title"] = title
+    
+    # Update session in database
+    await collection.update_one(
+        {"_id": session_id},
+        {
+            "$push": {
+                "messages": {
+                    "$each": [user_message.model_dump(), assistant_message.model_dump()]
+                }
+            },
+            "$set": {
+                "updated_at": datetime.now(),
+                "stats": new_stats,
+                **title_update
+            }
+        }
+    )
+    
+    return {
+        "user_message": user_message,
+        "assistant_message": assistant_message,
+        "session_stats": SessionStats(**new_stats)
+    }
+
+
+@router.delete("/{session_id}/messages")
+async def clear_messages(
+    request: Request,
+    session_id: str,
+    user: Optional[UserResponse] = Depends(get_current_user)
+):
+    """Clear all messages in a session."""
+    collection = await get_sessions_collection(request)
+    
+    # Check ownership
+    query = {"_id": session_id}
+    if user:
+        query["user_id"] = user.id
+    
+    result = await collection.update_one(
+        query,
+        {
+            "$set": {
+                "messages": [],
+                "stats": SessionStats().model_dump(),
+                "updated_at": datetime.now()
+            }
+        }
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    return {"success": True}
+
+
+# ============== Utility Endpoints ==============
+# NOTE: These endpoints use "meta/" prefix to avoid conflict with /{session_id}
+
+@router.get("/meta/models")
+async def get_available_models():
+    """Get list of available models with pricing."""
+    return {
+        "models": [
+            {"id": model_id, "pricing": pricing}
+            for model_id, pricing in MODEL_PRICING.items()
+            if model_id != "default"
+        ]
+    }
+
+
+@router.get("/meta/pricing")
+async def get_model_pricing_info():
+    """Get pricing information for all models."""
+    return {
+        "models": [
+            ModelInfo(id=model_id, pricing=pricing)
+            for model_id, pricing in MODEL_PRICING.items()
+            if model_id != "default"
+        ]
+    }

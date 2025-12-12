@@ -246,6 +246,57 @@ class ProfileManager:
         logger.info(f"Created profile: {key}")
         return True
     
+    def update_profile(
+        self,
+        key: str,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        documents_folders: Optional[List[str]] = None,
+        database: Optional[str] = None,
+        **kwargs
+    ) -> bool:
+        """
+        Update an existing profile.
+        
+        Args:
+            key: Profile key to update
+            name: New display name (optional)
+            description: New description (optional)
+            documents_folders: New list of document folders (optional)
+            database: New database name (optional)
+            **kwargs: Additional ProfileConfig fields
+            
+        Returns:
+            True if update was successful
+        """
+        if not self._config:
+            return False
+        
+        if key not in self._config.profiles:
+            logger.error(f"Profile '{key}' not found")
+            return False
+        
+        profile = self._config.profiles[key]
+        
+        # Update only provided fields
+        if name is not None:
+            profile.name = name
+        if description is not None:
+            profile.description = description
+        if documents_folders is not None:
+            profile.documents_folders = documents_folders
+        if database is not None:
+            profile.database = database
+        
+        # Handle additional kwargs
+        for field in ['collection_documents', 'collection_chunks', 'vector_index', 'text_index', 'embedding_model', 'llm_model']:
+            if field in kwargs and kwargs[field] is not None:
+                setattr(profile, field, kwargs[field])
+        
+        self._save_profiles()
+        logger.info(f"Updated profile: {key}")
+        return True
+
     def delete_profile(self, name: str) -> bool:
         """
         Delete a profile.

@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Outlet, NavLink, useLocation } from 'react-router-dom'
+import { useState, useRef, useEffect } from 'react'
+import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   ChatBubbleLeftRightIcon,
   MagnifyingGlassIcon,
@@ -9,23 +9,403 @@ import {
   Bars3Icon,
   XMarkIcon,
   CircleStackIcon,
+  PlusIcon,
+  FolderIcon,
+  FolderPlusIcon,
+  TrashIcon,
+  PencilIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  StarIcon,
+  CheckIcon,
+  ArrowRightOnRectangleIcon,
+  EllipsisHorizontalIcon,
 } from '@heroicons/react/24/outline'
+import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid'
 import ThemeToggle from './ThemeToggle'
+import { useChatSidebar } from '../contexts/ChatSidebarContext'
+import { useAuth } from '../contexts/AuthContext'
+import { ChatSession } from '../api/client'
 
-const navigation = [
-  { name: 'Chat', href: '/chat', icon: ChatBubbleLeftRightIcon },
-  { name: 'Search', href: '/search', icon: MagnifyingGlassIcon },
-  { name: 'Documents', href: '/documents', icon: DocumentTextIcon },
-  { name: 'Profiles', href: '/profiles', icon: UserCircleIcon },
-  { name: 'System', href: '/system', icon: Cog6ToothIcon },
+// User menu items (shown in dropdown like OpenAI's user menu)
+const baseMenuItems = [
+  { name: 'Search', href: '/search', icon: MagnifyingGlassIcon, adminOnly: false },
+  { name: 'Documents', href: '/documents', icon: DocumentTextIcon, adminOnly: false },
+  { name: 'Profiles', href: '/profiles', icon: UserCircleIcon, adminOnly: true },
+  { name: 'System', href: '/system', icon: Cog6ToothIcon, adminOnly: false },
 ]
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
+  const userMenuRef = useRef<HTMLDivElement>(null)
   const location = useLocation()
+  const navigate = useNavigate()
+  const { user, isAuthenticated, isLoading: isAuthLoading, logout } = useAuth()
+  const {
+    sessions,
+    folders,
+    currentSession,
+    isSidebarLoading,
+    collapsedFolders,
+    editingTitle,
+    editingTitleValue,
+    showNewFolder,
+    newFolderName,
+    contextMenu,
+    handleNewChat,
+    handleSelectSession,
+    handleDeleteSession,
+    handleTogglePin,
+    handleUpdateTitle,
+    handleCreateFolder,
+    handleDeleteFolder,
+    toggleFolder,
+    setEditingTitle,
+    setEditingTitleValue,
+    setShowNewFolder,
+    setNewFolderName,
+    setContextMenu,
+  } = useChatSidebar()
+
+  // Group sessions by folder
+  const sessionsByFolder = new Map<string | null, ChatSession[]>()
+  const pinnedSessions: ChatSession[] = []
+  
+  sessions.forEach(session => {
+    if (session.is_pinned) {
+      pinnedSessions.push(session)
+    } else {
+      const key = session.folder_id || null
+      if (!sessionsByFolder.has(key)) {
+        sessionsByFolder.set(key, [])
+      }
+      sessionsByFolder.get(key)!.push(session)
+    }
+  })
+
+  // Check if we're on the chat page
+  const isOnChatPage = location.pathname === '/' || location.pathname.startsWith('/chat')
+
+  // Get page title for non-chat pages
+  const getPageTitle = () => {
+    const item = baseMenuItems.find(n => location.pathname.startsWith(n.href))
+    return item?.name || (isOnChatPage ? 'Chat' : 'Chat')
+  }
+
+  // Filter menu items based on user admin status
+  const userMenuItems = baseMenuItems.filter(item => !item.adminOnly || user?.is_admin)
+
+  // Close user menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
+        setUserMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const handleLogout = async () => {
+    await logout()
+    setUserMenuOpen(false)
+    navigate('/login')
+  }
+
+  const handleMenuItemClick = (href: string) => {
+    navigate(href)
+    setUserMenuOpen(false)
+    setSidebarOpen(false)
+  }
+
+  const SidebarContent = () => (
+    <div className="flex flex-col h-full">
+      {/* Top Section - New Chat Button */}
+      <div className="p-3 flex-shrink-0">
+        <button
+          onClick={() => handleNewChat()}
+          className="w-full flex items-center gap-2 px-4 py-3 rounded-xl border border-surface-variant dark:border-gray-600 hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-sm font-medium text-primary-900 dark:text-gray-200"
+        >
+          <PlusIcon className="h-5 w-5" />
+          New chat
+        </button>
+      </div>
+
+      {/* Folders Section (Projects) */}
+      <div className="px-3 flex-shrink-0">
+        <div className="text-xs font-medium text-secondary dark:text-gray-500 uppercase tracking-wider px-2 py-2">
+          Projects
+        </div>
+        
+        {/* New Folder Input */}
+        {showNewFolder ? (
+          <div className="flex items-center gap-1 px-2 py-1 mb-1">
+            <FolderPlusIcon className="h-4 w-4 text-primary" />
+            <input
+              type="text"
+              value={newFolderName}
+              onChange={(e) => setNewFolderName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleCreateFolder()
+                if (e.key === 'Escape') setShowNewFolder(false)
+              }}
+              placeholder="Folder name"
+              className="flex-1 text-sm bg-transparent border-b border-primary focus:outline-none dark:text-gray-200"
+              autoFocus
+            />
+            <button onClick={handleCreateFolder} className="p-1">
+              <CheckIcon className="h-4 w-4 text-green-500" />
+            </button>
+            <button onClick={() => setShowNewFolder(false)} className="p-1">
+              <XMarkIcon className="h-4 w-4 text-red-500" />
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setShowNewFolder(true)}
+            className="flex items-center gap-2 px-2 py-2 text-sm text-secondary hover:text-primary dark:text-gray-400 dark:hover:text-primary-300 w-full rounded-lg hover:bg-surface-variant dark:hover:bg-gray-800"
+          >
+            <FolderPlusIcon className="h-4 w-4" />
+            New project
+          </button>
+        )}
+
+        {/* Folder List */}
+        <div className="mt-1 space-y-1">
+          {folders.map(folder => (
+            <div key={folder.id}>
+              <div
+                className="flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-800 cursor-pointer group"
+                onClick={() => toggleFolder(folder.id)}
+              >
+                {collapsedFolders.has(folder.id) ? (
+                  <ChevronRightIcon className="h-4 w-4 text-secondary" />
+                ) : (
+                  <ChevronDownIcon className="h-4 w-4 text-secondary" />
+                )}
+                <FolderIcon className="h-4 w-4" style={{ color: folder.color }} />
+                <span className="flex-1 text-sm truncate dark:text-gray-200">{folder.name}</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleNewChat(folder.id)
+                  }}
+                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-surface dark:hover:bg-gray-700 rounded"
+                >
+                  <PlusIcon className="h-3 w-3 text-secondary" />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (confirm(`Delete folder "${folder.name}"?`)) {
+                      handleDeleteFolder(folder.id)
+                    }
+                  }}
+                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-surface dark:hover:bg-gray-700 rounded"
+                >
+                  <TrashIcon className="h-3 w-3 text-red-500" />
+                </button>
+              </div>
+              {!collapsedFolders.has(folder.id) && (
+                <div className="ml-4 mt-0.5 space-y-0.5">
+                  {(sessionsByFolder.get(folder.id) || []).map(session => (
+                    <SessionItem
+                      key={session.id}
+                      session={session}
+                      isActive={currentSession?.id === session.id && isOnChatPage}
+                      isEditing={editingTitle === session.id}
+                      editValue={editingTitleValue}
+                      onSelect={() => handleSelectSession(session.id)}
+                      onEditChange={setEditingTitleValue}
+                      onEditSave={() => handleUpdateTitle(session.id)}
+                      onEditCancel={() => setEditingTitle(null)}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        setContextMenu({ sessionId: session.id, x: e.clientX, y: e.clientY })
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Divider */}
+      <div className="mx-3 my-2 border-t border-surface-variant dark:border-gray-700" />
+
+      {/* Scrollable Chat List */}
+      <div className="flex-1 overflow-y-auto px-3">
+        {isSidebarLoading ? (
+          <div className="flex justify-center py-8">
+            <div className="animate-spin h-6 w-6 border-2 border-primary border-t-transparent rounded-full" />
+          </div>
+        ) : (
+          <div className="space-y-0.5">
+            {/* Pinned Sessions */}
+            {pinnedSessions.length > 0 && (
+              <div className="mb-2">
+                <div className="px-2 py-1 text-xs font-medium text-secondary dark:text-gray-500 uppercase tracking-wider">
+                  Pinned
+                </div>
+                {pinnedSessions.map(session => (
+                  <SessionItem
+                    key={session.id}
+                    session={session}
+                    isActive={currentSession?.id === session.id && isOnChatPage}
+                    isEditing={editingTitle === session.id}
+                    editValue={editingTitleValue}
+                    onSelect={() => handleSelectSession(session.id)}
+                    onEditChange={setEditingTitleValue}
+                    onEditSave={() => handleUpdateTitle(session.id)}
+                    onEditCancel={() => setEditingTitle(null)}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      setContextMenu({ sessionId: session.id, x: e.clientX, y: e.clientY })
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+
+            {/* Your Chats */}
+            {(sessionsByFolder.get(null) || []).length > 0 && (
+              <div>
+                <div className="px-2 py-1 text-xs font-medium text-secondary dark:text-gray-500 uppercase tracking-wider">
+                  Your chats
+                </div>
+                {(sessionsByFolder.get(null) || []).map(session => (
+                  <SessionItem
+                    key={session.id}
+                    session={session}
+                    isActive={currentSession?.id === session.id && isOnChatPage}
+                    isEditing={editingTitle === session.id}
+                    editValue={editingTitleValue}
+                    onSelect={() => handleSelectSession(session.id)}
+                    onEditChange={setEditingTitleValue}
+                    onEditSave={() => handleUpdateTitle(session.id)}
+                    onEditCancel={() => setEditingTitle(null)}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      setContextMenu({ sessionId: session.id, x: e.clientX, y: e.clientY })
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+
+            {sessions.length === 0 && !isSidebarLoading && (
+              <div className="text-center py-8 text-secondary dark:text-gray-500 text-sm">
+                No chats yet
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Bottom Sticky Section - User Menu */}
+      <div className="flex-shrink-0 border-t border-surface-variant dark:border-gray-700 p-3" ref={userMenuRef}>
+        {/* User Menu Dropdown (appears above the button) */}
+        {userMenuOpen && (
+          <div className="absolute bottom-20 left-3 right-3 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-surface-variant dark:border-gray-600 py-2 z-50">
+            {/* User Info */}
+            {isAuthenticated && user && (
+              <div className="px-4 py-2 border-b border-surface-variant dark:border-gray-700">
+                <div className="font-medium text-sm text-primary-900 dark:text-gray-200">{user.name}</div>
+                <div className="text-xs text-secondary dark:text-gray-400">{user.email}</div>
+              </div>
+            )}
+            
+            {/* Menu Items */}
+            <div className="py-1">
+              {userMenuItems.map((item) => {
+                const isActive = location.pathname.startsWith(item.href)
+                return (
+                  <button
+                    key={item.name}
+                    onClick={() => handleMenuItemClick(item.href)}
+                    className={`w-full flex items-center gap-3 px-4 py-2 text-sm transition-colors ${
+                      isActive
+                        ? 'bg-primary-100 dark:bg-primary-900/50 text-primary-700 dark:text-primary-300'
+                        : 'text-secondary dark:text-gray-400 hover:bg-surface-variant dark:hover:bg-gray-700'
+                    }`}
+                  >
+                    <item.icon className="h-5 w-5" />
+                    {item.name}
+                  </button>
+                )
+              })}
+            </div>
+            
+            {/* Theme Toggle */}
+            <div className="px-4 py-2 border-t border-surface-variant dark:border-gray-700 flex items-center justify-between">
+              <span className="text-sm text-secondary dark:text-gray-400">Theme</span>
+              <ThemeToggle />
+            </div>
+            
+            {/* Auth Actions */}
+            <div className="border-t border-surface-variant dark:border-gray-700 py-1">
+              {isAuthenticated ? (
+                <button
+                  onClick={handleLogout}
+                  className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
+                >
+                  <ArrowRightOnRectangleIcon className="h-5 w-5" />
+                  Log out
+                </button>
+              ) : (
+                <button
+                  onClick={() => { navigate('/login'); setUserMenuOpen(false) }}
+                  className="w-full flex items-center gap-3 px-4 py-2 text-sm text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/20"
+                >
+                  <ArrowRightOnRectangleIcon className="h-5 w-5" />
+                  Sign in
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+        
+        {/* User Button */}
+        <button
+          onClick={() => setUserMenuOpen(!userMenuOpen)}
+          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors"
+        >
+          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary to-primary-600 flex items-center justify-center text-white text-sm font-medium">
+            {isAuthenticated && user ? (
+              user.name.charAt(0).toUpperCase()
+            ) : (
+              <CircleStackIcon className="h-5 w-5" />
+            )}
+          </div>
+          <div className="flex-1 text-left">
+            <div className="text-sm font-medium text-primary-900 dark:text-gray-200 truncate">
+              {isAuthenticated && user ? user.name : 'MongoDB RAG'}
+            </div>
+            {isAuthenticated && user && (
+              <div className="text-xs text-secondary dark:text-gray-500 truncate">{user.email}</div>
+            )}
+          </div>
+          <EllipsisHorizontalIcon className="h-5 w-5 text-secondary dark:text-gray-400" />
+        </button>
+      </div>
+    </div>
+  )
 
   return (
     <div className="min-h-screen bg-background dark:bg-gray-900 transition-colors duration-200">
+      {/* Auth Loading Overlay */}
+      {isAuthLoading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background dark:bg-gray-900">
+          <div className="text-center">
+            <div className="animate-spin h-10 w-10 border-4 border-primary border-t-transparent rounded-full mx-auto mb-4" />
+            <p className="text-secondary dark:text-gray-400">Loading...</p>
+          </div>
+        </div>
+      )}
+
       {/* Mobile sidebar backdrop */}
       {sidebarOpen && (
         <div
@@ -40,100 +420,159 @@ export default function Layout() {
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <div className="flex h-16 items-center justify-between px-6">
-          <div className="flex items-center gap-3">
-            <CircleStackIcon className="h-8 w-8 text-primary" />
-            <span className="text-xl font-semibold text-primary-900 dark:text-primary-200">MongoDB RAG</span>
-          </div>
-          <button
-            onClick={() => setSidebarOpen(false)}
-            className="rounded-full p-2 hover:bg-surface-variant dark:hover:bg-gray-700"
-          >
-            <XMarkIcon className="h-6 w-6 text-secondary dark:text-gray-400" />
-          </button>
-        </div>
-        <nav className="mt-4 px-3">
-          {navigation.map((item) => (
-            <NavLink
-              key={item.name}
-              to={item.href}
-              onClick={() => setSidebarOpen(false)}
-              className={({ isActive }) =>
-                `flex items-center gap-3 rounded-2xl px-4 py-3 mb-1 text-sm font-medium transition-all duration-200 ${
-                  isActive
-                    ? 'bg-primary-100 dark:bg-primary-900/50 text-primary-700 dark:text-primary-300'
-                    : 'text-secondary dark:text-gray-400 hover:bg-surface-variant dark:hover:bg-gray-700'
-                }`
-              }
-            >
-              <item.icon className="h-5 w-5" />
-              {item.name}
-            </NavLink>
-          ))}
-        </nav>
+        <SidebarContent />
       </div>
 
       {/* Desktop sidebar */}
       <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-72 lg:flex-col">
-        <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-surface dark:bg-gray-800 px-6 pb-4 shadow-elevation-1">
-          <div className="flex h-16 items-center gap-3">
-            <CircleStackIcon className="h-8 w-8 text-primary" />
-            <span className="text-xl font-semibold text-primary-900 dark:text-primary-200">MongoDB RAG</span>
-          </div>
-          <nav className="flex flex-1 flex-col">
-            <ul className="flex flex-1 flex-col gap-y-1">
-              {navigation.map((item) => (
-                <li key={item.name}>
-                  <NavLink
-                    to={item.href}
-                    className={({ isActive }) =>
-                      `group flex gap-x-3 rounded-2xl px-4 py-3 text-sm font-medium leading-6 transition-all duration-200 ${
-                        isActive
-                          ? 'bg-primary-100 dark:bg-primary-900/50 text-primary-700 dark:text-primary-300'
-                          : 'text-secondary dark:text-gray-400 hover:bg-surface-variant dark:hover:bg-gray-700 hover:text-primary-700 dark:hover:text-primary-300'
-                      }`
-                    }
-                  >
-                    <item.icon className="h-5 w-5 shrink-0" />
-                    {item.name}
-                  </NavLink>
-                </li>
-              ))}
-            </ul>
-          </nav>
-          <div className="mt-auto border-t border-surface-variant dark:border-gray-700 pt-4">
-            <p className="text-xs text-secondary dark:text-gray-500">
-              MongoDB RAG Agent v1.0
-            </p>
-          </div>
+        <div className="flex grow flex-col bg-surface dark:bg-gray-800 shadow-elevation-1">
+          <SidebarContent />
         </div>
       </div>
 
       {/* Main content */}
       <div className="lg:pl-72">
-        {/* Top bar */}
-        <div className="sticky top-0 z-30 flex h-16 items-center gap-x-4 bg-surface/95 dark:bg-gray-800/95 px-4 shadow-elevation-1 backdrop-blur sm:gap-x-6 sm:px-6 lg:px-8">
+        {/* Top bar - only show on non-chat pages or mobile */}
+        <div className="sticky top-0 z-30 flex h-14 items-center gap-x-4 bg-surface/95 dark:bg-gray-800/95 px-4 shadow-sm backdrop-blur lg:hidden">
           <button
             type="button"
-            className="-m-2.5 p-2.5 text-secondary dark:text-gray-400 lg:hidden"
+            className="-m-2.5 p-2.5 text-secondary dark:text-gray-400"
             onClick={() => setSidebarOpen(true)}
           >
             <Bars3Icon className="h-6 w-6" />
           </button>
-
           <div className="flex flex-1 items-center justify-between">
             <h1 className="text-lg font-semibold text-primary-900 dark:text-primary-200">
-              {navigation.find((n) => location.pathname.startsWith(n.href))?.name || 'Chat'}
+              {getPageTitle()}
             </h1>
-            <ThemeToggle />
           </div>
         </div>
 
         {/* Page content */}
-        <main className="py-6 px-4 sm:px-6 lg:px-8">
+        <main className={isOnChatPage ? '' : 'py-6 px-4 sm:px-6 lg:px-8'}>
           <Outlet />
         </main>
       </div>
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setContextMenu(null)}
+          />
+          <div
+            className="fixed z-50 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-surface-variant dark:border-gray-600 py-1 min-w-[160px]"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
+            {(() => {
+              const session = sessions.find(s => s.id === contextMenu.sessionId)
+              if (!session) return null
+              return (
+                <>
+                  <button
+                    onClick={() => handleTogglePin(session.id, session.is_pinned)}
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-surface-variant dark:hover:bg-gray-700 dark:text-gray-200"
+                  >
+                    {session.is_pinned ? (
+                      <>
+                        <StarIcon className="h-4 w-4" />
+                        Unpin
+                      </>
+                    ) : (
+                      <>
+                        <StarIconSolid className="h-4 w-4 text-yellow-500" />
+                        Pin
+                      </>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEditingTitle(session.id)
+                      setEditingTitleValue(session.title)
+                      setContextMenu(null)
+                    }}
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-surface-variant dark:hover:bg-gray-700 dark:text-gray-200"
+                  >
+                    <PencilIcon className="h-4 w-4" />
+                    Rename
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (confirm(`Delete chat "${session.title}"?`)) {
+                        handleDeleteSession(session.id)
+                      } else {
+                        setContextMenu(null)
+                      }
+                    }}
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
+                  >
+                    <TrashIcon className="h-4 w-4" />
+                    Delete
+                  </button>
+                </>
+              )
+            })()}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// Session Item Component
+function SessionItem({
+  session,
+  isActive,
+  isEditing,
+  editValue,
+  onSelect,
+  onEditChange,
+  onEditSave,
+  onEditCancel,
+  onContextMenu,
+}: {
+  session: ChatSession
+  isActive: boolean
+  isEditing: boolean
+  editValue: string
+  onSelect: () => void
+  onEditChange: (value: string) => void
+  onEditSave: () => void
+  onEditCancel: () => void
+  onContextMenu: (e: React.MouseEvent) => void
+}) {
+  return (
+    <div
+      onClick={onSelect}
+      onContextMenu={onContextMenu}
+      className={`flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer group transition-colors ${
+        isActive
+          ? 'bg-primary-100 dark:bg-primary-900/50 text-primary-900 dark:text-primary-100'
+          : 'hover:bg-surface-variant dark:hover:bg-gray-800 text-primary-900 dark:text-gray-300'
+      }`}
+    >
+      <ChatBubbleLeftRightIcon className="h-4 w-4 flex-shrink-0 text-secondary" />
+      {isEditing ? (
+        <input
+          type="text"
+          value={editValue}
+          onChange={(e) => onEditChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onEditSave()
+            if (e.key === 'Escape') onEditCancel()
+          }}
+          onBlur={onEditSave}
+          className="flex-1 text-sm bg-transparent border-b border-primary focus:outline-none"
+          autoFocus
+          onClick={(e) => e.stopPropagation()}
+        />
+      ) : (
+        <span className="flex-1 text-sm truncate">{session.title || 'New Chat'}</span>
+      )}
+      {session.is_pinned && (
+        <StarIconSolid className="h-3 w-3 text-yellow-500 flex-shrink-0" />
+      )}
     </div>
   )
 }

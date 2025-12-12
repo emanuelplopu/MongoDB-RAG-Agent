@@ -17,7 +17,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend.routers import chat, search, profiles, ingestion, system
+from backend.routers import chat, search, profiles, ingestion, system, sessions, auth
+from backend.routers.system import load_config_from_db
+from backend.routers.ingestion import check_and_resume_interrupted_jobs, graceful_shutdown_handler
 from backend.core.config import settings
 from backend.core.database import DatabaseManager
 
@@ -41,12 +43,37 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     app.state.db = db_manager
     
     logger.info(f"Connected to database: {settings.mongodb_database}")
+    
+    # Load persisted configuration from database
+    try:
+        config_loaded = await load_config_from_db(db_manager)
+        if config_loaded:
+            logger.info("Loaded saved configuration from database")
+        else:
+            logger.info("No saved configuration found, using defaults")
+    except Exception as e:
+        logger.warning(f"Failed to load saved config: {e}")
+    
+    # Check for and resume interrupted ingestion jobs
+    try:
+        resumed_job = await check_and_resume_interrupted_jobs(db_manager)
+        if resumed_job:
+            logger.info(f"Resumed interrupted ingestion job: {resumed_job}")
+    except Exception as e:
+        logger.warning(f"Failed to check for interrupted jobs: {e}")
+    
     logger.info(f"API ready at http://0.0.0.0:{settings.api_port}")
     
     yield
     
-    # Shutdown
+    # Shutdown - gracefully handle running ingestion jobs
     logger.info("Shutting down MongoDB RAG Agent API...")
+    
+    try:
+        await graceful_shutdown_handler(db_manager)
+    except Exception as e:
+        logger.warning(f"Error during graceful shutdown: {e}")
+    
     await db_manager.disconnect()
     logger.info("Database connection closed")
 
@@ -125,6 +152,18 @@ app.include_router(
     system.router,
     prefix="/api/v1/system",
     tags=["System"]
+)
+
+app.include_router(
+    sessions.router,
+    prefix="/api/v1/sessions",
+    tags=["Chat Sessions"]
+)
+
+app.include_router(
+    auth.router,
+    prefix="/api/v1/auth",
+    tags=["Authentication"]
 )
 
 

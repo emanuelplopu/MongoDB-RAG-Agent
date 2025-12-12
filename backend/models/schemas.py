@@ -19,9 +19,11 @@ class IngestionStatus(str, Enum):
     """Ingestion job status."""
     PENDING = "pending"
     RUNNING = "running"
+    PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    STOPPED = "stopped"
 
 
 # ============== Chat Models ==============
@@ -120,6 +122,14 @@ class ProfileCreateRequest(BaseModel):
     database: Optional[str] = None
 
 
+class ProfileUpdateRequest(BaseModel):
+    """Update profile request."""
+    name: Optional[str] = Field(None, description="Display name")
+    description: Optional[str] = None
+    documents_folders: Optional[List[str]] = Field(None, min_length=1)
+    database: Optional[str] = None
+
+
 # ============== Ingestion Models ==============
 
 class IngestionStartRequest(BaseModel):
@@ -142,12 +152,48 @@ class IngestionStatusResponse(BaseModel):
     total_files: int = 0
     processed_files: int = 0
     failed_files: int = 0
+    excluded_files: int = 0
+    document_count: int = 0
+    image_count: int = 0
+    audio_count: int = 0
+    video_count: int = 0
     chunks_created: int = 0
     current_file: Optional[str] = None
     errors: List[str] = Field(default_factory=list)
     progress_percent: float = 0.0
     elapsed_seconds: float = 0.0
     estimated_remaining_seconds: Optional[float] = None
+    is_paused: bool = False
+    can_pause: bool = True
+    can_stop: bool = True
+
+
+class IngestionRunSummary(BaseModel):
+    """Summary of an ingestion run for history display."""
+    job_id: str
+    status: str
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    total_files: int = 0
+    processed_files: int = 0
+    failed_files: int = 0
+    excluded_files: int = 0
+    document_count: int = 0
+    image_count: int = 0
+    audio_count: int = 0
+    video_count: int = 0
+    chunks_created: int = 0
+    elapsed_seconds: float = 0.0
+    profile: Optional[str] = None
+
+
+class IngestionRunsResponse(BaseModel):
+    """Paginated list of ingestion runs."""
+    runs: List[IngestionRunSummary]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
 
 
 class DocumentInfo(BaseModel):

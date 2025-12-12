@@ -4,7 +4,7 @@ profiles:
     name: Default
     description: Default project profile using the standard documents folder
     documents_folders:
-    - documents
+    - /app/documents
     database: rag_db
     collection_documents: documents
     collection_chunks: chunks
@@ -14,8 +14,19 @@ profiles:
     name: Parhelion Energy
     description: Parhelion Energy knowledge base
     documents_folders:
-    - D:\parhelion.energy
+    - /app/mounts/parhelion-energy
     database: rag_parhelion
+    collection_documents: documents
+    collection_chunks: chunks
+    vector_index: vector_index
+    text_index: text_index
+  parhelion-full:
+    name: Parhelion Energy + GDrive
+    description: Parhelion Energy knowledge base with Google Drive documents
+    documents_folders:
+    - /app/mounts/parhelion-energy
+    - /app/mounts/gdrive-root
+    database: rag_parhelion_full
     collection_documents: documents
     collection_chunks: chunks
     vector_index: vector_index
@@ -24,7 +35,7 @@ profiles:
     name: Example Project
     description: Example project demonstrating profile separation
     documents_folders:
-    - projects/example-project/documents
+    - /app/projects/example-project/documents
     database: rag_example
     collection_documents: documents
     collection_chunks: chunks
@@ -34,7 +45,7 @@ profiles:
     name: Test Profile
     description: A test profile
     documents_folders:
-    - ./test_docs
+    - /app/test_docs
     database: rag_test_profile
     collection_documents: documents
     collection_chunks: chunks

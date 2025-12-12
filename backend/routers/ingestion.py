@@ -3,6 +3,8 @@
 import logging
 import asyncio
 import uuid
+import os
+import signal
 from collections import deque
 from datetime import datetime
 from typing import Dict, Optional, List
@@ -12,18 +14,30 @@ from bson import ObjectId
 
 from backend.models.schemas import (
     IngestionStartRequest, IngestionStatusResponse, IngestionStatus,
-    DocumentInfo, DocumentListResponse, SuccessResponse
+    DocumentInfo, DocumentListResponse, SuccessResponse,
+    IngestionRunSummary, IngestionRunsResponse
 )
 from backend.core.config import settings
+from backend.routers.auth import require_admin, UserResponse
+from fastapi import Depends
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Track ingestion jobs (use Redis in production)
-_ingestion_jobs: Dict[str, dict] = {}
+# Collection name for persisted ingestion jobs
+INGESTION_JOBS_COLLECTION = "ingestion_jobs"
 
-# Log buffer with max 50000 lines
+# Track active ingestion task for graceful shutdown
+_active_ingestion_task: Optional[asyncio.Task] = None
+_current_job_id: Optional[str] = None
+_shutdown_requested: bool = False
+_pause_requested: bool = False
+_stop_requested: bool = False
+_is_paused: bool = False
+_current_job_state: Optional[dict] = None  # In-memory state for real-time status
+
+# Log buffer with max 50000 lines (kept in-memory for performance)
 MAX_LOG_LINES = 50000
 _ingestion_logs: deque = deque(maxlen=MAX_LOG_LINES)
 
@@ -50,8 +64,144 @@ _log_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelnam
 _log_handler.setLevel(logging.DEBUG)
 
 
-async def run_ingestion(job_id: str, config: dict):
-    """Run ingestion in background."""
+# ============== Database-backed Job Storage ==============
+
+async def get_jobs_collection(db):
+    """Get the ingestion jobs collection."""
+    return db.db[INGESTION_JOBS_COLLECTION]
+
+
+async def save_job_to_db(db, job: dict):
+    """Save or update a job in the database."""
+    collection = await get_jobs_collection(db)
+    job_doc = {**job, "_id": job["job_id"]}
+    await collection.replace_one(
+        {"_id": job["job_id"]},
+        job_doc,
+        upsert=True
+    )
+
+
+async def get_job_from_db(db, job_id: str) -> Optional[dict]:
+    """Get a job from the database."""
+    collection = await get_jobs_collection(db)
+    doc = await collection.find_one({"_id": job_id})
+    if doc:
+        doc["job_id"] = doc.pop("_id")
+    return doc
+
+
+async def get_latest_job_from_db(db) -> Optional[dict]:
+    """Get the most recent job from the database."""
+    collection = await get_jobs_collection(db)
+    cursor = collection.find().sort("started_at", -1).limit(1)
+    async for doc in cursor:
+        doc["job_id"] = doc.pop("_id")
+        return doc
+    return None
+
+
+async def get_running_job_from_db(db) -> Optional[dict]:
+    """Get any running or interrupted job from the database."""
+    collection = await get_jobs_collection(db)
+    # Look for RUNNING or INTERRUPTED status
+    doc = await collection.find_one({
+        "status": {"$in": [IngestionStatus.RUNNING, "INTERRUPTED"]}
+    })
+    if doc:
+        doc["job_id"] = doc.pop("_id")
+    return doc
+
+
+async def mark_job_interrupted(db, job_id: str):
+    """Mark a job as interrupted (for recovery after restart)."""
+    collection = await get_jobs_collection(db)
+    await collection.update_one(
+        {"_id": job_id, "status": IngestionStatus.RUNNING},
+        {"$set": {
+            "status": "INTERRUPTED",
+            "interrupted_at": datetime.now().isoformat()
+        }}
+    )
+    logger.info(f"Marked job {job_id} as interrupted")
+
+
+async def check_and_resume_interrupted_jobs(db) -> Optional[str]:
+    """
+    Check for interrupted ingestion jobs and resume them.
+    
+    Called at startup to recover from container restarts.
+    Returns the job_id if a job was resumed, None otherwise.
+    """
+    # First, mark any RUNNING jobs as INTERRUPTED (they were killed by restart)
+    collection = await get_jobs_collection(db)
+    result = await collection.update_many(
+        {"status": IngestionStatus.RUNNING},
+        {"$set": {
+            "status": "INTERRUPTED",
+            "interrupted_at": datetime.now().isoformat()
+        }}
+    )
+    
+    if result.modified_count > 0:
+        logger.info(f"Marked {result.modified_count} running job(s) as interrupted")
+    
+    # Check for interrupted jobs to resume
+    interrupted_job = await collection.find_one({"status": "INTERRUPTED"})
+    
+    if interrupted_job:
+        job_id = interrupted_job["_id"]
+        config = interrupted_job.get("config", {})
+        
+        # If config doesn't have incremental set, default to True for resume
+        if "incremental" not in config:
+            config["incremental"] = True
+        
+        logger.info(f"Found interrupted job {job_id}, resuming...")
+        
+        # Resume the job using asyncio.create_task
+        asyncio.create_task(run_ingestion(job_id, config, db))
+        
+        return job_id
+    
+    return None
+
+
+async def graceful_shutdown_handler(db):
+    """
+    Handle graceful shutdown - mark running jobs as interrupted.
+    
+    Called during application shutdown.
+    """
+    global _shutdown_requested
+    
+    if _current_job_id:
+        logger.info(f"Graceful shutdown: marking job {_current_job_id} as interrupted")
+        _shutdown_requested = True
+        await mark_job_interrupted(db, _current_job_id)
+    else:
+        # Just in case, mark any running jobs
+        collection = await get_jobs_collection(db)
+        result = await collection.update_many(
+            {"status": IngestionStatus.RUNNING},
+            {"$set": {
+                "status": "INTERRUPTED",
+                "interrupted_at": datetime.now().isoformat()
+            }}
+        )
+        if result.modified_count > 0:
+            logger.info(f"Marked {result.modified_count} job(s) as interrupted during shutdown")
+
+
+async def run_ingestion(job_id: str, config: dict, db):
+    """Run ingestion in background with DB persistence."""
+    global _current_job_id, _shutdown_requested, _pause_requested, _stop_requested, _is_paused, _current_job_state
+    _current_job_id = job_id
+    _shutdown_requested = False
+    _pause_requested = False
+    _stop_requested = False
+    _is_paused = False
+    
     # Clear logs and add handler
     _ingestion_logs.clear()
     
@@ -61,9 +211,37 @@ async def run_ingestion(job_id: str, config: dict):
     root_logger.addHandler(_log_handler)
     src_logger.addHandler(_log_handler)
     
+    # Helper to update job in memory and DB
+    job_state = {
+        "job_id": job_id,
+        "status": IngestionStatus.RUNNING,
+        "started_at": datetime.now().isoformat(),
+        "completed_at": None,
+        "total_files": 0,
+        "processed_files": 0,
+        "failed_files": 0,
+        "excluded_files": 0,
+        "document_count": 0,
+        "image_count": 0,
+        "audio_count": 0,
+        "video_count": 0,
+        "chunks_created": 0,
+        "current_file": None,
+        "errors": [],
+        "progress_percent": 0.0,
+        "config": config,  # Store config for resume capability
+        "profile": config.get("profile")
+    }
+    
+    # Store in global for real-time status access
+    _current_job_state = job_state
+    
+    async def update_job_state(**kwargs):
+        job_state.update(kwargs)
+        await save_job_to_db(db, job_state)
+    
     try:
-        _ingestion_jobs[job_id]["status"] = IngestionStatus.RUNNING
-        _ingestion_jobs[job_id]["started_at"] = datetime.now()
+        await update_job_state()
         
         _ingestion_logs.append({
             "timestamp": datetime.now().isoformat(),
@@ -103,19 +281,66 @@ async def run_ingestion(job_id: str, config: dict):
             use_profile=True
         )
         
-        # Track progress
-        def progress_callback(current: int, total: int, current_file: str = None):
-            _ingestion_jobs[job_id]["processed_files"] = current
-            _ingestion_jobs[job_id]["total_files"] = total
-            _ingestion_jobs[job_id]["progress_percent"] = (current / total * 100) if total > 0 else 0
+        # Track progress - save to DB periodically
+        last_db_update = datetime.now()
+        
+        async def progress_callback_async(current: int, total: int, current_file: str = None):
+            nonlocal last_db_update
+            global _pause_requested, _stop_requested, _is_paused
+            
+            # Check for stop request
+            if _stop_requested:
+                raise asyncio.CancelledError("Stop requested by user")
+            
+            # Check for shutdown
+            if _shutdown_requested:
+                raise asyncio.CancelledError("Shutdown requested")
+            
+            # Handle pause - wait until unpaused
+            while _pause_requested:
+                _is_paused = True
+                job_state["status"] = IngestionStatus.PAUSED
+                await save_job_to_db(db, job_state)
+                await asyncio.sleep(1)
+                if _stop_requested:
+                    raise asyncio.CancelledError("Stop requested while paused")
+            
+            if _is_paused:
+                _is_paused = False
+                job_state["status"] = IngestionStatus.RUNNING
+                await save_job_to_db(db, job_state)
+            
+            job_state["processed_files"] = current
+            job_state["total_files"] = total
+            job_state["progress_percent"] = (current / total * 100) if total > 0 else 0
             if current_file:
-                _ingestion_jobs[job_id]["current_file"] = current_file
+                job_state["current_file"] = current_file
+                # Categorize file by extension
+                ext = current_file.lower().split('.')[-1] if '.' in current_file else ''
+                if ext in ['pdf', 'doc', 'docx', 'txt', 'md', 'html', 'htm', 'xlsx', 'xls', 'pptx', 'ppt']:
+                    job_state["document_count"] = job_state.get("document_count", 0) + 1
+                elif ext in ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp']:
+                    job_state["image_count"] = job_state.get("image_count", 0) + 1
+                elif ext in ['mp3', 'wav', 'flac', 'm4a', 'ogg', 'wma']:
+                    job_state["audio_count"] = job_state.get("audio_count", 0) + 1
+                elif ext in ['mp4', 'avi', 'mkv', 'mov', 'wmv', 'webm']:
+                    job_state["video_count"] = job_state.get("video_count", 0) + 1
+                
                 _ingestion_logs.append({
                     "timestamp": datetime.now().isoformat(),
                     "level": "INFO",
                     "message": f"Processing ({current}/{total}): {current_file}",
                     "logger": "ingestion"
                 })
+            
+            # Update DB every 10 seconds to track progress
+            if (datetime.now() - last_db_update).total_seconds() > 10:
+                await save_job_to_db(db, job_state)
+                last_db_update = datetime.now()
+        
+        # Sync wrapper for the callback
+        def progress_callback(current: int, total: int, current_file: str = None):
+            asyncio.create_task(progress_callback_async(current, total, current_file))
         
         # Run ingestion
         results = await pipeline.ingest_documents(
@@ -123,29 +348,44 @@ async def run_ingestion(job_id: str, config: dict):
             incremental=config.get("incremental", True)
         )
         
-        # Update job status
-        _ingestion_jobs[job_id]["status"] = IngestionStatus.COMPLETED
-        _ingestion_jobs[job_id]["completed_at"] = datetime.now()
-        _ingestion_jobs[job_id]["processed_files"] = len(results)
-        _ingestion_jobs[job_id]["chunks_created"] = sum(r.chunks_created for r in results)
-        _ingestion_jobs[job_id]["failed_files"] = sum(1 for r in results if r.errors)
-        _ingestion_jobs[job_id]["errors"] = [
-            err for r in results for err in r.errors
-        ][:20]  # Limit errors stored
-        _ingestion_jobs[job_id]["progress_percent"] = 100.0
+        # Update job status to completed
+        await update_job_state(
+            status=IngestionStatus.COMPLETED,
+            completed_at=datetime.now().isoformat(),
+            processed_files=len(results),
+            chunks_created=sum(r.chunks_created for r in results),
+            failed_files=sum(1 for r in results if r.errors),
+            errors=[err for r in results for err in r.errors][:20],
+            progress_percent=100.0
+        )
         
         _ingestion_logs.append({
             "timestamp": datetime.now().isoformat(),
             "level": "INFO",
-            "message": f"Ingestion completed. Files: {len(results)}, Chunks: {_ingestion_jobs[job_id]['chunks_created']}",
+            "message": f"Ingestion completed. Files: {len(results)}, Chunks: {job_state['chunks_created']}",
+            "logger": "ingestion"
+        })
+        
+    except asyncio.CancelledError:
+        logger.warning(f"Ingestion job {job_id} was cancelled/interrupted")
+        await update_job_state(
+            status="INTERRUPTED",
+            interrupted_at=datetime.now().isoformat()
+        )
+        _ingestion_logs.append({
+            "timestamp": datetime.now().isoformat(),
+            "level": "WARNING",
+            "message": f"Ingestion interrupted (will resume on restart)",
             "logger": "ingestion"
         })
         
     except Exception as e:
         logger.error(f"Ingestion job {job_id} failed: {e}")
-        _ingestion_jobs[job_id]["status"] = IngestionStatus.FAILED
-        _ingestion_jobs[job_id]["errors"] = [str(e)]
-        _ingestion_jobs[job_id]["completed_at"] = datetime.now()
+        await update_job_state(
+            status=IngestionStatus.FAILED,
+            completed_at=datetime.now().isoformat(),
+            errors=[str(e)]
+        )
         _ingestion_logs.append({
             "timestamp": datetime.now().isoformat(),
             "level": "ERROR",
@@ -156,10 +396,13 @@ async def run_ingestion(job_id: str, config: dict):
         # Remove log handler
         root_logger.removeHandler(_log_handler)
         src_logger.removeHandler(_log_handler)
+        _current_job_id = None
+        _current_job_state = None
 
 
 @router.post("/start", response_model=IngestionStatusResponse)
 async def start_ingestion(
+    request_obj: Request,
     request: IngestionStartRequest,
     background_tasks: BackgroundTasks
 ):
@@ -168,19 +411,21 @@ async def start_ingestion(
     
     Initiates a background ingestion job for documents in the configured folder.
     """
-    # Check if another job is running
-    for job_id, job in _ingestion_jobs.items():
-        if job["status"] == IngestionStatus.RUNNING:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Ingestion job {job_id} is already running"
-            )
+    db = request_obj.app.state.db
+    
+    # Check if another job is running (in DB)
+    running_job = await get_running_job_from_db(db)
+    if running_job and running_job.get("status") == IngestionStatus.RUNNING:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Ingestion job {running_job['job_id']} is already running"
+        )
     
     # Create new job
     job_id = str(uuid.uuid4())
-    _ingestion_jobs[job_id] = {
-        "status": IngestionStatus.PENDING,
+    job = {
         "job_id": job_id,
+        "status": IngestionStatus.PENDING,
         "started_at": None,
         "completed_at": None,
         "total_files": 0,
@@ -192,80 +437,121 @@ async def start_ingestion(
         "progress_percent": 0.0
     }
     
-    # Start background task
-    config = request.model_dump()
-    background_tasks.add_task(run_ingestion, job_id, config)
+    # Save initial job state to DB
+    await save_job_to_db(db, job)
     
-    return IngestionStatusResponse(**_ingestion_jobs[job_id])
+    # Start background task with DB reference
+    config = request.model_dump()
+    background_tasks.add_task(run_ingestion, job_id, config, db)
+    
+    return IngestionStatusResponse(**job)
 
 
 @router.get("/status", response_model=IngestionStatusResponse)
-async def get_ingestion_status():
+async def get_ingestion_status(request: Request):
     """
     Get current ingestion status.
     
     Returns the status of the most recent or running ingestion job.
+    Uses in-memory state for real-time updates when job is running.
     """
-    if not _ingestion_jobs:
+    global _is_paused, _pause_requested, _current_job_state
+    db = request.app.state.db
+    
+    # If there's a running job, return the real-time in-memory state
+    if _current_job_state is not None and _current_job_id is not None:
+        job_data = _current_job_state
+    else:
+        # Get latest job from DB
+        job_data = await get_latest_job_from_db(db)
+    
+    if not job_data:
         return IngestionStatusResponse(
             status=IngestionStatus.COMPLETED,
             job_id=None,
             total_files=0,
             processed_files=0,
             progress_percent=0.0,
-            elapsed_seconds=0.0
+            elapsed_seconds=0.0,
+            is_paused=False,
+            can_pause=False,
+            can_stop=False
         )
-    
-    # Get most recent job
-    latest_job = max(
-        _ingestion_jobs.values(),
-        key=lambda j: j.get("started_at") or datetime.min
-    )
     
     # Calculate elapsed time and ETA
     elapsed_seconds = 0.0
     estimated_remaining = None
     
-    if latest_job.get("started_at"):
-        if latest_job.get("completed_at"):
-            elapsed_seconds = (latest_job["completed_at"] - latest_job["started_at"]).total_seconds()
+    started_at = job_data.get("started_at")
+    completed_at = job_data.get("completed_at")
+    
+    if started_at:
+        # Parse datetime if string
+        if isinstance(started_at, str):
+            started_at = datetime.fromisoformat(started_at)
+        if completed_at:
+            if isinstance(completed_at, str):
+                completed_at = datetime.fromisoformat(completed_at)
+            elapsed_seconds = (completed_at - started_at).total_seconds()
         else:
-            elapsed_seconds = (datetime.now() - latest_job["started_at"]).total_seconds()
+            elapsed_seconds = (datetime.now() - started_at).total_seconds()
         
         # Calculate ETA if running
-        if latest_job["status"] == IngestionStatus.RUNNING:
-            progress = latest_job.get("progress_percent", 0)
+        status = job_data.get("status")
+        if status == IngestionStatus.RUNNING or status == "running":
+            progress = job_data.get("progress_percent", 0)
             if progress > 0:
                 total_estimated = elapsed_seconds / (progress / 100)
                 estimated_remaining = max(0, total_estimated - elapsed_seconds)
     
+    # Determine if job is currently pausable/stoppable
+    status = job_data.get("status")
+    is_active = status in [IngestionStatus.RUNNING, IngestionStatus.PAUSED, "running", "paused", "INTERRUPTED"]
+    
+    # Filter out fields not in response model
+    response_fields = {
+        k: v for k, v in job_data.items() 
+        if k not in ["elapsed_seconds", "estimated_remaining_seconds", "config", "interrupted_at", 
+                     "is_paused", "can_pause", "can_stop"]
+    }
+    
     return IngestionStatusResponse(
-        **{k: v for k, v in latest_job.items() if k not in ["elapsed_seconds", "estimated_remaining_seconds"]},
+        **response_fields,
         elapsed_seconds=elapsed_seconds,
-        estimated_remaining_seconds=estimated_remaining
+        estimated_remaining_seconds=estimated_remaining,
+        is_paused=_is_paused or _pause_requested,
+        can_pause=is_active and not _pause_requested,
+        can_stop=is_active
     )
 
 
 @router.get("/status/{job_id}", response_model=IngestionStatusResponse)
-async def get_job_status(job_id: str):
+async def get_job_status(request: Request, job_id: str):
     """Get status of a specific ingestion job."""
-    if job_id not in _ingestion_jobs:
+    db = request.app.state.db
+    job = await get_job_from_db(db, job_id)
+    
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    return IngestionStatusResponse(**_ingestion_jobs[job_id])
+    # Filter out config field
+    response_fields = {k: v for k, v in job.items() if k not in ["config", "interrupted_at"]}
+    return IngestionStatusResponse(**response_fields)
 
 
 @router.post("/cancel/{job_id}", response_model=SuccessResponse)
-async def cancel_ingestion(job_id: str):
+async def cancel_ingestion(request: Request, job_id: str):
     """
     Cancel a running ingestion job.
     
     Note: This marks the job as cancelled but may not stop immediately.
     """
-    if job_id not in _ingestion_jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
+    global _shutdown_requested
+    db = request.app.state.db
     
-    job = _ingestion_jobs[job_id]
+    job = await get_job_from_db(db, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
     
     if job["status"] != IngestionStatus.RUNNING:
         raise HTTPException(
@@ -273,27 +559,237 @@ async def cancel_ingestion(job_id: str):
             detail=f"Job is not running (status: {job['status']})"
         )
     
+    # Signal shutdown to the running task
+    if _current_job_id == job_id:
+        _shutdown_requested = True
+    
+    # Update job in DB
     job["status"] = IngestionStatus.CANCELLED
-    job["completed_at"] = datetime.now()
+    job["completed_at"] = datetime.now().isoformat()
+    await save_job_to_db(db, job)
     
     return SuccessResponse(success=True, message="Ingestion cancelled")
 
 
 @router.get("/jobs")
-async def list_ingestion_jobs():
+async def list_ingestion_jobs(request: Request):
     """List all ingestion jobs."""
-    return {
-        "jobs": [
-            {
-                "job_id": job["job_id"],
-                "status": job["status"],
-                "started_at": job["started_at"],
-                "completed_at": job["completed_at"],
-                "progress_percent": job["progress_percent"]
+    db = request.app.state.db
+    collection = await get_jobs_collection(db)
+    
+    jobs = []
+    async for doc in collection.find().sort("started_at", -1).limit(20):
+        doc["job_id"] = doc.pop("_id")
+        jobs.append({
+            "job_id": doc["job_id"],
+            "status": doc.get("status"),
+            "started_at": doc.get("started_at"),
+            "completed_at": doc.get("completed_at"),
+            "progress_percent": doc.get("progress_percent", 0)
+        })
+    
+    return {"jobs": jobs}
+
+
+@router.get("/runs", response_model=IngestionRunsResponse)
+async def list_ingestion_runs(
+    request: Request,
+    page: int = 1,
+    page_size: int = 5
+):
+    """
+    Get paginated list of ingestion runs with full stats.
+    
+    Args:
+        page: Page number (1-based)
+        page_size: Number of runs per page (default 5)
+    """
+    db = request.app.state.db
+    collection = await get_jobs_collection(db)
+    
+    # Get total count
+    total = await collection.count_documents({})
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    
+    # Get paginated runs
+    skip = (page - 1) * page_size
+    runs = []
+    
+    async for doc in collection.find().sort("started_at", -1).skip(skip).limit(page_size):
+        job_id = doc.pop("_id")
+        
+        # Calculate elapsed time
+        elapsed_seconds = 0.0
+        started_at = doc.get("started_at")
+        completed_at = doc.get("completed_at")
+        
+        if started_at:
+            if isinstance(started_at, str):
+                started_at = datetime.fromisoformat(started_at)
+            if completed_at:
+                if isinstance(completed_at, str):
+                    completed_at = datetime.fromisoformat(completed_at)
+                elapsed_seconds = (completed_at - started_at).total_seconds()
+            else:
+                elapsed_seconds = (datetime.now() - started_at).total_seconds()
+        
+        runs.append(IngestionRunSummary(
+            job_id=job_id,
+            status=doc.get("status", "unknown"),
+            started_at=doc.get("started_at"),
+            completed_at=doc.get("completed_at"),
+            total_files=doc.get("total_files", 0),
+            processed_files=doc.get("processed_files", 0),
+            failed_files=doc.get("failed_files", 0),
+            excluded_files=doc.get("excluded_files", 0),
+            document_count=doc.get("document_count", 0),
+            image_count=doc.get("image_count", 0),
+            audio_count=doc.get("audio_count", 0),
+            video_count=doc.get("video_count", 0),
+            chunks_created=doc.get("chunks_created", 0),
+            elapsed_seconds=elapsed_seconds,
+            profile=doc.get("profile")
+        ))
+    
+    return IngestionRunsResponse(
+        runs=runs,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages
+    )
+
+
+@router.post("/pause", response_model=SuccessResponse)
+async def pause_ingestion(request: Request):
+    """
+    Pause the current ingestion job.
+    
+    The job will complete processing the current document before pausing.
+    """
+    global _pause_requested, _is_paused
+    
+    if not _current_job_id:
+        raise HTTPException(status_code=400, detail="No ingestion job is running")
+    
+    if _pause_requested:
+        return SuccessResponse(success=True, message="Already pausing or paused")
+    
+    _pause_requested = True
+    
+    _ingestion_logs.append({
+        "timestamp": datetime.now().isoformat(),
+        "level": "INFO",
+        "message": "Pause requested - will pause after current document",
+        "logger": "ingestion"
+    })
+    
+    return SuccessResponse(success=True, message="Pause requested - will pause after current document")
+
+
+@router.post("/resume", response_model=SuccessResponse)
+async def resume_ingestion(request: Request):
+    """
+    Resume a paused ingestion job.
+    """
+    global _pause_requested, _is_paused
+    
+    if not _current_job_id:
+        raise HTTPException(status_code=400, detail="No ingestion job to resume")
+    
+    if not _pause_requested and not _is_paused:
+        return SuccessResponse(success=True, message="Job is not paused")
+    
+    _pause_requested = False
+    
+    _ingestion_logs.append({
+        "timestamp": datetime.now().isoformat(),
+        "level": "INFO",
+        "message": "Resuming ingestion",
+        "logger": "ingestion"
+    })
+    
+    return SuccessResponse(success=True, message="Ingestion resumed")
+
+
+@router.post("/stop", response_model=SuccessResponse)
+async def stop_ingestion(request: Request):
+    """
+    Stop the current ingestion job immediately.
+    
+    The job will be marked as stopped and cannot be resumed.
+    """
+    global _stop_requested, _pause_requested
+    db = request.app.state.db
+    
+    if not _current_job_id:
+        raise HTTPException(status_code=400, detail="No ingestion job is running")
+    
+    _stop_requested = True
+    _pause_requested = False  # Unpause if paused to allow stop
+    
+    _ingestion_logs.append({
+        "timestamp": datetime.now().isoformat(),
+        "level": "WARNING",
+        "message": "Stop requested - stopping ingestion",
+        "logger": "ingestion"
+    })
+    
+    # Update job status in DB
+    job = await get_job_from_db(db, _current_job_id)
+    if job:
+        job["status"] = IngestionStatus.STOPPED
+        job["completed_at"] = datetime.now().isoformat()
+        await save_job_to_db(db, job)
+    
+    return SuccessResponse(success=True, message="Ingestion stopped")
+
+
+@router.get("/logs/stream")
+async def stream_logs():
+    """
+    Stream ingestion logs via Server-Sent Events (SSE).
+    
+    Returns real-time log entries as they are generated.
+    """
+    async def event_generator():
+        last_sent_index = max(0, len(_ingestion_logs) - 100)  # Start with last 100
+        
+        while True:
+            current_len = len(_ingestion_logs)
+            
+            # Send new logs since last sent
+            if current_len > last_sent_index:
+                logs_list = list(_ingestion_logs)
+                new_logs = logs_list[last_sent_index:current_len]
+                last_sent_index = current_len
+                
+                for log in new_logs:
+                    import json
+                    yield f"data: {json.dumps(log)}\n\n"
+            
+            # Also send current status
+            status_data = {
+                "type": "status",
+                "is_running": _current_job_id is not None,
+                "is_paused": _is_paused,
+                "job_id": _current_job_id,
+                "total_logs": current_len
             }
-            for job in _ingestion_jobs.values()
-        ]
-    }
+            import json
+            yield f"data: {json.dumps(status_data)}\n\n"
+            
+            await asyncio.sleep(0.5)  # Poll every 500ms
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"  # Disable nginx buffering
+        }
+    )
 
 
 @router.get("/logs")

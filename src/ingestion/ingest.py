@@ -741,6 +741,10 @@ class DocumentIngestionPipeline:
         results = []
 
         for i, file_path in enumerate(document_files):
+            # Yield control to event loop - allows API requests to be processed
+            # This gives UI priority over ingestion
+            await asyncio.sleep(0)
+            
             try:
                 logger.info(
                     f"Processing file {i+1}/{len(document_files)}: {file_path}"
