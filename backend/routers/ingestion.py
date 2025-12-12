@@ -284,7 +284,7 @@ async def run_ingestion(job_id: str, config: dict, db):
         # Track progress - save to DB periodically
         last_db_update = datetime.now()
         
-        async def progress_callback_async(current: int, total: int, current_file: str = None):
+        async def progress_callback_async(current: int, total: int, current_file: str = None, chunks_in_file: int = 0):
             nonlocal last_db_update
             global _pause_requested, _stop_requested, _is_paused
             
@@ -313,23 +313,33 @@ async def run_ingestion(job_id: str, config: dict, db):
             job_state["processed_files"] = current
             job_state["total_files"] = total
             job_state["progress_percent"] = (current / total * 100) if total > 0 else 0
+            
+            # Accumulate chunks incrementally
+            if chunks_in_file > 0:
+                job_state["chunks_created"] = job_state.get("chunks_created", 0) + chunks_in_file
+            
             if current_file:
                 job_state["current_file"] = current_file
-                # Categorize file by extension
-                ext = current_file.lower().split('.')[-1] if '.' in current_file else ''
-                if ext in ['pdf', 'doc', 'docx', 'txt', 'md', 'html', 'htm', 'xlsx', 'xls', 'pptx', 'ppt']:
-                    job_state["document_count"] = job_state.get("document_count", 0) + 1
-                elif ext in ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp']:
-                    job_state["image_count"] = job_state.get("image_count", 0) + 1
-                elif ext in ['mp3', 'wav', 'flac', 'm4a', 'ogg', 'wma']:
-                    job_state["audio_count"] = job_state.get("audio_count", 0) + 1
-                elif ext in ['mp4', 'avi', 'mkv', 'mov', 'wmv', 'webm']:
-                    job_state["video_count"] = job_state.get("video_count", 0) + 1
+                # Categorize file by extension - only count once when processing starts (current < processed_files + 1)
+                # We only increment counts when chunks_in_file > 0 (after processing)
+                if chunks_in_file > 0 or current == job_state.get("_last_counted_file_idx", -1):
+                    pass  # Already counted or processing complete
+                else:
+                    job_state["_last_counted_file_idx"] = current
+                    ext = current_file.lower().split('.')[-1] if '.' in current_file else ''
+                    if ext in ['pdf', 'doc', 'docx', 'txt', 'md', 'html', 'htm', 'xlsx', 'xls', 'pptx', 'ppt']:
+                        job_state["document_count"] = job_state.get("document_count", 0) + 1
+                    elif ext in ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp']:
+                        job_state["image_count"] = job_state.get("image_count", 0) + 1
+                    elif ext in ['mp3', 'wav', 'flac', 'm4a', 'ogg', 'wma']:
+                        job_state["audio_count"] = job_state.get("audio_count", 0) + 1
+                    elif ext in ['mp4', 'avi', 'mkv', 'mov', 'wmv', 'webm']:
+                        job_state["video_count"] = job_state.get("video_count", 0) + 1
                 
                 _ingestion_logs.append({
                     "timestamp": datetime.now().isoformat(),
                     "level": "INFO",
-                    "message": f"Processing ({current}/{total}): {current_file}",
+                    "message": f"Processing ({current}/{total}): {current_file}" + (f" - {chunks_in_file} chunks" if chunks_in_file > 0 else ""),
                     "logger": "ingestion"
                 })
             
@@ -339,8 +349,8 @@ async def run_ingestion(job_id: str, config: dict, db):
                 last_db_update = datetime.now()
         
         # Sync wrapper for the callback
-        def progress_callback(current: int, total: int, current_file: str = None):
-            asyncio.create_task(progress_callback_async(current, total, current_file))
+        def progress_callback(current: int, total: int, current_file: str = None, chunks_in_file: int = 0):
+            asyncio.create_task(progress_callback_async(current, total, current_file, chunks_in_file))
         
         # Run ingestion
         results = await pipeline.ingest_documents(

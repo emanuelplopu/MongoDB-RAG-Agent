@@ -14,6 +14,8 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 import argparse
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+import functools
 
 from pymongo import AsyncMongoClient
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
@@ -52,6 +54,18 @@ class IngestionResult:
 
 class DocumentIngestionPipeline:
     """Pipeline for ingesting documents into MongoDB vector database."""
+    
+    # Thread pool for CPU-intensive operations (shared across instances)
+    # Using max 2 workers to leave resources for API handling
+    _executor: Optional[ThreadPoolExecutor] = None
+    
+    @classmethod
+    def get_executor(cls) -> ThreadPoolExecutor:
+        """Get or create thread pool executor."""
+        if cls._executor is None:
+            # Use only 2 threads to leave CPU for API requests
+            cls._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ingest_")
+        return cls._executor
 
     def __init__(
         self,
@@ -579,8 +593,18 @@ class DocumentIngestionPipeline:
         """
         start_time = datetime.now()
 
-        # Read document (returns tuple: content, docling_doc)
-        document_content, docling_doc = self._read_document(file_path)
+        # Run CPU-intensive document reading in thread pool to avoid blocking event loop
+        # This allows API requests (login, status checks) to be processed during ingestion
+        loop = asyncio.get_running_loop()
+        document_content, docling_doc = await loop.run_in_executor(
+            self.get_executor(),
+            self._read_document,
+            file_path
+        )
+        
+        # Yield control after heavy operation
+        await asyncio.sleep(0)
+        
         document_title = self._extract_title(document_content, file_path)
         
         # Find which documents folder this file belongs to for relative path
@@ -620,6 +644,9 @@ class DocumentIngestionPipeline:
             )
 
         logger.info(f"Created {len(chunks)} chunks")
+
+        # Yield control to allow API requests between chunking and embedding
+        await asyncio.sleep(0)
 
         # Generate embeddings
         embedded_chunks = await self.embedder.embed_chunks(chunks)
@@ -692,14 +719,23 @@ class DocumentIngestionPipeline:
             await self._clean_databases()
             existing_sources = set()  # Nothing exists after cleaning
         elif incremental:
+            # Yield to event loop before potentially slow DB query
+            await asyncio.sleep(0)
             # Get existing sources for incremental mode
             existing_sources = await self._get_existing_sources()
             logger.info(f"Found {len(existing_sources)} already-ingested documents")
+            # Yield again after DB query
+            await asyncio.sleep(0)
         else:
             existing_sources = set()
 
-        # Find all supported document files
-        document_files = self._find_document_files()
+        # Find all supported document files - run in thread pool to avoid blocking
+        # glob.glob with recursive=True can be slow on large directory structures
+        loop = asyncio.get_running_loop()
+        document_files = await loop.run_in_executor(
+            self.get_executor(),
+            self._find_document_files
+        )
 
         if not document_files:
             logger.warning(
@@ -741,9 +777,14 @@ class DocumentIngestionPipeline:
         results = []
 
         for i, file_path in enumerate(document_files):
-            # Yield control to event loop - allows API requests to be processed
-            # This gives UI priority over ingestion
-            await asyncio.sleep(0)
+            # Give API requests priority - small delay between documents
+            # This ensures login, status checks, etc. remain responsive
+            await asyncio.sleep(0.05)  # 50ms pause between documents
+            
+            # Call progress callback BEFORE processing to show current file
+            if progress_callback:
+                # Pass current file path for file type categorization
+                progress_callback(i, len(document_files), file_path)
             
             try:
                 logger.info(
@@ -753,8 +794,15 @@ class DocumentIngestionPipeline:
                 result = await self._ingest_single_document(file_path)
                 results.append(result)
 
+                # Call progress callback AFTER processing with result info
                 if progress_callback:
-                    progress_callback(i + 1, len(document_files))
+                    # Pass current file and chunks created for this file
+                    progress_callback(
+                        i + 1, 
+                        len(document_files), 
+                        file_path,
+                        result.chunks_created if result else 0
+                    )
 
             except Exception as e:
                 logger.exception(f"Failed to process {file_path}: {e}")
@@ -765,6 +813,9 @@ class DocumentIngestionPipeline:
                     processing_time_ms=0,
                     errors=[str(e)]
                 ))
+                # Report failure in progress
+                if progress_callback:
+                    progress_callback(i + 1, len(document_files), file_path, 0)
 
         # Log summary
         total_chunks = sum(r.chunks_created for r in results)

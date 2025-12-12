@@ -31,6 +31,7 @@ import {
   LLMModel,
   EmbeddingModel,
   ConfigUpdateRequest,
+  IndexInfo,
 } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -82,50 +83,12 @@ export default function SystemPage() {
   const [isSavingToDb, setIsSavingToDb] = useState(false)
   const [configMessage, setConfigMessage] = useState<string | null>(null)
   
-  // Admin-only access check
-  useEffect(() => {
-    if (!authLoading && (!user || !user.is_admin)) {
-      navigate('/')
-    }
-  }, [user, authLoading, navigate])
+  // Index state
+  const [indexInfo, setIndexInfo] = useState<IndexInfo | null>(null)
+  const [isCreatingIndex, setIsCreatingIndex] = useState(false)
+  const [indexMessage, setIndexMessage] = useState<string | null>(null)
   
-  // Show loading while checking auth
-  if (authLoading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <ArrowPathIcon className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    )
-  }
-  
-  // Redirect non-admins
-  if (!user?.is_admin) {
-    return null
-  }
-
-  const fetchData = async () => {
-    setIsLoading(true)
-    setError(null)
-    try {
-      const [statsRes, ingestionRes] = await Promise.all([
-        systemApi.stats(),
-        ingestionApi.getStatus(),
-      ])
-      setStats(statsRes)
-      setIngestionStatus(ingestionRes)
-      
-      // Check if running
-      if (ingestionRes.status === 'running' || ingestionRes.status === 'paused') {
-        setIsIngesting(true)
-      }
-    } catch (err) {
-      console.error('Error fetching system data:', err)
-      setError('Failed to load system information.')
-    } finally {
-      setIsLoading(false)
-    }
-  }
-  
+  // All useCallback hooks must be defined before any returns
   const fetchRuns = useCallback(async (page: number = 1) => {
     try {
       const res = await ingestionApi.getRuns(page, 5)
@@ -137,14 +100,7 @@ export default function SystemPage() {
       console.error('Error fetching runs:', err)
     }
   }, [])
-
-  useEffect(() => {
-    fetchData()
-    fetchModels()
-    fetchRuns(1)
-  }, [fetchRuns])
   
-  // Start log streaming
   const startLogStreaming = useCallback(() => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close()
@@ -160,11 +116,9 @@ export default function SystemPage() {
         const data = JSON.parse(event.data)
         
         if (data.type === 'status') {
-          // Status update
           return
         }
         
-        // Log entry
         setLogs(prevLogs => {
           const newLogs = [...prevLogs, data]
           if (newLogs.length > MAX_LOG_LINES) {
@@ -194,6 +148,22 @@ export default function SystemPage() {
     setIsStreaming(false)
   }, [])
   
+  // Admin-only access check
+  useEffect(() => {
+    if (!authLoading && (!user || !user.is_admin)) {
+      navigate('/')
+    }
+  }, [user, authLoading, navigate])
+  
+  // Fetch data on mount (only if admin)
+  useEffect(() => {
+    if (!authLoading && user?.is_admin) {
+      fetchData()
+      fetchModels()
+      fetchRuns(1)
+    }
+  }, [authLoading, user, fetchRuns])
+  
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -202,6 +172,52 @@ export default function SystemPage() {
       }
     }
   }, [])
+  
+  // Auto-scroll logs to bottom
+  useEffect(() => {
+    if (showLogs && logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [logs, showLogs])
+  
+  // Show loading while checking auth
+  if (authLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <ArrowPathIcon className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    )
+  }
+  
+  // Redirect non-admins
+  if (!user?.is_admin) {
+    return null
+  }
+
+  const fetchData = async () => {
+    setIsLoading(true)
+    setError(null)
+    try {
+      const [statsRes, ingestionRes, indexRes] = await Promise.all([
+        systemApi.stats(),
+        ingestionApi.getStatus(),
+        systemApi.indexes(),
+      ])
+      setStats(statsRes)
+      setIngestionStatus(ingestionRes)
+      setIndexInfo(indexRes)
+      
+      // Check if running
+      if (ingestionRes.status === 'running' || ingestionRes.status === 'paused') {
+        setIsIngesting(true)
+      }
+    } catch (err) {
+      console.error('Error fetching system data:', err)
+      setError('Failed to load system information.')
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
   const fetchModels = async () => {
     setIsLoadingModels(true)
@@ -281,13 +297,6 @@ export default function SystemPage() {
       setIsSavingToDb(false)
     }
   }
-
-  // Auto-scroll logs to bottom
-  useEffect(() => {
-    if (showLogs && logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: 'smooth' })
-    }
-  }, [logs, showLogs])
 
   const handleStartIngestion = async (incremental: boolean = true) => {
     setIsIngesting(true)
@@ -372,6 +381,30 @@ export default function SystemPage() {
       setLogs([])
     } catch (err) {
       console.error('Error clearing logs:', err)
+    }
+  }
+
+  const handleCreateIndexes = async () => {
+    setIsCreatingIndex(true)
+    setIndexMessage(null)
+    try {
+      const result = await systemApi.createIndexes()
+      if (result.success) {
+        setIndexMessage(result.message || 'Indexes created successfully!')
+        // Refresh index info after a short delay
+        setTimeout(async () => {
+          const indexRes = await systemApi.indexes()
+          setIndexInfo(indexRes)
+        }, 2000)
+      } else {
+        setIndexMessage(`Failed: ${result.errors.join(', ')}`)
+      }
+      setTimeout(() => setIndexMessage(null), 5000)
+    } catch (err) {
+      console.error('Error creating indexes:', err)
+      setIndexMessage('Failed to create indexes')
+    } finally {
+      setIsCreatingIndex(false)
     }
   }
 
@@ -489,41 +522,111 @@ export default function SystemPage() {
 
       {/* Indexes */}
       <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
-        <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200 mb-4">Search Indexes</h3>
-        {stats?.indexes?.error ? (
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Search Indexes</h3>
+          <button
+            onClick={handleCreateIndexes}
+            disabled={isCreatingIndex}
+            className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white transition-all hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isCreatingIndex ? (
+              <>
+                <ArrowPathIcon className="h-4 w-4 animate-spin" />
+                Creating...
+              </>
+            ) : (
+              <>
+                <CpuChipIcon className="h-4 w-4" />
+                Create Indexes
+              </>
+            )}
+          </button>
+        </div>
+        
+        {indexMessage && (
+          <div className={`mb-4 p-3 rounded-xl text-sm ${
+            indexMessage.includes('Failed') 
+              ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
+              : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+          }`}>
+            {indexMessage}
+          </div>
+        )}
+        
+        {indexInfo?.error ? (
           <div className="rounded-xl bg-amber-50 dark:bg-amber-900/30 p-4 text-amber-700 dark:text-amber-400">
             <p className="font-medium">Indexes not available</p>
-            <p className="text-sm mt-1">Run ingestion to create the required collections and indexes.</p>
+            <p className="text-sm mt-1">Run ingestion first to create the collection, then create indexes.</p>
           </div>
-        ) : stats?.indexes?.indexes && stats.indexes.indexes.length > 0 ? (
-          <div className="grid gap-4 md:grid-cols-2">
-            {stats.indexes.indexes.map((index, i) => (
-              <div
-                key={i}
-                className="flex items-center justify-between rounded-xl bg-surface-variant dark:bg-gray-700 p-4"
-              >
-                <div>
-                  <p className="font-medium text-primary-900 dark:text-gray-200">{index.name}</p>
-                  <p className="text-sm text-secondary dark:text-gray-400">{index.type}</p>
+        ) : indexInfo?.indexes && indexInfo.indexes.length > 0 ? (
+          <div className="space-y-4">
+            {/* Index Stats */}
+            {indexInfo.stats && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                <div className="bg-surface-variant dark:bg-gray-700 rounded-xl p-3">
+                  <p className="text-xs text-secondary dark:text-gray-400">Indexed Chunks</p>
+                  <p className="text-lg font-semibold text-primary-900 dark:text-gray-200">
+                    {indexInfo.stats.indexed_documents.toLocaleString()}
+                  </p>
                 </div>
-                <div className="flex items-center gap-2">
-                  {index.status === 'READY' ? (
-                    <>
-                      <CheckCircleIcon className="h-5 w-5 text-green-500" />
-                      <span className="text-sm font-medium text-green-700 dark:text-green-400">Ready</span>
-                    </>
-                  ) : (
-                    <>
-                      <ExclamationTriangleIcon className="h-5 w-5 text-amber-500" />
-                      <span className="text-sm font-medium text-amber-700 dark:text-amber-400">{index.status}</span>
-                    </>
-                  )}
+                <div className="bg-surface-variant dark:bg-gray-700 rounded-xl p-3">
+                  <p className="text-xs text-secondary dark:text-gray-400">Index Size</p>
+                  <p className="text-lg font-semibold text-primary-900 dark:text-gray-200">
+                    {formatBytes(indexInfo.stats.total_index_size_bytes)}
+                  </p>
+                </div>
+                <div className="bg-surface-variant dark:bg-gray-700 rounded-xl p-3">
+                  <p className="text-xs text-secondary dark:text-gray-400">Storage Size</p>
+                  <p className="text-lg font-semibold text-primary-900 dark:text-gray-200">
+                    {formatBytes(indexInfo.stats.storage_size_bytes)}
+                  </p>
+                </div>
+                <div className="bg-surface-variant dark:bg-gray-700 rounded-xl p-3">
+                  <p className="text-xs text-secondary dark:text-gray-400">Last Updated</p>
+                  <p className="text-sm font-semibold text-primary-900 dark:text-gray-200">
+                    {indexInfo.stats.last_document_indexed 
+                      ? new Date(indexInfo.stats.last_document_indexed).toLocaleString()
+                      : 'N/A'
+                    }
+                  </p>
                 </div>
               </div>
-            ))}
+            )}
+            
+            {/* Index List */}
+            <div className="grid gap-4 md:grid-cols-2">
+              {indexInfo.indexes.map((index, i) => (
+                <div
+                  key={i}
+                  className="flex items-center justify-between rounded-xl bg-surface-variant dark:bg-gray-700 p-4"
+                >
+                  <div>
+                    <p className="font-medium text-primary-900 dark:text-gray-200">{index.name}</p>
+                    <p className="text-sm text-secondary dark:text-gray-400">{index.type}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {index.status === 'READY' ? (
+                      <>
+                        <CheckCircleIcon className="h-5 w-5 text-green-500" />
+                        <span className="text-sm font-medium text-green-700 dark:text-green-400">Ready</span>
+                      </>
+                    ) : (
+                      <>
+                        <ExclamationTriangleIcon className="h-5 w-5 text-amber-500" />
+                        <span className="text-sm font-medium text-amber-700 dark:text-amber-400">{index.status}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         ) : (
-          <p className="text-secondary dark:text-gray-400">No indexes found. Run ingestion to create search indexes.</p>
+          <div className="text-center py-6">
+            <CpuChipIcon className="h-12 w-12 text-gray-400 mx-auto mb-3" />
+            <p className="text-secondary dark:text-gray-400 mb-2">No indexes found</p>
+            <p className="text-sm text-secondary dark:text-gray-500">Click "Create Indexes" to build vector and text search indexes.</p>
+          </div>
         )}
       </div>
 

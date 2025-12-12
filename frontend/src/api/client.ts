@@ -221,6 +221,32 @@ export interface DocumentListResponse {
   total_pages: number
 }
 
+export interface IndexStats {
+  indexed_documents: number
+  total_index_size_bytes: number
+  storage_size_bytes: number
+  last_document_indexed?: string
+}
+
+export interface IndexInfo {
+  indexes?: Array<{ name: string; status: string; type: string }>
+  vector_index?: string
+  text_index?: string
+  stats?: IndexStats
+  error?: string
+}
+
+export interface CreateIndexResult {
+  success: boolean
+  vector_index?: { name: string; status: string; dimensions: number }
+  text_index?: { name: string; status: string }
+  documents_to_index?: number
+  errors: string[]
+  warning?: string
+  message?: string
+  created_at?: string
+}
+
 export interface SystemStats {
   database: {
     documents: { count: number; size_bytes: number; avg_doc_size: number }
@@ -228,12 +254,7 @@ export interface SystemStats {
     database: string
     error?: string
   }
-  indexes: {
-    indexes?: Array<{ name: string; status: string; type: string }>
-    vector_index?: string
-    text_index?: string
-    error?: string
-  }
+  indexes: IndexInfo
   config: {
     llm_provider: string
     llm_model: string
@@ -660,8 +681,13 @@ export const systemApi = {
     return response.data
   },
 
-  indexes: async () => {
+  indexes: async (): Promise<IndexInfo> => {
     const response = await api.get('/system/indexes')
+    return response.data
+  },
+
+  createIndexes: async (): Promise<CreateIndexResult> => {
+    const response = await api.post('/system/indexes/create')
     return response.data
   },
 

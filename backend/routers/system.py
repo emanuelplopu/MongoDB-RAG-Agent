@@ -154,9 +154,165 @@ async def get_config():
 
 @router.get("/indexes")
 async def get_indexes(request: Request):
-    """Get detailed index status."""
+    """Get detailed index status with stats."""
     db = request.app.state.db
-    return await db.check_indexes()
+    index_info = await db.check_indexes()
+    
+    # Add additional stats if indexes exist
+    if "indexes" in index_info and index_info["indexes"]:
+        try:
+            sync_client = db.get_sync_client()
+            mongo_db = sync_client[db.current_database_name]
+            chunks_coll = mongo_db[settings.mongodb_collection_chunks]
+            
+            # Get collection stats for index size estimate
+            coll_stats = mongo_db.command("collStats", settings.mongodb_collection_chunks)
+            
+            # Get the count for indexed documents
+            doc_count = chunks_coll.count_documents({})
+            
+            # Check for a sample document to get last updated
+            last_doc = chunks_coll.find_one(
+                sort=[("created_at", -1)]
+            )
+            last_updated = last_doc.get("created_at") if last_doc else None
+            
+            index_info["stats"] = {
+                "indexed_documents": doc_count,
+                "total_index_size_bytes": coll_stats.get("totalIndexSize", 0),
+                "storage_size_bytes": coll_stats.get("storageSize", 0),
+                "last_document_indexed": last_updated.isoformat() if last_updated else None
+            }
+        except Exception as e:
+            logger.warning(f"Could not get index stats: {e}")
+            index_info["stats"] = None
+    
+    return index_info
+
+
+@router.post("/indexes/create")
+async def create_search_indexes(request: Request):
+    """
+    Create or recreate search indexes.
+    
+    Creates both vector search and text search indexes for the chunks collection.
+    """
+    from datetime import datetime
+    
+    db = request.app.state.db
+    results = {
+        "success": False,
+        "vector_index": None,
+        "text_index": None,
+        "errors": []
+    }
+    
+    try:
+        sync_client = db.get_sync_client()
+        mongo_db = sync_client[db.current_database_name]
+        chunks_coll_name = settings.mongodb_collection_chunks
+        
+        # Get document count
+        doc_count = mongo_db[chunks_coll_name].count_documents({})
+        results["documents_to_index"] = doc_count
+        
+        if doc_count == 0:
+            results["warning"] = "No documents found in chunks collection"
+        
+        # Vector Search Index
+        vector_index_def = {
+            "name": settings.mongodb_vector_index,
+            "type": "vectorSearch",
+            "definition": {
+                "fields": [
+                    {
+                        "type": "vector",
+                        "path": "embedding",
+                        "numDimensions": settings.embedding_dimension,
+                        "similarity": "cosine"
+                    }
+                ]
+            }
+        }
+        
+        try:
+            # Drop existing index if exists
+            try:
+                mongo_db.command({
+                    "dropSearchIndex": chunks_coll_name,
+                    "name": settings.mongodb_vector_index
+                })
+            except Exception:
+                pass
+            
+            # Create new index
+            result = mongo_db.command({
+                "createSearchIndexes": chunks_coll_name,
+                "indexes": [vector_index_def]
+            })
+            results["vector_index"] = {
+                "name": settings.mongodb_vector_index,
+                "status": "created",
+                "dimensions": settings.embedding_dimension
+            }
+            logger.info(f"Created vector index: {settings.mongodb_vector_index}")
+        except Exception as e:
+            error_msg = f"Vector index error: {str(e)}"
+            results["errors"].append(error_msg)
+            logger.error(error_msg)
+        
+        # Text Search Index
+        text_index_def = {
+            "name": settings.mongodb_text_index,
+            "definition": {
+                "mappings": {
+                    "dynamic": False,
+                    "fields": {
+                        "content": {
+                            "type": "string",
+                            "analyzer": "lucene.standard"
+                        }
+                    }
+                }
+            }
+        }
+        
+        try:
+            # Drop existing index if exists
+            try:
+                mongo_db.command({
+                    "dropSearchIndex": chunks_coll_name,
+                    "name": settings.mongodb_text_index
+                })
+            except Exception:
+                pass
+            
+            # Create new index
+            result = mongo_db.command({
+                "createSearchIndexes": chunks_coll_name,
+                "indexes": [text_index_def]
+            })
+            results["text_index"] = {
+                "name": settings.mongodb_text_index,
+                "status": "created"
+            }
+            logger.info(f"Created text index: {settings.mongodb_text_index}")
+        except Exception as e:
+            error_msg = f"Text index error: {str(e)}"
+            results["errors"].append(error_msg)
+            logger.error(error_msg)
+        
+        # Check if at least one index was created
+        results["success"] = results["vector_index"] is not None or results["text_index"] is not None
+        results["created_at"] = datetime.now().isoformat()
+        results["message"] = "Indexes created. They may take a few seconds to become READY."
+        
+        return results
+        
+    except Exception as e:
+        logger.error(f"Failed to create indexes: {e}")
+        results["errors"].append(str(e))
+        return results
 
 
 @router.get("/info")
