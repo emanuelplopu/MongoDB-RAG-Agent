@@ -20,6 +20,9 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   SignalIcon,
+  QueueListIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
 } from '@heroicons/react/24/outline'
 import { 
   systemApi, 
@@ -32,6 +35,7 @@ import {
   EmbeddingModel,
   ConfigUpdateRequest,
   IndexInfo,
+  PendingFile,
 } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -88,6 +92,24 @@ export default function SystemPage() {
   const [isCreatingIndex, setIsCreatingIndex] = useState(false)
   const [indexMessage, setIndexMessage] = useState<string | null>(null)
   
+  // Pending files state
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
+  const [pendingFilesTotal, setPendingFilesTotal] = useState(0)
+  const [showPendingFiles, setShowPendingFiles] = useState(false)
+  const [isLoadingPendingFiles, setIsLoadingPendingFiles] = useState(false)
+  const pendingFilesPollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  
+  // Polling interval ref - for cleanup
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  
+  // Cleanup polling interval
+  const stopPolling = useCallback(() => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current)
+      pollIntervalRef.current = null
+    }
+  }, [])
+  
   // All useCallback hooks must be defined before any returns
   const fetchRuns = useCallback(async (page: number = 1) => {
     try {
@@ -98,6 +120,19 @@ export default function SystemPage() {
       setRunsTotal(res.total)
     } catch (err) {
       console.error('Error fetching runs:', err)
+    }
+  }, [])
+  
+  const fetchPendingFiles = useCallback(async () => {
+    try {
+      setIsLoadingPendingFiles(true)
+      const res = await ingestionApi.getPendingFiles(500)
+      setPendingFiles(res.files)
+      setPendingFilesTotal(res.total)
+    } catch (err) {
+      console.error('Error fetching pending files:', err)
+    } finally {
+      setIsLoadingPendingFiles(false)
     }
   }, [])
   
@@ -161,8 +196,9 @@ export default function SystemPage() {
       fetchData()
       fetchModels()
       fetchRuns(1)
+      fetchPendingFiles()
     }
-  }, [authLoading, user, fetchRuns])
+  }, [authLoading, user, fetchRuns, fetchPendingFiles])
   
   // Cleanup on unmount
   useEffect(() => {
@@ -170,8 +206,58 @@ export default function SystemPage() {
       if (eventSourceRef.current) {
         eventSourceRef.current.close()
       }
+      stopPolling()
+      if (pendingFilesPollingRef.current) {
+        clearInterval(pendingFilesPollingRef.current)
+      }
     }
-  }, [])
+  }, [stopPolling])
+  
+  // Auto-poll when ingestion is running (handles page refresh during ingestion)
+  useEffect(() => {
+    // Only run if we have status and it's running/paused
+    if (!ingestionStatus) return
+    
+    const isActive = ingestionStatus.status === 'running' || ingestionStatus.status === 'paused'
+    
+    if (isActive && !pollIntervalRef.current) {
+      // Start polling if not already polling
+      setIsIngesting(true)
+      
+      // Also start pending files polling
+      fetchPendingFiles()
+      pendingFilesPollingRef.current = setInterval(() => {
+        fetchPendingFiles()
+      }, 3000) // Poll every 3 seconds
+      
+      pollIntervalRef.current = setInterval(async () => {
+        try {
+          const updatedStatus = await ingestionApi.getStatus()
+          setIngestionStatus(updatedStatus)
+          
+          if (updatedStatus.status === 'completed' || updatedStatus.status === 'failed' || updatedStatus.status === 'stopped') {
+            stopPolling()
+            if (pendingFilesPollingRef.current) {
+              clearInterval(pendingFilesPollingRef.current)
+              pendingFilesPollingRef.current = null
+            }
+            setIsIngesting(false)
+            fetchRuns(1)
+            fetchPendingFiles() // Update pending files one last time
+          }
+        } catch (e) {
+          console.error('Error polling ingestion status:', e)
+        }
+      }, 1000)
+    } else if (!isActive && pollIntervalRef.current) {
+      // Stop polling if status is no longer active
+      stopPolling()
+      if (pendingFilesPollingRef.current) {
+        clearInterval(pendingFilesPollingRef.current)
+        pendingFilesPollingRef.current = null
+      }
+    }
+  }, [ingestionStatus?.status, stopPolling, fetchRuns, fetchPendingFiles])
   
   // Auto-scroll logs to bottom
   useEffect(() => {
@@ -306,26 +392,7 @@ export default function SystemPage() {
       const status = await ingestionApi.start({ incremental })
       setIngestionStatus(status)
       startLogStreaming()
-      
-      // Poll for updates
-      const pollInterval = setInterval(async () => {
-        try {
-          const updatedStatus = await ingestionApi.getStatus()
-          setIngestionStatus(updatedStatus)
-          
-          if (updatedStatus.status === 'completed' || updatedStatus.status === 'failed' || updatedStatus.status === 'stopped') {
-            clearInterval(pollInterval)
-            setIsIngesting(false)
-            fetchData()
-            fetchRuns(1)
-            // Keep streaming for a bit to catch final logs
-            setTimeout(() => stopLogStreaming(), 3000)
-          }
-        } catch (e) {
-          clearInterval(pollInterval)
-          setIsIngesting(false)
-        }
-      }, 1000)
+      // Polling is handled by the useEffect that watches ingestionStatus.status
     } catch (err) {
       console.error('Error starting ingestion:', err)
       setError('Failed to start ingestion.')
@@ -907,6 +974,110 @@ export default function SystemPage() {
                   ))}
                 </ul>
               </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Pending Files Queue */}
+      <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <QueueListIcon className="h-5 w-5 text-primary" />
+            <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">
+              Pending Files Queue
+            </h3>
+            <span className="text-sm text-secondary dark:text-gray-400">
+              ({pendingFilesTotal} files)
+            </span>
+            {isLoadingPendingFiles && (
+              <ArrowPathIcon className="h-4 w-4 animate-spin text-primary" />
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => fetchPendingFiles()}
+              className="flex items-center gap-1 rounded-xl bg-surface-variant dark:bg-gray-700 px-3 py-1.5 text-sm font-medium text-primary-700 dark:text-primary-300 transition-all hover:bg-primary-100 dark:hover:bg-gray-600"
+            >
+              <ArrowPathIcon className="h-4 w-4" />
+              Refresh
+            </button>
+            <button
+              onClick={() => setShowPendingFiles(!showPendingFiles)}
+              className="flex items-center gap-1 rounded-xl bg-surface-variant dark:bg-gray-700 px-3 py-1.5 text-sm font-medium text-primary-700 dark:text-primary-300 transition-all hover:bg-primary-100 dark:hover:bg-gray-600"
+            >
+              {showPendingFiles ? (
+                <>
+                  <ChevronUpIcon className="h-4 w-4" />
+                  Collapse
+                </>
+              ) : (
+                <>
+                  <ChevronDownIcon className="h-4 w-4" />
+                  Expand
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {showPendingFiles && (
+          <div className="overflow-x-auto">
+            {pendingFiles.length === 0 ? (
+              <p className="text-secondary dark:text-gray-400 text-sm">
+                No pending files. All documents have been indexed.
+              </p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200 dark:border-gray-700">
+                    <th className="text-left py-2 px-2 text-secondary dark:text-gray-400 font-medium">Name</th>
+                    <th className="text-left py-2 px-2 text-secondary dark:text-gray-400 font-medium">Format</th>
+                    <th className="text-right py-2 px-2 text-secondary dark:text-gray-400 font-medium">Size</th>
+                    <th className="text-left py-2 px-2 text-secondary dark:text-gray-400 font-medium">Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pendingFiles.slice(0, 500).map((file, i) => (
+                    <tr key={i} className="border-b border-gray-100 dark:border-gray-700/50 hover:bg-surface-variant dark:hover:bg-gray-700/50">
+                      <td className="py-2 px-2">
+                        <span className="text-primary-900 dark:text-gray-200 truncate block max-w-xs" title={file.path}>
+                          {file.name}
+                        </span>
+                        <span className="text-xs text-secondary dark:text-gray-500 truncate block max-w-xs" title={file.path}>
+                          {file.path}
+                        </span>
+                      </td>
+                      <td className="py-2 px-2">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                          ['pdf', 'doc', 'docx', 'txt', 'md'].includes(file.format)
+                            ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
+                            : ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(file.format)
+                            ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                            : ['mp3', 'wav', 'm4a', 'flac'].includes(file.format)
+                            ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400'
+                            : ['mp4', 'avi', 'mkv', 'mov', 'webm'].includes(file.format)
+                            ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
+                            : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-400'
+                        }`}>
+                          {file.format.toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="py-2 px-2 text-right text-secondary dark:text-gray-400 whitespace-nowrap">
+                        {formatBytes(file.size_bytes)}
+                      </td>
+                      <td className="py-2 px-2 text-secondary dark:text-gray-400 whitespace-nowrap">
+                        {new Date(file.created_at).toLocaleDateString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {pendingFilesTotal > 500 && (
+              <p className="text-xs text-secondary dark:text-gray-500 mt-2">
+                Showing 500 of {pendingFilesTotal} pending files
+              </p>
             )}
           </div>
         )}

@@ -10,6 +10,7 @@ const AUTH_TOKEN_KEY = 'auth_token'
 const MAX_RETRIES = 3
 const RETRY_DELAY = 1000 // ms
 const TIMEOUT = 30000 // 30 seconds
+const AUTH_CHECK_TIMEOUT = 5000 // 5 seconds for auth verification
 
 // Custom error class for API errors
 export class ApiError extends Error {
@@ -170,6 +171,10 @@ api.interceptors.request.use((config) => {
   const token = localStorage.getItem(AUTH_TOKEN_KEY)
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
+  }
+  // Use shorter timeout for auth-related requests
+  if (config.url?.includes('/auth/me')) {
+    config.timeout = AUTH_CHECK_TIMEOUT
   }
   return config
 })
@@ -466,6 +471,22 @@ export interface IngestionLogs {
   max_lines: number
 }
 
+export interface PendingFile {
+  name: string
+  path: string
+  size_bytes: number
+  format: string
+  created_at: string
+  modified_at: string
+}
+
+export interface PendingFilesResponse {
+  files: PendingFile[]
+  total: number
+  is_running: boolean
+  error?: string
+}
+
 // ============== Chat Sessions Types ==============
 
 export interface MessageStats {
@@ -758,6 +779,11 @@ export const ingestionApi = {
 
   getLogsStreamUrl: (): string => {
     return `${API_BASE}/ingestion/logs/stream`
+  },
+
+  getPendingFiles: async (limit: number = 500): Promise<PendingFilesResponse> => {
+    const response = await api.get('/ingestion/pending-files', { params: { limit } })
+    return response.data
   },
 }
 

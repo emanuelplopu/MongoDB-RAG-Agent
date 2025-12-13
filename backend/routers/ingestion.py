@@ -193,14 +193,133 @@ async def graceful_shutdown_handler(db):
             logger.info(f"Marked {result.modified_count} job(s) as interrupted during shutdown")
 
 
+async def _build_pending_files_queue(pipeline, incremental: bool = True):
+    """
+    Build the pending files queue from the ingestion pipeline.
+    
+    Called at the start of ingestion to populate the queue.
+    """
+    global _pending_files_queue
+    
+    try:
+        # Get file list from pipeline
+        import glob
+        patterns = [
+            "*.md", "*.markdown", "*.txt",
+            "*.pdf", "*.docx", "*.doc",
+            "*.pptx", "*.ppt", "*.xlsx", "*.xls",
+            "*.html", "*.htm",
+            "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.bmp",
+            "*.mp3", "*.wav", "*.m4a", "*.flac",
+            "*.mp4", "*.avi", "*.mkv", "*.mov", "*.webm",
+        ]
+        
+        all_files = []
+        for folder in pipeline.documents_folders:
+            if not os.path.exists(folder):
+                continue
+            for pattern in patterns:
+                all_files.extend(
+                    glob.glob(os.path.join(folder, "**", pattern), recursive=True)
+                )
+        
+        if not all_files:
+            _pending_files_queue = []
+            return
+        
+        # Get existing sources if incremental
+        existing_sources = set()
+        if incremental and pipeline._initialized:
+            documents_collection = pipeline.db[
+                pipeline.settings.mongodb_collection_documents
+            ]
+            cursor = documents_collection.find({}, {"source": 1})
+            async for doc in cursor:
+                if "source" in doc:
+                    existing_sources.add(doc["source"])
+        
+        # Build queue with file metadata
+        pending_files = []
+        for file_path in all_files:
+            # Calculate source path
+            document_source = os.path.basename(file_path)
+            for folder in pipeline.documents_folders:
+                if os.path.abspath(file_path).startswith(os.path.abspath(folder)):
+                    document_source = os.path.relpath(file_path, folder)
+                    break
+            
+            if incremental and document_source in existing_sources:
+                continue
+            
+            try:
+                stat = os.stat(file_path)
+                ext = os.path.splitext(file_path)[1].lower()
+                pending_files.append({
+                    "name": os.path.basename(file_path),
+                    "path": document_source,
+                    "size_bytes": stat.st_size,
+                    "format": ext[1:] if ext else "unknown",
+                    "created_at": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                })
+            except OSError:
+                continue
+        
+        # Sort by processing priority
+        def sort_key(f):
+            ext = f["format"].lower()
+            type_priority = {
+                "txt": 1, "md": 1, "markdown": 1,
+                "html": 2, "htm": 2,
+                "pdf": 3, "docx": 4, "doc": 4,
+                "xlsx": 5, "xls": 5, "pptx": 6, "ppt": 6,
+                "png": 7, "jpg": 7, "jpeg": 7, "gif": 7, "webp": 7, "bmp": 7,
+                "mp3": 8, "wav": 8, "m4a": 8, "flac": 8,
+                "mp4": 9, "avi": 9, "mkv": 9, "mov": 9, "webm": 9
+            }.get(ext, 10)
+            is_large = 1 if f["size_bytes"] > 5 * 1024 * 1024 else 0
+            return (is_large, type_priority, f["size_bytes"])
+        
+        pending_files.sort(key=sort_key)
+        _pending_files_queue = pending_files
+        
+        logger.info(f"Built pending files queue with {len(pending_files)} files")
+        
+    except Exception as e:
+        logger.error(f"Error building pending files queue: {e}")
+        _pending_files_queue = []
+
+
+def _update_pending_files_queue(current: int, total: int, current_file: str):
+    """
+    Update the pending files queue by removing processed files.
+    
+    Called from the progress callback during ingestion.
+    """
+    global _pending_files_queue
+    
+    if not _pending_files_queue:
+        return
+    
+    # Remove the processed file from the queue
+    # Match by filename since we only have the path from progress callback
+    filename = os.path.basename(current_file) if current_file else None
+    if filename:
+        _pending_files_queue = [
+            f for f in _pending_files_queue 
+            if f["name"] != filename
+        ][:500]  # Keep max 500 for display
+
+
 async def run_ingestion(job_id: str, config: dict, db):
     """Run ingestion in background with DB persistence."""
-    global _current_job_id, _shutdown_requested, _pause_requested, _stop_requested, _is_paused, _current_job_state
+    global _current_job_id, _shutdown_requested, _pause_requested, _stop_requested, _is_paused, _current_job_state, _pending_files_queue
     _current_job_id = job_id
     _shutdown_requested = False
     _pause_requested = False
     _stop_requested = False
     _is_paused = False
+    _pending_files_queue = []
     
     # Clear logs and add handler
     _ingestion_logs.clear()
@@ -281,6 +400,9 @@ async def run_ingestion(job_id: str, config: dict, db):
             use_profile=True
         )
         
+        # Build initial pending files queue
+        await _build_pending_files_queue(pipeline, config.get("incremental", True))
+        
         # Track progress - save to DB periodically
         last_db_update = datetime.now()
         
@@ -320,6 +442,10 @@ async def run_ingestion(job_id: str, config: dict, db):
             
             if current_file:
                 job_state["current_file"] = current_file
+                
+                # Update pending files queue - remove processed file
+                _update_pending_files_queue(current, total, current_file)
+                
                 # Categorize file by extension - only count once when processing starts (current < processed_files + 1)
                 # We only increment counts when chunks_in_file > 0 (after processing)
                 if chunks_in_file > 0 or current == job_state.get("_last_counted_file_idx", -1):
@@ -408,6 +534,7 @@ async def run_ingestion(job_id: str, config: dict, db):
         src_logger.removeHandler(_log_handler)
         _current_job_id = None
         _current_job_state = None
+        _pending_files_queue = []  # Clear queue
 
 
 @router.post("/start", response_model=IngestionStatusResponse)
@@ -668,6 +795,141 @@ async def list_ingestion_runs(
         page_size=page_size,
         total_pages=total_pages
     )
+
+
+# Global to track pending files queue during ingestion
+_pending_files_queue: List[dict] = []
+_pending_files_lock = asyncio.Lock()
+
+
+@router.get("/pending-files")
+async def get_pending_files(
+    request: Request,
+    limit: int = 500
+):
+    """
+    Get list of files pending to be indexed.
+    
+    Returns files that are queued for processing, including their metadata.
+    Limited to 500 files by default.
+    
+    Args:
+        limit: Maximum number of files to return (default 500, max 1000)
+    """
+    global _pending_files_queue
+    
+    limit = min(limit, 1000)
+    
+    # If ingestion is running, return the current queue
+    if _current_job_id is not None and _pending_files_queue:
+        return {
+            "files": _pending_files_queue[:limit],
+            "total": len(_pending_files_queue),
+            "is_running": True
+        }
+    
+    # Otherwise, calculate pending files from disk and DB
+    db = request.app.state.db
+    
+    try:
+        # Import ingestion module
+        from src.ingestion.ingest import DocumentIngestionPipeline, IngestionConfig
+        from src.profile import get_profile_manager
+        
+        # Create a temporary pipeline to find files
+        pm = get_profile_manager()
+        profile = pm.get_profile(pm.get_active_profile_name())
+        documents_folders = profile.get("documents_folders", [])
+        
+        if not documents_folders:
+            return {"files": [], "total": 0, "is_running": False}
+        
+        # Supported file patterns
+        patterns = [
+            "*.md", "*.markdown", "*.txt",
+            "*.pdf", "*.docx", "*.doc",
+            "*.pptx", "*.ppt", "*.xlsx", "*.xls",
+            "*.html", "*.htm",
+            "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.bmp",
+            "*.mp3", "*.wav", "*.m4a", "*.flac",
+            "*.mp4", "*.avi", "*.mkv", "*.mov", "*.webm",
+        ]
+        
+        import glob
+        all_files = []
+        for folder in documents_folders:
+            if not os.path.exists(folder):
+                continue
+            for pattern in patterns:
+                all_files.extend(
+                    glob.glob(os.path.join(folder, "**", pattern), recursive=True)
+                )
+        
+        if not all_files:
+            return {"files": [], "total": 0, "is_running": False}
+        
+        # Get existing sources from DB
+        documents_collection = db.documents_collection
+        existing_sources = set()
+        cursor = documents_collection.find({}, {"source": 1})
+        async for doc in cursor:
+            if "source" in doc:
+                existing_sources.add(doc["source"])
+        
+        # Filter to pending files and add metadata
+        pending_files = []
+        for file_path in all_files:
+            # Calculate source path
+            document_source = os.path.basename(file_path)
+            for folder in documents_folders:
+                if os.path.abspath(file_path).startswith(os.path.abspath(folder)):
+                    document_source = os.path.relpath(file_path, folder)
+                    break
+            
+            if document_source in existing_sources:
+                continue
+            
+            # Get file metadata
+            try:
+                stat = os.stat(file_path)
+                ext = os.path.splitext(file_path)[1].lower()
+                pending_files.append({
+                    "name": os.path.basename(file_path),
+                    "path": document_source,
+                    "size_bytes": stat.st_size,
+                    "format": ext[1:] if ext else "unknown",
+                    "created_at": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                })
+            except OSError:
+                continue
+        
+        # Sort by processing priority (text first, large files last)
+        def sort_key(f):
+            ext = f["format"].lower()
+            type_priority = {
+                "txt": 1, "md": 1, "markdown": 1,
+                "html": 2, "htm": 2,
+                "pdf": 3, "docx": 4, "doc": 4,
+                "xlsx": 5, "xls": 5, "pptx": 6, "ppt": 6,
+                "png": 7, "jpg": 7, "jpeg": 7, "gif": 7, "webp": 7, "bmp": 7,
+                "mp3": 8, "wav": 8, "m4a": 8, "flac": 8,
+                "mp4": 9, "avi": 9, "mkv": 9, "mov": 9, "webm": 9
+            }.get(ext, 10)
+            is_large = 1 if f["size_bytes"] > 5 * 1024 * 1024 else 0
+            return (is_large, type_priority, f["size_bytes"])
+        
+        pending_files.sort(key=sort_key)
+        
+        return {
+            "files": pending_files[:limit],
+            "total": len(pending_files),
+            "is_running": False
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting pending files: {e}")
+        return {"files": [], "total": 0, "is_running": False, "error": str(e)}
 
 
 @router.post("/pause", response_model=SuccessResponse)

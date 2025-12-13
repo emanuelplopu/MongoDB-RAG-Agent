@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react'
+import { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from 'react'
 import { authApi, User, setAuthToken, clearAuthToken, getAuthToken } from '../api/client'
 
 interface AuthContextType {
@@ -24,25 +24,65 @@ export function useAuth() {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const lastValidationRef = useRef<number>(0)
+  const VALIDATION_INTERVAL = 5 * 60 * 1000 // 5 minutes
+
+  // Function to validate auth token
+  const validateAuth = useCallback(async (force: boolean = false) => {
+    const token = getAuthToken()
+    if (!token) {
+      setUser(null)
+      setIsLoading(false)
+      return
+    }
+    
+    // Skip if recently validated (unless forced)
+    const now = Date.now()
+    if (!force && lastValidationRef.current && (now - lastValidationRef.current) < VALIDATION_INTERVAL) {
+      setIsLoading(false)
+      return
+    }
+    
+    try {
+      const userData = await authApi.getMe()
+      setUser(userData)
+      lastValidationRef.current = now
+    } catch (error) {
+      // Token expired or invalid
+      clearAuthToken()
+      setUser(null)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
 
   // Check for existing session on mount
   useEffect(() => {
-    const checkAuth = async () => {
-      const token = getAuthToken()
-      if (token) {
-        try {
-          const userData = await authApi.getMe()
-          setUser(userData)
-        } catch (error) {
-          // Token expired or invalid
-          clearAuthToken()
-          setUser(null)
-        }
+    validateAuth(true)
+  }, [validateAuth])
+  
+  // Revalidate when tab becomes visible (handles idle/sleep scenarios)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && getAuthToken()) {
+        validateAuth()
       }
-      setIsLoading(false)
     }
-    checkAuth()
-  }, [])
+    
+    const handleFocus = () => {
+      if (getAuthToken()) {
+        validateAuth()
+      }
+    }
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('focus', handleFocus)
+    
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('focus', handleFocus)
+    }
+  }, [validateAuth])
 
   // Listen for 401 unauthorized events from API client
   useEffect(() => {
