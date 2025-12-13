@@ -10,12 +10,16 @@ Production-ready API server with endpoints for:
 """
 
 import logging
+import traceback
+import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi.exceptions import RequestValidationError
 
 from backend.routers import chat, search, profiles, ingestion, system, sessions, auth
 from backend.routers.system import load_config_from_db
@@ -108,19 +112,145 @@ app.add_middleware(
 )
 
 
-# Exception handlers
-@app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
-    """Global exception handler for unhandled errors."""
-    logger.exception(f"Unhandled error: {exc}")
+# ============== Exception Handlers ==============
+
+def _is_admin_request(request: Request) -> bool:
+    """Check if the request is from an admin user.
+    
+    Looks at the Authorization header and decodes the JWT to check is_admin.
+    Returns False if unable to determine (safer default).
+    """
+    try:
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return False
+        
+        token = auth_header[7:]  # Remove "Bearer " prefix
+        from jose import jwt
+        import os
+        secret_key = os.getenv("JWT_SECRET_KEY", "mongodb-rag-secret-key-change-in-production")
+        payload = jwt.decode(token, secret_key, algorithms=["HS256"])
+        
+        # Look up user in database to check admin status
+        # For performance, we just check if request came with valid token
+        # The actual admin check happens in the error response handling
+        return payload.get("is_admin", False)
+    except Exception:
+        return False
+
+
+def _get_error_id() -> str:
+    """Generate a unique error ID for tracking."""
+    return str(uuid.uuid4())[:8]
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handle validation errors with user-friendly messages."""
+    error_id = _get_error_id()
+    
+    # Log full details
+    logger.error(
+        f"Validation error [{error_id}] on {request.method} {request.url.path}: "
+        f"{exc.errors()}"
+    )
+    
+    # User-friendly message
     return JSONResponse(
-        status_code=500,
+        status_code=422,
         content={
-            "error": "internal_server_error",
-            "message": "An unexpected error occurred",
-            "detail": str(exc) if settings.debug else None
+            "error": "validation_error",
+            "message": "Invalid request data. Please check your input and try again.",
+            "error_id": error_id,
         }
     )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Handle HTTP exceptions with appropriate detail levels."""
+    error_id = _get_error_id()
+    
+    # Log the error
+    logger.warning(
+        f"HTTP {exc.status_code} [{error_id}] on {request.method} {request.url.path}: "
+        f"{exc.detail}"
+    )
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": f"http_{exc.status_code}",
+            "message": exc.detail,
+            "error_id": error_id,
+        }
+    )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler for unhandled errors.
+    
+    - Regular users: See a friendly message with error ID for support
+    - Admin users: See technical details (but no stack trace in response)
+    - All errors are extensively logged with full stack traces
+    """
+    error_id = _get_error_id()
+    
+    # Get request context for logging
+    request_info = {
+        "method": request.method,
+        "path": request.url.path,
+        "query": str(request.query_params),
+        "client": request.client.host if request.client else "unknown",
+    }
+    
+    # Log extensively with full stack trace
+    logger.error(
+        f"Unhandled exception [{error_id}]\n"
+        f"  Request: {request_info['method']} {request_info['path']}\n"
+        f"  Query: {request_info['query']}\n"
+        f"  Client: {request_info['client']}\n"
+        f"  Exception Type: {type(exc).__name__}\n"
+        f"  Exception Message: {str(exc)}\n"
+        f"  Stack Trace:\n{traceback.format_exc()}"
+    )
+    
+    # Check if user is admin for detailed error response
+    is_admin = _is_admin_request(request)
+    
+    # User-friendly message for everyone
+    user_message = (
+        "We encountered an issue processing your request. "
+        "Please try again. If the problem persists, contact support with error ID: "
+        f"{error_id}"
+    )
+    
+    # Admin gets more details (but still no stack trace in response - that's only in logs)
+    if is_admin or settings.debug:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "internal_server_error",
+                "message": user_message,
+                "error_id": error_id,
+                "technical_details": {
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc),
+                    "path": request_info["path"],
+                    "method": request_info["method"],
+                }
+            }
+        )
+    else:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "internal_server_error",
+                "message": user_message,
+                "error_id": error_id,
+            }
+        )
 
 
 # Include routers

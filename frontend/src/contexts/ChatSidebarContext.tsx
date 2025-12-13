@@ -7,6 +7,7 @@ import {
   ChatFolder,
   LLMModel,
   ModelPricingInfo,
+  ApiError,
 } from '../api/client'
 import { useAuth } from './AuthContext'
 
@@ -101,11 +102,20 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
       setSessions(response.sessions)
       setFolders(response.folders)
     } catch (err) {
-      console.error('Failed to load sessions:', err)
+      // Log error details for debugging
+      if (err instanceof ApiError) {
+        console.error('Failed to load sessions:', err.getUserMessage(user?.is_admin ?? false))
+        // Only log technical details in development
+        if (import.meta.env.DEV && err.technicalDetails) {
+          console.debug('Technical details:', err.technicalDetails)
+        }
+      } else {
+        console.error('Failed to load sessions:', err)
+      }
     } finally {
       setIsSidebarLoading(false)
     }
-  }, [])
+  }, [user?.is_admin])
 
   // Load models and pricing
   const loadModels = useCallback(async () => {
@@ -117,9 +127,15 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
       setModels(modelsRes.models)
       setModelPricing(pricingRes.models)
     } catch (err) {
-      console.error('Failed to load models:', err)
+      // Log error details for debugging
+      if (err instanceof ApiError) {
+        console.error('Failed to load models:', err.getUserMessage(user?.is_admin ?? false))
+      } else {
+        console.error('Failed to load models:', err)
+      }
+      // Models are not critical - continue with empty list
     }
-  }, [])
+  }, [user?.is_admin])
 
   useEffect(() => {
     // Only load sessions after auth is done loading

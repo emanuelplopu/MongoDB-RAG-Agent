@@ -891,6 +891,51 @@ async def list_documents(
     )
 
 
+@router.get("/documents/lookup")
+async def find_document_by_source(request: Request, source: str):
+    """
+    Find a document by its source path.
+    
+    This performs a flexible search matching source field or title.
+    Returns the document ID if found, null otherwise.
+    
+    NOTE: This endpoint MUST be defined before /documents/{document_id}
+    to avoid path parameter matching "lookup" as a document_id.
+    """
+    db = request.app.state.db
+    
+    # Try exact match on source first
+    doc = await db.documents_collection.find_one({"source": source})
+    
+    if not doc:
+        # Try title match
+        doc = await db.documents_collection.find_one({"title": source})
+    
+    if not doc:
+        # Try partial match on source (filename only)
+        import re
+        filename = source.split('/')[-1].split('\\')[-1]  # Get filename from path
+        regex_pattern = re.escape(filename)
+        doc = await db.documents_collection.find_one({
+            "$or": [
+                {"source": {"$regex": regex_pattern, "$options": "i"}},
+                {"title": {"$regex": regex_pattern, "$options": "i"}}
+            ]
+        })
+    
+    if not doc:
+        return {"found": False, "document": None}
+    
+    return {
+        "found": True,
+        "document": {
+            "id": str(doc["_id"]),
+            "title": doc.get("title", "Untitled"),
+            "source": doc.get("source", "Unknown")
+        }
+    }
+
+
 @router.get("/documents/{document_id}")
 async def get_document(request: Request, document_id: str):
     """Get a specific document by ID."""

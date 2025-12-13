@@ -16,13 +16,79 @@ export class ApiError extends Error {
   status: number
   code: string
   details?: unknown
+  errorId?: string
+  technicalDetails?: {
+    exception_type?: string
+    exception_message?: string
+    path?: string
+    method?: string
+  }
 
-  constructor(message: string, status: number, code: string, details?: unknown) {
+  constructor(
+    message: string, 
+    status: number, 
+    code: string, 
+    details?: unknown,
+    errorId?: string,
+    technicalDetails?: ApiError['technicalDetails']
+  ) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.code = code
     this.details = details
+    this.errorId = errorId
+    this.technicalDetails = technicalDetails
+  }
+
+  /**
+   * Get a user-friendly error message suitable for display.
+   * @param isAdmin If true, may include more technical details.
+   */
+  getUserMessage(isAdmin: boolean = false): string {
+    // Network errors
+    if (this.code === 'NETWORK_ERROR') {
+      return 'Unable to connect to the server. Please check your internet connection and try again.'
+    }
+
+    // Rate limiting
+    if (this.status === 429) {
+      return 'The service is busy. Please wait a moment and try again.'
+    }
+
+    // Authentication errors
+    if (this.status === 401) {
+      return 'Your session has expired. Please log in again.'
+    }
+
+    // Forbidden
+    if (this.status === 403) {
+      return 'You do not have permission to perform this action.'
+    }
+
+    // Not found
+    if (this.status === 404) {
+      return 'The requested resource was not found.'
+    }
+
+    // Validation errors
+    if (this.status === 422) {
+      return 'Please check your input and try again.'
+    }
+
+    // Server errors
+    if (this.status >= 500) {
+      if (isAdmin && this.technicalDetails) {
+        const tech = this.technicalDetails
+        return `Server error: ${tech.exception_type || 'Unknown'} - ${tech.exception_message || this.message}${this.errorId ? ` (Error ID: ${this.errorId})` : ''}`
+      }
+      return this.errorId 
+        ? `Something went wrong. Please try again. If the problem persists, contact support with Error ID: ${this.errorId}`
+        : 'Something went wrong. Please try again.'
+    }
+
+    // For other errors, return the message from the server or a default
+    return this.message || 'An unexpected error occurred. Please try again.'
   }
 }
 
@@ -47,12 +113,14 @@ api.interceptors.response.use(
       
       if (retryCount < MAX_RETRIES) {
         (config as any)._retryCount = retryCount + 1
+        console.warn(`[API] Network error, retrying (${retryCount + 1}/${MAX_RETRIES})...`)
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * (retryCount + 1)))
         return api.request(config)
       }
       
+      console.error('[API] Network error - all retries exhausted')
       throw new ApiError(
-        'Network error - unable to connect to server',
+        'Unable to connect to the server. Please check your connection.',
         0,
         'NETWORK_ERROR'
       )
@@ -63,6 +131,17 @@ api.interceptors.response.use(
       const { status, data } = error.response
       const message = (data as any)?.message || (data as any)?.detail || 'An error occurred'
       const code = (data as any)?.error || `HTTP_${status}`
+      const errorId = (data as any)?.error_id
+      const technicalDetails = (data as any)?.technical_details
+      
+      // Log error for debugging (in development)
+      if (import.meta.env.DEV) {
+        console.error(`[API Error] ${status} ${code}: ${message}`, {
+          errorId,
+          technicalDetails,
+          data
+        })
+      }
       
       // Handle 401 Unauthorized - clear token and optionally redirect
       if (status === 401) {
@@ -71,7 +150,7 @@ api.interceptors.response.use(
         window.dispatchEvent(new CustomEvent('auth:unauthorized'))
       }
       
-      throw new ApiError(message, status, code, data)
+      throw new ApiError(message, status, code, data, errorId, technicalDetails)
     }
     
     throw error
@@ -411,6 +490,15 @@ export interface SessionMessage {
     relevance: number
     excerpt: string
   }>
+  attachments?: Array<AttachmentInfo>
+}
+
+export interface AttachmentInfo {
+  filename: string
+  content_type: string
+  size_bytes: number
+  data_url?: string
+  token_estimate: number
 }
 
 export interface SessionStats {
@@ -587,10 +675,23 @@ export const documentsApi = {
   },
 
   findBySource: async (source: string): Promise<Document | null> => {
-    // Search through documents to find by source
-    const response = await api.get('/ingestion/documents', { params: { page: 1, page_size: 100 } })
-    const docs = response.data.documents as Document[]
-    return docs.find(d => d.source === source || d.title === source) || null
+    // Use dedicated lookup endpoint for efficient source matching
+    try {
+      const response = await api.get('/ingestion/documents/lookup', { params: { source } })
+      if (response.data.found && response.data.document) {
+        return {
+          id: response.data.document.id,
+          title: response.data.document.title,
+          source: response.data.document.source,
+          chunks_count: 0,
+          metadata: {}
+        }
+      }
+      return null
+    } catch (err) {
+      // Silently fail lookup - source links will be non-clickable
+      return null
+    }
   },
 }
 
@@ -761,14 +862,34 @@ export const sessionsApi = {
   sendMessage: async (
     sessionId: string,
     content: string,
-    options?: { search_type?: string; match_count?: number; include_sources?: boolean }
+    options?: { 
+      search_type?: string
+      match_count?: number
+      include_sources?: boolean
+      attachments?: AttachmentInfo[]
+    }
   ): Promise<SendMessageResponse> => {
     const response = await api.post(`/sessions/${sessionId}/messages`, {
       content,
       search_type: options?.search_type || 'hybrid',
       match_count: options?.match_count || 10,
       include_sources: options?.include_sources ?? true,
+      attachments: options?.attachments || null,
     })
+    return response.data
+  },
+
+  estimateTokens: async (attachments: AttachmentInfo[]): Promise<{
+    attachments: Array<{
+      filename: string
+      content_type: string
+      size_bytes: number
+      token_estimate: number
+    }>
+    total_tokens: number
+    cost_estimates: Record<string, number>
+  }> => {
+    const response = await api.post('/sessions/meta/estimate-tokens', attachments)
     return response.data
   },
 

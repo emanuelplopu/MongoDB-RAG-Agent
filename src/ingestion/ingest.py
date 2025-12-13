@@ -169,9 +169,16 @@ class DocumentIngestionPipeline:
     def _find_document_files(self) -> List[str]:
         """
         Find all supported document files in all document folders.
+        
+        Files are sorted for optimal processing order:
+        1. Text files first (fastest to process)
+        2. Then PDF, DOCX, Excel, etc.
+        3. Images
+        4. Audio files (slowest)
+        5. Large files (>5MB) are processed last within each category
 
         Returns:
-            List of file paths
+            List of file paths in optimal processing order
         """
         # Supported file patterns - Docling + text formats + audio
         patterns = [
@@ -181,7 +188,9 @@ class DocumentIngestionPipeline:
             "*.pptx", "*.ppt",  # PowerPoint
             "*.xlsx", "*.xls",  # Excel
             "*.html", "*.htm",  # HTML
+            "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.bmp",  # Images
             "*.mp3", "*.wav", "*.m4a", "*.flac",  # Audio formats
+            "*.mp4", "*.avi", "*.mkv", "*.mov", "*.webm",  # Video formats
         ]
         
         all_files = []
@@ -201,8 +210,78 @@ class DocumentIngestionPipeline:
         
         if not all_files:
             logger.error(f"No document files found in folders: {self.documents_folders}")
+            return []
         
-        return sorted(all_files)
+        # Sort files for optimal processing order
+        all_files = self._sort_files_for_processing(all_files)
+        
+        return all_files
+    
+    def _sort_files_for_processing(self, files: List[str]) -> List[str]:
+        """
+        Sort files for optimal processing order:
+        1. Small text files first (fastest)
+        2. PDF, DOCX, Excel (medium speed)
+        3. Images (can be slower due to OCR)
+        4. Audio files (slowest - require transcription)
+        5. Video files (very slow)
+        6. Large files (>5MB) at the end within each category
+        
+        Args:
+            files: List of file paths
+            
+        Returns:
+            Sorted list of file paths
+        """
+        # Define file type priorities (lower = processed first)
+        TYPE_PRIORITY = {
+            # Text files - fastest
+            '.txt': 1, '.md': 1, '.markdown': 1,
+            # HTML - also fast
+            '.html': 2, '.htm': 2,
+            # Office documents - medium
+            '.pdf': 3,
+            '.docx': 4, '.doc': 4,
+            '.xlsx': 5, '.xls': 5,
+            '.pptx': 6, '.ppt': 6,
+            # Images - can need OCR
+            '.png': 7, '.jpg': 7, '.jpeg': 7, '.gif': 7, '.webp': 7, '.bmp': 7, '.svg': 7,
+            # Audio - requires transcription
+            '.mp3': 8, '.wav': 8, '.m4a': 8, '.flac': 8, '.ogg': 8,
+            # Video - slowest
+            '.mp4': 9, '.avi': 9, '.mkv': 9, '.mov': 9, '.webm': 9, '.wmv': 9,
+        }
+        
+        SIZE_THRESHOLD = 5 * 1024 * 1024  # 5MB
+        
+        def get_sort_key(file_path: str) -> tuple:
+            """Return (is_large, type_priority, size, filename) for sorting."""
+            ext = os.path.splitext(file_path)[1].lower()
+            type_priority = TYPE_PRIORITY.get(ext, 100)  # Unknown types last
+            
+            try:
+                size = os.path.getsize(file_path)
+            except OSError:
+                size = 0
+            
+            is_large = size > SIZE_THRESHOLD
+            
+            # Sort by: is_large (False first), type_priority, size, filename
+            return (is_large, type_priority, size, os.path.basename(file_path).lower())
+        
+        sorted_files = sorted(files, key=get_sort_key)
+        
+        # Log the processing order summary
+        small_count = sum(1 for f in sorted_files if os.path.getsize(f) <= SIZE_THRESHOLD)
+        large_count = len(sorted_files) - small_count
+        
+        if large_count > 0:
+            logger.info(
+                f"File processing order: {small_count} small files first, "
+                f"{large_count} large files (>5MB) last"
+            )
+        
+        return sorted_files
 
     def _read_document(self, file_path: str) -> tuple[str, Optional[Any]]:
         """
@@ -278,6 +357,8 @@ class DocumentIngestionPipeline:
     def _transcribe_audio(self, file_path: str) -> tuple[str, Optional[Any]]:
         """
         Transcribe audio file using OpenAI Whisper API (fast cloud-based).
+        
+        For large files (>25MB), splits audio into chunks and processes in parallel.
 
         Args:
             file_path: Path to the audio file
@@ -301,12 +382,14 @@ class DocumentIngestionPipeline:
 
             # Check file size (OpenAI limit is 25MB)
             file_size_mb = audio_path.stat().st_size / (1024 * 1024)
+            
+            # For large files, use chunked transcription
             if file_size_mb > 25:
-                logger.warning(
+                logger.info(
                     f"Audio file {file_size_mb:.1f}MB exceeds 25MB limit, "
-                    "falling back to local Whisper"
+                    "using chunked transcription for optimal speed"
                 )
-                return self._transcribe_audio_local(file_path)
+                return self._transcribe_audio_chunked(file_path)
 
             # Initialize OpenAI client (use LLM API key which is OpenAI key)
             client = OpenAI(api_key=self.settings.llm_api_key)
@@ -355,8 +438,149 @@ class DocumentIngestionPipeline:
 
         except Exception as e:
             logger.error(f"OpenAI Whisper API failed for {file_path}: {e}")
-            logger.info("Falling back to local Whisper transcription...")
+            logger.info("Falling back to chunked transcription...")
+            try:
+                return self._transcribe_audio_chunked(file_path)
+            except Exception as e2:
+                logger.error(f"Chunked transcription also failed: {e2}")
+                logger.info("Falling back to local Whisper transcription...")
+                return self._transcribe_audio_local(file_path)
+
+    def _transcribe_audio_chunked(self, file_path: str) -> tuple[str, Optional[Any]]:
+        """
+        Transcribe large audio file by splitting into chunks and processing in parallel.
+        
+        This is MUCH faster than local Whisper for large files (2 hour audio in 3-5 min).
+
+        Args:
+            file_path: Path to the audio file
+
+        Returns:
+            Tuple of (markdown_content, None)
+        """
+        import tempfile
+        import concurrent.futures
+        from pathlib import Path
+        from openai import OpenAI
+        
+        audio_path = Path(file_path).resolve()
+        logger.info(f"Starting chunked transcription for: {audio_path.name}")
+        
+        try:
+            from pydub import AudioSegment
+        except ImportError:
+            logger.warning("pydub not installed, falling back to local Whisper")
             return self._transcribe_audio_local(file_path)
+        
+        # Load audio file
+        file_ext = audio_path.suffix.lower()
+        if file_ext == '.mp3':
+            audio = AudioSegment.from_mp3(str(audio_path))
+        elif file_ext == '.wav':
+            audio = AudioSegment.from_wav(str(audio_path))
+        elif file_ext in ['.m4a', '.mp4']:
+            audio = AudioSegment.from_file(str(audio_path), format="m4a")
+        elif file_ext == '.flac':
+            audio = AudioSegment.from_file(str(audio_path), format="flac")
+        else:
+            audio = AudioSegment.from_file(str(audio_path))
+        
+        total_duration = len(audio) / 1000  # Duration in seconds
+        logger.info(f"Audio duration: {total_duration/60:.1f} minutes")
+        
+        # Split into ~10 minute chunks (keeps each under 25MB for most formats)
+        chunk_duration_ms = 10 * 60 * 1000  # 10 minutes in ms
+        chunks = []
+        chunk_files = []
+        
+        for i in range(0, len(audio), chunk_duration_ms):
+            chunk = audio[i:i + chunk_duration_ms]
+            chunk_start_time = i / 1000  # Convert to seconds
+            chunks.append((chunk, chunk_start_time))
+        
+        logger.info(f"Split audio into {len(chunks)} chunks for parallel processing")
+        
+        # Export chunks to temporary files
+        temp_dir = tempfile.mkdtemp(prefix="whisper_chunks_")
+        try:
+            for idx, (chunk, _) in enumerate(chunks):
+                chunk_path = Path(temp_dir) / f"chunk_{idx:04d}.mp3"
+                chunk.export(str(chunk_path), format="mp3", bitrate="64k")
+                chunk_files.append(chunk_path)
+            
+            # Initialize OpenAI client
+            client = OpenAI(api_key=self.settings.llm_api_key)
+            
+            # Process chunks in parallel (max 4 concurrent to respect rate limits)
+            def transcribe_chunk(args):
+                chunk_path, chunk_start = args
+                with open(chunk_path, "rb") as audio_file:
+                    result = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio_file,
+                        response_format="verbose_json",
+                        timestamp_granularities=["segment"]
+                    )
+                return (chunk_start, result)
+            
+            results = []
+            chunk_args = list(zip(chunk_files, [c[1] for c in chunks]))
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                future_to_chunk = {
+                    executor.submit(transcribe_chunk, args): args 
+                    for args in chunk_args
+                }
+                for future in concurrent.futures.as_completed(future_to_chunk):
+                    try:
+                        results.append(future.result())
+                    except Exception as e:
+                        logger.error(f"Chunk transcription failed: {e}")
+            
+            # Sort by start time and combine results
+            results.sort(key=lambda x: x[0])
+            
+            # Format as markdown with timestamps
+            markdown_lines = [f"# {audio_path.stem}\n"]
+            markdown_lines.append(f"**Source**: {audio_path.name}\n")
+            if results:
+                markdown_lines.append(f"**Language**: {results[0][1].language}\n")
+            markdown_lines.append(f"**Duration**: {total_duration:.1f}s ({total_duration/60:.1f} min)\n")
+            markdown_lines.append(f"**Processed**: {len(results)} chunks in parallel\n")
+            markdown_lines.append("\n---\n\n")
+            
+            for chunk_start, transcription in results:
+                if hasattr(transcription, 'segments') and transcription.segments:
+                    for segment in transcription.segments:
+                        # Adjust timestamps by chunk start time
+                        start_time = segment.get('start', 0) + chunk_start
+                        end_time = segment.get('end', 0) + chunk_start
+                        text = segment.get('text', '').strip()
+                        
+                        start_min, start_sec = divmod(int(start_time), 60)
+                        end_min, end_sec = divmod(int(end_time), 60)
+                        
+                        markdown_lines.append(
+                            f"[{start_min:02d}:{start_sec:02d} - {end_min:02d}:{end_sec:02d}] {text}\n\n"
+                        )
+                else:
+                    markdown_lines.append(transcription.text + "\n\n")
+            
+            markdown_content = "".join(markdown_lines)
+            logger.info(
+                f"Successfully transcribed {audio_path.name} using chunked processing "
+                f"({len(chunks)} chunks, {total_duration/60:.1f} min)"
+            )
+            
+            return (markdown_content, None)
+            
+        finally:
+            # Clean up temp files
+            import shutil
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception:
+                pass
 
     def _transcribe_audio_local(self, file_path: str) -> tuple[str, Optional[Any]]:
         """

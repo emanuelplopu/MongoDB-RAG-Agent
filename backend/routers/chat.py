@@ -150,13 +150,8 @@ async def perform_search(db, query: str, search_type: SearchType, match_count: i
 
 
 async def generate_response(message: str, context: str, conversation_history: list) -> tuple:
-    """Generate LLM response."""
-    from openai import AsyncOpenAI
-    
-    client = AsyncOpenAI(
-        api_key=settings.llm_api_key,
-        base_url=settings.llm_base_url
-    )
+    """Generate LLM response using LiteLLM for unified model handling."""
+    import litellm
     
     # Build messages
     messages = [
@@ -180,11 +175,14 @@ Always cite the document source when referencing information from the context.""
     # Add current message
     messages.append({"role": "user", "content": message})
     
-    response = await client.chat.completions.create(
+    # Use LiteLLM - automatically handles max_tokens vs max_completion_tokens
+    response = await litellm.acompletion(
         model=settings.llm_model,
         messages=messages,
         temperature=0.7,
-        max_tokens=2000
+        max_tokens=2000,
+        api_key=settings.llm_api_key,
+        api_base=settings.llm_base_url if settings.llm_base_url else None,
     )
     
     return (

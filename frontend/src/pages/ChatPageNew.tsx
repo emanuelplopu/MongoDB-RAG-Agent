@@ -12,13 +12,18 @@ import {
   DocumentTextIcon,
   ChevronDownIcon,
   ExclamationCircleIcon,
+  PaperClipIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline'
 import {
   sessionsApi,
   documentsApi,
   SessionMessage,
+  ApiError,
+  AttachmentInfo,
 } from '../api/client'
 import { useChatSidebar } from '../contexts/ChatSidebarContext'
+import { useAuth } from '../contexts/AuthContext'
 
 // Local storage keys
 const STORAGE_KEYS = {
@@ -47,15 +52,21 @@ export default function ChatPage() {
     models,
     getPricing,
   } = useChatSidebar()
+  
+  // Get current user for error message handling
+  const { user } = useAuth()
 
   // Local state
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showModelSelector, setShowModelSelector] = useState(false)
+  const [attachments, setAttachments] = useState<AttachmentInfo[]>([])
+  const [attachmentTokens, setAttachmentTokens] = useState<number>(0)
   
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Load draft from localStorage when session changes
   useEffect(() => {
@@ -109,6 +120,82 @@ export default function ChatPage() {
     setShowModelSelector(false)
   }
 
+  // Handle file attachment
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (!files) return
+
+    const newAttachments: AttachmentInfo[] = []
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      
+      // Check file size (max 20MB)
+      if (file.size > 20 * 1024 * 1024) {
+        setError(`File "${file.name}" is too large (max 20MB)`)
+        continue
+      }
+
+      // Read file as data URL for images
+      const dataUrl = await new Promise<string | null>((resolve) => {
+        if (file.type.startsWith('image/')) {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result as string)
+          reader.onerror = () => resolve(null)
+          reader.readAsDataURL(file)
+        } else {
+          resolve(null)
+        }
+      })
+
+      // Estimate tokens for the attachment
+      let tokenEstimate = 0
+      if (file.type.startsWith('image/')) {
+        // Default estimate for images (will be refined by backend)
+        tokenEstimate = 765 // Default for 1024x1024 image
+      } else if (file.type.startsWith('text/')) {
+        tokenEstimate = Math.floor(file.size / 4)
+      } else {
+        tokenEstimate = Math.floor(file.size / 100)
+      }
+
+      newAttachments.push({
+        filename: file.name,
+        content_type: file.type || 'application/octet-stream',
+        size_bytes: file.size,
+        data_url: dataUrl || undefined,
+        token_estimate: tokenEstimate,
+      })
+    }
+
+    const allAttachments = [...attachments, ...newAttachments]
+    setAttachments(allAttachments)
+    
+    // Calculate total token estimate
+    const totalTokens = allAttachments.reduce((sum, a) => sum + a.token_estimate, 0)
+    setAttachmentTokens(totalTokens)
+
+    // Clear the file input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  // Remove attachment
+  const removeAttachment = (index: number) => {
+    const newAttachments = attachments.filter((_, i) => i !== index)
+    setAttachments(newAttachments)
+    const totalTokens = newAttachments.reduce((sum, a) => sum + a.token_estimate, 0)
+    setAttachmentTokens(totalTokens)
+  }
+
+  // Format file size
+  const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  }
+
   // Send message
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -123,7 +210,10 @@ export default function ChatPage() {
     }
 
     const messageContent = input.trim()
+    const messageAttachments = attachments.length > 0 ? [...attachments] : undefined
     setInput('')
+    setAttachments([])
+    setAttachmentTokens(0)
     setError(null)
     localStorage.removeItem(STORAGE_KEYS.DRAFT + session.id)
     setIsLoading(true)
@@ -134,6 +224,7 @@ export default function ChatPage() {
       role: 'user',
       content: messageContent,
       timestamp: new Date().toISOString(),
+      attachments: messageAttachments,
     }
     setCurrentSession(prev => prev ? {
       ...prev,
@@ -141,7 +232,9 @@ export default function ChatPage() {
     } : null)
 
     try {
-      const response = await sessionsApi.sendMessage(session.id, messageContent)
+      const response = await sessionsApi.sendMessage(session.id, messageContent, {
+        attachments: messageAttachments,
+      })
       
       // Update session with real messages
       setCurrentSession(prev => {
@@ -160,9 +253,22 @@ export default function ChatPage() {
           ? { ...s, updated_at: new Date().toISOString(), stats: response.session_stats }
           : s
       ))
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to send message:', err)
-      setError(err.message || 'Failed to send message. Please try again.')
+      
+      // Get appropriate error message based on user role
+      let errorMessage: string
+      if (err instanceof ApiError) {
+        errorMessage = err.getUserMessage(user?.is_admin ?? false)
+      } else if (err instanceof Error) {
+        errorMessage = user?.is_admin 
+          ? `Error: ${err.message}`
+          : 'Failed to send message. Please try again.'
+      } else {
+        errorMessage = 'An unexpected error occurred. Please try again.'
+      }
+      
+      setError(errorMessage)
       // Remove temp message on error
       setCurrentSession(prev => prev ? {
         ...prev,
@@ -297,7 +403,68 @@ export default function ChatPage() {
               </div>
             )}
             <form onSubmit={handleSubmit} className="max-w-3xl mx-auto">
+              {/* Attachment Preview */}
+              {attachments.length > 0 && (
+                <div className="flex flex-wrap gap-2 mb-2 p-2 bg-surface-variant dark:bg-gray-700 rounded-xl">
+                  {attachments.map((attachment, index) => (
+                    <div
+                      key={index}
+                      className="relative group flex items-center gap-2 px-2 py-1 bg-white dark:bg-gray-600 rounded-lg border border-surface dark:border-gray-500"
+                    >
+                      {attachment.data_url && attachment.content_type.startsWith('image/') ? (
+                        <img
+                          src={attachment.data_url}
+                          alt={attachment.filename}
+                          className="w-10 h-10 object-cover rounded"
+                        />
+                      ) : (
+                        <div className="w-10 h-10 flex items-center justify-center bg-surface-variant dark:bg-gray-500 rounded">
+                          <DocumentTextIcon className="h-5 w-5 text-secondary" />
+                        </div>
+                      )}
+                      <div className="flex flex-col">
+                        <span className="text-xs text-primary-900 dark:text-gray-200 truncate max-w-[100px]">
+                          {attachment.filename}
+                        </span>
+                        <span className="text-[10px] text-secondary dark:text-gray-400">
+                          {formatFileSize(attachment.size_bytes)} • ~{attachment.token_estimate.toLocaleString()} tokens
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeAttachment(index)}
+                        className="absolute -top-1 -right-1 w-4 h-4 flex items-center justify-center bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <XMarkIcon className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                  {attachmentTokens > 0 && (
+                    <div className="flex items-center px-2 text-xs text-secondary dark:text-gray-400">
+                      Total: ~{attachmentTokens.toLocaleString()} tokens
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="relative flex items-end gap-2 bg-surface-variant dark:bg-gray-700 rounded-2xl p-2">
+                {/* File input (hidden) */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept="image/*,.pdf,.txt,.md,.doc,.docx"
+                  onChange={handleFileSelect}
+                  className="hidden"
+                />
+                {/* Attachment button */}
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex h-10 w-10 items-center justify-center rounded-xl hover:bg-surface dark:hover:bg-gray-600 text-secondary hover:text-primary transition-colors flex-shrink-0"
+                  title="Attach files"
+                >
+                  <PaperClipIcon className="h-5 w-5" />
+                </button>
                 <textarea
                   ref={inputRef}
                   value={input}
@@ -317,7 +484,7 @@ export default function ChatPage() {
                 </button>
               </div>
               <p className="text-xs text-center text-secondary dark:text-gray-500 mt-2">
-                Press Enter to send, Shift+Enter for new line
+                Press Enter to send, Shift+Enter for new line{attachments.length > 0 ? ` • ${attachments.length} file(s) attached` : ''}
               </p>
             </form>
           </div>
@@ -351,22 +518,30 @@ export default function ChatPage() {
 function MessageBubble({ message }: { message: SessionMessage }) {
   const isUser = message.role === 'user'
   const [documentIds, setDocumentIds] = useState<Record<string, string>>({})
+  const [loadingDocs, setLoadingDocs] = useState(false)
 
-  // Lookup document IDs for sources
+  // Lookup document IDs for sources - load all at once
   useEffect(() => {
-    if (message.sources && message.sources.length > 0) {
-      message.sources.forEach(async (source) => {
-        if (!documentIds[source.source]) {
-          try {
-            const doc = await documentsApi.findBySource(source.source)
-            if (doc) {
-              setDocumentIds(prev => ({ ...prev, [source.source]: doc.id }))
+    if (message.sources && message.sources.length > 0 && !loadingDocs) {
+      setLoadingDocs(true)
+      const loadDocIds = async () => {
+        const newIds: Record<string, string> = {}
+        await Promise.all(
+          message.sources!.map(async (source) => {
+            try {
+              const doc = await documentsApi.findBySource(source.source)
+              if (doc) {
+                newIds[source.source] = doc.id
+              }
+            } catch (err) {
+              // Ignore lookup errors
             }
-          } catch (err) {
-            // Ignore lookup errors
-          }
-        }
-      })
+          })
+        )
+        setDocumentIds(prev => ({ ...prev, ...newIds }))
+        setLoadingDocs(false)
+      }
+      loadDocIds()
     }
   }, [message.sources])
 
@@ -389,6 +564,27 @@ function MessageBubble({ message }: { message: SessionMessage }) {
             ? 'bg-primary text-white'
             : 'bg-surface-variant dark:bg-gray-700 text-primary-900 dark:text-gray-100'
         }`}>
+          {/* Attachments */}
+          {message.attachments && message.attachments.length > 0 && (
+            <div className={`flex flex-wrap gap-2 mb-2 ${isUser ? 'justify-end' : ''}`}>
+              {message.attachments.map((attachment, idx) => (
+                <div key={idx} className="relative">
+                  {attachment.data_url && attachment.content_type?.startsWith('image/') ? (
+                    <img
+                      src={attachment.data_url}
+                      alt={attachment.filename}
+                      className="max-w-[200px] max-h-[150px] object-cover rounded-lg border border-white/20"
+                    />
+                  ) : (
+                    <div className="flex items-center gap-2 px-2 py-1 bg-white/10 rounded-lg">
+                      <DocumentTextIcon className="h-4 w-4" />
+                      <span className="text-xs truncate max-w-[120px]">{attachment.filename}</span>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
           {isUser ? (
             <p className="whitespace-pre-wrap">{message.content}</p>
           ) : (
@@ -400,33 +596,30 @@ function MessageBubble({ message }: { message: SessionMessage }) {
         
         {/* Sources */}
         {message.sources && message.sources.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1">
+          <div className="mt-2 flex flex-wrap items-center gap-1">
+            <span className="text-[9px] text-secondary dark:text-gray-500 font-medium">
+              {message.sources.length} matches:
+            </span>
             {message.sources.map((source, idx) => {
               const docId = documentIds[source.source]
-              const content = (
-                <>
-                  <DocumentTextIcon className="h-3 w-3" />
-                  <span className="text-primary-700 dark:text-primary-300">{source.title}</span>
-                  <span className="text-secondary dark:text-gray-400">{Math.round(source.relevance * 100)}%</span>
-                </>
-              )
-              return docId ? (
-                <Link
-                  key={idx}
-                  to={`/documents/${docId}`}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-surface-variant dark:bg-gray-700 text-xs hover:bg-surface dark:hover:bg-gray-600 transition-colors"
-                  title={source.excerpt}
-                >
-                  {content}
-                </Link>
-              ) : (
+              const badge = (
                 <span
                   key={idx}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-surface-variant dark:bg-gray-700 text-xs"
+                  className={`inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] bg-primary-50 dark:bg-gray-600 ${docId ? 'hover:bg-primary-100 dark:hover:bg-gray-500 cursor-pointer' : 'opacity-60'} transition-colors`}
                   title={source.excerpt}
                 >
-                  {content}
+                  <DocumentTextIcon className="h-2 w-2 text-primary-500 flex-shrink-0" />
+                  <span className="text-primary-600 dark:text-primary-300 truncate max-w-[80px]">{source.title}</span>
+                  <span className="text-secondary dark:text-gray-400 ml-0.5">{Math.round(source.relevance * 100)}%</span>
                 </span>
+              )
+              
+              return docId ? (
+                <Link key={idx} to={`/documents/${docId}`} className="no-underline">
+                  {badge}
+                </Link>
+              ) : (
+                badge
               )
             })}
           </div>

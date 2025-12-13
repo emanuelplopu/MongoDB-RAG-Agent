@@ -3,6 +3,7 @@
 import logging
 import time
 import uuid
+import traceback
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, HTTPException, Request, Depends
@@ -68,6 +69,79 @@ def calculate_cost(model_id: str, input_tokens: int, output_tokens: int) -> floa
     return input_cost + output_cost
 
 
+def estimate_image_tokens(width: int = 1024, height: int = 1024, detail: str = "auto") -> int:
+    """
+    Estimate tokens for an image based on OpenAI's vision token calculation.
+    
+    OpenAI Vision token calculation:
+    - Low detail: 85 tokens fixed
+    - High detail: 85 base + 170 tokens per 512x512 tile
+    
+    For auto detail, we estimate based on image size.
+    """
+    if detail == "low":
+        return 85
+    
+    # High detail calculation
+    # Scale image to fit in 2048x2048 while maintaining aspect ratio
+    max_size = 2048
+    scale = min(max_size / max(width, height), 1.0)
+    scaled_width = int(width * scale)
+    scaled_height = int(height * scale)
+    
+    # Scale shortest side to 768px
+    if min(scaled_width, scaled_height) > 768:
+        scale_768 = 768 / min(scaled_width, scaled_height)
+        scaled_width = int(scaled_width * scale_768)
+        scaled_height = int(scaled_height * scale_768)
+    
+    # Calculate number of 512x512 tiles
+    tiles_x = (scaled_width + 511) // 512
+    tiles_y = (scaled_height + 511) // 512
+    total_tiles = tiles_x * tiles_y
+    
+    # 85 base + 170 per tile
+    return 85 + (170 * total_tiles)
+
+
+def estimate_attachment_tokens(attachment: 'AttachmentInfo') -> int:
+    """
+    Estimate tokens for an attachment.
+    
+    For images: Uses OpenAI vision token calculation
+    For documents: Estimates based on typical compression ratios
+    For audio: Estimates based on duration
+    """
+    content_type = attachment.content_type
+    size_bytes = attachment.size_bytes
+    
+    if content_type.startswith("image/"):
+        # Default estimate for images without dimensions
+        # Assume 1024x1024 for typical images
+        return estimate_image_tokens(1024, 1024, "auto")
+    
+    elif content_type.startswith("audio/"):
+        # Whisper: ~1 minute of audio = ~1500 tokens transcribed
+        # Estimate duration from file size (rough estimate: 1MB = 1 minute for MP3)
+        estimated_minutes = size_bytes / (1024 * 1024)
+        return int(estimated_minutes * 1500)
+    
+    elif content_type in ["application/pdf", "application/msword", 
+                          "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]:
+        # Estimate ~4 chars per token, documents are often text-heavy
+        # Estimate text ratio from file size
+        estimated_chars = size_bytes * 0.5  # Rough estimate of text content
+        return int(estimated_chars / 4)
+    
+    elif content_type.startswith("text/"):
+        # Text files: ~4 chars per token
+        return size_bytes // 4
+    
+    else:
+        # Unknown type - rough estimate
+        return size_bytes // 100
+
+
 # ============== Pydantic Models ==============
 
 class MessageStats(BaseModel):
@@ -89,6 +163,7 @@ class Message(BaseModel):
     stats: Optional[MessageStats] = None
     model: Optional[str] = None
     sources: Optional[List[Dict[str, Any]]] = None
+    attachments: Optional[List[Dict[str, Any]]] = None  # Attached files for multimodal
 
 
 class SessionStats(BaseModel):
@@ -142,11 +217,21 @@ class UpdateSessionRequest(BaseModel):
     is_pinned: Optional[bool] = None
 
 
+class AttachmentInfo(BaseModel):
+    """Information about an attached file."""
+    filename: str
+    content_type: str
+    size_bytes: int
+    data_url: Optional[str] = None  # Base64 data URL for images
+    token_estimate: int = 0  # Estimated tokens for the attachment
+
+
 class SendMessageRequest(BaseModel):
     content: str = Field(..., min_length=1)
     search_type: str = "hybrid"
     match_count: int = 10
     include_sources: bool = True
+    attachments: Optional[List[AttachmentInfo]] = None  # File attachments for multimodal
 
 
 class CreateFolderRequest(BaseModel):
@@ -452,8 +537,14 @@ async def send_message(
     msg_request: SendMessageRequest,
     user: Optional[UserResponse] = Depends(get_current_user)
 ):
-    """Send a message in a chat session and get AI response."""
-    from openai import AsyncOpenAI
+    """Send a message in a chat session and get AI response.
+    
+    This endpoint handles the full RAG chat flow:
+    1. Validates session ownership
+    2. Performs semantic search on knowledge base
+    3. Generates LLM response with context
+    4. Updates session with messages and stats
+    """
     from backend.routers.chat import get_embedding, perform_search
     from backend.models.schemas import SearchType
     
@@ -461,28 +552,76 @@ async def send_message(
     db = request.app.state.db
     collection = await get_sessions_collection(request)
     
+    # Log the incoming request
+    logger.info(
+        f"Chat request: session={session_id}, user={user.id if user else 'anonymous'}, "
+        f"content_length={len(msg_request.content)}"
+    )
+    
     # Get session - check ownership
     query = {"_id": session_id}
     if user:
         query["user_id"] = user.id
     
-    doc = await collection.find_one(query)
+    try:
+        doc = await collection.find_one(query)
+    except Exception as e:
+        logger.error(
+            f"Database error finding session: session_id={session_id}, "
+            f"error={type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to retrieve chat session. Please try again."
+        )
+    
     if not doc:
+        logger.warning(
+            f"Session not found: session_id={session_id}, user_id={user.id if user else 'anonymous'}"
+        )
         raise HTTPException(status_code=404, detail="Session not found")
     
     session_model = doc.get("model", settings.llm_model)
+    logger.debug(f"Using model: {session_model} for session {session_id}")
     
-    # Create user message
+    # Create user message with attachments
+    attachment_list = None
+    if msg_request.attachments:
+        attachment_list = [a.model_dump() for a in msg_request.attachments]
+    
     user_message = Message(
         role="user",
-        content=msg_request.content
+        content=msg_request.content,
+        attachments=attachment_list
     )
     
-    # Perform search
-    search_type = SearchType(msg_request.search_type)
-    search_results = await perform_search(
-        db, msg_request.content, search_type, msg_request.match_count
-    )
+    # Perform search on knowledge base
+    try:
+        search_type = SearchType(msg_request.search_type)
+        search_results = await perform_search(
+            db, msg_request.content, search_type, msg_request.match_count
+        )
+        logger.info(
+            f"Search completed: session={session_id}, results={len(search_results)}, "
+            f"search_type={msg_request.search_type}"
+        )
+    except ValueError as e:
+        logger.error(
+            f"Invalid search type: {msg_request.search_type}, "
+            f"session={session_id}, error={str(e)}"
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid search type: {msg_request.search_type}"
+        )
+    except Exception as e:
+        logger.error(
+            f"Search failed: session={session_id}, "
+            f"error={type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+        )
+        # Continue without search results rather than failing completely
+        search_results = []
+        logger.warning(f"Continuing without search results for session {session_id}")
     
     # Build context
     context_parts = []
@@ -511,7 +650,8 @@ say so and provide what help you can.
 CONTEXT FROM KNOWLEDGE BASE:
 {context}
 
-Always cite the document source when referencing information from the context."""
+IMPORTANT: Do NOT list or cite sources in your response. The sources are displayed separately in the UI.
+Just answer the question directly using the information from the context."""
         }
     ]
     
@@ -521,20 +661,89 @@ Always cite the document source when referencing information from the context.""
     
     llm_messages.append({"role": "user", "content": msg_request.content})
     
-    # Generate response
+    # Add multimodal content if attachments present
+    # Build message content for multimodal models (GPT-4 Vision, Claude, etc.)
+    if msg_request.attachments:
+        multimodal_content = []
+        multimodal_content.append({"type": "text", "text": msg_request.content})
+        
+        for attachment in msg_request.attachments:
+            if attachment.content_type.startswith("image/") and attachment.data_url:
+                multimodal_content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": attachment.data_url,
+                        "detail": "auto"  # Let the model decide detail level
+                    }
+                })
+        
+        # Replace the last user message with multimodal content
+        if len(multimodal_content) > 1:  # Has at least one image
+            llm_messages[-1] = {"role": "user", "content": multimodal_content}
+    
+    # Generate response with comprehensive error handling
     generation_start = time.time()
     
-    client = AsyncOpenAI(
-        api_key=settings.llm_api_key,
-        base_url=settings.llm_base_url
-    )
-    
-    response = await client.chat.completions.create(
-        model=session_model,
-        messages=llm_messages,
-        temperature=0.7,
-        max_tokens=4000
-    )
+    try:
+        # Use LiteLLM for unified LLM interface - handles model-specific parameters automatically
+        import litellm
+        
+        # LiteLLM automatically handles max_tokens vs max_completion_tokens based on model
+        response = await litellm.acompletion(
+            model=session_model,
+            messages=llm_messages,
+            temperature=0.7,
+            max_tokens=4000,  # LiteLLM translates this to max_completion_tokens if needed
+            api_key=settings.llm_api_key,
+            api_base=settings.llm_base_url if settings.llm_base_url else None,
+        )
+        
+    except litellm.RateLimitError as e:
+        logger.error(
+            f"LLM rate limit exceeded: session={session_id}, model={session_model}, "
+            f"error={str(e)}\n{traceback.format_exc()}"
+        )
+        raise HTTPException(
+            status_code=429,
+            detail="The AI service is currently busy. Please wait a moment and try again."
+        )
+    except litellm.APIConnectionError as e:
+        logger.error(
+            f"LLM connection failed: session={session_id}, model={session_model}, "
+            f"base_url={settings.llm_base_url}, error={str(e)}\n{traceback.format_exc()}"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to connect to the AI service. Please try again later."
+        )
+    except litellm.APIError as e:
+        logger.error(
+            f"LLM API error: session={session_id}, model={session_model}, "
+            f"status_code={getattr(e, 'status_code', 'unknown')}, "
+            f"error={str(e)}\n{traceback.format_exc()}"
+        )
+        
+        # Provide appropriate user-facing message based on error type
+        if hasattr(e, 'status_code'):
+            if e.status_code == 401:
+                detail = "AI service authentication failed. Please contact the administrator."
+            elif e.status_code == 404:
+                detail = f"The selected model '{session_model}' is not available. Please try a different model."
+            else:
+                detail = "The AI service encountered an error. Please try again."
+        else:
+            detail = "An error occurred while generating the response. Please try again."
+        
+        raise HTTPException(status_code=503, detail=detail)
+    except Exception as e:
+        logger.error(
+            f"Unexpected LLM error: session={session_id}, model={session_model}, "
+            f"error_type={type(e).__name__}, error={str(e)}\n{traceback.format_exc()}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="An unexpected error occurred while generating the response. Please try again."
+        )
     
     generation_time = time.time() - generation_start
     total_time = time.time() - start_time
@@ -544,6 +753,12 @@ Always cite the document source when referencing information from the context.""
     input_tokens = usage.prompt_tokens if usage else 0
     output_tokens = usage.completion_tokens if usage else 0
     total_tokens = usage.total_tokens if usage else 0
+    
+    logger.info(
+        f"LLM response generated: session={session_id}, model={session_model}, "
+        f"input_tokens={input_tokens}, output_tokens={output_tokens}, "
+        f"generation_time={generation_time:.2f}s, total_time={total_time:.2f}s"
+    )
     
     # Calculate stats
     tokens_per_second = output_tokens / generation_time if generation_time > 0 else 0
@@ -584,32 +799,89 @@ Always cite the document source when referencing information from the context.""
             (current_stats.get("avg_latency_ms", 0) * (msg_count - 1) + total_time * 1000) / msg_count, 0
         )
     
-    # Auto-generate title from first message
+    # Auto-generate title using LLM after 3 exchanges (6 messages)
     title_update = {}
+    message_count_after_this = len(messages) + 2  # +2 for user and assistant messages being added
+    
+    # Generate title on first message (simple) or after 3 exchanges (LLM-based)
     if len(messages) == 0:
-        # Generate title from first message
+        # First message - use first few words as placeholder
         first_words = msg_request.content.split()[:6]
         title = " ".join(first_words)
         if len(title) > 40:
             title = title[:40] + "..."
         title_update["title"] = title
+    elif message_count_after_this == 6:  # After 3 exchanges (3 user + 3 assistant = 6)
+        # Generate a better title using LLM
+        try:
+            import litellm
+            
+            # Build conversation summary for title generation
+            conversation_summary = []
+            for msg in messages[-6:]:  # Last 6 messages
+                role = "User" if msg["role"] == "user" else "Assistant"
+                content_preview = msg["content"][:200] if len(msg["content"]) > 200 else msg["content"]
+                conversation_summary.append(f"{role}: {content_preview}")
+            conversation_summary.append(f"User: {msg_request.content[:200]}")
+            
+            title_prompt = [
+                {
+                    "role": "system",
+                    "content": "Generate a short, descriptive title (max 8 words) for this conversation. Return ONLY the title, nothing else."
+                },
+                {
+                    "role": "user",
+                    "content": "\n".join(conversation_summary)
+                }
+            ]
+            
+            title_response = await litellm.acompletion(
+                model=session_model,
+                messages=title_prompt,
+                temperature=0.7,
+                max_tokens=30,
+                api_key=settings.llm_api_key,
+                api_base=settings.llm_base_url if settings.llm_base_url else None,
+            )
+            
+            generated_title = title_response.choices[0].message.content.strip()
+            # Clean up the title - remove quotes if present, limit length
+            generated_title = generated_title.strip('"\'')
+            words = generated_title.split()[:8]  # Max 8 words
+            generated_title = " ".join(words)
+            if generated_title:
+                title_update["title"] = generated_title
+                logger.info(f"Generated title for session {session_id}: {generated_title}")
+        except Exception as e:
+            logger.warning(f"Failed to generate title for session {session_id}: {e}")
+            # Keep existing title if generation fails
     
     # Update session in database
-    await collection.update_one(
-        {"_id": session_id},
-        {
-            "$push": {
-                "messages": {
-                    "$each": [user_message.model_dump(), assistant_message.model_dump()]
+    try:
+        await collection.update_one(
+            {"_id": session_id},
+            {
+                "$push": {
+                    "messages": {
+                        "$each": [user_message.model_dump(), assistant_message.model_dump()]
+                    }
+                },
+                "$set": {
+                    "updated_at": datetime.now(),
+                    "stats": new_stats,
+                    **title_update
                 }
-            },
-            "$set": {
-                "updated_at": datetime.now(),
-                "stats": new_stats,
-                **title_update
             }
-        }
-    )
+        )
+        logger.debug(f"Session updated successfully: session_id={session_id}")
+    except Exception as e:
+        logger.error(
+            f"Failed to update session in database: session_id={session_id}, "
+            f"error={type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+        )
+        # The response was generated successfully, so we return it even if DB update fails
+        # This avoids losing the response entirely
+        logger.warning(f"Returning response despite DB update failure for session {session_id}")
     
     return {
         "user_message": user_message,
@@ -673,4 +945,36 @@ async def get_model_pricing_info():
             for model_id, pricing in MODEL_PRICING.items()
             if model_id != "default"
         ]
+    }
+
+
+@router.post("/meta/estimate-tokens")
+async def estimate_tokens_endpoint(
+    attachments: List[AttachmentInfo]
+):
+    """
+    Estimate tokens for a list of attachments.
+    
+    Returns individual token estimates and total for price calculation.
+    """
+    estimates = []
+    total = 0
+    
+    for attachment in attachments:
+        tokens = estimate_attachment_tokens(attachment)
+        estimates.append({
+            "filename": attachment.filename,
+            "content_type": attachment.content_type,
+            "size_bytes": attachment.size_bytes,
+            "token_estimate": tokens
+        })
+        total += tokens
+    
+    return {
+        "attachments": estimates,
+        "total_tokens": total,
+        "cost_estimates": {
+            model_id: calculate_cost(model_id, total, 0)
+            for model_id in ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"]
+        }
     }
