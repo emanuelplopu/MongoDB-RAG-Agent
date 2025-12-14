@@ -12,6 +12,9 @@ Production-ready API server with endpoints for:
 import logging
 import traceback
 import uuid
+import asyncio
+import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -19,6 +22,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.exceptions import RequestValidationError
 
 from backend.routers import chat, search, profiles, ingestion, system, sessions, auth
@@ -33,6 +37,83 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+# Increase default thread pool size for async operations
+# This prevents blocking when ingestion uses many threads
+def configure_thread_pool():
+    """Configure a larger default thread pool for asyncio."""
+    loop = asyncio.get_event_loop()
+    # Use 32 workers instead of default min(32, cpu_count + 4)
+    executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="asyncio_")
+    loop.set_default_executor(executor)
+    logger.info("Configured asyncio thread pool with 32 workers")
+
+# Configure at module load
+try:
+    configure_thread_pool()
+except RuntimeError:
+    # Event loop not running yet, will be configured later
+    pass
+
+
+# Request timeout middleware to prevent blocking requests
+REQUEST_TIMEOUT_SECONDS = 30  # Default timeout for API requests
+HEALTH_CHECK_PATHS = {"/health", "/api/v1/system/health", "/"}
+
+
+class RequestTimeoutMiddleware(BaseHTTPMiddleware):
+    """Middleware to enforce request timeouts and prevent blocking.
+    
+    - Health check endpoints get a short timeout (5s)
+    - Regular endpoints get a standard timeout (30s)
+    - Streaming endpoints are excluded from timeout
+    """
+    
+    async def dispatch(self, request: Request, call_next):
+        # Skip timeout for SSE/streaming endpoints
+        if request.url.path.endswith("/stream") or "logs/stream" in request.url.path:
+            return await call_next(request)
+        
+        # Short timeout for health checks
+        if request.url.path in HEALTH_CHECK_PATHS:
+            timeout = 5
+        else:
+            timeout = REQUEST_TIMEOUT_SECONDS
+        
+        start_time = time.time()
+        
+        try:
+            # Wrap the request in a timeout
+            response = await asyncio.wait_for(
+                call_next(request),
+                timeout=timeout
+            )
+            
+            # Log slow requests (>5s)
+            elapsed = time.time() - start_time
+            if elapsed > 5 and request.url.path not in HEALTH_CHECK_PATHS:
+                logger.warning(
+                    f"Slow request: {request.method} {request.url.path} "
+                    f"took {elapsed:.2f}s"
+                )
+            
+            return response
+            
+        except asyncio.TimeoutError:
+            elapsed = time.time() - start_time
+            logger.error(
+                f"Request timeout after {elapsed:.2f}s: "
+                f"{request.method} {request.url.path}"
+            )
+            return JSONResponse(
+                status_code=504,
+                content={
+                    "error": "gateway_timeout",
+                    "message": f"Request timed out after {timeout}s. "
+                               "The server may be busy processing other requests.",
+                    "path": request.url.path
+                }
+            )
 
 
 @asynccontextmanager
@@ -110,6 +191,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add request timeout middleware (after CORS)
+app.add_middleware(RequestTimeoutMiddleware)
 
 
 # ============== Exception Handlers ==============

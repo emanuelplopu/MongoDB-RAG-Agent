@@ -757,7 +757,10 @@ class DocumentIngestionPipeline:
             "title": title,
             "source": source,
             "content": content,
-            "metadata": metadata,
+            "metadata": {
+                **metadata,
+                "chunks_count": len(chunks)  # Store chunks count for efficient retrieval
+            },
             "created_at": datetime.now()
         }
 

@@ -193,17 +193,59 @@ async def graceful_shutdown_handler(db):
             logger.info(f"Marked {result.modified_count} job(s) as interrupted during shutdown")
 
 
+def _find_files_sync(folders: List[str], patterns: List[str]) -> List[str]:
+    """Synchronous helper to find files - runs in thread pool."""
+    import glob
+    all_files = []
+    for folder in folders:
+        if not os.path.exists(folder):
+            continue
+        for pattern in patterns:
+            all_files.extend(
+                glob.glob(os.path.join(folder, "**", pattern), recursive=True)
+            )
+    return all_files
+
+
+def _get_files_metadata_batch_sync(file_paths: List[str], folders: List[str]) -> List[dict]:
+    """Get file metadata for a batch of files synchronously - runs in thread pool."""
+    results = []
+    for file_path in file_paths:
+        try:
+            # Calculate source path
+            document_source = os.path.basename(file_path)
+            for folder in folders:
+                if os.path.abspath(file_path).startswith(os.path.abspath(folder)):
+                    document_source = os.path.relpath(file_path, folder)
+                    break
+            
+            stat = os.stat(file_path)
+            ext = os.path.splitext(file_path)[1].lower()
+            results.append({
+                "name": os.path.basename(file_path),
+                "path": document_source,
+                "size_bytes": stat.st_size,
+                "format": ext[1:] if ext else "unknown",
+                "created_at": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat()
+            })
+        except OSError:
+            continue
+    return results
+
+
 async def _build_pending_files_queue(pipeline, incremental: bool = True):
     """
     Build the pending files queue from the ingestion pipeline.
     
     Called at the start of ingestion to populate the queue.
+    Uses thread pool for blocking file system operations.
     """
     global _pending_files_queue
     
+    logger.info("Starting _build_pending_files_queue...")
+    
     try:
-        # Get file list from pipeline
-        import glob
         patterns = [
             "*.md", "*.markdown", "*.txt",
             "*.pdf", "*.docx", "*.doc",
@@ -214,18 +256,23 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True):
             "*.mp4", "*.avi", "*.mkv", "*.mov", "*.webm",
         ]
         
-        all_files = []
-        for folder in pipeline.documents_folders:
-            if not os.path.exists(folder):
-                continue
-            for pattern in patterns:
-                all_files.extend(
-                    glob.glob(os.path.join(folder, "**", pattern), recursive=True)
-                )
+        # Run glob in thread pool to avoid blocking event loop
+        loop = asyncio.get_running_loop()
+        all_files = await loop.run_in_executor(
+            None,
+            _find_files_sync,
+            pipeline.documents_folders,
+            patterns
+        )
+        
+        # Yield control back to event loop
+        await asyncio.sleep(0)
         
         if not all_files:
             _pending_files_queue = []
             return
+        
+        logger.info(f"Found {len(all_files)} total files, building queue...")
         
         # Get existing sources if incremental
         existing_sources = set()
@@ -238,10 +285,9 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True):
                 if "source" in doc:
                     existing_sources.add(doc["source"])
         
-        # Build queue with file metadata
-        pending_files = []
+        # Filter files that need processing
+        files_to_process = []
         for file_path in all_files:
-            # Calculate source path
             document_source = os.path.basename(file_path)
             for folder in pipeline.documents_folders:
                 if os.path.abspath(file_path).startswith(os.path.abspath(folder)):
@@ -251,19 +297,26 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True):
             if incremental and document_source in existing_sources:
                 continue
             
-            try:
-                stat = os.stat(file_path)
-                ext = os.path.splitext(file_path)[1].lower()
-                pending_files.append({
-                    "name": os.path.basename(file_path),
-                    "path": document_source,
-                    "size_bytes": stat.st_size,
-                    "format": ext[1:] if ext else "unknown",
-                    "created_at": datetime.fromtimestamp(stat.st_ctime).isoformat(),
-                    "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat()
-                })
-            except OSError:
-                continue
+            files_to_process.append(file_path)
+        
+        # Yield control
+        await asyncio.sleep(0)
+        
+        if not files_to_process:
+            _pending_files_queue = []
+            logger.info("No new files to process")
+            return
+        
+        # Get metadata for all files in a single batch in thread pool
+        pending_files = await loop.run_in_executor(
+            None,
+            _get_files_metadata_batch_sync,
+            files_to_process,
+            pipeline.documents_folders
+        )
+        
+        # Yield control
+        await asyncio.sleep(0)
         
         # Sort by processing priority
         def sort_key(f):
@@ -392,13 +445,29 @@ async def run_ingestion(job_id: str, config: dict, db):
             max_tokens=config.get("max_tokens", 512)
         )
         
-        # Create pipeline
-        pipeline = DocumentIngestionPipeline(
-            config=ing_config,
-            documents_folder=config.get("documents_folder"),
-            clean_before_ingest=config.get("clean_before_ingest", False),
-            use_profile=True
-        )
+        # Helper to create pipeline synchronously (includes heavy tokenizer loading)
+        def create_pipeline_sync():
+            return DocumentIngestionPipeline(
+                config=ing_config,
+                documents_folder=config.get("documents_folder"),
+                clean_before_ingest=config.get("clean_before_ingest", False),
+                use_profile=True
+            )
+        
+        # Create pipeline in thread pool to avoid blocking event loop
+        # The pipeline __init__ loads tokenizers which can be slow
+        _ingestion_logs.append({
+            "timestamp": datetime.now().isoformat(),
+            "level": "INFO",
+            "message": "Initializing pipeline (loading tokenizers)...",
+            "logger": "ingestion"
+        })
+        
+        loop = asyncio.get_running_loop()
+        pipeline = await loop.run_in_executor(None, create_pipeline_sync)
+        
+        # Yield control after heavy initialization
+        await asyncio.sleep(0)
         
         # Build initial pending files queue
         await _build_pending_files_queue(pipeline, config.get("incremental", True))
@@ -744,8 +813,8 @@ async def list_ingestion_runs(
     db = request.app.state.db
     collection = await get_jobs_collection(db)
     
-    # Get total count
-    total = await collection.count_documents({})
+    # Use estimated_document_count for faster results (jobs collection is small anyway)
+    total = await collection.estimated_document_count()
     total_pages = max(1, (total + page_size - 1) // page_size)
     
     # Get paginated runs
@@ -812,6 +881,7 @@ async def get_pending_files(
     
     Returns files that are queued for processing, including their metadata.
     Limited to 500 files by default.
+    Uses thread pool for blocking file operations.
     
     Args:
         limit: Maximum number of files to return (default 500, max 1000)
@@ -832,8 +902,6 @@ async def get_pending_files(
     db = request.app.state.db
     
     try:
-        # Import ingestion module
-        from src.ingestion.ingest import DocumentIngestionPipeline, IngestionConfig
         from src.profile import get_profile_manager
         
         # Create a temporary pipeline to find files
@@ -855,15 +923,14 @@ async def get_pending_files(
             "*.mp4", "*.avi", "*.mkv", "*.mov", "*.webm",
         ]
         
-        import glob
-        all_files = []
-        for folder in documents_folders:
-            if not os.path.exists(folder):
-                continue
-            for pattern in patterns:
-                all_files.extend(
-                    glob.glob(os.path.join(folder, "**", pattern), recursive=True)
-                )
+        # Run glob in thread pool to avoid blocking event loop
+        loop = asyncio.get_running_loop()
+        all_files = await loop.run_in_executor(
+            None,
+            _find_files_sync,
+            documents_folders,
+            patterns
+        )
         
         if not all_files:
             return {"files": [], "total": 0, "is_running": False}
@@ -876,8 +943,8 @@ async def get_pending_files(
             if "source" in doc:
                 existing_sources.add(doc["source"])
         
-        # Filter to pending files and add metadata
-        pending_files = []
+        # Filter to pending files
+        files_to_process = []
         for file_path in all_files:
             # Calculate source path
             document_source = os.path.basename(file_path)
@@ -889,20 +956,25 @@ async def get_pending_files(
             if document_source in existing_sources:
                 continue
             
-            # Get file metadata
-            try:
-                stat = os.stat(file_path)
-                ext = os.path.splitext(file_path)[1].lower()
-                pending_files.append({
-                    "name": os.path.basename(file_path),
-                    "path": document_source,
-                    "size_bytes": stat.st_size,
-                    "format": ext[1:] if ext else "unknown",
-                    "created_at": datetime.fromtimestamp(stat.st_ctime).isoformat(),
-                    "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat()
-                })
-            except OSError:
-                continue
+            files_to_process.append(file_path)
+            
+            # Limit to first 1000 files for quick response
+            if len(files_to_process) >= 1000:
+                break
+        
+        if not files_to_process:
+            return {"files": [], "total": 0, "is_running": False}
+        
+        # Yield control
+        await asyncio.sleep(0)
+        
+        # Get metadata for all files in a single batch in thread pool
+        pending_files = await loop.run_in_executor(
+            None,
+            _get_files_metadata_batch_sync,
+            files_to_process,
+            documents_folders
+        )
         
         # Sort by processing priority (text first, large files last)
         def sort_key(f):
@@ -1118,8 +1190,8 @@ async def list_documents(
     db = request.app.state.db
     collection = db.documents_collection
     
-    # Get total count
-    total = await collection.count_documents({})
+    # Use estimated_document_count for faster results
+    total = await collection.estimated_document_count()
     
     # Calculate pagination
     skip = (page - 1) * page_size
@@ -1130,10 +1202,9 @@ async def list_documents(
     
     documents = []
     async for doc in cursor:
-        # Count chunks for this document
-        chunks_count = await db.chunks_collection.count_documents({
-            "document_id": doc["_id"]
-        })
+        # Don't count chunks per document - it's too slow on large collections
+        # The chunk count is stored during ingestion if needed
+        chunks_count = doc.get("metadata", {}).get("chunks_count", 0)
         
         documents.append(DocumentInfo(
             id=str(doc["_id"]),

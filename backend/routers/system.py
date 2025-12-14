@@ -161,28 +161,42 @@ async def get_indexes(request: Request):
     # Add additional stats if indexes exist
     if "indexes" in index_info and index_info["indexes"]:
         try:
-            sync_client = db.get_sync_client()
-            mongo_db = sync_client[db.current_database_name]
-            chunks_coll = mongo_db[settings.mongodb_collection_chunks]
+            # Run sync operations in dedicated thread pool to avoid blocking
+            import asyncio
+            from backend.core.database import get_db_executor
+            loop = asyncio.get_running_loop()
             
-            # Get collection stats for index size estimate
-            coll_stats = mongo_db.command("collStats", settings.mongodb_collection_chunks)
+            def get_index_stats_sync():
+                import time as sync_time
+                logger.info("get_index_stats_sync: starting")
+                start = sync_time.time()
+                
+                sync_client = db.get_sync_client()
+                mongo_db = sync_client[db.current_database_name]
+                chunks_coll = mongo_db[settings.mongodb_collection_chunks]
+                logger.info(f"get_index_stats_sync: got client in {sync_time.time()-start:.2f}s")
+                
+                # Get collection stats for index size estimate
+                coll_stats = mongo_db.command("collStats", settings.mongodb_collection_chunks)
+                logger.info(f"get_index_stats_sync: got collStats in {sync_time.time()-start:.2f}s")
+                
+                # Use estimated_document_count for faster results
+                doc_count = chunks_coll.estimated_document_count()
+                logger.info(f"get_index_stats_sync: got doc_count={doc_count} in {sync_time.time()-start:.2f}s")
+                
+                # Skip the slow find_one query - use None for last_updated
+                # The find_one(sort=[("created_at", -1)]) scans entire collection without index
+                last_updated = None
+                logger.info(f"get_index_stats_sync: completed in {sync_time.time()-start:.2f}s")
+                
+                return {
+                    "indexed_documents": doc_count,
+                    "total_index_size_bytes": coll_stats.get("totalIndexSize", 0),
+                    "storage_size_bytes": coll_stats.get("storageSize", 0),
+                    "last_document_indexed": last_updated
+                }
             
-            # Get the count for indexed documents
-            doc_count = chunks_coll.count_documents({})
-            
-            # Check for a sample document to get last updated
-            last_doc = chunks_coll.find_one(
-                sort=[("created_at", -1)]
-            )
-            last_updated = last_doc.get("created_at") if last_doc else None
-            
-            index_info["stats"] = {
-                "indexed_documents": doc_count,
-                "total_index_size_bytes": coll_stats.get("totalIndexSize", 0),
-                "storage_size_bytes": coll_stats.get("storageSize", 0),
-                "last_document_indexed": last_updated.isoformat() if last_updated else None
-            }
+            index_info["stats"] = await loop.run_in_executor(get_db_executor(), get_index_stats_sync)
         except Exception as e:
             logger.warning(f"Could not get index stats: {e}")
             index_info["stats"] = None
@@ -198,121 +212,130 @@ async def create_search_indexes(request: Request):
     Creates both vector search and text search indexes for the chunks collection.
     """
     from datetime import datetime
+    import asyncio
+    from backend.core.database import get_db_executor
     
     db = request.app.state.db
-    results = {
-        "success": False,
-        "vector_index": None,
-        "text_index": None,
-        "errors": []
-    }
     
-    try:
-        sync_client = db.get_sync_client()
-        mongo_db = sync_client[db.current_database_name]
-        chunks_coll_name = settings.mongodb_collection_chunks
-        
-        # Get document count
-        doc_count = mongo_db[chunks_coll_name].count_documents({})
-        results["documents_to_index"] = doc_count
-        
-        if doc_count == 0:
-            results["warning"] = "No documents found in chunks collection"
-        
-        # Vector Search Index
-        vector_index_def = {
-            "name": settings.mongodb_vector_index,
-            "type": "vectorSearch",
-            "definition": {
-                "fields": [
-                    {
-                        "type": "vector",
-                        "path": "embedding",
-                        "numDimensions": settings.embedding_dimension,
-                        "similarity": "cosine"
-                    }
-                ]
-            }
+    def create_indexes_sync():
+        """Run sync index creation in thread pool."""
+        results = {
+            "success": False,
+            "vector_index": None,
+            "text_index": None,
+            "errors": []
         }
         
         try:
-            # Drop existing index if exists
-            try:
-                mongo_db.command({
-                    "dropSearchIndex": chunks_coll_name,
-                    "name": settings.mongodb_vector_index
-                })
-            except Exception:
-                pass
+            sync_client = db.get_sync_client()
+            mongo_db = sync_client[db.current_database_name]
+            chunks_coll_name = settings.mongodb_collection_chunks
             
-            # Create new index
-            result = mongo_db.command({
-                "createSearchIndexes": chunks_coll_name,
-                "indexes": [vector_index_def]
-            })
-            results["vector_index"] = {
+            # Use estimated_document_count for faster results
+            doc_count = mongo_db[chunks_coll_name].estimated_document_count()
+            results["documents_to_index"] = doc_count
+            
+            if doc_count == 0:
+                results["warning"] = "No documents found in chunks collection"
+            
+            # Vector Search Index
+            vector_index_def = {
                 "name": settings.mongodb_vector_index,
-                "status": "created",
-                "dimensions": settings.embedding_dimension
+                "type": "vectorSearch",
+                "definition": {
+                    "fields": [
+                        {
+                            "type": "vector",
+                            "path": "embedding",
+                            "numDimensions": settings.embedding_dimension,
+                            "similarity": "cosine"
+                        }
+                    ]
+                }
             }
-            logger.info(f"Created vector index: {settings.mongodb_vector_index}")
-        except Exception as e:
-            error_msg = f"Vector index error: {str(e)}"
-            results["errors"].append(error_msg)
-            logger.error(error_msg)
-        
-        # Text Search Index
-        text_index_def = {
-            "name": settings.mongodb_text_index,
-            "definition": {
-                "mappings": {
-                    "dynamic": False,
-                    "fields": {
-                        "content": {
-                            "type": "string",
-                            "analyzer": "lucene.standard"
+            
+            try:
+                # Drop existing index if exists
+                try:
+                    mongo_db.command({
+                        "dropSearchIndex": chunks_coll_name,
+                        "name": settings.mongodb_vector_index
+                    })
+                except Exception:
+                    pass
+                
+                # Create new index
+                mongo_db.command({
+                    "createSearchIndexes": chunks_coll_name,
+                    "indexes": [vector_index_def]
+                })
+                results["vector_index"] = {
+                    "name": settings.mongodb_vector_index,
+                    "status": "created",
+                    "dimensions": settings.embedding_dimension
+                }
+                logger.info(f"Created vector index: {settings.mongodb_vector_index}")
+            except Exception as e:
+                error_msg = f"Vector index error: {str(e)}"
+                results["errors"].append(error_msg)
+                logger.error(error_msg)
+            
+            # Text Search Index
+            text_index_def = {
+                "name": settings.mongodb_text_index,
+                "definition": {
+                    "mappings": {
+                        "dynamic": False,
+                        "fields": {
+                            "content": {
+                                "type": "string",
+                                "analyzer": "lucene.standard"
+                            }
                         }
                     }
                 }
             }
-        }
-        
-        try:
-            # Drop existing index if exists
-            try:
-                mongo_db.command({
-                    "dropSearchIndex": chunks_coll_name,
-                    "name": settings.mongodb_text_index
-                })
-            except Exception:
-                pass
             
-            # Create new index
-            result = mongo_db.command({
-                "createSearchIndexes": chunks_coll_name,
-                "indexes": [text_index_def]
-            })
-            results["text_index"] = {
-                "name": settings.mongodb_text_index,
-                "status": "created"
-            }
-            logger.info(f"Created text index: {settings.mongodb_text_index}")
+            try:
+                # Drop existing index if exists
+                try:
+                    mongo_db.command({
+                        "dropSearchIndex": chunks_coll_name,
+                        "name": settings.mongodb_text_index
+                    })
+                except Exception:
+                    pass
+                
+                # Create new index
+                mongo_db.command({
+                    "createSearchIndexes": chunks_coll_name,
+                    "indexes": [text_index_def]
+                })
+                results["text_index"] = {
+                    "name": settings.mongodb_text_index,
+                    "status": "created"
+                }
+                logger.info(f"Created text index: {settings.mongodb_text_index}")
+            except Exception as e:
+                error_msg = f"Text index error: {str(e)}"
+                results["errors"].append(error_msg)
+                logger.error(error_msg)
+            
+            # Check if at least one index was created
+            results["success"] = results["vector_index"] is not None or results["text_index"] is not None
+            results["created_at"] = datetime.now().isoformat()
+            results["message"] = "Indexes created. They may take a few seconds to become READY."
+            
+            return results
+            
         except Exception as e:
-            error_msg = f"Text index error: {str(e)}"
-            results["errors"].append(error_msg)
-            logger.error(error_msg)
-        
-        # Check if at least one index was created
-        results["success"] = results["vector_index"] is not None or results["text_index"] is not None
-        results["created_at"] = datetime.now().isoformat()
-        results["message"] = "Indexes created. They may take a few seconds to become READY."
-        
-        return results
-        
-    except Exception as e:
-        logger.error(f"Failed to create indexes: {e}")
-        results["errors"].append(str(e))
-        return results
+            logger.error(f"Failed to create indexes: {e}")
+            results["errors"].append(str(e))
+            return results
+    
+    # Run in thread pool to avoid blocking
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(get_db_executor(), create_indexes_sync)
 
 
 @router.get("/info")
@@ -376,39 +399,53 @@ async def get_database_stats(request: Request):
     db = request.app.state.db
     
     try:
-        # Get collection counts
-        doc_count = await db.documents_collection.count_documents({})
-        chunk_count = await db.chunks_collection.count_documents({})
+        import asyncio
+        from backend.core.database import get_db_executor
         
-        # Get storage stats
-        doc_stats = await db.db.command("collStats", settings.mongodb_collection_documents)
-        chunk_stats = await db.db.command("collStats", settings.mongodb_collection_chunks)
+        loop = asyncio.get_running_loop()
         
-        # Get sample of recent documents
-        recent_docs = []
-        cursor = db.documents_collection.find({}).sort("created_at", -1).limit(5)
-        async for doc in cursor:
-            recent_docs.append({
-                "id": str(doc["_id"]),
-                "title": doc.get("title", "Untitled"),
-                "source": doc.get("source", "Unknown"),
-                "created_at": doc.get("created_at")
-            })
+        def get_stats_sync():
+            """Run sync DB operations in thread pool."""
+            sync_client = db.get_sync_client()
+            mongo_db = sync_client[db.current_database_name]
+            
+            docs_coll = mongo_db[settings.mongodb_collection_documents]
+            chunks_coll = mongo_db[settings.mongodb_collection_chunks]
+            
+            # Use estimated_document_count for fast results
+            doc_count = docs_coll.estimated_document_count()
+            chunk_count = chunks_coll.estimated_document_count()
+            
+            # Get storage stats
+            doc_stats = mongo_db.command("collStats", settings.mongodb_collection_documents)
+            chunk_stats = mongo_db.command("collStats", settings.mongodb_collection_chunks)
+            
+            # Get sample of recent documents (with index on created_at this is fast)
+            recent_docs = []
+            for doc in docs_coll.find({}).sort("created_at", -1).limit(5):
+                recent_docs.append({
+                    "id": str(doc["_id"]),
+                    "title": doc.get("title", "Untitled"),
+                    "source": doc.get("source", "Unknown"),
+                    "created_at": doc.get("created_at")
+                })
+            
+            return {
+                "documents": {
+                    "count": doc_count,
+                    "size_mb": round(doc_stats.get("size", 0) / 1024 / 1024, 2),
+                    "avg_size_kb": round(doc_stats.get("avgObjSize", 0) / 1024, 2)
+                },
+                "chunks": {
+                    "count": chunk_count,
+                    "size_mb": round(chunk_stats.get("size", 0) / 1024 / 1024, 2),
+                    "avg_size_kb": round(chunk_stats.get("avgObjSize", 0) / 1024, 2)
+                },
+                "database": settings.mongodb_database,
+                "recent_documents": recent_docs
+            }
         
-        return {
-            "documents": {
-                "count": doc_count,
-                "size_mb": round(doc_stats.get("size", 0) / 1024 / 1024, 2),
-                "avg_size_kb": round(doc_stats.get("avgObjSize", 0) / 1024, 2)
-            },
-            "chunks": {
-                "count": chunk_count,
-                "size_mb": round(chunk_stats.get("size", 0) / 1024 / 1024, 2),
-                "avg_size_kb": round(chunk_stats.get("avgObjSize", 0) / 1024, 2)
-            },
-            "database": settings.mongodb_database,
-            "recent_documents": recent_docs
-        }
+        return await loop.run_in_executor(get_db_executor(), get_stats_sync)
         
     except Exception as e:
         logger.error(f"Failed to get database stats: {e}")
