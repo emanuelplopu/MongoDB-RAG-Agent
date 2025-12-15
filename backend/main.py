@@ -26,6 +26,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.exceptions import RequestValidationError
 
 from backend.routers import chat, search, profiles, ingestion, system, sessions, auth
+from backend.routers import status, indexes, ingestion_queue, local_llm
 from backend.routers.system import load_config_from_db
 from backend.routers.ingestion import check_and_resume_interrupted_jobs, graceful_shutdown_handler
 from backend.core.config import settings
@@ -378,6 +379,30 @@ app.include_router(
     auth.router,
     prefix="/api/v1/auth",
     tags=["Authentication"]
+)
+
+app.include_router(
+    status.router,
+    prefix="/api/v1/status",
+    tags=["Status Dashboard"]
+)
+
+app.include_router(
+    indexes.router,
+    prefix="/api/v1/indexes",
+    tags=["Search Indexes"]
+)
+
+app.include_router(
+    ingestion_queue.router,
+    prefix="/api/v1/ingestion-queue",
+    tags=["Ingestion Queue"]
+)
+
+app.include_router(
+    local_llm.router,
+    prefix="/api/v1/local-llm",
+    tags=["Local LLM"]
 )
 
 

@@ -1056,4 +1056,396 @@ export const authApi = {
   },
 }
 
+// ============== Status Dashboard Types ==============
+
+export interface ProfileStats {
+  profile_key: string
+  profile_name: string
+  database: string
+  documents_count: number
+  chunks_count: number
+  total_tokens: number
+  avg_chunk_size: number
+  storage_size_bytes: number
+  last_ingestion?: string
+  ingestion_jobs_count: number
+}
+
+export interface SystemMetrics {
+  cpu_percent: number
+  memory_percent: number
+  memory_used_gb: number
+  memory_total_gb: number
+  disk_percent: number
+  disk_used_gb: number
+  disk_total_gb: number
+  uptime_seconds: number
+}
+
+export interface StatusDashboard {
+  profiles: ProfileStats[]
+  active_profile: string
+  system_metrics: SystemMetrics
+  total_documents: number
+  total_chunks: number
+  total_profiles: number
+  api_uptime_seconds: number
+  llm_provider: string
+  llm_model: string
+  embedding_model: string
+}
+
+// ============== Search Indexes Types ==============
+
+export interface IndexMetrics {
+  name: string
+  type: string
+  status: string
+  size_bytes: number
+  documents_indexed: number
+  last_updated?: string
+}
+
+export interface SearchPerformance {
+  avg_response_time_ms: number
+  p50_response_time_ms: number
+  p95_response_time_ms: number
+  p99_response_time_ms: number
+  total_searches: number
+  searches_last_hour: number
+  searches_last_24h: number
+}
+
+export interface OptimizationSuggestion {
+  category: string
+  severity: string
+  title: string
+  description: string
+  action: string
+  estimated_impact: string
+}
+
+export interface IndexDashboard {
+  indexes: IndexMetrics[]
+  performance: SearchPerformance
+  suggestions: OptimizationSuggestion[]
+  resource_allocation: Record<string, unknown>
+}
+
+// ============== Ingestion Queue Types ==============
+
+export interface QueuedIngestionJob {
+  id: string
+  profile_key: string
+  profile_name: string
+  file_types: string[]
+  incremental: boolean
+  priority: number
+  created_at: string
+  status: string
+  started_at?: string
+  completed_at?: string
+  error?: string
+}
+
+export interface ScheduledIngestionJob {
+  id: string
+  profile_key: string
+  profile_name: string
+  file_types: string[]
+  incremental: boolean
+  frequency: string
+  hour: number
+  day_of_week: number
+  day_of_month: number
+  enabled: boolean
+  last_run?: string
+  next_run?: string
+  created_at: string
+}
+
+export interface QueueStatus {
+  queue: QueuedIngestionJob[]
+  current_job?: QueuedIngestionJob
+  total_queued: number
+  is_processing: boolean
+}
+
+export interface QueueRequest {
+  profile_key: string
+  file_types?: string[]
+  incremental?: boolean
+  priority?: number
+}
+
+export interface ScheduleRequest {
+  profile_key: string
+  file_types?: string[]
+  incremental?: boolean
+  frequency: string
+  hour?: number
+  day_of_week?: number
+  day_of_month?: number
+}
+
+// ============== Local LLM Types ==============
+
+export interface LocalProvider {
+  id: string
+  name: string
+  url: string
+  host: string  // The host where it was discovered
+  location: string  // 'host', 'container', 'network', 'custom'
+  status: string
+  models: Array<{ name: string; size_gb?: number; type?: string; capabilities?: string[] }>
+  supports_embeddings: boolean
+  supports_vision: boolean    // Image processing (LLaVA, etc.)
+  supports_audio: boolean     // Audio transcription (Whisper)
+  supports_video: boolean     // Video understanding
+  error?: string
+}
+
+export interface SystemResources {
+  cpu_cores: number
+  ram_total_gb: number
+  ram_available_gb: number
+  gpu_available: boolean
+  gpu_name?: string
+  gpu_memory_gb?: number
+}
+
+export interface ModelRecommendation {
+  name: string
+  provider: string
+  type: string
+  size_gb: number
+  performance_score: number
+  is_installed: boolean
+  warning?: string
+}
+
+export interface DiscoveryResult {
+  providers: LocalProvider[]
+  resources: SystemResources
+  recommendations: ModelRecommendation[]
+  offline_ready: boolean
+  has_chat_model: boolean
+  has_embedding_model: boolean
+  has_vision_model: boolean    // Image processing capability
+  has_audio_model: boolean     // Audio transcription capability
+  has_video_model: boolean     // Video understanding capability
+  scanned_hosts: string[]
+  custom_endpoints: CustomEndpoint[]
+}
+
+export interface CustomEndpoint {
+  id: string
+  name: string
+  url: string
+  provider_type: string  // ollama, openai-compatible
+  enabled: boolean
+}
+
+export interface NetworkScanRequest {
+  ip_range?: string
+  custom_ips?: string[]
+  ports?: number[]
+}
+
+export interface NetworkScanResult {
+  success: boolean
+  found: LocalProvider[]
+  scanned: string[]
+  scanned_count: number
+  found_count: number
+  error?: string
+}
+
+export interface OfflineModeConfig {
+  enabled: boolean
+  // Chat model
+  chat_provider?: string
+  chat_model?: string
+  chat_url?: string
+  // Embedding model
+  embedding_provider?: string
+  embedding_model?: string
+  embedding_url?: string
+  // Vision model (for image processing)
+  vision_provider?: string
+  vision_model?: string
+  vision_url?: string
+  // Audio model (for transcription - local Whisper)
+  audio_provider?: string
+  audio_model?: string
+  audio_url?: string
+}
+
+// ============== New API Functions ==============
+
+export const statusApi = {
+  getDashboard: async (): Promise<StatusDashboard> => {
+    const response = await api.get('/status/dashboard')
+    return response.data
+  },
+
+  getProfileMetrics: async (profileKey: string) => {
+    const response = await api.get(`/status/metrics/profile/${profileKey}`)
+    return response.data
+  },
+
+  getDetailedHealth: async () => {
+    const response = await api.get('/status/health/detailed')
+    return response.data
+  },
+}
+
+export const indexesApi = {
+  getDashboard: async (): Promise<IndexDashboard> => {
+    const response = await api.get('/indexes/dashboard')
+    return response.data
+  },
+
+  createIndexes: async () => {
+    const response = await api.post('/indexes/create')
+    return response.data
+  },
+
+  getPerformanceHistory: async (hours: number = 24) => {
+    const response = await api.get('/indexes/performance/history', { params: { hours } })
+    return response.data
+  },
+}
+
+export const ingestionQueueApi = {
+  getQueue: async (): Promise<QueueStatus> => {
+    const response = await api.get('/ingestion-queue/queue')
+    return response.data
+  },
+
+  addToQueue: async (request: QueueRequest) => {
+    const response = await api.post('/ingestion-queue/queue/add', request)
+    return response.data
+  },
+
+  addMultipleToQueue: async (jobs: QueueRequest[]) => {
+    const response = await api.post('/ingestion-queue/queue/add-multiple', jobs)
+    return response.data
+  },
+
+  removeFromQueue: async (jobId: string) => {
+    const response = await api.delete(`/ingestion-queue/queue/${jobId}`)
+    return response.data
+  },
+
+  clearQueue: async () => {
+    const response = await api.delete('/ingestion-queue/queue')
+    return response.data
+  },
+
+  reorderQueue: async (jobIds: string[]) => {
+    const response = await api.post('/ingestion-queue/queue/reorder', jobIds)
+    return response.data
+  },
+
+  // Schedules
+  getSchedules: async (): Promise<{ schedules: ScheduledIngestionJob[] }> => {
+    const response = await api.get('/ingestion-queue/schedules')
+    return response.data
+  },
+
+  createSchedule: async (request: ScheduleRequest) => {
+    const response = await api.post('/ingestion-queue/schedules', request)
+    return response.data
+  },
+
+  updateSchedule: async (scheduleId: string, request: ScheduleRequest) => {
+    const response = await api.put(`/ingestion-queue/schedules/${scheduleId}`, request)
+    return response.data
+  },
+
+  deleteSchedule: async (scheduleId: string) => {
+    const response = await api.delete(`/ingestion-queue/schedules/${scheduleId}`)
+    return response.data
+  },
+
+  toggleSchedule: async (scheduleId: string) => {
+    const response = await api.post(`/ingestion-queue/schedules/${scheduleId}/toggle`)
+    return response.data
+  },
+
+  runScheduleNow: async (scheduleId: string) => {
+    const response = await api.post(`/ingestion-queue/schedules/${scheduleId}/run-now`)
+    return response.data
+  },
+}
+
+export const localLlmApi = {
+  discover: async (): Promise<DiscoveryResult> => {
+    const response = await api.get('/local-llm/discover')
+    return response.data
+  },
+
+  pullModel: async (providerId: string, modelName: string, providerUrl?: string) => {
+    const response = await api.post(`/local-llm/pull/${providerId}`, null, { 
+      params: { model_name: modelName, provider_url: providerUrl } 
+    })
+    return response.data
+  },
+
+  getPullStatus: async (providerId: string) => {
+    const response = await api.get(`/local-llm/pull-status/${providerId}`)
+    return response.data
+  },
+
+  getOfflineConfig: async (): Promise<OfflineModeConfig> => {
+    const response = await api.get('/local-llm/offline-config')
+    return response.data
+  },
+
+  saveOfflineConfig: async (config: OfflineModeConfig) => {
+    const response = await api.post('/local-llm/offline-config', config)
+    return response.data
+  },
+
+  testModel: async (providerId: string, modelName: string, modelType: string = 'chat', providerUrl?: string) => {
+    const response = await api.post('/local-llm/test-model', null, {
+      params: { provider_id: providerId, model_name: modelName, model_type: modelType, provider_url: providerUrl }
+    })
+    return response.data
+  },
+
+  compareModels: async () => {
+    const response = await api.get('/local-llm/compare-models')
+    return response.data
+  },
+
+  // Network Scanning
+  scanNetwork: async (request: NetworkScanRequest): Promise<NetworkScanResult> => {
+    const response = await api.post('/local-llm/scan-network', request)
+    return response.data
+  },
+
+  // Custom Endpoints
+  getCustomEndpoints: async (): Promise<{ endpoints: CustomEndpoint[] }> => {
+    const response = await api.get('/local-llm/custom-endpoints')
+    return response.data
+  },
+
+  addCustomEndpoint: async (endpoint: CustomEndpoint) => {
+    const response = await api.post('/local-llm/custom-endpoints', endpoint)
+    return response.data
+  },
+
+  deleteCustomEndpoint: async (endpointId: string) => {
+    const response = await api.delete(`/local-llm/custom-endpoints/${endpointId}`)
+    return response.data
+  },
+
+  testCustomEndpoint: async (endpointId: string) => {
+    const response = await api.post(`/local-llm/custom-endpoints/${endpointId}/test`)
+    return response.data
+  },
+}
+
 export default api

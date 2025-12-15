@@ -364,6 +364,46 @@ def _update_pending_files_queue(current: int, total: int, current_file: str):
         ][:500]  # Keep max 500 for display
 
 
+async def _apply_offline_mode_for_ingestion(db):
+    """
+    Check offline mode configuration and set environment variable.
+    
+    This is called before starting ingestion to ensure the OFFLINE_MODE
+    environment variable is set based on the user's configuration.
+    The ingestion pipeline will check this variable to decide whether
+    to use local Whisper for audio transcription.
+    """
+    try:
+        collection = db.db["offline_config"]
+        doc = await collection.find_one({"_id": "config"})
+        
+        if doc and doc.get("enabled"):
+            os.environ["OFFLINE_MODE"] = "true"
+            
+            # Also set the audio model URL if configured
+            if doc.get("audio_url"):
+                os.environ["OFFLINE_AUDIO_URL"] = doc.get("audio_url")
+            if doc.get("audio_model"):
+                os.environ["OFFLINE_AUDIO_MODEL"] = doc.get("audio_model")
+            
+            # Set vision model info for image processing
+            if doc.get("vision_url"):
+                os.environ["OFFLINE_VISION_URL"] = doc.get("vision_url")
+            if doc.get("vision_model"):
+                os.environ["OFFLINE_VISION_MODEL"] = doc.get("vision_model")
+                
+            logger.info(f"Offline mode enabled for ingestion (audio: {doc.get('audio_model')}, vision: {doc.get('vision_model')})")
+        else:
+            os.environ["OFFLINE_MODE"] = "false"
+            # Clear model-specific env vars
+            for key in ["OFFLINE_AUDIO_URL", "OFFLINE_AUDIO_MODEL", "OFFLINE_VISION_URL", "OFFLINE_VISION_MODEL"]:
+                os.environ.pop(key, None)
+    except Exception as e:
+        logger.warning(f"Could not check offline config: {e}")
+        # Default to not offline mode on error
+        os.environ["OFFLINE_MODE"] = "false"
+
+
 async def run_ingestion(job_id: str, config: dict, db):
     """Run ingestion in background with DB persistence."""
     global _current_job_id, _shutdown_requested, _pause_requested, _stop_requested, _is_paused, _current_job_state, _pending_files_queue
@@ -421,6 +461,9 @@ async def run_ingestion(job_id: str, config: dict, db):
             "message": f"Starting ingestion job {job_id}",
             "logger": "ingestion"
         })
+        
+        # Check offline mode configuration and set environment variable
+        await _apply_offline_mode_for_ingestion(db)
         
         # Import ingestion module
         from src.ingestion.ingest import DocumentIngestionPipeline, IngestionConfig

@@ -8,6 +8,10 @@ import DocumentsPage from './pages/DocumentsPage'
 import DocumentPreviewPage from './pages/DocumentPreviewPage'
 import ProfilesPage from './pages/ProfilesPage'
 import SystemPage from './pages/SystemPage'
+import StatusPage from './pages/StatusPage'
+import SearchIndexesPage from './pages/SearchIndexesPage'
+import IngestionManagementPage from './pages/IngestionManagementPage'
+import ConfigurationPage from './pages/ConfigurationPage'
 import LoginPage from './pages/LoginPage'
 import NotFoundPage from './pages/NotFoundPage'
 
@@ -25,6 +29,10 @@ function App() {
             <Route path="documents/:documentId" element={<DocumentPreviewPage />} />
             <Route path="profiles" element={<ProfilesPage />} />
             <Route path="system" element={<SystemPage />} />
+            <Route path="system/status" element={<StatusPage />} />
+            <Route path="system/indexes" element={<SearchIndexesPage />} />
+            <Route path="system/ingestion" element={<IngestionManagementPage />} />
+            <Route path="system/config" element={<ConfigurationPage />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />
         </Routes>

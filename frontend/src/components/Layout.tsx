@@ -20,6 +20,10 @@ import {
   CheckIcon,
   ArrowRightOnRectangleIcon,
   EllipsisHorizontalIcon,
+  ChartBarIcon,
+  MagnifyingGlassCircleIcon,
+  ArrowPathIcon,
+  WrenchScrewdriverIcon,
 } from '@heroicons/react/24/outline'
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid'
 import ThemeToggle from './ThemeToggle'
@@ -32,7 +36,14 @@ const baseMenuItems = [
   { name: 'Search', href: '/search', icon: MagnifyingGlassIcon, adminOnly: false },
   { name: 'Documents', href: '/documents', icon: DocumentTextIcon, adminOnly: false },
   { name: 'Profiles', href: '/profiles', icon: UserCircleIcon, adminOnly: true },
-  { name: 'System', href: '/system', icon: Cog6ToothIcon, adminOnly: false },
+]
+
+// System sub-menu items (admin only)
+const systemMenuItems = [
+  { name: 'Status', href: '/system/status', icon: ChartBarIcon },
+  { name: 'Search Indexes', href: '/system/indexes', icon: MagnifyingGlassCircleIcon },
+  { name: 'Ingestion', href: '/system/ingestion', icon: ArrowPathIcon },
+  { name: 'Configuration', href: '/system/config', icon: WrenchScrewdriverIcon },
 ]
 
 export default function Layout() {
@@ -95,6 +106,9 @@ export default function Layout() {
 
   // Filter menu items based on user admin status
   const userMenuItems = baseMenuItems.filter(item => !item.adminOnly || user?.is_admin)
+  
+  // State for system submenu expansion
+  const [systemMenuOpen, setSystemMenuOpen] = useState(location.pathname.startsWith('/system'))
 
   // Close user menu when clicking outside
   useEffect(() => {
@@ -337,6 +351,51 @@ export default function Layout() {
                   </button>
                 )
               })}
+              
+              {/* System Menu with Submenu (admin only) */}
+              {user?.is_admin && (
+                <>
+                  <button
+                    onClick={() => setSystemMenuOpen(!systemMenuOpen)}
+                    className={`w-full flex items-center justify-between px-4 py-2 text-sm transition-colors ${
+                      location.pathname.startsWith('/system')
+                        ? 'bg-primary-100 dark:bg-primary-900/50 text-primary-700 dark:text-primary-300'
+                        : 'text-secondary dark:text-gray-400 hover:bg-surface-variant dark:hover:bg-gray-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Cog6ToothIcon className="h-5 w-5" />
+                      System
+                    </div>
+                    {systemMenuOpen ? (
+                      <ChevronDownIcon className="h-4 w-4" />
+                    ) : (
+                      <ChevronRightIcon className="h-4 w-4" />
+                    )}
+                  </button>
+                  {systemMenuOpen && (
+                    <div className="ml-4 border-l border-surface-variant dark:border-gray-600">
+                      {systemMenuItems.map((subItem) => {
+                        const isSubActive = location.pathname === subItem.href
+                        return (
+                          <button
+                            key={subItem.name}
+                            onClick={() => handleMenuItemClick(subItem.href)}
+                            className={`w-full flex items-center gap-3 px-4 py-1.5 text-sm transition-colors ${
+                              isSubActive
+                                ? 'text-primary-700 dark:text-primary-300 bg-primary-50 dark:bg-primary-900/30'
+                                : 'text-secondary dark:text-gray-400 hover:text-primary-700 dark:hover:text-primary-300'
+                            }`}
+                          >
+                            <subItem.icon className="h-4 w-4" />
+                            {subItem.name}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
             
             {/* Theme Toggle */}

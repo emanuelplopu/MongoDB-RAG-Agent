@@ -356,7 +356,12 @@ class DocumentIngestionPipeline:
 
     def _transcribe_audio(self, file_path: str) -> tuple[str, Optional[Any]]:
         """
-        Transcribe audio file using OpenAI Whisper API (fast cloud-based).
+        Transcribe audio file using the best available method.
+        
+        Priority:
+        1. If offline mode enabled with audio model configured -> Use local Ollama Whisper
+        2. If OpenAI API key available -> Use cloud Whisper API (faster)
+        3. Fallback to local Docling Whisper (slower but works offline)
         
         For large files (>25MB), splits audio into chunks and processes in parallel.
 
@@ -366,6 +371,14 @@ class DocumentIngestionPipeline:
         Returns:
             Tuple of (markdown_content, None) - no DoclingDocument for API transcription
         """
+        # Check if offline mode is enabled with audio model configured
+        offline_audio_enabled = self._check_offline_audio_mode()
+        
+        if offline_audio_enabled:
+            logger.info("Offline mode enabled - using local Whisper transcription")
+            return self._transcribe_audio_local(file_path)
+        
+        # Try cloud-based transcription
         try:
             from pathlib import Path
             from openai import OpenAI
@@ -445,6 +458,38 @@ class DocumentIngestionPipeline:
                 logger.error(f"Chunked transcription also failed: {e2}")
                 logger.info("Falling back to local Whisper transcription...")
                 return self._transcribe_audio_local(file_path)
+
+    def _check_offline_audio_mode(self) -> bool:
+        """
+        Check if offline mode is enabled with audio model configured.
+        
+        Reads the offline config from MongoDB if available.
+        
+        Returns:
+            True if should use local audio transcription
+        """
+        try:
+            # Try to read offline config from environment or check MongoDB
+            import os
+            
+            # Quick check - if no API key or explicitly offline
+            if not self.settings.llm_api_key:
+                logger.info("No OpenAI API key - will use local transcription")
+                return True
+            
+            # Check for offline mode environment variable
+            if os.environ.get('OFFLINE_MODE', '').lower() == 'true':
+                logger.info("OFFLINE_MODE environment variable set")
+                return True
+            
+            # TODO: Could also check MongoDB for offline config, but that would
+            # require async call. For now, rely on env var or missing API key.
+            
+            return False
+            
+        except Exception as e:
+            logger.warning(f"Error checking offline mode: {e}")
+            return False
 
     def _transcribe_audio_chunked(self, file_path: str) -> tuple[str, Optional[Any]]:
         """
