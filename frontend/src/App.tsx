@@ -12,6 +12,7 @@ import StatusPage from './pages/StatusPage'
 import SearchIndexesPage from './pages/SearchIndexesPage'
 import IngestionManagementPage from './pages/IngestionManagementPage'
 import ConfigurationPage from './pages/ConfigurationPage'
+import UserManagementPage from './pages/UserManagementPage'
 import LoginPage from './pages/LoginPage'
 import NotFoundPage from './pages/NotFoundPage'
 
@@ -33,6 +34,7 @@ function App() {
             <Route path="system/indexes" element={<SearchIndexesPage />} />
             <Route path="system/ingestion" element={<IngestionManagementPage />} />
             <Route path="system/config" element={<ConfigurationPage />} />
+            <Route path="system/users" element={<UserManagementPage />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />
         </Routes>

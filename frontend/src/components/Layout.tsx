@@ -24,6 +24,7 @@ import {
   MagnifyingGlassCircleIcon,
   ArrowPathIcon,
   WrenchScrewdriverIcon,
+  UsersIcon,
 } from '@heroicons/react/24/outline'
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid'
 import ThemeToggle from './ThemeToggle'
@@ -44,6 +45,7 @@ const systemMenuItems = [
   { name: 'Search Indexes', href: '/system/indexes', icon: MagnifyingGlassCircleIcon },
   { name: 'Ingestion', href: '/system/ingestion', icon: ArrowPathIcon },
   { name: 'Configuration', href: '/system/config', icon: WrenchScrewdriverIcon },
+  { name: 'Users', href: '/system/users', icon: UsersIcon },
 ]
 
 export default function Layout() {

@@ -1005,6 +1005,21 @@ export interface SetAccessRequest {
   has_access: boolean
 }
 
+// User management types
+export interface CreateUserRequest {
+  email: string
+  name: string
+  password: string
+  is_admin?: boolean
+}
+
+export interface UpdateUserRequest {
+  name?: string
+  email?: string
+  is_admin?: boolean
+  new_password?: string
+}
+
 export const authApi = {
   register: async (data: RegisterRequest): Promise<AuthResponse> => {
     const response = await api.post('/auth/register', data)
@@ -1052,6 +1067,27 @@ export const authApi = {
 
   setProfileAccess: async (data: SetAccessRequest): Promise<{ success: boolean }> => {
     const response = await api.post('/auth/access', data)
+    return response.data
+  },
+
+  // User management endpoints (admin)
+  createUser: async (data: CreateUserRequest): Promise<UserListItem> => {
+    const response = await api.post('/auth/users/create', data)
+    return response.data
+  },
+
+  updateUser: async (userId: string, data: UpdateUserRequest): Promise<UserListItem> => {
+    const response = await api.put(`/auth/users/${userId}`, data)
+    return response.data
+  },
+
+  setUserStatus: async (userId: string, isActive: boolean): Promise<{ success: boolean; message: string }> => {
+    const response = await api.put(`/auth/users/${userId}/status`, { is_active: isActive })
+    return response.data
+  },
+
+  deleteUser: async (userId: string): Promise<{ success: boolean; message: string }> => {
+    const response = await api.delete(`/auth/users/${userId}`)
     return response.data
   },
 }

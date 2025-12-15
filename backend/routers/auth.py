@@ -523,3 +523,217 @@ async def get_user_accessible_profiles(request: Request, user_id: str) -> list[s
         profiles.append(entry["profile_key"])
     
     return profiles
+
+
+# ============== User Management Endpoints (Admin) ==============
+
+class AdminCreateUserRequest(BaseModel):
+    """Admin request to create a new user."""
+    email: EmailStr
+    name: str = Field(..., min_length=2, max_length=100)
+    password: str = Field(..., min_length=6, max_length=100)
+    is_admin: bool = False
+
+
+class AdminUpdateUserRequest(BaseModel):
+    """Admin request to update a user."""
+    name: Optional[str] = Field(None, min_length=2, max_length=100)
+    email: Optional[EmailStr] = None
+    is_admin: Optional[bool] = None
+    new_password: Optional[str] = Field(None, min_length=6, max_length=100)
+
+
+class UserStatusRequest(BaseModel):
+    """Request to change user active status."""
+    is_active: bool
+
+
+@router.post("/users/create", response_model=UserListResponse)
+async def admin_create_user(
+    request: Request,
+    create_request: AdminCreateUserRequest,
+    admin: UserResponse = Depends(require_admin)
+):
+    """
+    Create a new user (admin only).
+    
+    Allows admin to create users with email and password.
+    """
+    collection = await get_users_collection(request)
+    
+    # Check if email already exists
+    existing = await collection.find_one({"email": create_request.email.lower()})
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered"
+        )
+    
+    # Create user
+    user = User(
+        email=create_request.email.lower(),
+        name=create_request.name,
+        password_hash=get_password_hash(create_request.password),
+        is_admin=create_request.is_admin
+    )
+    
+    doc = user.model_dump()
+    doc["_id"] = doc.pop("id")
+    
+    await collection.insert_one(doc)
+    
+    logger.info(f"Admin {admin.email} created user: {user.email}")
+    
+    return UserListResponse(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        is_active=user.is_active,
+        is_admin=user.is_admin,
+        created_at=user.created_at
+    )
+
+
+@router.put("/users/{user_id}", response_model=UserListResponse)
+async def admin_update_user(
+    request: Request,
+    user_id: str,
+    update_request: AdminUpdateUserRequest,
+    admin: UserResponse = Depends(require_admin)
+):
+    """
+    Update a user (admin only).
+    
+    Allows admin to update user name, email, admin status, and password.
+    """
+    collection = await get_users_collection(request)
+    
+    # Get existing user
+    user_doc = await collection.find_one({"_id": user_id})
+    if not user_doc:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Prevent admin from removing their own admin status
+    if user_id == admin.id and update_request.is_admin is False:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot remove your own admin status"
+        )
+    
+    # Build update dict
+    update_dict = {"updated_at": datetime.now()}
+    
+    if update_request.name is not None:
+        update_dict["name"] = update_request.name
+    
+    if update_request.email is not None:
+        # Check if email is already taken by another user
+        existing = await collection.find_one({
+            "email": update_request.email.lower(),
+            "_id": {"$ne": user_id}
+        })
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already in use by another user"
+            )
+        update_dict["email"] = update_request.email.lower()
+    
+    if update_request.is_admin is not None:
+        update_dict["is_admin"] = update_request.is_admin
+    
+    if update_request.new_password is not None:
+        update_dict["password_hash"] = get_password_hash(update_request.new_password)
+    
+    await collection.update_one({"_id": user_id}, {"$set": update_dict})
+    
+    # Get updated user
+    updated_doc = await collection.find_one({"_id": user_id})
+    
+    logger.info(f"Admin {admin.email} updated user: {updated_doc['email']}")
+    
+    return UserListResponse(
+        id=str(updated_doc["_id"]),
+        email=updated_doc["email"],
+        name=updated_doc["name"],
+        is_active=updated_doc.get("is_active", True),
+        is_admin=updated_doc.get("is_admin", False),
+        created_at=updated_doc["created_at"]
+    )
+
+
+@router.put("/users/{user_id}/status")
+async def admin_set_user_status(
+    request: Request,
+    user_id: str,
+    status_request: UserStatusRequest,
+    admin: UserResponse = Depends(require_admin)
+):
+    """
+    Activate or deactivate a user account (admin only).
+    
+    Deactivated users cannot log in but their data is preserved.
+    """
+    collection = await get_users_collection(request)
+    
+    # Get user
+    user_doc = await collection.find_one({"_id": user_id})
+    if not user_doc:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Prevent admin from deactivating themselves
+    if user_id == admin.id and not status_request.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot deactivate your own account"
+        )
+    
+    await collection.update_one(
+        {"_id": user_id},
+        {"$set": {
+            "is_active": status_request.is_active,
+            "updated_at": datetime.now()
+        }}
+    )
+    
+    action = "activated" if status_request.is_active else "deactivated"
+    logger.info(f"Admin {admin.email} {action} user: {user_doc['email']}")
+    
+    return {"success": True, "message": f"User {action} successfully"}
+
+
+@router.delete("/users/{user_id}")
+async def admin_delete_user(
+    request: Request,
+    user_id: str,
+    admin: UserResponse = Depends(require_admin)
+):
+    """
+    Delete a user (admin only).
+    
+    Permanently removes the user account and their profile access.
+    """
+    collection = await get_users_collection(request)
+    access_collection = await get_profile_access_collection(request)
+    
+    # Get user
+    user_doc = await collection.find_one({"_id": user_id})
+    if not user_doc:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Prevent admin from deleting themselves
+    if user_id == admin.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete your own account"
+        )
+    
+    # Delete user's profile access entries
+    await access_collection.delete_many({"user_id": user_id})
+    
+    # Delete user
+    await collection.delete_one({"_id": user_id})
+    
+    logger.info(f"Admin {admin.email} deleted user: {user_doc['email']}")
+    
+    return {"success": True, "message": "User deleted successfully"}
