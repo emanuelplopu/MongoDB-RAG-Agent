@@ -1604,6 +1604,7 @@ export interface CloudConnection {
   oauth_email?: string
   oauth_expires_at?: string
   oauth_scopes?: string[]
+  cache_size_mb: number
   last_validated_at?: string
   error_message?: string
   created_at: string
@@ -1927,6 +1928,70 @@ export const cloudSourcesApi = {
 
   getJobLogsUrl: (jobId: string): string => {
     return `${API_BASE}/cloud-sources/jobs/${jobId}/logs`
+  },
+
+  // Cache API
+  getCloudSourceInfo: async (documentId: string): Promise<{
+    is_cloud_source: boolean
+    document_id: string
+    provider?: CloudProviderType
+    connection_id?: string
+    remote_id?: string
+    remote_path?: string
+    web_view_url?: string
+    synced_at?: string
+    is_cached?: boolean
+    cached_path?: string
+    cache_access_count?: number
+  }> => {
+    const response = await api.get(`/cloud-sources/cache/info/${documentId}`)
+    return response.data
+  },
+
+  getCachedFile: async (documentId: string, connectionId: string): Promise<{
+    remote_id: string
+    remote_path: string
+    local_path: string
+    file_name: string
+    size_bytes: number
+    mime_type: string
+    cached_at: string
+    last_accessed_at: string
+    access_count: number
+    web_view_url?: string
+  }> => {
+    const response = await api.post('/cloud-sources/cache/get-file', {
+      document_id: documentId,
+      connection_id: connectionId,
+    })
+    return response.data
+  },
+
+  getCachedFileUrl: (connectionId: string, documentId: string): string => {
+    return `${API_BASE}/cloud-sources/cache/serve/${connectionId}/${documentId}`
+  },
+
+  getCacheStats: async (connectionId: string): Promise<{
+    connection_id: string
+    cache_dir: string
+    total_files: number
+    total_size_bytes: number
+    cache_limit_bytes: number
+    usage_percent: number
+    files: Array<{
+      remote_id: string
+      file_name: string
+      size_bytes: number
+      access_count: number
+      last_accessed_at: string
+    }>
+  }> => {
+    const response = await api.get(`/cloud-sources/cache/stats/${connectionId}`)
+    return response.data
+  },
+
+  clearCache: async (connectionId: string): Promise<void> => {
+    await api.delete(`/cloud-sources/cache/clear/${connectionId}`)
   },
 }
 

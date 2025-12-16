@@ -437,6 +437,7 @@ class SyncWorker:
                             "config_id": str(config.get("_id")),
                             "remote_id": file.id,
                             "remote_path": file.path,
+                            "web_view_url": file.web_view_url,
                             "synced_at": datetime.utcnow(),
                         }
                     }}

@@ -10,8 +10,10 @@ import {
   CubeIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  CloudIcon,
+  ArrowTopRightOnSquareIcon,
 } from '@heroicons/react/24/outline'
-import { documentsApi, DocumentFullInfo, DocumentChunk } from '../api/client'
+import { documentsApi, DocumentFullInfo, DocumentChunk, cloudSourcesApi } from '../api/client'
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 Bytes'
@@ -84,6 +86,18 @@ export default function DocumentPreviewPage() {
   const [showContent, setShowContent] = useState(false)
   const [openingExplorer, setOpeningExplorer] = useState(false)
   const [explorerMessage, setExplorerMessage] = useState<string | null>(null)
+  
+  // Cloud source state
+  const [cloudSourceInfo, setCloudSourceInfo] = useState<{
+    is_cloud_source: boolean
+    provider?: string
+    connection_id?: string
+    web_view_url?: string
+    remote_path?: string
+    is_cached?: boolean
+  } | null>(null)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_loadingCloudInfo, setLoadingCloudInfo] = useState(false)
 
   useEffect(() => {
     if (!documentId) return
@@ -94,6 +108,18 @@ export default function DocumentPreviewPage() {
       try {
         const data = await documentsApi.getFullInfo(documentId)
         setDoc(data)
+        
+        // Check if this is a cloud source document
+        setLoadingCloudInfo(true)
+        try {
+          const cloudInfo = await cloudSourcesApi.getCloudSourceInfo(documentId)
+          setCloudSourceInfo(cloudInfo)
+        } catch (cloudErr) {
+          // Not a cloud source or error fetching info
+          setCloudSourceInfo({ is_cloud_source: false })
+        } finally {
+          setLoadingCloudInfo(false)
+        }
       } catch (err) {
         console.error('Error fetching document:', err)
         setError('Failed to load document details')
@@ -107,6 +133,14 @@ export default function DocumentPreviewPage() {
 
   const handleOpenExplorer = async () => {
     if (!documentId) return
+    
+    // For cloud sources, open in cloud provider
+    if (cloudSourceInfo?.is_cloud_source && cloudSourceInfo.web_view_url) {
+      window.open(cloudSourceInfo.web_view_url, '_blank')
+      return
+    }
+    
+    // For local files, open in OS explorer
     setOpeningExplorer(true)
     setExplorerMessage(null)
     try {
@@ -122,8 +156,27 @@ export default function DocumentPreviewPage() {
     }
   }
 
-  const handleOpenPreview = () => {
+  const handleOpenPreview = async () => {
     if (!documentId) return
+    
+    // For cloud sources, use cached file URL
+    if (cloudSourceInfo?.is_cloud_source && cloudSourceInfo.connection_id) {
+      // Trigger cache download and open
+      try {
+        await cloudSourcesApi.getCachedFile(documentId, cloudSourceInfo.connection_id)
+        const url = cloudSourcesApi.getCachedFileUrl(cloudSourceInfo.connection_id, documentId)
+        window.open(url, '_blank')
+      } catch (err) {
+        console.error('Failed to cache file:', err)
+        // Fallback to web view if available
+        if (cloudSourceInfo.web_view_url) {
+          window.open(cloudSourceInfo.web_view_url, '_blank')
+        }
+      }
+      return
+    }
+    
+    // For local files, use direct file URL
     window.open(documentsApi.getFileUrl(documentId), '_blank')
   }
 
@@ -170,20 +223,37 @@ export default function DocumentPreviewPage() {
 
       {/* Action buttons */}
       <div className="flex flex-wrap gap-3">
+        {/* Cloud Source Badge */}
+        {cloudSourceInfo?.is_cloud_source && (
+          <div className="flex items-center gap-2 px-3 py-2 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded-xl text-sm">
+            <CloudIcon className="h-4 w-4" />
+            <span>Cloud Source: {cloudSourceInfo.provider?.replace('_', ' ')}</span>
+          </div>
+        )}
+        
         <button
           onClick={handleOpenExplorer}
-          disabled={openingExplorer}
+          disabled={openingExplorer || (cloudSourceInfo?.is_cloud_source && !cloudSourceInfo.web_view_url)}
           className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-xl hover:bg-primary-700 transition-colors disabled:opacity-50"
         >
-          <FolderOpenIcon className="h-5 w-5" />
-          {openingExplorer ? 'Opening...' : 'Open in Explorer'}
+          {cloudSourceInfo?.is_cloud_source ? (
+            <>
+              <ArrowTopRightOnSquareIcon className="h-5 w-5" />
+              {openingExplorer ? 'Opening...' : 'Open in Cloud Provider'}
+            </>
+          ) : (
+            <>
+              <FolderOpenIcon className="h-5 w-5" />
+              {openingExplorer ? 'Opening...' : 'Open in Explorer'}
+            </>
+          )}
         </button>
         <button
           onClick={handleOpenPreview}
           className="flex items-center gap-2 px-4 py-2 bg-surface-variant dark:bg-gray-700 text-primary-900 dark:text-primary-200 rounded-xl hover:bg-primary-100 dark:hover:bg-gray-600 transition-colors"
         >
           <EyeIcon className="h-5 w-5" />
-          Open Preview
+          {cloudSourceInfo?.is_cloud_source ? 'Open Here (Cached)' : 'Open Preview'}
         </button>
         <Link
           to="/documents"
@@ -287,13 +357,20 @@ export default function DocumentPreviewPage() {
         </div>
       </div>
 
-      {/* File Path */}
-      {doc.file_path && (
+      {/* File Path / Cloud Source Path */}
+      {(doc.file_path || cloudSourceInfo?.remote_path) && (
         <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm">
-          <h3 className="font-medium text-primary-900 dark:text-primary-200 mb-2">File Path</h3>
+          <h3 className="font-medium text-primary-900 dark:text-primary-200 mb-2">
+            {cloudSourceInfo?.is_cloud_source ? 'Cloud Path' : 'File Path'}
+          </h3>
           <code className="block text-sm bg-gray-50 dark:bg-gray-900 p-3 rounded-lg text-secondary overflow-x-auto">
-            {doc.file_path}
+            {cloudSourceInfo?.is_cloud_source ? cloudSourceInfo.remote_path : doc.file_path}
           </code>
+          {cloudSourceInfo?.is_cloud_source && cloudSourceInfo.is_cached && (
+            <p className="text-xs text-green-600 dark:text-green-400 mt-2">
+              ✓ Cached locally for preview
+            </p>
+          )}
         </div>
       )}
 

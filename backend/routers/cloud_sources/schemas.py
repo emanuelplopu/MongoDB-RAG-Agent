@@ -108,6 +108,9 @@ class ConnectionCreateRequest(BaseModel):
     # For app token auth
     app_token: Optional[str] = None
     
+    # Cache configuration
+    cache_size_mb: int = Field(default=1024, ge=100, le=100000, description="Local file cache size in MB")
+    
     @field_validator('server_url')
     @classmethod
     def validate_server_url(cls, v: Optional[str]) -> Optional[str]:
@@ -124,6 +127,9 @@ class ConnectionUpdateRequest(BaseModel):
     password: Optional[str] = None
     api_key: Optional[str] = None
     app_token: Optional[str] = None
+    
+    # Cache configuration
+    cache_size_mb: Optional[int] = Field(None, ge=100, le=100000, description="Local file cache size in MB")
 
 
 class ConnectionResponse(BaseModel):
@@ -142,6 +148,9 @@ class ConnectionResponse(BaseModel):
     oauth_email: Optional[str] = None
     oauth_expires_at: Optional[datetime] = None
     oauth_scopes: Optional[list[str]] = None
+    
+    # Cache configuration
+    cache_size_mb: int = 1024
     
     # Status info
     last_validated_at: Optional[datetime] = None

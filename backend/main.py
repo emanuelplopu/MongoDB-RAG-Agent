@@ -32,6 +32,7 @@ from backend.routers.cloud_sources import (
     oauth_router as cloud_oauth,
     sync_router as cloud_sync,
     providers_router as cloud_providers,
+    cache_router as cloud_cache,
 )
 from backend.routers.system import load_config_from_db
 from backend.routers.ingestion import check_and_resume_interrupted_jobs, graceful_shutdown_handler
@@ -434,6 +435,12 @@ app.include_router(
     cloud_sync,
     prefix="/api/v1/cloud-sources",
     tags=["Cloud Sources"]
+)
+
+app.include_router(
+    cloud_cache,
+    prefix="/api/v1/cloud-sources",
+    tags=["Cloud Sources Cache"]
 )
 
 
