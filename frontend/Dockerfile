@@ -30,8 +30,8 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 # Expose port
 EXPOSE 80
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s \
-  CMD wget --quiet --tries=1 --spider http://localhost:80/ || exit 1
+# Health check - use curl which is available in nginx alpine
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+  CMD curl -f http://localhost:80/ || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]

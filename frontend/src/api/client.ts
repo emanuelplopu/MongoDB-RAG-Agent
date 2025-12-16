@@ -487,6 +487,18 @@ export interface PendingFilesResponse {
   error?: string
 }
 
+export interface MetadataRebuildStatus {
+  status: 'starting' | 'running' | 'completed' | 'failed' | 'cancelled'
+  started_at: string
+  completed_at?: string
+  total: number
+  processed: number
+  updated: number
+  progress_percent: number
+  message?: string
+  error?: string
+}
+
 // ============== Chat Sessions Types ==============
 
 export interface MessageStats {
@@ -665,9 +677,45 @@ export const profilesApi = {
   },
 }
 
+export interface FolderInfo {
+  path: string
+  name: string
+  depth: number
+  count: number
+}
+
+export interface FoldersResponse {
+  folders: FolderInfo[]
+  total_folders: number
+  total_documents: number
+  error?: string
+}
+
+export type SortField = 'name' | 'modified' | 'size' | 'type'
+export type SortOrder = 'asc' | 'desc'
+
 export const documentsApi = {
-  list: async (page: number = 1, pageSize: number = 20): Promise<DocumentListResponse> => {
-    const response = await api.get('/ingestion/documents', { params: { page, page_size: pageSize } })
+  list: async (
+    page: number = 1, 
+    pageSize: number = 20, 
+    folder?: string, 
+    search?: string, 
+    exactFolder: boolean = false,
+    sortBy: SortField = 'modified',
+    sortOrder: SortOrder = 'desc'
+  ): Promise<DocumentListResponse> => {
+    const params: Record<string, any> = { page, page_size: pageSize }
+    if (folder) params.folder = folder
+    if (search) params.search = search
+    if (exactFolder) params.exact_folder = true
+    params.sort_by = sortBy
+    params.sort_order = sortOrder
+    const response = await api.get('/ingestion/documents', { params })
+    return response.data
+  },
+
+  getFolders: async (): Promise<FoldersResponse> => {
+    const response = await api.get('/ingestion/documents/folders')
     return response.data
   },
 
@@ -783,6 +831,30 @@ export const ingestionApi = {
 
   getPendingFiles: async (limit: number = 500): Promise<PendingFilesResponse> => {
     const response = await api.get('/ingestion/pending-files', { params: { limit } })
+    return response.data
+  },
+
+  // Metadata rebuild
+  startMetadataRebuild: async (): Promise<{
+    success: boolean
+    message: string
+    status: MetadataRebuildStatus
+  }> => {
+    const response = await api.post('/ingestion/rebuild-metadata')
+    return response.data
+  },
+
+  getMetadataRebuildStatus: async (): Promise<{
+    running: boolean
+    status: MetadataRebuildStatus | null
+    message?: string
+  }> => {
+    const response = await api.get('/ingestion/rebuild-metadata')
+    return response.data
+  },
+
+  cancelMetadataRebuild: async (): Promise<{ success: boolean; message: string }> => {
+    const response = await api.delete('/ingestion/rebuild-metadata')
     return response.data
   },
 }

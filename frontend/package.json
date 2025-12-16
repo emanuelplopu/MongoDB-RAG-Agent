@@ -13,13 +13,14 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@material-tailwind/react": "^3.0.0-beta.24",
     "@heroicons/react": "^2.2.0",
+    "@material-tailwind/react": "^3.0.0-beta.24",
+    "axios": "^1.7.9",
     "react": "^18.3.1",
+    "react-arborist": "^3.4.3",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^7.1.1",
     "react-markdown": "^9.0.1",
-    "axios": "^1.7.9"
+    "react-router-dom": "^7.1.1"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",

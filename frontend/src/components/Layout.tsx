@@ -25,6 +25,7 @@ import {
   ArrowPathIcon,
   WrenchScrewdriverIcon,
   UsersIcon,
+  HomeIcon,
 } from '@heroicons/react/24/outline'
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid'
 import ThemeToggle from './ThemeToggle'
@@ -34,6 +35,7 @@ import { ChatSession } from '../api/client'
 
 // User menu items (shown in dropdown like OpenAI's user menu)
 const baseMenuItems = [
+  { name: 'Home', href: '/', icon: HomeIcon, adminOnly: false, exact: true },
   { name: 'Search', href: '/search', icon: MagnifyingGlassIcon, adminOnly: false },
   { name: 'Documents', href: '/documents', icon: DocumentTextIcon, adminOnly: false },
   { name: 'Profiles', href: '/profiles', icon: UserCircleIcon, adminOnly: true },
@@ -98,12 +100,17 @@ export default function Layout() {
   })
 
   // Check if we're on the chat page
-  const isOnChatPage = location.pathname === '/' || location.pathname.startsWith('/chat')
+  const isOnChatPage = location.pathname.startsWith('/chat')
+  
+  // Check if we're on the home page
+  const isOnHomePage = location.pathname === '/'
 
   // Get page title for non-chat pages
   const getPageTitle = () => {
-    const item = baseMenuItems.find(n => location.pathname.startsWith(n.href))
-    return item?.name || (isOnChatPage ? 'Chat' : 'Chat')
+    if (isOnHomePage) return 'Home'
+    if (isOnChatPage) return 'Chat'
+    const item = baseMenuItems.find(n => !n.exact && location.pathname.startsWith(n.href))
+    return item?.name || 'Chat'
   }
 
   // Filter menu items based on user admin status
@@ -337,7 +344,9 @@ export default function Layout() {
             {/* Menu Items */}
             <div className="py-1">
               {userMenuItems.map((item) => {
-                const isActive = location.pathname.startsWith(item.href)
+                const isActive = item.exact 
+                  ? location.pathname === item.href 
+                  : location.pathname.startsWith(item.href)
                 return (
                   <button
                     key={item.name}
@@ -510,7 +519,7 @@ export default function Layout() {
         </div>
 
         {/* Page content */}
-        <main className={isOnChatPage ? '' : 'py-6 px-4 sm:px-6 lg:px-8'}>
+        <main className={isOnChatPage || isOnHomePage ? (isOnHomePage ? 'py-6 px-4 sm:px-6 lg:px-8' : '') : 'py-6 px-4 sm:px-6 lg:px-8'}>
           <Outlet />
         </main>
       </div>

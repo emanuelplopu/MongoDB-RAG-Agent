@@ -21,32 +21,11 @@ profiles:
     vector_index: vector_index
     text_index: text_index
   parhelion-full:
-    name: Parhelion Energy + GDrive
+    name: Manu-Primary-GDrive
     description: Parhelion Energy knowledge base with Google Drive documents
     documents_folders:
-    - /app/mounts/parhelion-energy
     - /app/mounts/gdrive-root
-    database: rag_parhelion_full
-    collection_documents: documents
-    collection_chunks: chunks
-    vector_index: vector_index
-    text_index: text_index
-  example-project:
-    name: Example Project
-    description: Example project demonstrating profile separation
-    documents_folders:
-    - /app/projects/example-project/documents
-    database: rag_example
-    collection_documents: documents
-    collection_chunks: chunks
-    vector_index: vector_index
-    text_index: text_index
-  test_profile:
-    name: Test Profile
-    description: A test profile
-    documents_folders:
-    - /app/test_docs
-    database: rag_test_profile
+    database: gdrive-behova-root
     collection_documents: documents
     collection_chunks: chunks
     vector_index: vector_index

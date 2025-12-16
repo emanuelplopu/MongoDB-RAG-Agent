@@ -41,6 +41,10 @@ _current_job_state: Optional[dict] = None  # In-memory state for real-time statu
 MAX_LOG_LINES = 50000
 _ingestion_logs: deque = deque(maxlen=MAX_LOG_LINES)
 
+# Metadata rebuild state tracking
+_metadata_rebuild_state: Optional[dict] = None
+_metadata_rebuild_task: Optional[asyncio.Task] = None
+
 
 class IngestionLogHandler(logging.Handler):
     """Custom handler to capture logs during ingestion."""
@@ -1047,6 +1051,206 @@ async def get_pending_files(
         return {"files": [], "total": 0, "is_running": False, "error": str(e)}
 
 
+# ============== Metadata Rebuild ==============
+
+async def _run_metadata_rebuild(db):
+    """
+    Background task to rebuild chunks_count metadata for all documents.
+    
+    Processes documents in batches using pagination to avoid blocking.
+    """
+    global _metadata_rebuild_state
+    
+    try:
+        collection = db.documents_collection
+        chunks_collection = db.chunks_collection
+        
+        # Count documents needing update (chunks_count missing or 0)
+        query = {
+            "$or": [
+                {"metadata.chunks_count": {"$exists": False}},
+                {"metadata.chunks_count": None},
+                {"metadata.chunks_count": 0}
+            ]
+        }
+        total_docs = await collection.count_documents(query)
+        
+        _metadata_rebuild_state["total"] = total_docs
+        _metadata_rebuild_state["status"] = "running"
+        
+        if total_docs == 0:
+            _metadata_rebuild_state["status"] = "completed"
+            _metadata_rebuild_state["message"] = "All documents already have valid chunks_count"
+            return
+        
+        logger.info(f"Starting metadata rebuild for {total_docs} documents")
+        
+        # Strategy: Get all chunk counts in a single aggregation, then bulk update documents
+        # Run in thread executor to avoid blocking event loop
+        
+        logger.info("[Rebuild] Aggregating all chunk counts (this may take a moment)...")
+        _metadata_rebuild_state["message"] = "Counting chunks..."
+        
+        # Get all document IDs that need updating
+        doc_ids = []
+        async for doc in collection.find(query, {"_id": 1}):
+            doc_ids.append(doc["_id"])
+        
+        logger.info(f"[Rebuild] Found {len(doc_ids)} documents to process")
+        
+        if not doc_ids:
+            _metadata_rebuild_state["status"] = "completed"
+            _metadata_rebuild_state["message"] = "No documents need updating"
+            return
+        
+        # Get chunk counts using a simpler approach - lookup from chunks
+        # For each document, we'll update with count or -1
+        _metadata_rebuild_state["message"] = "Updating documents..."
+        
+        processed = 0
+        updated = 0
+        
+        # Process in small batches to allow yielding
+        batch_size = 10
+        for i in range(0, len(doc_ids), batch_size):
+            batch = doc_ids[i:i + batch_size]
+            
+            # Get chunk counts for this batch using aggregation
+            pipeline = [
+                {"$match": {"document_id": {"$in": batch}}},
+                {"$group": {"_id": "$document_id", "count": {"$sum": 1}}}
+            ]
+            
+            chunk_counts = {}
+            async for result in chunks_collection.aggregate(pipeline):
+                chunk_counts[result["_id"]] = result["count"]
+            
+            # Update documents in this batch
+            for doc_id in batch:
+                count = chunk_counts.get(doc_id, 0)
+                final_count = count if count > 0 else -1
+                
+                await collection.update_one(
+                    {"_id": doc_id},
+                    {"$set": {"metadata.chunks_count": final_count}}
+                )
+                
+                if count > 0:
+                    updated += 1
+                processed += 1
+            
+            # Update progress
+            _metadata_rebuild_state["processed"] = processed
+            _metadata_rebuild_state["updated"] = updated
+            _metadata_rebuild_state["progress_percent"] = round(processed / total_docs * 100, 1)
+            
+            # Log every 50 documents and yield to event loop
+            if processed % 50 == 0 or processed == total_docs:
+                logger.info(f"Rebuild progress: {processed}/{total_docs} ({_metadata_rebuild_state['progress_percent']}%)")
+            await asyncio.sleep(0.01)
+        
+        _metadata_rebuild_state["status"] = "completed"
+        _metadata_rebuild_state["progress_percent"] = 100
+        _metadata_rebuild_state["message"] = f"Updated {updated} documents out of {processed} processed"
+        _metadata_rebuild_state["completed_at"] = datetime.now().isoformat()
+        
+        logger.info(f"Metadata rebuild completed: {updated}/{processed} documents updated")
+        
+    except asyncio.CancelledError:
+        _metadata_rebuild_state["status"] = "cancelled"
+        _metadata_rebuild_state["message"] = "Rebuild was cancelled"
+        logger.warning("Metadata rebuild was cancelled")
+    except Exception as e:
+        _metadata_rebuild_state["status"] = "failed"
+        _metadata_rebuild_state["error"] = str(e)
+        logger.error(f"Metadata rebuild failed: {e}", exc_info=True)
+
+
+@router.post("/rebuild-metadata")
+async def start_metadata_rebuild(request: Request):
+    """
+    Start async metadata rebuild to fix chunks_count for all documents.
+    
+    Processes documents with missing or zero chunks_count in batches,
+    counting actual chunks from the chunks collection and updating
+    the document metadata.
+    
+    Returns immediately with job status - use GET /rebuild-metadata for progress.
+    """
+    global _metadata_rebuild_state, _metadata_rebuild_task
+    
+    # Check if rebuild is already running
+    if _metadata_rebuild_state and _metadata_rebuild_state.get("status") == "running":
+        return {
+            "success": False,
+            "message": "Metadata rebuild is already running",
+            "status": _metadata_rebuild_state
+        }
+    
+    db = request.app.state.db
+    
+    # Initialize state
+    _metadata_rebuild_state = {
+        "status": "starting",
+        "started_at": datetime.now().isoformat(),
+        "completed_at": None,
+        "total": 0,
+        "processed": 0,
+        "updated": 0,
+        "progress_percent": 0,
+        "message": None,
+        "error": None
+    }
+    
+    # Start background task
+    _metadata_rebuild_task = asyncio.create_task(_run_metadata_rebuild(db))
+    
+    return {
+        "success": True,
+        "message": "Metadata rebuild started",
+        "status": _metadata_rebuild_state
+    }
+
+
+@router.get("/rebuild-metadata")
+async def get_metadata_rebuild_status():
+    """
+    Get the status of the metadata rebuild process.
+    
+    Returns current progress if a rebuild is running or the result of the last rebuild.
+    """
+    global _metadata_rebuild_state
+    
+    if not _metadata_rebuild_state:
+        return {
+            "running": False,
+            "status": None,
+            "message": "No rebuild has been started"
+        }
+    
+    return {
+        "running": _metadata_rebuild_state.get("status") == "running",
+        "status": _metadata_rebuild_state
+    }
+
+
+@router.delete("/rebuild-metadata")
+async def cancel_metadata_rebuild():
+    """
+    Cancel the running metadata rebuild process.
+    """
+    global _metadata_rebuild_task, _metadata_rebuild_state
+    
+    if not _metadata_rebuild_task or not _metadata_rebuild_state:
+        return {"success": False, "message": "No rebuild is running"}
+    
+    if _metadata_rebuild_state.get("status") != "running":
+        return {"success": False, "message": "Rebuild is not currently running"}
+    
+    _metadata_rebuild_task.cancel()
+    return {"success": True, "message": "Rebuild cancellation requested"}
+
+
 @router.post("/pause", response_model=SuccessResponse)
 async def pause_ingestion(request: Request):
     """
@@ -1223,31 +1427,105 @@ async def clear_logs():
 async def list_documents(
     request: Request,
     page: int = 1,
-    page_size: int = 20
+    page_size: int = 20,
+    folder: Optional[str] = None,
+    search: Optional[str] = None,
+    exact_folder: bool = False,
+    sort_by: str = "modified",
+    sort_order: str = "desc"
 ):
     """
     List ingested documents.
     
     Returns paginated list of documents in the knowledge base.
+    Supports filtering by folder path and search term.
+    
+    Args:
+        page: Page number (1-indexed)
+        page_size: Number of documents per page
+        folder: Filter by folder path (documents whose source starts with this path)
+        search: Search term to filter by title or source
+        exact_folder: If True, only return documents directly in folder (not in subfolders)
+        sort_by: Field to sort by (name, modified, size, type). Default: modified
+        sort_order: Sort direction (asc, desc). Default: desc
     """
+    import re
+    
     db = request.app.state.db
     collection = db.documents_collection
     
-    # Use estimated_document_count for faster results
-    total = await collection.estimated_document_count()
+    # Build query filter
+    query: dict = {}
+    
+    # Folder filter
+    if folder:
+        # Normalize folder path
+        folder_normalized = folder.replace("\\", "/")
+        
+        if exact_folder:
+            # Match documents DIRECTLY in this folder (not in subfolders)
+            # Pattern: folder/filename (no more slashes after folder)
+            query["$or"] = [
+                {"source": {"$regex": f"^{re.escape(folder_normalized)}/[^/]+$", "$options": "i"}},
+                {"source": {"$regex": f"^{re.escape(folder_normalized.replace('/', chr(92)+chr(92)))}\\\\[^\\\\]+$", "$options": "i"}},
+            ]
+        else:
+            # Match documents in this folder or subfolders (recursive)
+            query["$or"] = [
+                {"source": {"$regex": f"^{re.escape(folder_normalized)}/", "$options": "i"}},
+                {"source": {"$regex": f"^{re.escape(folder_normalized.replace('/', chr(92)+chr(92)))}\\\\", "$options": "i"}},
+            ]
+    elif exact_folder:
+        # Root level - documents with no folder (just filename)
+        query["source"] = {"$regex": "^[^/\\\\]+$", "$options": "i"}
+    
+    # Search filter - match title or source containing search term
+    if search:
+        search_regex = re.escape(search)
+        search_conditions = [
+            {"title": {"$regex": search_regex, "$options": "i"}},
+            {"source": {"$regex": search_regex, "$options": "i"}}
+        ]
+        if "$or" in query:
+            # Combine with folder filter using $and
+            query = {"$and": [{"$or": query["$or"]}, {"$or": search_conditions}]}
+        elif "source" in query:
+            query = {"$and": [{"source": query["source"]}, {"$or": search_conditions}]}
+        else:
+            query["$or"] = search_conditions
+    
+    # Get total count for this query
+    if query:
+        total = await collection.count_documents(query)
+    else:
+        # Use estimated count for unfiltered queries (faster)
+        total = await collection.estimated_document_count()
     
     # Calculate pagination
     skip = (page - 1) * page_size
-    total_pages = (total + page_size - 1) // page_size
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    
+    # Determine sort field and direction
+    sort_field_map = {
+        "name": "title",
+        "modified": "created_at",
+        "size": "metadata.chunks_count",
+        "type": "source"  # Will sort by extension
+    }
+    sort_field = sort_field_map.get(sort_by, "created_at")
+    sort_direction = -1 if sort_order == "desc" else 1
     
     # Get documents
-    cursor = collection.find({}).skip(skip).limit(page_size).sort("created_at", -1)
+    cursor = collection.find(query).skip(skip).limit(page_size).sort(sort_field, sort_direction)
     
     documents = []
     async for doc in cursor:
-        # Don't count chunks per document - it's too slow on large collections
-        # The chunk count is stored during ingestion if needed
-        chunks_count = doc.get("metadata", {}).get("chunks_count", 0)
+        # Use stored chunks_count from metadata, or 0 if not available
+        # -1 means "checked but has 0 chunks" (used internally), display as 0
+        # Use the rebuild-metadata endpoint to fix missing counts
+        chunks_count = doc.get("metadata", {}).get("chunks_count") or 0
+        if chunks_count < 0:
+            chunks_count = 0
         
         documents.append(DocumentInfo(
             id=str(doc["_id"]),
@@ -1265,6 +1543,77 @@ async def list_documents(
         page_size=page_size,
         total_pages=total_pages
     )
+
+
+@router.get("/documents/folders")
+async def get_document_folders(request: Request):
+    """
+    Get all unique folder paths from documents.
+    
+    Returns a list of folder paths with document counts for building
+    a folder tree in the UI. This is efficient as it only fetches
+    the 'source' field and aggregates in MongoDB.
+    """
+    db = request.app.state.db
+    collection = db.documents_collection
+    
+    try:
+        # Use aggregation pipeline to get unique folder paths efficiently
+        pipeline = [
+            # Only get documents with source field
+            {"$match": {"source": {"$exists": True, "$ne": None}}},
+            # Project only the source field
+            {"$project": {"source": 1}},
+        ]
+        
+        # Execute aggregation
+        cursor = collection.aggregate(pipeline)
+        
+        # Build folder structure with counts
+        folder_counts: dict = {}
+        total_documents = 0
+        
+        async for doc in cursor:
+            source = doc.get("source", "")
+            if not source:
+                continue
+                
+            total_documents += 1
+            
+            # Normalize path separators
+            source = source.replace("\\", "/")
+            parts = source.split("/")
+            
+            # Build folder path hierarchy
+            current_path = ""
+            for i, part in enumerate(parts[:-1]):  # Exclude filename
+                current_path = f"{current_path}/{part}" if current_path else part
+                if current_path not in folder_counts:
+                    folder_counts[current_path] = {
+                        "path": current_path,
+                        "name": part,
+                        "depth": i,
+                        "count": 0
+                    }
+                folder_counts[current_path]["count"] += 1
+        
+        # Convert to list and sort by path
+        folders = sorted(folder_counts.values(), key=lambda x: x["path"])
+        
+        return {
+            "folders": folders,
+            "total_folders": len(folders),
+            "total_documents": total_documents
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting document folders: {e}")
+        return {
+            "folders": [],
+            "total_folders": 0,
+            "total_documents": 0,
+            "error": str(e)
+        }
 
 
 @router.get("/documents/lookup")

@@ -3,6 +3,7 @@ import { AuthProvider } from './contexts/AuthContext'
 import { ChatSidebarProvider } from './contexts/ChatSidebarContext'
 import Layout from './components/Layout'
 import ChatPageNew from './pages/ChatPageNew'
+import HomePage from './pages/HomePage'
 import SearchPage from './pages/SearchPage'
 import DocumentsPage from './pages/DocumentsPage'
 import DocumentPreviewPage from './pages/DocumentPreviewPage'
@@ -23,7 +24,7 @@ function App() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/" element={<Layout />}>
-            <Route index element={<ChatPageNew />} />
+            <Route index element={<HomePage />} />
             <Route path="chat" element={<ChatPageNew />} />
             <Route path="search" element={<SearchPage />} />
             <Route path="documents" element={<DocumentsPage />} />
