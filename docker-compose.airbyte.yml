@@ -1,0 +1,184 @@
+# MongoDB RAG Agent - Airbyte Integration
+# Airbyte for complex API integrations (Confluence, Jira)
+#
+# Port Assignments (within 11000-11100 range):
+#   - Airbyte Webapp:     11020
+#   - Airbyte API:        11021
+#   - Airbyte Builder:    11022
+#
+# Data Persistence:
+#   All Airbyte data is stored in ./data/airbyte/ for easy backup and persistence
+#
+# Usage:
+#   docker-compose -f docker-compose.yml -f docker-compose.airbyte.yml up -d
+#
+# Note: First run may take a few minutes for Airbyte to initialize.
+
+services:
+  # ===========================================
+  # Airbyte - Config Database (PostgreSQL)
+  # ===========================================
+  airbyte-db:
+    image: postgres:13-alpine
+    container_name: rag-airbyte-db
+    environment:
+      - POSTGRES_USER=airbyte
+      - POSTGRES_PASSWORD=airbyte_password
+      - POSTGRES_DB=airbyte
+    volumes:
+      - ./data/airbyte/db:/var/lib/postgresql/data
+    networks:
+      - rag-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airbyte"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===========================================
+  # Airbyte - Temporal (Workflow Engine)
+  # ===========================================
+  airbyte-temporal:
+    image: temporalio/auto-setup:1.22.3
+    container_name: rag-airbyte-temporal
+    environment:
+      - DB=postgresql
+      - DB_PORT=5432
+      - POSTGRES_USER=airbyte
+      - POSTGRES_PWD=airbyte_password
+      - POSTGRES_SEEDS=airbyte-db
+    depends_on:
+      airbyte-db:
+        condition: service_healthy
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+  # ===========================================
+  # Airbyte - Server (API)
+  # ===========================================
+  airbyte-server:
+    image: airbyte/server:0.57.0
+    container_name: rag-airbyte-server
+    ports:
+      - "11021:8001"
+    environment:
+      - AIRBYTE_VERSION=0.57.0
+      - DATABASE_HOST=airbyte-db
+      - DATABASE_PORT=5432
+      - DATABASE_DB=airbyte
+      - DATABASE_USER=airbyte
+      - DATABASE_PASSWORD=airbyte_password
+      - TEMPORAL_HOST=airbyte-temporal:7233
+      - TRACKING_STRATEGY=logging
+      - LOG_LEVEL=INFO
+      - CONFIGS_DATABASE_MINIMUM_FLYWAY_MIGRATION_VERSION=0.35.15.001
+      - JOBS_DATABASE_MINIMUM_FLYWAY_MIGRATION_VERSION=0.29.15.001
+      - CONFIG_ROOT=/data
+      - WORKSPACE_ROOT=/tmp/workspace
+      - WEBAPP_URL=http://localhost:11020
+      - API_URL=http://localhost:11021/api
+      - INTERNAL_API_HOST=airbyte-server:8001
+      - WORKER_ENVIRONMENT=docker
+      - LOCAL_ROOT=/tmp/airbyte_local
+      - RUN_DATABASE_MIGRATION_ON_STARTUP=true
+    volumes:
+      - ./data/airbyte/config:/data
+      - ./data/airbyte/workspace:/tmp/workspace
+      - ./data/airbyte/local:/tmp/airbyte_local
+    depends_on:
+      airbyte-db:
+        condition: service_healthy
+      airbyte-temporal:
+        condition: service_started
+    networks:
+      - rag-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ===========================================
+  # Airbyte - Worker (Sync Job Executor)
+  # ===========================================
+  airbyte-worker:
+    image: airbyte/worker:0.57.0
+    container_name: rag-airbyte-worker
+    environment:
+      - AIRBYTE_VERSION=0.57.0
+      - DATABASE_HOST=airbyte-db
+      - DATABASE_PORT=5432
+      - DATABASE_DB=airbyte
+      - DATABASE_USER=airbyte
+      - DATABASE_PASSWORD=airbyte_password
+      - TEMPORAL_HOST=airbyte-temporal:7233
+      - CONFIG_ROOT=/data
+      - WORKSPACE_ROOT=/tmp/workspace
+      - LOCAL_ROOT=/tmp/airbyte_local
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - INTERNAL_API_HOST=airbyte-server:8001
+      - LOG_LEVEL=INFO
+      - ACTIVITY_MAX_ATTEMPT=5
+      - ACTIVITY_INITIAL_DELAY_BETWEEN_ATTEMPTS_SECONDS=30
+      - ACTIVITY_MAX_DELAY_BETWEEN_ATTEMPTS_SECONDS=600
+      - WORKFLOW_FAILURE_RESTART_DELAY_SECONDS=600
+      - MAX_SYNC_WORKERS=5
+      - SHOULD_RUN_NOTIFY_WORKFLOWS=false
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./data/airbyte/config:/data
+      - ./data/airbyte/workspace:/tmp/workspace
+      - ./data/airbyte/local:/tmp/airbyte_local
+    depends_on:
+      airbyte-server:
+        condition: service_healthy
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+  # ===========================================
+  # Airbyte - Webapp (UI)
+  # ===========================================
+  airbyte-webapp:
+    image: airbyte/webapp:0.57.0
+    container_name: rag-airbyte-webapp
+    ports:
+      - "11020:80"
+    environment:
+      - AIRBYTE_VERSION=0.57.0
+      - API_URL=http://localhost:11021/api/v1/
+      - CONNECTOR_BUILDER_API_URL=http://localhost:11022/
+      - TRACKING_STRATEGY=logging
+    depends_on:
+      airbyte-server:
+        condition: service_healthy
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+  # ===========================================
+  # Airbyte - Connector Builder Server API
+  # ===========================================
+  airbyte-connector-builder-api:
+    image: airbyte/connector-builder-server:0.57.0
+    container_name: rag-airbyte-connector-builder-api
+    ports:
+      - "11022:80"
+    environment:
+      - AIRBYTE_VERSION=0.57.0
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+# Note: Using bind mounts to ./data/airbyte/ for persistence
+# No named volumes required - all data stored in project folder
+
+# Use existing network from main docker-compose
+networks:
+  rag-network:
+    external: true
+    name: mongodb-rag-agent_rag-network

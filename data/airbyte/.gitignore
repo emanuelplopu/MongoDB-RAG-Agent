@@ -1,0 +1,18 @@
+# Airbyte data directory
+# This folder contains all Airbyte persistence data
+# Contents are auto-generated and should not be committed
+
+# PostgreSQL database files
+db/
+
+# Airbyte configuration data
+config/
+
+# Sync workspace (temporary files during sync)
+workspace/
+
+# Local files (downloaded content)
+local/
+
+# Keep this .gitignore
+!.gitignore

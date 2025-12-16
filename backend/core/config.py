@@ -52,6 +52,20 @@ class BackendSettings(BaseSettings):
     # Profile Settings
     profiles_path: str = Field(default="profiles.yaml")
     
+    # Airbyte Integration Settings
+    airbyte_enabled: bool = Field(
+        default=False, 
+        description="Enable Airbyte integration for Confluence/Jira"
+    )
+    airbyte_api_url: str = Field(
+        default="http://airbyte-server:8001",
+        description="Airbyte API URL (internal container network)"
+    )
+    airbyte_webapp_url: str = Field(
+        default="http://localhost:11020",
+        description="Airbyte Webapp URL (for external access)"
+    )
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

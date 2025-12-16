@@ -5,6 +5,12 @@
 #   - MongoDB:  11017
 #   - Backend:  11000
 #   - Frontend: 11080
+#   - Airbyte Webapp: 11020 (optional, via docker-compose.airbyte.yml)
+#   - Airbyte API:    11021 (optional, via docker-compose.airbyte.yml)
+#   - Airbyte Builder: 11022 (optional, via docker-compose.airbyte.yml)
+#
+# To run with Airbyte:
+#   docker-compose -f docker-compose.yml -f docker-compose.airbyte.yml up -d
 
 services:
   # ===========================================
@@ -65,6 +71,11 @@ services:
       # Profile configuration
       - PROFILES_PATH=/app/profiles.yaml
       # ACTIVE_PROFILE can be set to override profiles.yaml, but defaults to saved value
+      
+      # Airbyte Integration (optional - for Confluence/Jira)
+      - AIRBYTE_ENABLED=${AIRBYTE_ENABLED:-false}
+      - AIRBYTE_API_URL=${AIRBYTE_API_URL:-http://airbyte-server:8001}
+      - AIRBYTE_WEBAPP_URL=${AIRBYTE_WEBAPP_URL:-http://localhost:11020}
     volumes:
       - ./documents:/app/documents
       - ./projects:/app/projects
