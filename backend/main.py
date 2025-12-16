@@ -27,6 +27,12 @@ from fastapi.exceptions import RequestValidationError
 
 from backend.routers import chat, search, profiles, ingestion, system, sessions, auth
 from backend.routers import status, indexes, ingestion_queue, local_llm
+from backend.routers.cloud_sources import (
+    connections_router as cloud_connections,
+    oauth_router as cloud_oauth,
+    sync_router as cloud_sync,
+    providers_router as cloud_providers,
+)
 from backend.routers.system import load_config_from_db
 from backend.routers.ingestion import check_and_resume_interrupted_jobs, graceful_shutdown_handler
 from backend.core.config import settings
@@ -403,6 +409,31 @@ app.include_router(
     local_llm.router,
     prefix="/api/v1/local-llm",
     tags=["Local LLM"]
+)
+
+# Cloud Sources routers
+app.include_router(
+    cloud_providers,
+    prefix="/api/v1/cloud-sources",
+    tags=["Cloud Sources"]
+)
+
+app.include_router(
+    cloud_connections,
+    prefix="/api/v1/cloud-sources",
+    tags=["Cloud Sources"]
+)
+
+app.include_router(
+    cloud_oauth,
+    prefix="/api/v1/cloud-sources",
+    tags=["Cloud Sources"]
+)
+
+app.include_router(
+    cloud_sync,
+    prefix="/api/v1/cloud-sources",
+    tags=["Cloud Sources"]
 )
 
 

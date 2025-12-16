@@ -1556,4 +1556,378 @@ export const localLlmApi = {
   },
 }
 
+// ============== Cloud Sources Types ==============
+
+export type CloudProviderType = 
+  | 'google_drive'
+  | 'onedrive'
+  | 'sharepoint'
+  | 'dropbox'
+  | 'owncloud'
+  | 'nextcloud'
+  | 'confluence'
+  | 'jira'
+  | 'email_imap'
+  | 'email_gmail'
+  | 'email_outlook'
+
+export type CloudAuthType = 'oauth2' | 'api_key' | 'password' | 'app_token'
+
+export type CloudConnectionStatus = 'active' | 'expired' | 'revoked' | 'error' | 'pending'
+
+export type SyncJobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused'
+
+export type SyncJobType = 'full' | 'incremental' | 'manual'
+
+export type SyncFrequency = 'hourly' | 'daily' | 'weekly' | 'monthly'
+
+export interface CloudProvider {
+  provider_type: CloudProviderType
+  display_name: string
+  description: string
+  icon: string
+  supported_auth_types: CloudAuthType[]
+  supports_delta_sync: boolean
+  supports_webhooks: boolean
+  documentation_url?: string
+  setup_instructions?: string
+}
+
+export interface CloudConnection {
+  id: string
+  user_id: string
+  provider: CloudProviderType
+  display_name: string
+  auth_type: CloudAuthType
+  status: CloudConnectionStatus
+  server_url?: string
+  oauth_email?: string
+  oauth_expires_at?: string
+  oauth_scopes?: string[]
+  last_validated_at?: string
+  error_message?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface RemoteFolder {
+  id: string
+  name: string
+  path: string
+  parent_id?: string
+  has_children: boolean
+  children_count?: number
+  modified_at?: string
+}
+
+export interface RemoteFile {
+  id: string
+  name: string
+  path: string
+  mime_type: string
+  size_bytes: number
+  modified_at: string
+  web_view_url?: string
+}
+
+export interface SourcePath {
+  path: string
+  remote_id: string
+  include_subfolders: boolean
+  display_name?: string
+}
+
+export interface SyncFilters {
+  file_types: string[]
+  exclude_patterns: string[]
+  max_file_size_mb: number
+  modified_after?: string
+}
+
+export interface SyncSchedule {
+  enabled: boolean
+  frequency: SyncFrequency
+  hour: number
+  day_of_week?: number
+  day_of_month?: number
+}
+
+export interface SyncConfig {
+  id: string
+  user_id: string
+  connection_id: string
+  connection_display_name: string
+  provider: CloudProviderType
+  profile_key: string
+  name: string
+  source_paths: SourcePath[]
+  filters: SyncFilters
+  schedule: SyncSchedule
+  delete_removed: boolean
+  status: string
+  stats: {
+    total_files: number
+    total_size_bytes: number
+    last_sync_at?: string
+    last_sync_files_processed: number
+    last_sync_duration_seconds: number
+    next_scheduled_run?: string
+  }
+  created_at: string
+  updated_at: string
+}
+
+export interface SyncJobProgress {
+  phase: string
+  current_file?: string
+  files_discovered: number
+  files_processed: number
+  files_skipped: number
+  files_failed: number
+  bytes_processed: number
+}
+
+export interface SyncJobError {
+  file_path: string
+  error_type: string
+  message: string
+  timestamp: string
+}
+
+export interface SyncJob {
+  id: string
+  config_id: string
+  config_name: string
+  user_id: string
+  type: SyncJobType
+  status: SyncJobStatus
+  progress: SyncJobProgress
+  errors: SyncJobError[]
+  started_at?: string
+  completed_at?: string
+  duration_seconds?: number
+}
+
+export interface CloudSourceSummary {
+  connection_id: string
+  provider: CloudProviderType
+  display_name: string
+  status: CloudConnectionStatus
+  sync_configs_count: number
+  total_files_indexed: number
+  last_sync_at?: string
+  next_sync_at?: string
+  has_errors: boolean
+}
+
+export interface CloudSourcesDashboard {
+  total_connections: number
+  active_connections: number
+  total_sync_configs: number
+  total_files_indexed: number
+  total_size_bytes: number
+  active_jobs: number
+  sources: CloudSourceSummary[]
+  recent_errors: SyncJobError[]
+  next_scheduled_sync?: string
+}
+
+// ============== Cloud Sources API ==============
+
+export const cloudSourcesApi = {
+  // Providers
+  getProviders: async (): Promise<{ providers: CloudProvider[] }> => {
+    const response = await api.get('/cloud-sources/providers')
+    return response.data
+  },
+
+  getProvider: async (providerType: CloudProviderType): Promise<CloudProvider> => {
+    const response = await api.get(`/cloud-sources/providers/${providerType}`)
+    return response.data
+  },
+
+  // Connections
+  getConnections: async (params?: {
+    provider?: CloudProviderType
+    status?: CloudConnectionStatus
+  }): Promise<{ connections: CloudConnection[]; total: number }> => {
+    const response = await api.get('/cloud-sources/connections', { params })
+    return response.data
+  },
+
+  createConnection: async (data: {
+    provider: CloudProviderType
+    display_name: string
+    server_url?: string
+    username?: string
+    password?: string
+    api_key?: string
+    app_token?: string
+  }): Promise<CloudConnection> => {
+    const response = await api.post('/cloud-sources/connections', data)
+    return response.data
+  },
+
+  getConnection: async (connectionId: string): Promise<CloudConnection> => {
+    const response = await api.get(`/cloud-sources/connections/${connectionId}`)
+    return response.data
+  },
+
+  updateConnection: async (connectionId: string, data: {
+    display_name?: string
+    password?: string
+    api_key?: string
+    app_token?: string
+  }): Promise<CloudConnection> => {
+    const response = await api.put(`/cloud-sources/connections/${connectionId}`, data)
+    return response.data
+  },
+
+  deleteConnection: async (connectionId: string): Promise<void> => {
+    await api.delete(`/cloud-sources/connections/${connectionId}`)
+  },
+
+  testConnection: async (connectionId: string): Promise<{
+    success: boolean
+    message: string
+    user_info?: Record<string, unknown>
+    storage_quota?: Record<string, unknown>
+  }> => {
+    const response = await api.post(`/cloud-sources/connections/${connectionId}/test`)
+    return response.data
+  },
+
+  browseFolder: async (connectionId: string, params?: {
+    path?: string
+    folder_id?: string
+  }): Promise<{
+    current_folder: RemoteFolder
+    folders: RemoteFolder[]
+    files: RemoteFile[]
+    has_more: boolean
+    next_cursor?: string
+  }> => {
+    const response = await api.get(`/cloud-sources/connections/${connectionId}/browse`, { params })
+    return response.data
+  },
+
+  // OAuth
+  initiateOAuth: async (provider: CloudProviderType, displayName: string): Promise<{
+    authorization_url: string
+    state: string
+  }> => {
+    const response = await api.post(`/cloud-sources/oauth/${provider}/authorize`, {
+      provider,
+      display_name: displayName,
+    })
+    return response.data
+  },
+
+  refreshOAuthTokens: async (connectionId: string): Promise<CloudConnection> => {
+    const response = await api.post(`/cloud-sources/oauth/${connectionId}/refresh`)
+    return response.data
+  },
+
+  revokeOAuthTokens: async (connectionId: string): Promise<void> => {
+    await api.delete(`/cloud-sources/oauth/${connectionId}/revoke`)
+  },
+
+  // Sync Configurations
+  getSyncConfigs: async (params?: {
+    connection_id?: string
+  }): Promise<{ configs: SyncConfig[]; total: number }> => {
+    const response = await api.get('/cloud-sources/sync-configs', { params })
+    return response.data
+  },
+
+  createSyncConfig: async (data: {
+    connection_id: string
+    profile_key: string
+    name: string
+    source_paths: SourcePath[]
+    filters?: Partial<SyncFilters>
+    schedule?: Partial<SyncSchedule>
+    delete_removed?: boolean
+  }): Promise<SyncConfig> => {
+    const response = await api.post('/cloud-sources/sync-configs', data)
+    return response.data
+  },
+
+  getSyncConfig: async (configId: string): Promise<SyncConfig> => {
+    const response = await api.get(`/cloud-sources/sync-configs/${configId}`)
+    return response.data
+  },
+
+  updateSyncConfig: async (configId: string, data: Partial<{
+    name: string
+    source_paths: SourcePath[]
+    filters: SyncFilters
+    schedule: SyncSchedule
+    delete_removed: boolean
+  }>): Promise<SyncConfig> => {
+    const response = await api.put(`/cloud-sources/sync-configs/${configId}`, data)
+    return response.data
+  },
+
+  deleteSyncConfig: async (configId: string): Promise<void> => {
+    await api.delete(`/cloud-sources/sync-configs/${configId}`)
+  },
+
+  // Sync Operations
+  runSync: async (configId: string, options?: {
+    type?: SyncJobType
+    force_full?: boolean
+  }): Promise<SyncJob> => {
+    const response = await api.post(`/cloud-sources/sync-configs/${configId}/run`, options || {})
+    return response.data
+  },
+
+  getSyncStatus: async (configId: string): Promise<SyncJob> => {
+    const response = await api.get(`/cloud-sources/sync-configs/${configId}/status`)
+    return response.data
+  },
+
+  pauseSync: async (configId: string): Promise<void> => {
+    await api.post(`/cloud-sources/sync-configs/${configId}/pause`)
+  },
+
+  resumeSync: async (configId: string): Promise<void> => {
+    await api.post(`/cloud-sources/sync-configs/${configId}/resume`)
+  },
+
+  cancelSync: async (configId: string): Promise<void> => {
+    await api.post(`/cloud-sources/sync-configs/${configId}/cancel`)
+  },
+
+  getSyncHistory: async (configId: string, params?: {
+    page?: number
+    page_size?: number
+  }): Promise<{
+    jobs: SyncJob[]
+    total: number
+    page: number
+    page_size: number
+    total_pages: number
+  }> => {
+    const response = await api.get(`/cloud-sources/sync-configs/${configId}/history`, { params })
+    return response.data
+  },
+
+  // Dashboard
+  getDashboard: async (): Promise<CloudSourcesDashboard> => {
+    const response = await api.get('/cloud-sources/dashboard')
+    return response.data
+  },
+
+  // Job Details
+  getJob: async (jobId: string): Promise<SyncJob> => {
+    const response = await api.get(`/cloud-sources/jobs/${jobId}`)
+    return response.data
+  },
+
+  getJobLogsUrl: (jobId: string): string => {
+    return `${API_BASE}/cloud-sources/jobs/${jobId}/logs`
+  },
+}
+
 export default api
