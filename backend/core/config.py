@@ -66,6 +66,20 @@ class BackendSettings(BaseSettings):
         description="Airbyte Webapp URL (for external access)"
     )
     
+    # Airbyte MongoDB Destination Settings
+    airbyte_mongodb_host: str = Field(
+        default="mongodb",
+        description="MongoDB host for Airbyte destination (container name)"
+    )
+    airbyte_mongodb_port: int = Field(
+        default=27017,
+        description="MongoDB port for Airbyte destination"
+    )
+    airbyte_mongodb_database: str = Field(
+        default="rag_db",
+        description="MongoDB database for Airbyte to write synced data"
+    )
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

@@ -117,6 +117,25 @@ def _load_providers():
         logger.info("Loaded Jira provider (via Airbyte)")
     except ImportError as e:
         logger.warning(f"Jira provider not available: {e}")
+    
+    # Email providers (via Airbyte)
+    try:
+        from backend.providers.airbyte import email_gmail
+        logger.info("Loaded Gmail provider (via Airbyte)")
+    except ImportError as e:
+        logger.warning(f"Gmail provider not available: {e}")
+    
+    try:
+        from backend.providers.airbyte import email_outlook
+        logger.info("Loaded Outlook provider (via Airbyte)")
+    except ImportError as e:
+        logger.warning(f"Outlook provider not available: {e}")
+    
+    try:
+        from backend.providers.airbyte import email_imap
+        logger.info("Loaded IMAP email provider (via Airbyte)")
+    except ImportError as e:
+        logger.warning(f"IMAP email provider not available: {e}")
 
 
 # Auto-load providers on import
