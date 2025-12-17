@@ -10,6 +10,19 @@ profiles:
     collection_chunks: chunks
     vector_index: vector_index
     text_index: text_index
+    # Airbyte configuration (optional)
+    # airbyte:
+    #   workspace_id: null
+    #   destination_id: null
+    #   default_sync_mode: incremental
+    #   default_schedule_type: manual
+    # Cloud source connections (optional)
+    # cloud_sources:
+    # - connection_id: gmail-john
+    #   provider_type: gmail
+    #   display_name: "John's Gmail"
+    #   enabled: true
+    #   collection_prefix: gmail_
   parhelion:
     name: Parhelion Energy
     description: Parhelion Energy knowledge base
@@ -20,6 +33,28 @@ profiles:
     collection_chunks: chunks
     vector_index: vector_index
     text_index: text_index
+    # Example Airbyte configuration
+    airbyte:
+      workspace_id: null  # Will be set after first sync
+      destination_id: null  # Will be set after first destination creation
+      default_sync_mode: incremental
+      default_schedule_type: manual
+    # Example cloud sources (uncomment to use)
+    cloud_sources: []
+    # - connection_id: confluence-parhelion
+    #   provider_type: confluence
+    #   display_name: "Parhelion Confluence"
+    #   enabled: true
+    #   collection_prefix: confluence_
+    #   sync_schedule: "0 0 * * *"  # Daily at midnight
+    # - connection_id: gmail-support
+    #   provider_type: gmail
+    #   display_name: "Support Inbox"
+    #   enabled: true
+    #   collection_prefix: gmail_support_
+    #   include_paths:
+    #   - INBOX
+    #   - "[Gmail]/Sent Mail"
   parhelion-full:
     name: Manu-Primary-GDrive
     description: Parhelion Energy knowledge base with Google Drive documents
@@ -30,3 +65,16 @@ profiles:
     collection_chunks: chunks
     vector_index: vector_index
     text_index: text_index
+    # Example with Google Drive cloud source
+    airbyte:
+      workspace_id: null
+      destination_id: null
+      default_sync_mode: incremental
+      default_schedule_type: scheduled
+      default_schedule_cron: "0 */6 * * *"  # Every 6 hours
+    cloud_sources: []
+    # - connection_id: gdrive-main
+    #   provider_type: google_drive
+    #   display_name: "Main Google Drive"
+    #   enabled: true
+    #   collection_prefix: gdrive_

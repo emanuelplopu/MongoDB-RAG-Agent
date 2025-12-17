@@ -86,12 +86,37 @@ class SearchResponse(BaseModel):
     processing_time_ms: float = Field(..., description="Processing time")
 
 
+# ============== Cloud Source Enums ==============
+
+class CloudSourceType(str, Enum):
+    """Supported cloud source types."""
+    GOOGLE_DRIVE = "google_drive"
+    DROPBOX = "dropbox"
+    ONEDRIVE = "onedrive"
+    WEBDAV = "webdav"
+    CONFLUENCE = "confluence"
+    JIRA = "jira"
+    GMAIL = "gmail"
+    OUTLOOK = "outlook"
+    IMAP = "imap"
+
+
+class SyncStatus(str, Enum):
+    """Cloud source sync status."""
+    PENDING = "pending"
+    SYNCING = "syncing"
+    SUCCESS = "success"
+    ERROR = "error"
+    CANCELLED = "cancelled"
+
+
 # ============== Profile Models ==============
 
 class ProfileConfig(BaseModel):
     """Profile configuration."""
     name: str = Field(..., description="Profile display name")
     description: Optional[str] = Field(None, description="Profile description")
+    owner_user_id: Optional[str] = Field(None, description="User ID of profile owner")
     documents_folders: List[str] = Field(default_factory=list)
     database: str = Field(default="rag_db")
     collection_documents: str = Field(default="documents")
@@ -100,6 +125,8 @@ class ProfileConfig(BaseModel):
     text_index: str = Field(default="text_index")
     embedding_model: Optional[str] = None
     llm_model: Optional[str] = None
+    airbyte: Optional["AirbyteConfig"] = None
+    cloud_sources: List["CloudSourceAssociation"] = Field(default_factory=list)
 
 
 class ProfileListResponse(BaseModel):
@@ -120,6 +147,7 @@ class ProfileCreateRequest(BaseModel):
     description: Optional[str] = None
     documents_folders: List[str] = Field(..., min_length=1)
     database: Optional[str] = None
+    owner_user_id: Optional[str] = None
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -128,6 +156,78 @@ class ProfileUpdateRequest(BaseModel):
     description: Optional[str] = None
     documents_folders: Optional[List[str]] = Field(None, min_length=1)
     database: Optional[str] = None
+    owner_user_id: Optional[str] = None
+
+
+# ============== Cloud Source Models ==============
+
+class AirbyteConfig(BaseModel):
+    """Airbyte-specific configuration for a profile."""
+    workspace_id: Optional[str] = Field(None, description="Airbyte workspace ID")
+    workspace_name: Optional[str] = Field(None, description="Airbyte workspace name")
+    destination_id: Optional[str] = Field(None, description="Airbyte MongoDB destination ID")
+    default_sync_mode: str = Field(default="incremental", description="Default sync mode")
+    default_schedule_type: str = Field(default="manual", description="Default schedule type")
+    default_schedule_cron: Optional[str] = Field(None, description="Default cron expression")
+
+
+class CloudSourceAssociation(BaseModel):
+    """Association between a profile and a cloud source connection."""
+    connection_id: str = Field(..., description="Unique connection ID")
+    provider_type: CloudSourceType = Field(..., description="Type of cloud provider")
+    display_name: str = Field(default="", description="User-friendly name")
+    airbyte_source_id: Optional[str] = Field(None, description="Airbyte source ID")
+    airbyte_connection_id: Optional[str] = Field(None, description="Airbyte sync connection ID")
+    enabled: bool = Field(default=True, description="Whether sync is enabled")
+    sync_schedule: Optional[str] = Field(None, description="Cron schedule for sync")
+    last_sync_at: Optional[datetime] = Field(None, description="Last sync timestamp")
+    last_sync_status: Optional[SyncStatus] = Field(None, description="Last sync status")
+    include_paths: List[str] = Field(default_factory=list, description="Paths to include")
+    exclude_paths: List[str] = Field(default_factory=list, description="Paths to exclude")
+    collection_prefix: str = Field(default="", description="Prefix for MongoDB collections")
+
+
+class CloudSourceCreateRequest(BaseModel):
+    """Request to add a cloud source to a profile."""
+    connection_id: str = Field(..., description="Unique connection ID")
+    provider_type: CloudSourceType = Field(..., description="Type of cloud provider")
+    display_name: Optional[str] = Field(None, description="User-friendly name")
+    airbyte_source_id: Optional[str] = None
+    airbyte_connection_id: Optional[str] = None
+    collection_prefix: Optional[str] = None
+    enabled: bool = True
+    sync_schedule: Optional[str] = None
+    include_paths: List[str] = Field(default_factory=list)
+    exclude_paths: List[str] = Field(default_factory=list)
+
+
+class CloudSourceUpdateRequest(BaseModel):
+    """Request to update a cloud source."""
+    display_name: Optional[str] = None
+    enabled: Optional[bool] = None
+    sync_schedule: Optional[str] = None
+    airbyte_source_id: Optional[str] = None
+    airbyte_connection_id: Optional[str] = None
+    collection_prefix: Optional[str] = None
+    include_paths: Optional[List[str]] = None
+    exclude_paths: Optional[List[str]] = None
+
+
+class CloudSourceListResponse(BaseModel):
+    """List of cloud sources response."""
+    cloud_sources: List[CloudSourceAssociation]
+    profile_key: str
+    total: int
+
+
+class AirbyteConfigUpdateRequest(BaseModel):
+    """Request to update Airbyte configuration for a profile."""
+    workspace_id: Optional[str] = None
+    workspace_name: Optional[str] = None
+    destination_id: Optional[str] = None
+    default_sync_mode: Optional[str] = None
+    default_schedule_type: Optional[str] = None
+    default_schedule_cron: Optional[str] = None
 
 
 # ============== Ingestion Models ==============
@@ -257,3 +357,7 @@ class ErrorResponse(BaseModel):
     error: str
     message: str
     detail: Optional[str] = None
+
+
+# Rebuild models with forward references
+ProfileConfig.model_rebuild()

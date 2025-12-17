@@ -5,6 +5,8 @@ Each profile defines a separate project with its own:
 - MongoDB database
 - Collection names
 - Search index names
+- Airbyte integration settings
+- Cloud source connections
 """
 
 import os
@@ -14,6 +16,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field
 from pydantic import BaseModel, Field
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +24,84 @@ logger = logging.getLogger(__name__)
 DEFAULT_PROFILES_PATH = "profiles.yaml"
 
 
+class CloudSourceType(str, Enum):
+    """Supported cloud source types."""
+    GOOGLE_DRIVE = "google_drive"
+    DROPBOX = "dropbox"
+    ONEDRIVE = "onedrive"
+    WEBDAV = "webdav"
+    CONFLUENCE = "confluence"
+    JIRA = "jira"
+    GMAIL = "gmail"
+    OUTLOOK = "outlook"
+    IMAP = "imap"
+
+
+class CloudSourceAssociation(BaseModel):
+    """Association between a profile and a cloud source connection.
+    
+    Each profile can have multiple cloud source connections,
+    and each connection syncs data to the profile's database.
+    """
+    
+    # Connection identification
+    connection_id: str = Field(..., description="Unique ID of the cloud source connection")
+    provider_type: CloudSourceType = Field(..., description="Type of cloud provider")
+    display_name: str = Field(default="", description="User-friendly name for this connection")
+    
+    # Airbyte-specific IDs (for Airbyte-backed providers)
+    airbyte_source_id: Optional[str] = Field(default=None, description="Airbyte source ID")
+    airbyte_connection_id: Optional[str] = Field(default=None, description="Airbyte sync connection ID")
+    
+    # Sync configuration
+    enabled: bool = Field(default=True, description="Whether sync is enabled")
+    sync_schedule: Optional[str] = Field(default=None, description="Cron schedule for sync (e.g., '0 */6 * * *')")
+    last_sync_at: Optional[str] = Field(default=None, description="ISO timestamp of last sync")
+    last_sync_status: Optional[str] = Field(default=None, description="Status of last sync (success/error)")
+    
+    # Folder/path filters
+    include_paths: List[str] = Field(default_factory=list, description="Paths/folders to include")
+    exclude_paths: List[str] = Field(default_factory=list, description="Paths/folders to exclude")
+    
+    # Collection prefix for synced data
+    collection_prefix: str = Field(default="", description="Prefix for MongoDB collections from this source")
+
+
+class AirbyteConfig(BaseModel):
+    """Airbyte-specific configuration for a profile.
+    
+    Each profile can have its own Airbyte workspace and destination,
+    allowing complete isolation of synced data.
+    """
+    
+    # Airbyte workspace (one per profile for isolation)
+    workspace_id: Optional[str] = Field(default=None, description="Airbyte workspace ID for this profile")
+    workspace_name: Optional[str] = Field(default=None, description="Airbyte workspace name")
+    
+    # Airbyte destination (points to profile's MongoDB database)
+    destination_id: Optional[str] = Field(default=None, description="Airbyte MongoDB destination ID")
+    
+    # Default sync settings
+    default_sync_mode: str = Field(default="incremental", description="Default sync mode (full_refresh/incremental)")
+    default_schedule_type: str = Field(default="manual", description="Default schedule type (manual/scheduled)")
+    default_schedule_cron: Optional[str] = Field(default=None, description="Default cron expression for scheduled syncs")
+
+
 class ProfileConfig(BaseModel):
-    """Configuration for a single profile."""
+    """Configuration for a single profile.
+    
+    A profile represents a complete project workspace with:
+    - Document storage (local folders)
+    - MongoDB database for RAG data
+    - Cloud source integrations (via Airbyte)
+    - Search indexes
+    """
     
     name: str = Field(..., description="Display name for the profile")
     description: str = Field(default="", description="Profile description")
+    
+    # Owner/access control (for multi-user scenarios)
+    owner_user_id: Optional[str] = Field(default=None, description="User ID of the profile owner")
     
     # Document sources
     documents_folders: List[str] = Field(
@@ -45,6 +121,44 @@ class ProfileConfig(BaseModel):
     # Optional overrides
     embedding_model: Optional[str] = Field(default=None, description="Override embedding model")
     llm_model: Optional[str] = Field(default=None, description="Override LLM model")
+    
+    # Airbyte integration
+    airbyte: Optional[AirbyteConfig] = Field(
+        default=None, 
+        description="Airbyte configuration for this profile"
+    )
+    
+    # Cloud source connections
+    cloud_sources: List[CloudSourceAssociation] = Field(
+        default_factory=list,
+        description="Cloud source connections associated with this profile"
+    )
+    
+    def get_cloud_source(self, connection_id: str) -> Optional[CloudSourceAssociation]:
+        """Get a cloud source by connection ID."""
+        for source in self.cloud_sources:
+            if source.connection_id == connection_id:
+                return source
+        return None
+    
+    def get_cloud_sources_by_type(self, provider_type: CloudSourceType) -> List[CloudSourceAssociation]:
+        """Get all cloud sources of a specific type."""
+        return [s for s in self.cloud_sources if s.provider_type == provider_type]
+    
+    def add_cloud_source(self, source: CloudSourceAssociation) -> bool:
+        """Add a cloud source association."""
+        if self.get_cloud_source(source.connection_id):
+            return False  # Already exists
+        self.cloud_sources.append(source)
+        return True
+    
+    def remove_cloud_source(self, connection_id: str) -> bool:
+        """Remove a cloud source association."""
+        for i, source in enumerate(self.cloud_sources):
+            if source.connection_id == connection_id:
+                self.cloud_sources.pop(i)
+                return True
+        return False
 
 
 class ProfilesConfig(BaseModel):
@@ -336,6 +450,260 @@ class ProfileManager:
         """Get the primary (first) document folder for the active profile."""
         folders = self.get_all_document_folders()
         return folders[0] if folders else "documents"
+    
+    # ==================== Cloud Source Management ====================
+    
+    def add_cloud_source(
+        self,
+        profile_key: str,
+        connection_id: str,
+        provider_type: CloudSourceType,
+        display_name: str = "",
+        airbyte_source_id: Optional[str] = None,
+        airbyte_connection_id: Optional[str] = None,
+        collection_prefix: Optional[str] = None,
+        **kwargs
+    ) -> Optional[CloudSourceAssociation]:
+        """
+        Add a cloud source connection to a profile.
+        
+        Args:
+            profile_key: Profile to add the cloud source to
+            connection_id: Unique connection identifier
+            provider_type: Type of cloud provider
+            display_name: User-friendly name
+            airbyte_source_id: Airbyte source ID (for Airbyte-backed providers)
+            airbyte_connection_id: Airbyte connection ID
+            collection_prefix: Prefix for MongoDB collections
+            **kwargs: Additional CloudSourceAssociation fields
+            
+        Returns:
+            The created CloudSourceAssociation, or None if failed
+        """
+        if not self._config:
+            return None
+        
+        profile = self._config.profiles.get(profile_key)
+        if not profile:
+            logger.error(f"Profile '{profile_key}' not found")
+            return None
+        
+        # Default collection prefix based on provider type
+        if collection_prefix is None:
+            collection_prefix = f"{provider_type.value}_"
+        
+        source = CloudSourceAssociation(
+            connection_id=connection_id,
+            provider_type=provider_type,
+            display_name=display_name or f"{provider_type.value} connection",
+            airbyte_source_id=airbyte_source_id,
+            airbyte_connection_id=airbyte_connection_id,
+            collection_prefix=collection_prefix,
+            enabled=kwargs.get('enabled', True),
+            sync_schedule=kwargs.get('sync_schedule'),
+            include_paths=kwargs.get('include_paths', []),
+            exclude_paths=kwargs.get('exclude_paths', []),
+        )
+        
+        if not profile.add_cloud_source(source):
+            logger.error(f"Cloud source '{connection_id}' already exists in profile '{profile_key}'")
+            return None
+        
+        self._save_profiles()
+        logger.info(f"Added cloud source '{connection_id}' to profile '{profile_key}'")
+        return source
+    
+    def remove_cloud_source(self, profile_key: str, connection_id: str) -> bool:
+        """
+        Remove a cloud source connection from a profile.
+        
+        Args:
+            profile_key: Profile to remove from
+            connection_id: Connection ID to remove
+            
+        Returns:
+            True if removed successfully
+        """
+        if not self._config:
+            return False
+        
+        profile = self._config.profiles.get(profile_key)
+        if not profile:
+            logger.error(f"Profile '{profile_key}' not found")
+            return False
+        
+        if not profile.remove_cloud_source(connection_id):
+            logger.error(f"Cloud source '{connection_id}' not found in profile '{profile_key}'")
+            return False
+        
+        self._save_profiles()
+        logger.info(f"Removed cloud source '{connection_id}' from profile '{profile_key}'")
+        return True
+    
+    def get_cloud_source(
+        self, 
+        profile_key: str, 
+        connection_id: str
+    ) -> Optional[CloudSourceAssociation]:
+        """Get a specific cloud source from a profile."""
+        if not self._config:
+            return None
+        
+        profile = self._config.profiles.get(profile_key)
+        if not profile:
+            return None
+        
+        return profile.get_cloud_source(connection_id)
+    
+    def list_cloud_sources(
+        self, 
+        profile_key: Optional[str] = None,
+        provider_type: Optional[CloudSourceType] = None
+    ) -> List[CloudSourceAssociation]:
+        """
+        List cloud sources, optionally filtered by profile and/or type.
+        
+        Args:
+            profile_key: If provided, only list sources for this profile
+            provider_type: If provided, only list sources of this type
+            
+        Returns:
+            List of matching cloud source associations
+        """
+        if not self._config:
+            return []
+        
+        sources = []
+        
+        if profile_key:
+            profile = self._config.profiles.get(profile_key)
+            if profile:
+                if provider_type:
+                    sources = profile.get_cloud_sources_by_type(provider_type)
+                else:
+                    sources = list(profile.cloud_sources)
+        else:
+            # List from all profiles
+            for profile in self._config.profiles.values():
+                if provider_type:
+                    sources.extend(profile.get_cloud_sources_by_type(provider_type))
+                else:
+                    sources.extend(profile.cloud_sources)
+        
+        return sources
+    
+    def update_cloud_source(
+        self,
+        profile_key: str,
+        connection_id: str,
+        **updates
+    ) -> bool:
+        """
+        Update a cloud source connection.
+        
+        Args:
+            profile_key: Profile containing the cloud source
+            connection_id: Connection ID to update
+            **updates: Fields to update (display_name, enabled, sync_schedule, etc.)
+            
+        Returns:
+            True if updated successfully
+        """
+        if not self._config:
+            return False
+        
+        profile = self._config.profiles.get(profile_key)
+        if not profile:
+            logger.error(f"Profile '{profile_key}' not found")
+            return False
+        
+        source = profile.get_cloud_source(connection_id)
+        if not source:
+            logger.error(f"Cloud source '{connection_id}' not found in profile '{profile_key}'")
+            return False
+        
+        # Update allowed fields
+        allowed_fields = [
+            'display_name', 'enabled', 'sync_schedule', 
+            'airbyte_source_id', 'airbyte_connection_id',
+            'last_sync_at', 'last_sync_status',
+            'include_paths', 'exclude_paths', 'collection_prefix'
+        ]
+        
+        for field, value in updates.items():
+            if field in allowed_fields and value is not None:
+                setattr(source, field, value)
+        
+        self._save_profiles()
+        logger.info(f"Updated cloud source '{connection_id}' in profile '{profile_key}'")
+        return True
+    
+    # ==================== Airbyte Configuration ====================
+    
+    def set_airbyte_config(
+        self,
+        profile_key: str,
+        workspace_id: Optional[str] = None,
+        workspace_name: Optional[str] = None,
+        destination_id: Optional[str] = None,
+        default_sync_mode: Optional[str] = None,
+        default_schedule_type: Optional[str] = None,
+        default_schedule_cron: Optional[str] = None,
+    ) -> bool:
+        """
+        Set or update Airbyte configuration for a profile.
+        
+        Args:
+            profile_key: Profile to configure
+            workspace_id: Airbyte workspace ID
+            workspace_name: Airbyte workspace name
+            destination_id: Airbyte MongoDB destination ID
+            default_sync_mode: Default sync mode (full_refresh/incremental)
+            default_schedule_type: Default schedule type (manual/scheduled)
+            default_schedule_cron: Default cron expression
+            
+        Returns:
+            True if configured successfully
+        """
+        if not self._config:
+            return False
+        
+        profile = self._config.profiles.get(profile_key)
+        if not profile:
+            logger.error(f"Profile '{profile_key}' not found")
+            return False
+        
+        # Create or update Airbyte config
+        if profile.airbyte is None:
+            profile.airbyte = AirbyteConfig()
+        
+        if workspace_id is not None:
+            profile.airbyte.workspace_id = workspace_id
+        if workspace_name is not None:
+            profile.airbyte.workspace_name = workspace_name
+        if destination_id is not None:
+            profile.airbyte.destination_id = destination_id
+        if default_sync_mode is not None:
+            profile.airbyte.default_sync_mode = default_sync_mode
+        if default_schedule_type is not None:
+            profile.airbyte.default_schedule_type = default_schedule_type
+        if default_schedule_cron is not None:
+            profile.airbyte.default_schedule_cron = default_schedule_cron
+        
+        self._save_profiles()
+        logger.info(f"Updated Airbyte config for profile '{profile_key}'")
+        return True
+    
+    def get_airbyte_config(self, profile_key: str) -> Optional[AirbyteConfig]:
+        """Get Airbyte configuration for a profile."""
+        if not self._config:
+            return None
+        
+        profile = self._config.profiles.get(profile_key)
+        if not profile:
+            return None
+        
+        return profile.airbyte
 
 
 # Global profile manager instance

@@ -4,13 +4,15 @@ Airbyte Base Provider
 Abstract base class for Airbyte-backed cloud source providers.
 Provides common functionality for managing Airbyte sources, destinations,
 and sync operations.
+
+Supports profile-aware configuration for multi-tenant deployments.
 """
 
 import asyncio
 import logging
 from abc import abstractmethod
 from datetime import datetime
-from typing import AsyncIterator, Optional, Any
+from typing import AsyncIterator, Optional, Any, TYPE_CHECKING
 
 from backend.providers.base import (
     CloudSourceProvider,
@@ -36,6 +38,9 @@ from backend.providers.airbyte.client import (
     AirbyteValidationError,
 )
 
+if TYPE_CHECKING:
+    from src.profile import ProfileConfig, AirbyteConfig
+
 logger = logging.getLogger(__name__)
 
 
@@ -51,6 +56,11 @@ class AirbyteProvider(CloudSourceProvider):
     This class provides the infrastructure for managing Airbyte sources,
     destinations, and sync jobs. Subclasses implement source-specific
     configuration and data transformation.
+    
+    Supports profile-aware configuration:
+    - Uses profile's database for MongoDB destination
+    - Uses profile's Airbyte workspace/destination if configured
+    - Tracks cloud source associations per profile
     """
     
     def __init__(
@@ -59,17 +69,75 @@ class AirbyteProvider(CloudSourceProvider):
         airbyte_url: str = "http://localhost:11021",
         mongodb_uri: str = "mongodb://mongodb:27017",
         mongodb_database: str = "rag_db",
+        profile: Optional["ProfileConfig"] = None,
+        collection_prefix: Optional[str] = None,
     ):
+        """
+        Initialize the Airbyte provider.
+        
+        Args:
+            credentials: Connection credentials for the source
+            airbyte_url: Airbyte API URL
+            mongodb_uri: MongoDB connection URI
+            mongodb_database: Default MongoDB database (overridden by profile)
+            profile: Optional profile configuration for profile-aware sync
+            collection_prefix: Prefix for synced collections (default: provider_type_)
+        """
         super().__init__(credentials)
         self.airbyte_url = airbyte_url
         self.mongodb_uri = mongodb_uri
-        self.mongodb_database = mongodb_database
+        
+        # Profile-aware configuration
+        self._profile = profile
+        if profile:
+            # Use profile's database
+            self.mongodb_database = profile.database
+            self._collection_prefix = collection_prefix or f"{self.provider_type.value}_"
+            
+            # Use profile's Airbyte config if available
+            if profile.airbyte:
+                self._airbyte_workspace_id = profile.airbyte.workspace_id
+                self._airbyte_destination_id = profile.airbyte.destination_id
+            else:
+                self._airbyte_workspace_id = None
+                self._airbyte_destination_id = None
+        else:
+            self.mongodb_database = mongodb_database
+            self._collection_prefix = collection_prefix
+            self._airbyte_workspace_id = None
+            self._airbyte_destination_id = None
+        
         self._client: Optional[AirbyteClient] = None
         
         # Airbyte resource IDs (set after setup)
         self._source_id: Optional[str] = None
         self._destination_id: Optional[str] = None
         self._connection_id: Optional[str] = None
+    
+    @property
+    def profile(self) -> Optional["ProfileConfig"]:
+        """Get the profile associated with this provider."""
+        return self._profile
+    
+    @property
+    def collection_prefix(self) -> str:
+        """Get the collection prefix for synced data."""
+        return self._collection_prefix or f"{self.provider_type.value}_"
+    
+    def set_profile(self, profile: "ProfileConfig") -> None:
+        """
+        Set or update the profile for this provider.
+        
+        This updates the MongoDB database target and Airbyte configuration.
+        """
+        self._profile = profile
+        self.mongodb_database = profile.database
+        
+        if profile.airbyte:
+            self._airbyte_workspace_id = profile.airbyte.workspace_id
+            self._airbyte_destination_id = profile.airbyte.destination_id
+        
+        logger.info(f"Provider configured for profile: {profile.name} (db: {profile.database})")
     
     @property
     def client(self) -> AirbyteClient:
@@ -139,7 +207,7 @@ class AirbyteProvider(CloudSourceProvider):
         
         This creates or updates:
         - Source (from credentials)
-        - Destination (MongoDB)
+        - Destination (MongoDB) - uses profile's destination if configured
         - Connection (source -> destination)
         
         Returns:
@@ -160,6 +228,10 @@ class AirbyteProvider(CloudSourceProvider):
                 "Airbyte is not available. Please start Airbyte with: "
                 "docker-compose -f docker-compose.yml -f docker-compose.airbyte.yml up -d"
             )
+        
+        # Set workspace if configured from profile
+        if self._airbyte_workspace_id:
+            self.client.workspace_id = self._airbyte_workspace_id
         
         try:
             # Build source configuration
@@ -184,24 +256,42 @@ class AirbyteProvider(CloudSourceProvider):
             raise AirbyteProviderError(f"Invalid source configuration: {e}") from e
         
         try:
-            # Check if MongoDB destination exists, create if not
-            destinations = await self.client.list_destinations()
-            mongo_dest = next(
-                (d for d in destinations if "mongodb" in d.name.lower() and "rag" in d.name.lower()),
-                None
-            )
-            
-            if mongo_dest:
-                self._destination_id = mongo_dest.destination_id
-                logger.info(f"Using existing MongoDB destination: {mongo_dest.destination_id}")
+            # Use profile's destination ID if configured
+            if self._airbyte_destination_id:
+                self._destination_id = self._airbyte_destination_id
+                logger.info(f"Using profile's Airbyte destination: {self._destination_id}")
             else:
-                dest = await self.client.create_mongodb_destination(
-                    name="RAG MongoDB Destination",
-                    mongodb_uri=self.mongodb_uri,
-                    database=self.mongodb_database,
+                # Check if MongoDB destination exists, create if not
+                destinations = await self.client.list_destinations()
+                
+                # Build destination name based on profile
+                if self._profile:
+                    dest_name_pattern = f"rag-{self._profile.database}".lower()
+                else:
+                    dest_name_pattern = "rag"
+                
+                mongo_dest = next(
+                    (d for d in destinations if dest_name_pattern in d.name.lower() and "mongodb" in d.name.lower()),
+                    None
                 )
-                self._destination_id = dest.destination_id
-                logger.info(f"Created MongoDB destination: {dest.destination_id}")
+                
+                if mongo_dest:
+                    self._destination_id = mongo_dest.destination_id
+                    logger.info(f"Using existing MongoDB destination: {mongo_dest.destination_id}")
+                else:
+                    dest_name = f"RAG MongoDB - {self._profile.name}" if self._profile else "RAG MongoDB Destination"
+                    dest = await self.client.create_mongodb_destination(
+                        name=dest_name,
+                        mongodb_uri=self.mongodb_uri,
+                        database=self.mongodb_database,
+                    )
+                    self._destination_id = dest.destination_id
+                    logger.info(f"Created MongoDB destination: {dest.destination_id}")
+                    
+                    # If we have a profile, update it with the new destination ID
+                    if self._profile and self._profile.airbyte:
+                        self._airbyte_destination_id = dest.destination_id
+                        logger.info(f"Profile's Airbyte destination set to: {dest.destination_id}")
                 
         except AirbyteAPIError as e:
             # Clean up source if destination creation fails
@@ -267,7 +357,7 @@ class AirbyteProvider(CloudSourceProvider):
                 source_id=self._source_id,
                 destination_id=self._destination_id,
                 sync_catalog=sync_catalog,
-                prefix=f"{self.provider_type.value}_",
+                prefix=self.collection_prefix,
             )
             self._connection_id = connection.connection_id
             logger.info(f"Created Airbyte connection: {connection.connection_id}")

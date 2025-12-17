@@ -5,7 +5,10 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 
 from backend.models.schemas import (
     ProfileConfig, ProfileListResponse, ProfileSwitchRequest,
-    ProfileCreateRequest, ProfileUpdateRequest, SuccessResponse
+    ProfileCreateRequest, ProfileUpdateRequest, SuccessResponse,
+    CloudSourceAssociation, CloudSourceCreateRequest, CloudSourceUpdateRequest,
+    CloudSourceListResponse, AirbyteConfigUpdateRequest, AirbyteConfig,
+    CloudSourceType
 )
 from backend.core.config import settings
 from backend.routers.auth import require_auth, require_admin, UserResponse, get_user_accessible_profiles
@@ -352,4 +355,377 @@ async def get_profile(
         raise
     except Exception as e:
         logger.error(f"Failed to get profile: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Cloud Source Management ====================
+
+
+@router.get("/{profile_key}/cloud-sources", response_model=CloudSourceListResponse)
+async def list_cloud_sources(
+    request: Request,
+    profile_key: str,
+    provider_type: CloudSourceType = None,
+    user: UserResponse = Depends(require_auth)
+):
+    """
+    List cloud source connections for a profile.
+    
+    Optionally filter by provider type.
+    """
+    try:
+        pm = get_profile_manager()
+        
+        if profile_key not in pm.list_profiles():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Profile '{profile_key}' not found"
+            )
+        
+        # Check user has access to the profile
+        accessible_keys = await get_user_accessible_profiles(request, user.id)
+        if profile_key not in accessible_keys:
+            raise HTTPException(
+                status_code=403,
+                detail="You don't have access to this profile"
+            )
+        
+        # Import the CloudSourceType enum from src.profile for filtering
+        from src.profile import CloudSourceType as SrcCloudSourceType
+        
+        src_provider_type = None
+        if provider_type:
+            src_provider_type = SrcCloudSourceType(provider_type.value)
+        
+        sources = pm.list_cloud_sources(
+            profile_key=profile_key,
+            provider_type=src_provider_type
+        )
+        
+        # Convert to response schema
+        cloud_sources = [
+            CloudSourceAssociation(
+                connection_id=s.connection_id,
+                provider_type=CloudSourceType(s.provider_type.value),
+                display_name=s.display_name,
+                airbyte_source_id=s.airbyte_source_id,
+                airbyte_connection_id=s.airbyte_connection_id,
+                enabled=s.enabled,
+                sync_schedule=s.sync_schedule,
+                last_sync_at=s.last_sync_at,
+                last_sync_status=s.last_sync_status,
+                include_paths=s.include_paths,
+                exclude_paths=s.exclude_paths,
+                collection_prefix=s.collection_prefix,
+            )
+            for s in sources
+        ]
+        
+        return CloudSourceListResponse(
+            cloud_sources=cloud_sources,
+            profile_key=profile_key,
+            total=len(cloud_sources)
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to list cloud sources: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{profile_key}/cloud-sources", response_model=CloudSourceAssociation)
+async def add_cloud_source(
+    request: Request,
+    profile_key: str,
+    cloud_source: CloudSourceCreateRequest,
+    user: UserResponse = Depends(require_auth)
+):
+    """
+    Add a cloud source connection to a profile.
+    
+    Associates a cloud provider (Gmail, Confluence, etc.) with this profile.
+    Data from this source will sync to the profile's database.
+    """
+    try:
+        pm = get_profile_manager()
+        
+        if profile_key not in pm.list_profiles():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Profile '{profile_key}' not found"
+            )
+        
+        # Check user has access to the profile
+        accessible_keys = await get_user_accessible_profiles(request, user.id)
+        if profile_key not in accessible_keys:
+            raise HTTPException(
+                status_code=403,
+                detail="You don't have access to this profile"
+            )
+        
+        # Import the CloudSourceType enum from src.profile
+        from src.profile import CloudSourceType as SrcCloudSourceType
+        
+        source = pm.add_cloud_source(
+            profile_key=profile_key,
+            connection_id=cloud_source.connection_id,
+            provider_type=SrcCloudSourceType(cloud_source.provider_type.value),
+            display_name=cloud_source.display_name or "",
+            airbyte_source_id=cloud_source.airbyte_source_id,
+            airbyte_connection_id=cloud_source.airbyte_connection_id,
+            collection_prefix=cloud_source.collection_prefix,
+            enabled=cloud_source.enabled,
+            sync_schedule=cloud_source.sync_schedule,
+            include_paths=cloud_source.include_paths,
+            exclude_paths=cloud_source.exclude_paths,
+        )
+        
+        if not source:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cloud source '{cloud_source.connection_id}' already exists in this profile"
+            )
+        
+        return CloudSourceAssociation(
+            connection_id=source.connection_id,
+            provider_type=CloudSourceType(source.provider_type.value),
+            display_name=source.display_name,
+            airbyte_source_id=source.airbyte_source_id,
+            airbyte_connection_id=source.airbyte_connection_id,
+            enabled=source.enabled,
+            sync_schedule=source.sync_schedule,
+            include_paths=source.include_paths,
+            exclude_paths=source.exclude_paths,
+            collection_prefix=source.collection_prefix,
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to add cloud source: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/{profile_key}/cloud-sources/{connection_id}", response_model=SuccessResponse)
+async def update_cloud_source(
+    request: Request,
+    profile_key: str,
+    connection_id: str,
+    cloud_source: CloudSourceUpdateRequest,
+    user: UserResponse = Depends(require_auth)
+):
+    """
+    Update a cloud source connection.
+    
+    Updates the configuration for an existing cloud source.
+    """
+    try:
+        pm = get_profile_manager()
+        
+        if profile_key not in pm.list_profiles():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Profile '{profile_key}' not found"
+            )
+        
+        # Check user has access to the profile
+        accessible_keys = await get_user_accessible_profiles(request, user.id)
+        if profile_key not in accessible_keys:
+            raise HTTPException(
+                status_code=403,
+                detail="You don't have access to this profile"
+            )
+        
+        # Build updates dict
+        updates = {}
+        if cloud_source.display_name is not None:
+            updates["display_name"] = cloud_source.display_name
+        if cloud_source.enabled is not None:
+            updates["enabled"] = cloud_source.enabled
+        if cloud_source.sync_schedule is not None:
+            updates["sync_schedule"] = cloud_source.sync_schedule
+        if cloud_source.airbyte_source_id is not None:
+            updates["airbyte_source_id"] = cloud_source.airbyte_source_id
+        if cloud_source.airbyte_connection_id is not None:
+            updates["airbyte_connection_id"] = cloud_source.airbyte_connection_id
+        if cloud_source.collection_prefix is not None:
+            updates["collection_prefix"] = cloud_source.collection_prefix
+        if cloud_source.include_paths is not None:
+            updates["include_paths"] = cloud_source.include_paths
+        if cloud_source.exclude_paths is not None:
+            updates["exclude_paths"] = cloud_source.exclude_paths
+        
+        success = pm.update_cloud_source(
+            profile_key=profile_key,
+            connection_id=connection_id,
+            **updates
+        )
+        
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Cloud source '{connection_id}' not found in this profile"
+            )
+        
+        return SuccessResponse(
+            success=True,
+            message=f"Updated cloud source: {connection_id}"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update cloud source: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/{profile_key}/cloud-sources/{connection_id}", response_model=SuccessResponse)
+async def remove_cloud_source(
+    request: Request,
+    profile_key: str,
+    connection_id: str,
+    user: UserResponse = Depends(require_auth)
+):
+    """
+    Remove a cloud source connection from a profile.
+    
+    This does NOT delete the synced data, only the association.
+    """
+    try:
+        pm = get_profile_manager()
+        
+        if profile_key not in pm.list_profiles():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Profile '{profile_key}' not found"
+            )
+        
+        # Check user has access to the profile
+        accessible_keys = await get_user_accessible_profiles(request, user.id)
+        if profile_key not in accessible_keys:
+            raise HTTPException(
+                status_code=403,
+                detail="You don't have access to this profile"
+            )
+        
+        success = pm.remove_cloud_source(
+            profile_key=profile_key,
+            connection_id=connection_id
+        )
+        
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Cloud source '{connection_id}' not found in this profile"
+            )
+        
+        return SuccessResponse(
+            success=True,
+            message=f"Removed cloud source: {connection_id}"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to remove cloud source: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Airbyte Configuration ====================
+
+
+@router.get("/{profile_key}/airbyte", response_model=AirbyteConfig)
+async def get_airbyte_config(
+    request: Request,
+    profile_key: str,
+    user: UserResponse = Depends(require_auth)
+):
+    """
+    Get Airbyte configuration for a profile.
+    """
+    try:
+        pm = get_profile_manager()
+        
+        if profile_key not in pm.list_profiles():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Profile '{profile_key}' not found"
+            )
+        
+        # Check user has access to the profile
+        accessible_keys = await get_user_accessible_profiles(request, user.id)
+        if profile_key not in accessible_keys:
+            raise HTTPException(
+                status_code=403,
+                detail="You don't have access to this profile"
+            )
+        
+        airbyte_config = pm.get_airbyte_config(profile_key)
+        
+        if not airbyte_config:
+            return AirbyteConfig()
+        
+        return AirbyteConfig(
+            workspace_id=airbyte_config.workspace_id,
+            workspace_name=airbyte_config.workspace_name,
+            destination_id=airbyte_config.destination_id,
+            default_sync_mode=airbyte_config.default_sync_mode,
+            default_schedule_type=airbyte_config.default_schedule_type,
+            default_schedule_cron=airbyte_config.default_schedule_cron,
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get Airbyte config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/{profile_key}/airbyte", response_model=SuccessResponse)
+async def update_airbyte_config(
+    request: Request,
+    profile_key: str,
+    airbyte_config: AirbyteConfigUpdateRequest,
+    admin: UserResponse = Depends(require_admin)
+):
+    """
+    Update Airbyte configuration for a profile.
+    
+    Admin only. Sets the Airbyte workspace and destination for this profile.
+    """
+    try:
+        pm = get_profile_manager()
+        
+        if profile_key not in pm.list_profiles():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Profile '{profile_key}' not found"
+            )
+        
+        success = pm.set_airbyte_config(
+            profile_key=profile_key,
+            workspace_id=airbyte_config.workspace_id,
+            workspace_name=airbyte_config.workspace_name,
+            destination_id=airbyte_config.destination_id,
+            default_sync_mode=airbyte_config.default_sync_mode,
+            default_schedule_type=airbyte_config.default_schedule_type,
+            default_schedule_cron=airbyte_config.default_schedule_cron,
+        )
+        
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to update Airbyte configuration"
+            )
+        
+        return SuccessResponse(
+            success=True,
+            message=f"Updated Airbyte configuration for profile: {profile_key}"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update Airbyte config: {e}")
         raise HTTPException(status_code=500, detail=str(e))
