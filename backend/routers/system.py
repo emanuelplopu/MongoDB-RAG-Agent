@@ -832,3 +832,379 @@ async def load_config_from_db(db) -> bool:
     except Exception as e:
         logger.warning(f"Failed to load config from database: {e}")
         return False
+
+
+# ==================== Database Management ====================
+
+class DatabaseCheckResponse(BaseModel):
+    """Response for database existence check."""
+    database: str
+    exists: bool
+    has_collections: bool
+    collections: List[str]
+    documents_count: int
+    chunks_count: int
+    can_create: bool
+
+
+class DatabaseCreateRequest(BaseModel):
+    """Request to create a database with required collections."""
+    database: str
+    create_indexes: bool = True
+
+
+@router.get("/database/check/{database_name}")
+async def check_database_exists(request: Request, database_name: str):
+    """
+    Check if a MongoDB database exists and has required collections.
+    
+    Returns information about the database status.
+    """
+    db = request.app.state.db
+    
+    try:
+        import asyncio
+        from backend.core.database import get_db_executor
+        
+        loop = asyncio.get_running_loop()
+        
+        def check_db_sync():
+            sync_client = db.get_sync_client()
+            
+            # List all databases
+            db_list = sync_client.list_database_names()
+            exists = database_name in db_list
+            
+            if exists:
+                mongo_db = sync_client[database_name]
+                collections = mongo_db.list_collection_names()
+                
+                # Check for required RAG collections
+                has_documents = settings.mongodb_collection_documents in collections
+                has_chunks = settings.mongodb_collection_chunks in collections
+                
+                # Get counts
+                doc_count = 0
+                chunk_count = 0
+                if has_documents:
+                    doc_count = mongo_db[settings.mongodb_collection_documents].estimated_document_count()
+                if has_chunks:
+                    chunk_count = mongo_db[settings.mongodb_collection_chunks].estimated_document_count()
+                
+                return {
+                    "database": database_name,
+                    "exists": True,
+                    "has_collections": has_documents or has_chunks,
+                    "collections": collections,
+                    "documents_count": doc_count,
+                    "chunks_count": chunk_count,
+                    "has_documents_collection": has_documents,
+                    "has_chunks_collection": has_chunks,
+                    "can_create": False
+                }
+            else:
+                return {
+                    "database": database_name,
+                    "exists": False,
+                    "has_collections": False,
+                    "collections": [],
+                    "documents_count": 0,
+                    "chunks_count": 0,
+                    "has_documents_collection": False,
+                    "has_chunks_collection": False,
+                    "can_create": True
+                }
+        
+        return await loop.run_in_executor(get_db_executor(), check_db_sync)
+        
+    except Exception as e:
+        logger.error(f"Failed to check database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/database/create")
+async def create_database(request: Request, create_request: DatabaseCreateRequest):
+    """
+    Create a MongoDB database with required RAG collections.
+    
+    Creates the documents and chunks collections for the specified database.
+    Optionally creates search indexes.
+    """
+    db = request.app.state.db
+    database_name = create_request.database
+    
+    try:
+        import asyncio
+        from backend.core.database import get_db_executor
+        
+        loop = asyncio.get_running_loop()
+        
+        def create_db_sync():
+            sync_client = db.get_sync_client()
+            mongo_db = sync_client[database_name]
+            
+            results = {
+                "database": database_name,
+                "created": True,
+                "collections_created": [],
+                "indexes_created": [],
+                "errors": []
+            }
+            
+            # Create documents collection
+            try:
+                if settings.mongodb_collection_documents not in mongo_db.list_collection_names():
+                    mongo_db.create_collection(settings.mongodb_collection_documents)
+                    results["collections_created"].append(settings.mongodb_collection_documents)
+                    logger.info(f"Created collection: {database_name}.{settings.mongodb_collection_documents}")
+            except Exception as e:
+                results["errors"].append(f"Failed to create documents collection: {e}")
+            
+            # Create chunks collection
+            try:
+                if settings.mongodb_collection_chunks not in mongo_db.list_collection_names():
+                    mongo_db.create_collection(settings.mongodb_collection_chunks)
+                    results["collections_created"].append(settings.mongodb_collection_chunks)
+                    logger.info(f"Created collection: {database_name}.{settings.mongodb_collection_chunks}")
+            except Exception as e:
+                results["errors"].append(f"Failed to create chunks collection: {e}")
+            
+            # Create standard indexes on collections
+            try:
+                docs_coll = mongo_db[settings.mongodb_collection_documents]
+                docs_coll.create_index("source", background=True)
+                docs_coll.create_index("created_at", background=True)
+                results["indexes_created"].append(f"{settings.mongodb_collection_documents}.source")
+                results["indexes_created"].append(f"{settings.mongodb_collection_documents}.created_at")
+            except Exception as e:
+                results["errors"].append(f"Failed to create document indexes: {e}")
+            
+            try:
+                chunks_coll = mongo_db[settings.mongodb_collection_chunks]
+                chunks_coll.create_index("document_id", background=True)
+                chunks_coll.create_index("created_at", background=True)
+                results["indexes_created"].append(f"{settings.mongodb_collection_chunks}.document_id")
+                results["indexes_created"].append(f"{settings.mongodb_collection_chunks}.created_at")
+            except Exception as e:
+                results["errors"].append(f"Failed to create chunk indexes: {e}")
+            
+            return results
+        
+        result = await loop.run_in_executor(get_db_executor(), create_db_sync)
+        return result
+        
+    except Exception as e:
+        logger.error(f"Failed to create database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/database/test-connection")
+async def test_database_connection(request: Request):
+    """
+    Test the MongoDB connection and return status.
+    """
+    db = request.app.state.db
+    
+    try:
+        # Ping the database
+        result = await db.client.admin.command('ping')
+        
+        # Get server info
+        server_info = await db.client.server_info()
+        
+        return {
+            "connected": True,
+            "ping": result,
+            "server_version": server_info.get("version"),
+            "current_database": db.current_database_name,
+            "uri_host": settings.mongodb_uri.split("@")[-1].split("/")[0] if "@" in settings.mongodb_uri else "localhost"
+        }
+    except Exception as e:
+        logger.error(f"Database connection test failed: {e}")
+        return {
+            "connected": False,
+            "error": str(e)
+        }
+
+
+# ==================== Airbyte Status ====================
+
+@router.get("/airbyte/status")
+async def get_airbyte_status():
+    """
+    Check Airbyte service status and availability.
+    """
+    if not settings.airbyte_enabled:
+        return {
+            "enabled": False,
+            "available": False,
+            "message": "Airbyte integration is disabled"
+        }
+    
+    try:
+        import httpx
+        
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            # Check Airbyte health endpoint
+            response = await client.get(f"{settings.airbyte_api_url}/api/v1/health")
+            
+            if response.status_code == 200:
+                return {
+                    "enabled": True,
+                    "available": True,
+                    "api_url": settings.airbyte_api_url,
+                    "webapp_url": settings.airbyte_webapp_url,
+                    "status": response.json() if response.headers.get("content-type", "").startswith("application/json") else "healthy"
+                }
+            else:
+                return {
+                    "enabled": True,
+                    "available": False,
+                    "api_url": settings.airbyte_api_url,
+                    "status_code": response.status_code,
+                    "message": "Airbyte API returned non-200 status"
+                }
+                
+    except httpx.ConnectError:
+        return {
+            "enabled": True,
+            "available": False,
+            "api_url": settings.airbyte_api_url,
+            "message": "Cannot connect to Airbyte. Make sure Airbyte containers are running."
+        }
+    except Exception as e:
+        logger.error(f"Failed to check Airbyte status: {e}")
+        return {
+            "enabled": True,
+            "available": False,
+            "api_url": settings.airbyte_api_url,
+            "error": str(e)
+        }
+
+
+@router.get("/email-providers")
+async def list_email_providers():
+    """
+    List available email providers and their configuration requirements.
+    """
+    return {
+        "providers": [
+            {
+                "type": "gmail",
+                "display_name": "Gmail",
+                "icon": "📧",
+                "auth_type": "oauth2",
+                "description": "Connect to Gmail via Google OAuth",
+                "requires_airbyte": True,
+                "config_fields": []
+            },
+            {
+                "type": "outlook",
+                "display_name": "Outlook / Microsoft 365",
+                "icon": "📨",
+                "auth_type": "oauth2",
+                "description": "Connect to Outlook via Microsoft OAuth",
+                "requires_airbyte": True,
+                "config_fields": []
+            },
+            {
+                "type": "imap",
+                "display_name": "IMAP (Generic)",
+                "icon": "✉️",
+                "auth_type": "password",
+                "description": "Connect to any email server via IMAP",
+                "requires_airbyte": True,
+                "config_fields": [
+                    {"name": "host", "label": "IMAP Server", "type": "text", "required": True, "placeholder": "imap.example.com"},
+                    {"name": "port", "label": "Port", "type": "number", "required": True, "default": 993},
+                    {"name": "username", "label": "Email Address", "type": "email", "required": True},
+                    {"name": "password", "label": "Password / App Password", "type": "password", "required": True},
+                    {"name": "ssl", "label": "Use SSL", "type": "checkbox", "default": True},
+                    {"name": "folders", "label": "Folders to sync", "type": "text", "placeholder": "INBOX, Sent", "required": False}
+                ]
+            }
+        ]
+    }
+
+
+@router.get("/cloud-storage-providers")
+async def list_cloud_storage_providers():
+    """
+    List available cloud storage providers and their configuration requirements.
+    """
+    return {
+        "providers": [
+            {
+                "type": "google_drive",
+                "display_name": "Google Drive",
+                "icon": "🔵",
+                "auth_type": "oauth2",
+                "description": "Connect to Google Drive for document syncing",
+                "requires_airbyte": False,
+                "supports_multiple": True,
+                "config_fields": []
+            },
+            {
+                "type": "dropbox",
+                "display_name": "Dropbox",
+                "icon": "📦",
+                "auth_type": "oauth2",
+                "description": "Connect to Dropbox for document syncing",
+                "requires_airbyte": False,
+                "supports_multiple": True,
+                "config_fields": []
+            },
+            {
+                "type": "onedrive",
+                "display_name": "OneDrive / SharePoint",
+                "icon": "☁️",
+                "auth_type": "oauth2",
+                "description": "Connect to Microsoft OneDrive or SharePoint",
+                "requires_airbyte": False,
+                "supports_multiple": True,
+                "config_fields": []
+            },
+            {
+                "type": "webdav",
+                "display_name": "WebDAV (Nextcloud, ownCloud)",
+                "icon": "🌐",
+                "auth_type": "password",
+                "description": "Connect to any WebDAV server",
+                "requires_airbyte": False,
+                "supports_multiple": True,
+                "config_fields": [
+                    {"name": "url", "label": "WebDAV URL", "type": "url", "required": True, "placeholder": "https://cloud.example.com/remote.php/dav/files/user"},
+                    {"name": "username", "label": "Username", "type": "text", "required": True},
+                    {"name": "password", "label": "Password", "type": "password", "required": True}
+                ]
+            },
+            {
+                "type": "confluence",
+                "display_name": "Confluence",
+                "icon": "📝",
+                "auth_type": "api_key",
+                "description": "Connect to Atlassian Confluence wiki",
+                "requires_airbyte": True,
+                "supports_multiple": True,
+                "config_fields": [
+                    {"name": "domain", "label": "Confluence Domain", "type": "text", "required": True, "placeholder": "your-domain.atlassian.net"},
+                    {"name": "email", "label": "Email", "type": "email", "required": True},
+                    {"name": "api_token", "label": "API Token", "type": "password", "required": True}
+                ]
+            },
+            {
+                "type": "jira",
+                "display_name": "Jira",
+                "icon": "🔷",
+                "auth_type": "api_key",
+                "description": "Connect to Atlassian Jira for issue tracking",
+                "requires_airbyte": True,
+                "supports_multiple": True,
+                "config_fields": [
+                    {"name": "domain", "label": "Jira Domain", "type": "text", "required": True, "placeholder": "your-domain.atlassian.net"},
+                    {"name": "email", "label": "Email", "type": "email", "required": True},
+                    {"name": "api_token", "label": "API Token", "type": "password", "required": True}
+                ]
+            }
+        ]
+    }

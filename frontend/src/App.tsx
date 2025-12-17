@@ -17,6 +17,7 @@ import UserManagementPage from './pages/UserManagementPage'
 import CloudSourcesPage from './pages/CloudSourcesPage'
 import CloudSourceConnectionsPage from './pages/CloudSourceConnectionsPage'
 import CloudSourceConnectPage from './pages/CloudSourceConnectPage'
+import EmailCloudConfigPage from './pages/EmailCloudConfigPage'
 import LoginPage from './pages/LoginPage'
 import NotFoundPage from './pages/NotFoundPage'
 
@@ -43,6 +44,7 @@ function App() {
             <Route path="cloud-sources/connections" element={<CloudSourceConnectionsPage />} />
             <Route path="cloud-sources/connections/:connectionId" element={<CloudSourceConnectionsPage />} />
             <Route path="cloud-sources/connect/:providerType" element={<CloudSourceConnectPage />} />
+            <Route path="email-cloud-config" element={<EmailCloudConfigPage />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />
         </Routes>

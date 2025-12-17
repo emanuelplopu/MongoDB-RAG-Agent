@@ -27,6 +27,7 @@ import {
   UsersIcon,
   HomeIcon,
   CloudIcon,
+  EnvelopeIcon,
 } from '@heroicons/react/24/outline'
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid'
 import ThemeToggle from './ThemeToggle'
@@ -40,6 +41,7 @@ const baseMenuItems = [
   { name: 'Search', href: '/search', icon: MagnifyingGlassIcon, adminOnly: false },
   { name: 'Documents', href: '/documents', icon: DocumentTextIcon, adminOnly: false },
   { name: 'Cloud Sources', href: '/cloud-sources', icon: CloudIcon, adminOnly: false },
+  { name: 'Email & Cloud Config', href: '/email-cloud-config', icon: EnvelopeIcon, adminOnly: false },
   { name: 'Profiles', href: '/profiles', icon: UserCircleIcon, adminOnly: true },
 ]
 
