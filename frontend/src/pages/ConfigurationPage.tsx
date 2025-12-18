@@ -21,7 +21,7 @@ import {
 import {
   localLlmApi, systemApi, profilesApi,
   DiscoveryResult, LocalProvider, ModelRecommendation, OfflineModeConfig,
-  Profile, SystemStats, CustomEndpoint, NetworkScanResult
+  Profile, SystemStats, CustomEndpoint, NetworkScanResult, ConfigOptions
 } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -54,7 +54,12 @@ export default function ConfigurationPage() {
   const [isSaving, setIsSaving] = useState(false)
   const [isPulling, setIsPulling] = useState<string | null>(null)
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
-  const [activeTab, setActiveTab] = useState<'offline' | 'network' | 'models' | 'profiles'>('offline')
+  const [activeTab, setActiveTab] = useState<'offline' | 'network' | 'models' | 'profiles' | 'search'>('offline')
+    
+    // Search settings state
+    const [configOptions, setConfigOptions] = useState<ConfigOptions | null>(null)
+    const [defaultMatchCount, setDefaultMatchCount] = useState<number>(10)
+    const [isSavingSearch, setIsSavingSearch] = useState(false)
   
   // Network scanning state
   const [customEndpoints, setCustomEndpoints] = useState<CustomEndpoint[]>([])
@@ -68,16 +73,19 @@ export default function ConfigurationPage() {
   const fetchData = useCallback(async () => {
     setIsLoading(true)
     try {
-      const [statsRes, profilesRes, configRes, endpointsRes] = await Promise.all([
+      const [statsRes, profilesRes, configRes, endpointsRes, configOptionsRes] = await Promise.all([
         systemApi.stats(),
         profilesApi.list(),
         localLlmApi.getOfflineConfig(),
-        localLlmApi.getCustomEndpoints()
+        localLlmApi.getCustomEndpoints(),
+        systemApi.getConfigOptions()
       ])
       setSystemStats(statsRes)
       setProfiles(profilesRes.profiles)
       setOfflineConfig(configRes)
       setCustomEndpoints(endpointsRes.endpoints)
+      setConfigOptions(configOptionsRes)
+      setDefaultMatchCount(configOptionsRes.current.default_match_count)
     } catch (err) {
       console.error('Error fetching data:', err)
     } finally {
@@ -358,6 +366,7 @@ export default function ConfigurationPage() {
           { id: 'network', label: 'Network Scan', icon: GlobeAltIcon },
           { id: 'models', label: 'Local Models', icon: CpuChipIcon },
           { id: 'profiles', label: 'Profile Settings', icon: Cog6ToothIcon },
+                    { id: 'search', label: 'Search Settings', icon: MagnifyingGlassIcon },
         ].map(tab => (
           <button
             key={tab.id}
@@ -886,6 +895,111 @@ export default function ConfigurationPage() {
           <p className="text-sm text-secondary dark:text-gray-500 mt-4">
             Edit profiles in the Profiles page to configure per-profile models.
           </p>
+        </div>
+      )}
+
+      {/* Search Settings Tab */}
+      {activeTab === 'search' && (
+        <div className="space-y-6">
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+            <div className="flex items-center gap-3 mb-4">
+              <MagnifyingGlassIcon className="h-5 w-5 text-primary" />
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Agent Search Settings</h3>
+            </div>
+            <p className="text-sm text-secondary dark:text-gray-400 mb-6">
+              Configure how the chat agent retrieves information from your knowledge base.
+            </p>
+
+            <div className="grid gap-6 md:grid-cols-2">
+              {/* Default Match Count */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  Default Results Count
+                </label>
+                <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                  Number of document chunks the agent retrieves per search (higher = more context but slower)
+                </p>
+                <select
+                  value={defaultMatchCount}
+                  onChange={(e) => setDefaultMatchCount(Number(e.target.value))}
+                  className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none"
+                >
+                  {(configOptions?.options.match_count_options || [5, 10, 15, 20, 25, 50, 100]).map((n) => (
+                    <option key={n} value={n}>
+                      {n} results
+                    </option>
+                  ))}
+                </select>
+                {configOptions && defaultMatchCount !== configOptions.current.default_match_count && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                    Unsaved change (current: {configOptions.current.default_match_count})
+                  </p>
+                )}
+              </div>
+
+              {/* Current Config Display */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <h4 className="text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">Current Configuration</h4>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-secondary dark:text-gray-400">LLM Model:</span>
+                    <span className="text-primary-900 dark:text-gray-200 font-mono text-xs">
+                      {configOptions?.current.llm_model || 'Loading...'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-secondary dark:text-gray-400">Embedding Model:</span>
+                    <span className="text-primary-900 dark:text-gray-200 font-mono text-xs">
+                      {configOptions?.current.embedding_model || 'Loading...'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-secondary dark:text-gray-400">Embedding Dimensions:</span>
+                    <span className="text-primary-900 dark:text-gray-200 font-mono text-xs">
+                      {configOptions?.current.embedding_dimension || 'Loading...'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Save Button */}
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                onClick={async () => {
+                  setIsSavingSearch(true)
+                  setMessage(null)
+                  try {
+                    await systemApi.saveConfigToDb({ default_match_count: defaultMatchCount })
+                    setMessage({ type: 'success', text: 'Search settings saved successfully! Changes will persist across restarts.' })
+                    // Refresh config options
+                    const newConfig = await systemApi.getConfigOptions()
+                    setConfigOptions(newConfig)
+                  } catch (err) {
+                    setMessage({ type: 'error', text: 'Failed to save search settings' })
+                  } finally {
+                    setIsSavingSearch(false)
+                  }
+                }}
+                disabled={isSavingSearch || !!(configOptions && defaultMatchCount === configOptions.current.default_match_count)}
+                className="flex items-center gap-2 rounded-xl bg-primary px-6 py-2 font-medium text-white transition-all hover:bg-primary-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                {isSavingSearch && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
+                Save Search Settings
+              </button>
+            </div>
+          </div>
+
+          {/* Info Card */}
+          <div className="rounded-2xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-6">
+            <h4 className="text-sm font-medium text-blue-900 dark:text-blue-200 mb-2">How it works</h4>
+            <ul className="text-sm text-blue-800 dark:text-blue-300 space-y-1">
+              <li>• The agent uses this setting when searching your knowledge base for relevant context</li>
+              <li>• Higher values provide more comprehensive results but may slow down responses</li>
+              <li>• Lower values are faster but may miss relevant information</li>
+              <li>• Recommended: 10-20 for most use cases, 50+ for thorough research queries</li>
+            </ul>
+          </div>
         </div>
       )}
     </div>

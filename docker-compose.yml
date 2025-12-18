@@ -19,6 +19,7 @@ services:
   mongodb:
     image: mongodb/mongodb-atlas-local:8.0
     container_name: rag-mongodb
+    hostname: rag-mongodb-host
     ports:
       - "11017:27017"
     volumes:

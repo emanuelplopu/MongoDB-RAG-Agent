@@ -11,9 +11,12 @@ import {
   BoltIcon,
   DocumentTextIcon,
   ChevronDownIcon,
+  ChevronRightIcon,
   ExclamationCircleIcon,
   PaperClipIcon,
   XMarkIcon,
+  MagnifyingGlassIcon,
+  CpuChipIcon,
 } from '@heroicons/react/24/outline'
 import {
   sessionsApi,
@@ -519,6 +522,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
   const isUser = message.role === 'user'
   const [documentIds, setDocumentIds] = useState<Record<string, string>>({})
   const [loadingDocs, setLoadingDocs] = useState(false)
+  const [showThinking, setShowThinking] = useState(false)
 
   // Lookup document IDs for sources - load all at once
   useEffect(() => {
@@ -593,6 +597,70 @@ function MessageBubble({ message }: { message: SessionMessage }) {
             </div>
           )}
         </div>
+        
+        {/* Thinking Panel - Shows search operations */}
+        {message.thinking && message.thinking.operations.length > 0 && (
+          <div className="mt-2">
+            <button
+              onClick={() => setShowThinking(!showThinking)}
+              className="flex items-center gap-1 text-xs text-secondary dark:text-gray-400 hover:text-primary dark:hover:text-primary-300 transition-colors"
+            >
+              {showThinking ? (
+                <ChevronDownIcon className="h-3 w-3" />
+              ) : (
+                <ChevronRightIcon className="h-3 w-3" />
+              )}
+              <CpuChipIcon className="h-3 w-3" />
+              <span>Search Operations ({message.thinking.operations.length})</span>
+              <span className="text-[10px] opacity-60">
+                {message.thinking.total_duration_ms.toFixed(0)}ms
+              </span>
+            </button>
+            
+            {showThinking && (
+              <div className="mt-2 space-y-2 pl-4 border-l-2 border-primary-200 dark:border-primary-800">
+                {message.thinking.operations.map((op, idx) => (
+                  <div
+                    key={idx}
+                    className="p-2 rounded-lg bg-surface dark:bg-gray-800/50 text-xs"
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                        op.index_type === 'vector' 
+                          ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300' 
+                          : 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300'
+                      }`}>
+                        {op.index_type === 'vector' ? 'Vector Search' : 'Text Search'}
+                      </span>
+                      <span className="text-secondary dark:text-gray-500">
+                        {op.index_name}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3 text-secondary dark:text-gray-400">
+                      <span className="flex items-center gap-1">
+                        <MagnifyingGlassIcon className="h-3 w-3" />
+                        {op.results_count} results
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <ClockIcon className="h-3 w-3" />
+                        {op.duration_ms.toFixed(1)}ms
+                      </span>
+                      {op.top_score !== null && (
+                        <span className="flex items-center gap-1">
+                          <BoltIcon className="h-3 w-3" />
+                          {(op.top_score * 100).toFixed(1)}% top score
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                <div className="text-[10px] text-secondary dark:text-gray-500">
+                  Total: {message.thinking.total_results} results in {message.thinking.total_duration_ms.toFixed(0)}ms
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         
         {/* Sources */}
         {message.sources && message.sources.length > 0 && (

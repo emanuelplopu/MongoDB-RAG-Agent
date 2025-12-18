@@ -154,6 +154,25 @@ class MessageStats(BaseModel):
     latency_ms: float = 0.0
 
 
+class SearchOperationResponse(BaseModel):
+    """Details of a single search operation."""
+    index_type: str  # "vector" or "text"
+    index_name: str
+    query: str
+    results_count: int
+    duration_ms: float
+    top_score: Optional[float] = None
+
+
+class SearchThinkingResponse(BaseModel):
+    """Captures the agent's search thought process."""
+    search_type: str  # "hybrid", "semantic", "text"
+    query: str
+    total_results: int
+    operations: List[SearchOperationResponse] = []
+    total_duration_ms: float = 0.0
+
+
 class Message(BaseModel):
     """Chat message with stats."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -164,6 +183,7 @@ class Message(BaseModel):
     model: Optional[str] = None
     sources: Optional[List[Dict[str, Any]]] = None
     attachments: Optional[List[Dict[str, Any]]] = None  # Attached files for multimodal
+    thinking: Optional[SearchThinkingResponse] = None  # Search operations performed
 
 
 class SessionStats(BaseModel):
@@ -596,14 +616,15 @@ async def send_message(
     )
     
     # Perform search on knowledge base
+    search_thinking = None
     try:
         search_type = SearchType(msg_request.search_type)
-        search_results = await perform_search(
+        search_results, search_thinking = await perform_search(
             db, msg_request.content, search_type, msg_request.match_count
         )
         logger.info(
             f"Search completed: session={session_id}, results={len(search_results)}, "
-            f"search_type={msg_request.search_type}"
+            f"search_type={msg_request.search_type}, operations={len(search_thinking.operations) if search_thinking else 0}"
         )
     except ValueError as e:
         logger.error(
@@ -621,6 +642,7 @@ async def send_message(
         )
         # Continue without search results rather than failing completely
         search_results = []
+        search_thinking = None
         logger.warning(f"Continuing without search results for session {session_id}")
     
     # Build context
@@ -764,11 +786,33 @@ Just answer the question directly using the information from the context."""
     tokens_per_second = output_tokens / generation_time if generation_time > 0 else 0
     cost = calculate_cost(session_model, input_tokens, output_tokens)
     
+    # Convert search thinking to response model
+    thinking_response = None
+    if search_thinking:
+        thinking_response = SearchThinkingResponse(
+            search_type=search_thinking.search_type,
+            query=search_thinking.query,
+            total_results=search_thinking.total_results,
+            operations=[
+                SearchOperationResponse(
+                    index_type=op.index_type,
+                    index_name=op.index_name,
+                    query=op.query,
+                    results_count=op.results_count,
+                    duration_ms=op.duration_ms,
+                    top_score=op.top_score
+                )
+                for op in search_thinking.operations
+            ],
+            total_duration_ms=search_thinking.total_duration_ms
+        )
+    
     assistant_message = Message(
         role="assistant",
         content=response.choices[0].message.content,
         model=session_model,
         sources=sources if sources else None,
+        thinking=thinking_response,
         stats=MessageStats(
             input_tokens=input_tokens,
             output_tokens=output_tokens,

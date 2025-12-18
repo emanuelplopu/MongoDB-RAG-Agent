@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { CircleStackIcon } from '@heroicons/react/24/outline'
+import { CircleStackIcon, ExclamationCircleIcon } from '@heroicons/react/24/outline'
+import { ApiError } from '../api/client'
 
 export default function LoginPage() {
   const [isLogin, setIsLogin] = useState(true)
@@ -9,6 +10,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
   const [error, setError] = useState('')
+  const [errorId, setErrorId] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   
   const { login, register } = useAuth()
@@ -17,6 +19,7 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    setErrorId(null)
     setIsLoading(true)
 
     try {
@@ -32,7 +35,20 @@ export default function LoginPage() {
       }
       navigate('/')
     } catch (err: any) {
-      setError(err.message || 'Authentication failed')
+      // Handle ApiError with user-friendly messages
+      if (err instanceof ApiError) {
+        setError(err.getUserMessage())
+        setErrorId(err.errorId || null)
+      } else if (err?.status === 401) {
+        // Authentication failed - show specific message
+        setError('Invalid email or password. Please try again.')
+      } else if (err?.status >= 500) {
+        // Server error - show error ID if available
+        setError('Unable to connect to the server. Please try again later.')
+        setErrorId(err?.errorId || null)
+      } else {
+        setError(err.message || 'Authentication failed. Please try again.')
+      }
     } finally {
       setIsLoading(false)
     }
@@ -101,8 +117,18 @@ export default function LoginPage() {
             </div>
 
             {error && (
-              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4 text-red-600 dark:text-red-400 text-sm">
-                {error}
+              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4">
+                <div className="flex items-start gap-3">
+                  <ExclamationCircleIcon className="h-5 w-5 text-red-500 dark:text-red-400 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <p className="text-red-600 dark:text-red-400 text-sm">{error}</p>
+                    {errorId && (
+                      <p className="text-red-500/70 dark:text-red-400/70 text-xs mt-1">
+                        Error ID: {errorId}
+                      </p>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
 

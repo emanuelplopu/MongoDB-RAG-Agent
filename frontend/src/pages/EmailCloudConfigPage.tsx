@@ -220,7 +220,7 @@ export default function EmailCloudConfigPage() {
         fetchJSON<{ providers: EmailProvider[] }>(`${API_BASE}/system/email-providers`, { signal }),
         fetchJSON<{ providers: CloudStorageProvider[] }>(`${API_BASE}/system/cloud-storage-providers`, { signal }),
         fetchJSON<AirbyteStatus>(`${API_BASE}/system/airbyte/status`, { signal }),
-        fetchJSON<MongoDBTestResult>(`${API_BASE}/system/database/test-connection`, { signal }),
+        fetchJSON<MongoDBTestResult>(`${API_BASE}/system/database/test-connection`, { signal, method: 'POST' }),
       ])
       
       setEmailProviders(emailResp.providers)
@@ -228,13 +228,7 @@ export default function EmailCloudConfigPage() {
       setAirbyteStatus(airbyteResp)
       setMongoTestResult(mongoResp)
       
-      // Check current database status
-      if (mongoResp.current_database) {
-        setCurrentDatabase(mongoResp.current_database)
-        await checkDatabaseStatus(mongoResp.current_database)
-      }
-      
-      // Load configured sources for current profile
+      // Load configured sources for current profile (this also sets the database from profile)
       await loadConfiguredSources()
       
     } catch (err) {
@@ -250,9 +244,15 @@ export default function EmailCloudConfigPage() {
   const loadConfiguredSources = useCallback(async () => {
     try {
       // Get active profile
-      const profileResp = await fetchJSON<{ profile_key: string }>(`${API_BASE}/profiles/active`)
-      const profileKey = profileResp.profile_key
+      const profileResp = await fetchJSON<{ key: string; profile: { database: string } }>(`${API_BASE}/profiles/active`)
+      const profileKey = profileResp.key
       setActiveProfileKey(profileKey)
+      
+      // Update current database from profile
+      if (profileResp.profile?.database) {
+        setCurrentDatabase(profileResp.profile.database)
+        await checkDatabaseStatus(profileResp.profile.database)
+      }
       
       // Get cloud sources for profile
       const sourcesResp = await fetchJSON<{ cloud_sources: CloudSourceAssociation[] }>(
@@ -281,7 +281,7 @@ export default function EmailCloudConfigPage() {
     setTestingMongo(true)
     setError(null)
     try {
-      const result = await fetchJSON<MongoDBTestResult>(`${API_BASE}/system/database/test-connection`)
+      const result = await fetchJSON<MongoDBTestResult>(`${API_BASE}/system/database/test-connection`, { method: 'POST' })
       setMongoTestResult(result)
       if (result.connected) {
         showSuccess('MongoDB connection successful!')

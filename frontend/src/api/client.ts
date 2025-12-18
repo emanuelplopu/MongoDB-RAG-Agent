@@ -501,6 +501,23 @@ export interface MetadataRebuildStatus {
 
 // ============== Chat Sessions Types ==============
 
+export interface SearchOperation {
+  index_type: 'vector' | 'text'
+  index_name: string
+  query: string
+  results_count: number
+  duration_ms: number
+  top_score: number | null
+}
+
+export interface SearchThinking {
+  search_type: string
+  query: string
+  total_results: number
+  operations: SearchOperation[]
+  total_duration_ms: number
+}
+
 export interface MessageStats {
   input_tokens: number
   output_tokens: number
@@ -524,6 +541,7 @@ export interface SessionMessage {
     excerpt: string
   }>
   attachments?: Array<AttachmentInfo>
+  thinking?: SearchThinking
 }
 
 export interface AttachmentInfo {

@@ -1,14 +1,17 @@
 import { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from 'react'
 import { authApi, User, setAuthToken, clearAuthToken, getAuthToken } from '../api/client'
+import SessionExpiredModal from '../components/SessionExpiredModal'
 
 interface AuthContextType {
   user: User | null
   isLoading: boolean
   isAuthenticated: boolean
+  sessionExpired: boolean
   login: (email: string, password: string) => Promise<void>
   register: (email: string, name: string, password: string) => Promise<void>
   logout: () => Promise<void>
   refreshUser: () => Promise<void>
+  dismissSessionExpired: () => void
 }
 
 const AuthContext = createContext<AuthContextType | null>(null)
@@ -24,6 +27,9 @@ export function useAuth() {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [sessionExpired, setSessionExpired] = useState(false)
+  const [showSessionModal, setShowSessionModal] = useState(false)
+  const hadUserRef = useRef(false) // Track if user was previously logged in
   const lastValidationRef = useRef<number>(0)
   const VALIDATION_INTERVAL = 5 * 60 * 1000 // 5 minutes
 
@@ -87,22 +93,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Listen for 401 unauthorized events from API client
   useEffect(() => {
     const handleUnauthorized = () => {
+      // Only show modal if user was previously logged in
+      if (hadUserRef.current) {
+        setSessionExpired(true)
+        setShowSessionModal(true)
+      }
       setUser(null)
+      clearAuthToken()
     }
     window.addEventListener('auth:unauthorized', handleUnauthorized)
     return () => window.removeEventListener('auth:unauthorized', handleUnauthorized)
   }, [])
 
+  // Track when user becomes logged in
+  useEffect(() => {
+    if (user) {
+      hadUserRef.current = true
+    }
+  }, [user])
+
   const login = useCallback(async (email: string, password: string) => {
     const response = await authApi.login({ email, password })
     setAuthToken(response.access_token)
     setUser(response.user)
+    setSessionExpired(false)
+    setShowSessionModal(false)
   }, [])
 
   const register = useCallback(async (email: string, name: string, password: string) => {
     const response = await authApi.register({ email, name, password })
     setAuthToken(response.access_token)
     setUser(response.user)
+    setSessionExpired(false)
+    setShowSessionModal(false)
   }, [])
 
   const logout = useCallback(async () => {
@@ -113,6 +136,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     clearAuthToken()
     setUser(null)
+    setSessionExpired(false)
+    setShowSessionModal(false)
+    hadUserRef.current = false
   }, [])
 
   const refreshUser = useCallback(async () => {
@@ -120,24 +146,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const userData = await authApi.getMe()
       setUser(userData)
     } catch (error) {
+      // Check if this was a session expiration
+      if (hadUserRef.current) {
+        setSessionExpired(true)
+        setShowSessionModal(true)
+      }
       clearAuthToken()
       setUser(null)
     }
+  }, [])
+
+  const dismissSessionExpired = useCallback(() => {
+    setSessionExpired(false)
+    setShowSessionModal(false)
+    hadUserRef.current = false
+  }, [])
+
+  const handleContinueAsGuest = useCallback(() => {
+    setSessionExpired(false)
+    setShowSessionModal(false)
+    hadUserRef.current = false
   }, [])
 
   const value: AuthContextType = {
     user,
     isLoading,
     isAuthenticated: !!user,
+    sessionExpired,
     login,
     register,
     logout,
     refreshUser,
+    dismissSessionExpired,
   }
 
   return (
     <AuthContext.Provider value={value}>
       {children}
+      <SessionExpiredModal
+        isOpen={showSessionModal}
+        onClose={() => setShowSessionModal(false)}
+        onContinueAsGuest={handleContinueAsGuest}
+      />
     </AuthContext.Provider>
   )
 }

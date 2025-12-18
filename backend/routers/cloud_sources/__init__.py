@@ -1,4 +1,3 @@
-"""
 """Cloud Sources Router Package
 
 This package provides API endpoints for managing cloud source connections,

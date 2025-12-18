@@ -35,15 +35,47 @@ async def get_embedding(text: str) -> list:
     return response.data[0].embedding
 
 
-async def perform_search(db, query: str, search_type: SearchType, match_count: int) -> list:
-    """Perform search on the knowledge base."""
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, Optional
+
+
+@dataclass
+class SearchOperation:
+    """Details of a single search operation."""
+    index_type: str  # "vector" or "text"
+    index_name: str
+    query: str
+    results_count: int
+    duration_ms: float
+    top_score: Optional[float] = None
+
+
+@dataclass 
+class SearchThinking:
+    """Captures the agent's search thought process."""
+    search_type: str  # "hybrid", "semantic", "text"
+    query: str
+    total_results: int
+    operations: List[SearchOperation] = field(default_factory=list)
+    total_duration_ms: float = 0.0
+
+
+async def perform_search(db, query: str, search_type: SearchType, match_count: int) -> tuple:
+    """Perform search on the knowledge base and return results with thinking details.
+    
+    Returns:
+        tuple: (results_list, SearchThinking object with operation details)
+    """
     collection = db.chunks_collection
     
     results = []
+    operations = []
+    total_start = time.time()
     
     try:
         if search_type in [SearchType.SEMANTIC, SearchType.HYBRID]:
             # Vector search
+            vector_start = time.time()
             query_embedding = await get_embedding(query)
             
             vector_pipeline = [
@@ -78,8 +110,9 @@ async def perform_search(db, query: str, search_type: SearchType, match_count: i
             ]
             
             cursor = collection.aggregate(vector_pipeline)
+            vector_results = []
             async for doc in cursor:
-                results.append({
+                vector_results.append({
                     "chunk_id": str(doc["chunk_id"]),
                     "document_id": str(doc["document_id"]),
                     "content": doc["content"],
@@ -87,9 +120,21 @@ async def perform_search(db, query: str, search_type: SearchType, match_count: i
                     "document_title": doc["document_title"],
                     "document_source": doc["document_source"]
                 })
+            
+            vector_duration = (time.time() - vector_start) * 1000
+            operations.append(SearchOperation(
+                index_type="vector",
+                index_name=settings.mongodb_vector_index,
+                query=query,
+                results_count=len(vector_results),
+                duration_ms=round(vector_duration, 2),
+                top_score=vector_results[0]["similarity"] if vector_results else None
+            ))
+            results.extend(vector_results)
         
-        if search_type == SearchType.TEXT:
-            # Text search only
+        if search_type in [SearchType.TEXT, SearchType.HYBRID]:
+            # Text search
+            text_start = time.time()
             text_pipeline = [
                 {
                     "$search": {
@@ -124,8 +169,9 @@ async def perform_search(db, query: str, search_type: SearchType, match_count: i
             ]
             
             cursor = collection.aggregate(text_pipeline)
+            text_results = []
             async for doc in cursor:
-                results.append({
+                text_results.append({
                     "chunk_id": str(doc["chunk_id"]),
                     "document_id": str(doc["document_id"]),
                     "content": doc["content"],
@@ -133,6 +179,17 @@ async def perform_search(db, query: str, search_type: SearchType, match_count: i
                     "document_title": doc["document_title"],
                     "document_source": doc["document_source"]
                 })
+            
+            text_duration = (time.time() - text_start) * 1000
+            operations.append(SearchOperation(
+                index_type="text",
+                index_name=settings.mongodb_text_index,
+                query=query,
+                results_count=len(text_results),
+                duration_ms=round(text_duration, 2),
+                top_score=text_results[0]["similarity"] if text_results else None
+            ))
+            results.extend(text_results)
         
         # Deduplicate and limit results
         seen = set()
@@ -142,11 +199,30 @@ async def perform_search(db, query: str, search_type: SearchType, match_count: i
                 seen.add(r["chunk_id"])
                 unique_results.append(r)
         
-        return unique_results[:match_count]
+        final_results = unique_results[:match_count]
+        total_duration = (time.time() - total_start) * 1000
+        
+        thinking = SearchThinking(
+            search_type=search_type.value,
+            query=query,
+            total_results=len(final_results),
+            operations=operations,
+            total_duration_ms=round(total_duration, 2)
+        )
+        
+        return final_results, thinking
         
     except Exception as e:
         logger.error(f"Search failed: {e}")
-        return []
+        # Return empty results with error in thinking
+        thinking = SearchThinking(
+            search_type=search_type.value,
+            query=query,
+            total_results=0,
+            operations=[],
+            total_duration_ms=0.0
+        )
+        return [], thinking
 
 
 async def generate_response(message: str, context: str, conversation_history: list) -> tuple:
@@ -212,7 +288,7 @@ async def chat(request: Request, chat_request: ChatRequest):
     conversation_history = _conversations[conversation_id]
     
     # Perform search
-    search_results = await perform_search(
+    search_results, search_thinking = await perform_search(
         db,
         chat_request.message,
         chat_request.search_type,
