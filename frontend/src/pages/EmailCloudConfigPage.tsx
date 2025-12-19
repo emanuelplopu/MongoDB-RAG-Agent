@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useAuth } from '../contexts/AuthContext'
 import {
   EnvelopeIcon,
   CloudIcon,
@@ -121,6 +122,32 @@ async function fetchJSON<T>(url: string, options?: RequestInit & { signal?: Abor
   return response.json()
 }
 
+/**
+ * Sanitize a name for use in MongoDB database name.
+ * Only allows ASCII alphanumeric characters, converts to lowercase,
+ * replaces spaces with underscores, and removes all other characters.
+ */
+function sanitizeForDatabaseName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/\s+/g, '_')  // Replace spaces with underscores
+    .replace(/[^a-z0-9_]/g, '')  // Remove all non-ASCII alphanumeric except underscores
+    .replace(/_+/g, '_')  // Collapse multiple underscores
+    .replace(/^_|_$/g, '')  // Trim leading/trailing underscores
+}
+
+/**
+ * Generate a user-specific database name from user's full name.
+ * Format: user_rag_{firstname}_{lastname}
+ */
+function generateUserDatabaseName(fullName: string): string {
+  const sanitized = sanitizeForDatabaseName(fullName)
+  if (!sanitized) {
+    return 'user_rag_default'
+  }
+  return `user_rag_${sanitized}`
+}
+
 // Validate required fields in config form
 function validateConfigForm(fields: ConfigField[], form: Record<string, string>): string[] {
   const errors: string[] = []
@@ -146,6 +173,17 @@ function validateConfigForm(fields: ConfigField[], form: Record<string, string>)
 }
 
 export default function EmailCloudConfigPage() {
+  // Get current user from auth context
+  const { user } = useAuth()
+  
+  // Generate user-specific database name from user's name
+  const userDatabase = useMemo(() => {
+    if (!user?.name) {
+      return 'user_rag_default'
+    }
+    return generateUserDatabaseName(user.name)
+  }, [user?.name])
+  
   // State
   const [emailProviders, setEmailProviders] = useState<EmailProvider[]>([])
   const [cloudProviders, setCloudProviders] = useState<CloudStorageProvider[]>([])
@@ -172,8 +210,7 @@ export default function EmailCloudConfigPage() {
   const [configDisplayName, setConfigDisplayName] = useState('')
   const [editingSourceId, setEditingSourceId] = useState<string | null>(null)
   
-  // Current profile database
-  const [currentDatabase, setCurrentDatabase] = useState('rag_db')
+  // Active profile key (for cloud sources association)
   const [activeProfileKey, setActiveProfileKey] = useState<string>('')
   
   // AbortController ref for cleanup
@@ -243,16 +280,13 @@ export default function EmailCloudConfigPage() {
 
   const loadConfiguredSources = useCallback(async () => {
     try {
-      // Get active profile
+      // Get active profile (for cloud sources association only)
       const profileResp = await fetchJSON<{ key: string; profile: { database: string } }>(`${API_BASE}/profiles/active`)
       const profileKey = profileResp.key
       setActiveProfileKey(profileKey)
       
-      // Update current database from profile
-      if (profileResp.profile?.database) {
-        setCurrentDatabase(profileResp.profile.database)
-        await checkDatabaseStatus(profileResp.profile.database)
-      }
+      // Check the user-specific database status (not profile database)
+      await checkDatabaseStatus(userDatabase)
       
       // Get cloud sources for profile
       const sourcesResp = await fetchJSON<{ cloud_sources: CloudSourceAssociation[] }>(
@@ -263,7 +297,7 @@ export default function EmailCloudConfigPage() {
       // Ignore errors - profile might not have cloud sources
       setConfiguredSources([])
     }
-  }, [])
+  }, [userDatabase])
 
   const checkDatabaseStatus = async (dbName: string) => {
     setCheckingDatabase(true)
@@ -296,7 +330,7 @@ export default function EmailCloudConfigPage() {
   }, [showSuccess])
 
   const createDatabase = useCallback(async () => {
-    if (!currentDatabase) return
+    if (!userDatabase) return
     
     setCreatingDatabase(true)
     setError(null)
@@ -304,22 +338,22 @@ export default function EmailCloudConfigPage() {
       const result = await fetchJSON<{ database: string; created: boolean; errors: string[] }>(`${API_BASE}/system/database/create`, {
         method: 'POST',
         body: JSON.stringify({
-          database: currentDatabase,
+          database: userDatabase,
           create_indexes: true,
         }),
       })
       if (result.errors?.length > 0) {
         setError(`Database created with warnings: ${result.errors.join(', ')}`)
       } else {
-        showSuccess(`Database "${currentDatabase}" created successfully!`)
+        showSuccess(`Database "${userDatabase}" created successfully!`)
       }
-      await checkDatabaseStatus(currentDatabase)
+      await checkDatabaseStatus(userDatabase)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create database')
     } finally {
       setCreatingDatabase(false)
     }
-  }, [currentDatabase, showSuccess])
+  }, [userDatabase, showSuccess])
 
   const openConfigModal = useCallback((_type: 'email' | 'cloud', provider: EmailProvider | CloudStorageProvider, existingSource?: CloudSourceAssociation) => {
     setSelectedProvider(provider)
@@ -600,15 +634,21 @@ export default function EmailCloudConfigPage() {
         </div>
       </div>
 
-      {/* Database Status & Creation */}
+      {/* User-Specific Database Status & Creation */}
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-md p-6 border border-surface-variant dark:border-gray-700">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-primary-900 dark:text-white flex items-center gap-2">
-            <ServerStackIcon className="h-5 w-5" />
-            Database Status: {currentDatabase}
-          </h2>
+          <div>
+            <h2 className="text-lg font-semibold text-primary-900 dark:text-white flex items-center gap-2">
+              <ServerStackIcon className="h-5 w-5" />
+              Your Personal Database
+            </h2>
+            <p className="text-sm text-secondary dark:text-gray-400 mt-1">
+              <code className="bg-surface-variant dark:bg-gray-700 px-2 py-0.5 rounded text-xs font-mono">{userDatabase}</code>
+              {user?.name && <span className="ml-2">({user.name})</span>}
+            </p>
+          </div>
           <button
-            onClick={() => checkDatabaseStatus(currentDatabase)}
+            onClick={() => checkDatabaseStatus(userDatabase)}
             disabled={checkingDatabase}
             className="text-sm text-primary hover:underline flex items-center gap-1"
           >

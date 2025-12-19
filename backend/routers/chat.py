@@ -1,14 +1,16 @@
-"""Chat router - Conversational AI with RAG."""
+"""Chat router - Conversational AI with RAG and web browsing."""
 
 import logging
 import time
 import uuid
-from typing import Optional
+import json
+from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from backend.models.schemas import ChatRequest, ChatResponse, SearchType
 from backend.core.config import settings
+from backend.tools.browser_tool import browse_url, BrowserToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,18 @@ class SearchOperation:
     results_count: int
     duration_ms: float
     top_score: Optional[float] = None
+    top_results: Optional[List[dict]] = None  # Top result excerpts [{title, excerpt}]
+
+
+@dataclass
+class ToolOperation:
+    """Details of a tool operation (browser, etc)."""
+    tool_name: str
+    tool_input: Dict[str, Any]
+    success: bool
+    result_summary: str = ""
+    duration_ms: float = 0.0
+    error: Optional[str] = None
 
 
 @dataclass 
@@ -58,6 +72,67 @@ class SearchThinking:
     total_results: int
     operations: List[SearchOperation] = field(default_factory=list)
     total_duration_ms: float = 0.0
+
+
+# Tool schemas for LLM function calling
+TOOLS_SCHEMA = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_knowledge_base",
+            "description": "Search the internal knowledge base for information from ingested documents. Use this for questions about company data, uploaded documents, or internal information.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query to find relevant documents"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browse_web",
+            "description": "Fetch and read content from a web page URL. Use this when you need current information from the internet, to look up company registries, check websites, verify facts online, or find information not in the knowledge base.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The full URL to fetch (must start with http:// or https://)"
+                    },
+                    "extract_type": {
+                        "type": "string",
+                        "enum": ["text", "markdown", "links"],
+                        "description": "Type of content to extract: 'text' for plain text, 'markdown' for formatted content, 'links' for page links. Default is 'text'."
+                    }
+                },
+                "required": ["url"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web using a search engine to find relevant URLs. Use this when you need to find websites or pages about a topic but don't have a specific URL.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query to find relevant web pages"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    }
+]
 
 
 async def perform_search(db, query: str, search_type: SearchType, match_count: int) -> tuple:
@@ -122,13 +197,26 @@ async def perform_search(db, query: str, search_type: SearchType, match_count: i
                 })
             
             vector_duration = (time.time() - vector_start) * 1000
+            # Extract top result excerpts (first 3, max 150 chars each)
+            top_vector_results = []
+            for r in vector_results[:3]:
+                excerpt = r["content"][:150].strip()
+                if len(r["content"]) > 150:
+                    excerpt += "..."
+                top_vector_results.append({
+                    "title": r["document_title"],
+                    "excerpt": excerpt,
+                    "score": round(r["similarity"], 3) if r["similarity"] else None
+                })
+            
             operations.append(SearchOperation(
                 index_type="vector",
                 index_name=settings.mongodb_vector_index,
                 query=query,
                 results_count=len(vector_results),
                 duration_ms=round(vector_duration, 2),
-                top_score=vector_results[0]["similarity"] if vector_results else None
+                top_score=vector_results[0]["similarity"] if vector_results else None,
+                top_results=top_vector_results if top_vector_results else None
             ))
             results.extend(vector_results)
         
@@ -181,13 +269,26 @@ async def perform_search(db, query: str, search_type: SearchType, match_count: i
                 })
             
             text_duration = (time.time() - text_start) * 1000
+            # Extract top result excerpts (first 3, max 150 chars each)
+            top_text_results = []
+            for r in text_results[:3]:
+                excerpt = r["content"][:150].strip()
+                if len(r["content"]) > 150:
+                    excerpt += "..."
+                top_text_results.append({
+                    "title": r["document_title"],
+                    "excerpt": excerpt,
+                    "score": round(r["similarity"], 3) if r["similarity"] else None
+                })
+            
             operations.append(SearchOperation(
                 index_type="text",
                 index_name=settings.mongodb_text_index,
                 query=query,
                 results_count=len(text_results),
                 duration_ms=round(text_duration, 2),
-                top_score=text_results[0]["similarity"] if text_results else None
+                top_score=text_results[0]["similarity"] if text_results else None,
+                top_results=top_text_results if top_text_results else None
             ))
             results.extend(text_results)
         
@@ -225,45 +326,277 @@ async def perform_search(db, query: str, search_type: SearchType, match_count: i
         return [], thinking
 
 
-async def generate_response(message: str, context: str, conversation_history: list) -> tuple:
-    """Generate LLM response using LiteLLM for unified model handling."""
+async def generate_response(message: str, context: str, conversation_history: list, db=None, tool_operations: List[ToolOperation] = None, model: str = None) -> tuple:
+    """Generate LLM response using LiteLLM with tool calling support.
+    
+    Args:
+        message: User's message
+        context: Context from knowledge base search (can be empty)
+        conversation_history: Previous conversation messages
+        db: Database connection for knowledge base searches
+        tool_operations: List to append tool operations to (for UI tracking)
+        model: LLM model to use (defaults to settings.llm_model)
+    
+    Returns:
+        tuple: (response_text, tokens_used, search_thinking, tool_operations)
+    """
     import litellm
     
+    if tool_operations is None:
+        tool_operations = []
+    
+    # Use provided model or default
+    llm_model = model or settings.llm_model
+    
+    search_thinking = None
+    all_context_parts = []
+    
+    # Add any pre-existing context
+    if context and context != "No relevant documents found.":
+        all_context_parts.append(context)
+    
+    # System prompt with tool instructions
+    system_prompt = """You are a helpful AI assistant with access to multiple tools:
+
+1. **search_knowledge_base**: Search the internal knowledge base for information from ingested documents (company data, uploaded files, internal documents).
+
+2. **browse_web**: Fetch and read content from any web URL. Use this for:
+   - Looking up company information in official registries (Firmenbuch, Handelsregister, etc.)
+   - Checking company websites for owner/director information (Impressum)
+   - Verifying current facts online
+   - Finding information not available in the knowledge base
+
+3. **web_search**: Search the web to find relevant URLs when you don't have a specific address.
+
+## When to use tools:
+- If the user asks about internal/company documents → use search_knowledge_base
+- If the user asks to look something up online, check a website, or find current information → use browse_web or web_search
+- If the user asks about company ownership/directors → try browsing official registry websites or company Impressum pages
+
+## Important:
+- You CAN browse the web - use the browse_web tool with URLs
+- For Austrian companies: use https://www.firmenbuch.at/ or https://justizonline.gv.at/
+- For German companies: use https://www.handelsregister.de/ or https://www.unternehmensregister.de/
+- Always check the Impressum page of company websites for owner/director information
+
+Provide helpful, accurate responses based on the information you find."""
+    
     # Build messages
-    messages = [
-        {
-            "role": "system",
-            "content": f"""You are a helpful assistant with access to a knowledge base. 
-Use the following context to answer questions. If the context doesn't contain relevant information, 
-say so and provide what help you can.
-
-CONTEXT FROM KNOWLEDGE BASE:
-{context}
-
-Always cite the document source when referencing information from the context."""
-        }
-    ]
+    messages = [{"role": "system", "content": system_prompt}]
     
     # Add conversation history
-    for msg in conversation_history[-10:]:  # Last 10 messages
+    for msg in conversation_history[-10:]:
         messages.append({"role": msg["role"], "content": msg["content"]})
     
     # Add current message
     messages.append({"role": "user", "content": message})
     
-    # Use LiteLLM - automatically handles max_tokens vs max_completion_tokens
-    response = await litellm.acompletion(
-        model=settings.llm_model,
-        messages=messages,
-        temperature=0.7,
-        max_tokens=2000,
-        api_key=settings.llm_api_key,
-        api_base=settings.llm_base_url if settings.llm_base_url else None,
-    )
+    # Maximum tool call iterations to prevent infinite loops
+    max_iterations = 5
+    iteration = 0
+    total_tokens = 0
     
+    while iteration < max_iterations:
+        iteration += 1
+        
+        try:
+            # Call LLM with tools
+            response = await litellm.acompletion(
+                model=llm_model,
+                messages=messages,
+                tools=TOOLS_SCHEMA,
+                tool_choice="auto",
+                temperature=0.7,
+                max_tokens=2000,
+                api_key=settings.llm_api_key,
+                api_base=settings.llm_base_url if settings.llm_base_url else None,
+            )
+            
+            if response.usage:
+                total_tokens += response.usage.total_tokens
+            
+            assistant_message = response.choices[0].message
+            
+            # Check if LLM wants to call tools
+            if assistant_message.tool_calls:
+                # Add assistant message with tool calls to conversation
+                messages.append({
+                    "role": "assistant",
+                    "content": assistant_message.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        }
+                        for tc in assistant_message.tool_calls
+                    ]
+                })
+                
+                # Process each tool call
+                for tool_call in assistant_message.tool_calls:
+                    tool_name = tool_call.function.name
+                    try:
+                        tool_args = json.loads(tool_call.function.arguments)
+                    except json.JSONDecodeError:
+                        tool_args = {}
+                    
+                    tool_start = time.time()
+                    tool_result = ""
+                    tool_success = True
+                    tool_error = None
+                    
+                    logger.info(f"Tool call: {tool_name} with args: {tool_args}")
+                    
+                    if tool_name == "search_knowledge_base":
+                        # Perform knowledge base search
+                        if db:
+                            query = tool_args.get("query", message)
+                            results, thinking = await perform_search(
+                                db, query, SearchType.HYBRID, 10
+                            )
+                            search_thinking = thinking
+                            
+                            if results:
+                                context_parts = []
+                                for r in results[:5]:
+                                    context_parts.append(f"[{r['document_title']}]: {r['content'][:500]}")
+                                tool_result = "\n\n".join(context_parts)
+                                all_context_parts.append(tool_result)
+                            else:
+                                tool_result = "No relevant documents found in the knowledge base."
+                        else:
+                            tool_result = "Knowledge base not available."
+                            tool_success = False
+                    
+                    elif tool_name == "browse_web":
+                        # Use browser tool
+                        url = tool_args.get("url", "")
+                        extract_type = tool_args.get("extract_type", "text")
+                        
+                        if url:
+                            browser_result: BrowserToolResult = await browse_url(url, extract_type)
+                            if browser_result.success:
+                                tool_result = f"Title: {browser_result.title}\n\nContent:\n{browser_result.content[:3000]}"
+                                if browser_result.links:
+                                    links_text = "\n".join([f"- {l['text']}: {l['href']}" for l in browser_result.links[:10]])
+                                    tool_result += f"\n\nLinks found:\n{links_text}"
+                            else:
+                                tool_result = f"Failed to fetch page: {browser_result.error}"
+                                tool_success = False
+                                tool_error = browser_result.error
+                        else:
+                            tool_result = "No URL provided."
+                            tool_success = False
+                            tool_error = "No URL provided"
+                    
+                    elif tool_name == "web_search":
+                        # Web search using Brave Search API
+                        query = tool_args.get("query", "")
+                        if query:
+                            try:
+                                import httpx
+                                brave_api_key = settings.brave_search_api_key
+                                
+                                async with httpx.AsyncClient() as client:
+                                    response = await client.get(
+                                        "https://api.search.brave.com/res/v1/web/search",
+                                        params={"q": query, "count": 10},
+                                        headers={
+                                            "X-Subscription-Token": brave_api_key,
+                                            "Accept": "application/json"
+                                        },
+                                        timeout=15.0
+                                    )
+                                    
+                                    if response.status_code == 200:
+                                        data = response.json()
+                                        web_results = data.get("web", {}).get("results", [])
+                                        
+                                        if web_results:
+                                            formatted_results = []
+                                            for i, result in enumerate(web_results[:8], 1):
+                                                title = result.get("title", "No title")
+                                                url = result.get("url", "")
+                                                description = result.get("description", "No description")
+                                                formatted_results.append(
+                                                    f"{i}. **{title}**\n   URL: {url}\n   {description}"
+                                                )
+                                            
+                                            tool_result = f"Web search results for '{query}':\n\n" + "\n\n".join(formatted_results)
+                                            tool_result += "\n\nYou can use browse_web to visit any of these URLs for more details."
+                                        else:
+                                            tool_result = f"No results found for '{query}'. Try different keywords."
+                                    else:
+                                        tool_result = f"Search API error (status {response.status_code}). Try browsing specific URLs instead."
+                                        tool_success = False
+                                        tool_error = f"Brave API returned status {response.status_code}"
+                                        
+                            except Exception as e:
+                                logger.error(f"Brave Search error: {e}")
+                                tool_result = f"Search failed: {str(e)}. Try browsing specific URLs instead."
+                                tool_success = False
+                                tool_error = str(e)
+                        else:
+                            tool_result = "No search query provided."
+                            tool_success = False
+                            tool_error = "No query provided"
+                    
+                    else:
+                        tool_result = f"Unknown tool: {tool_name}"
+                        tool_success = False
+                        tool_error = f"Unknown tool: {tool_name}"
+                    
+                    tool_duration = (time.time() - tool_start) * 1000
+                    
+                    # Record tool operation
+                    result_summary = tool_result[:200] + "..." if len(tool_result) > 200 else tool_result
+                    tool_operations.append(ToolOperation(
+                        tool_name=tool_name,
+                        tool_input=tool_args,
+                        success=tool_success,
+                        result_summary=result_summary,
+                        duration_ms=round(tool_duration, 2),
+                        error=tool_error
+                    ))
+                    
+                    # Add tool result to messages
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": tool_result
+                    })
+                
+                # Continue loop to get final response after tool calls
+                continue
+            
+            else:
+                # No tool calls - we have a final response
+                return (
+                    assistant_message.content or "",
+                    total_tokens,
+                    search_thinking,
+                    tool_operations
+                )
+        
+        except Exception as e:
+            logger.error(f"Error in generate_response: {e}")
+            return (
+                f"I encountered an error while processing your request: {str(e)}",
+                total_tokens,
+                search_thinking,
+                tool_operations
+            )
+    
+    # Max iterations reached
     return (
-        response.choices[0].message.content,
-        response.usage.total_tokens if response.usage else None
+        "I apologize, but I couldn't complete the request within the allowed number of steps.",
+        total_tokens,
+        search_thinking,
+        tool_operations
     )
 
 
@@ -273,8 +606,10 @@ async def chat(request: Request, chat_request: ChatRequest):
     """
     Chat with the RAG agent.
     
-    Sends a message to the AI assistant which will search the knowledge base
-    and generate a contextual response.
+    The agent can:
+    - Search the knowledge base for internal documents
+    - Browse web pages to look up information online
+    - Answer questions using its general knowledge
     """
     start_time = time.time()
     
@@ -287,38 +622,29 @@ async def chat(request: Request, chat_request: ChatRequest):
     
     conversation_history = _conversations[conversation_id]
     
-    # Perform search
-    search_results, search_thinking = await perform_search(
-        db,
+    # Let the agent decide what tools to use
+    # Pass empty context initially - agent will call search_knowledge_base if needed
+    tool_operations = []
+    response_text, tokens_used, search_thinking, tool_operations = await generate_response(
         chat_request.message,
-        chat_request.search_type,
-        chat_request.match_count
+        "",  # Empty context - agent will search if needed
+        conversation_history,
+        db=db,
+        tool_operations=tool_operations
     )
     
-    # Build context from search results
-    context_parts = []
+    # Build sources from search_thinking if available
     sources = []
-    
-    for result in search_results:
-        context_parts.append(
-            f"[Source: {result['document_title']}]\n{result['content']}"
-        )
-        if chat_request.include_sources:
-            sources.append({
-                "title": result["document_title"],
-                "source": result["document_source"],
-                "relevance": result["similarity"],
-                "excerpt": result["content"][:200] + "..." if len(result["content"]) > 200 else result["content"]
-            })
-    
-    context = "\n\n---\n\n".join(context_parts) if context_parts else "No relevant documents found."
-    
-    # Generate response
-    response_text, tokens_used = await generate_response(
-        chat_request.message,
-        context,
-        conversation_history
-    )
+    if search_thinking and search_thinking.operations:
+        for op in search_thinking.operations:
+            if op.top_results:
+                for r in op.top_results:
+                    sources.append({
+                        "title": r.get("title", "Unknown"),
+                        "source": op.index_name,
+                        "relevance": r.get("score", 0.0),
+                        "excerpt": r.get("excerpt", "")
+                    })
     
     # Update conversation history
     conversation_history.append({"role": "user", "content": chat_request.message})
@@ -333,8 +659,8 @@ async def chat(request: Request, chat_request: ChatRequest):
     return ChatResponse(
         message=response_text,
         conversation_id=conversation_id,
-        sources=sources if chat_request.include_sources else None,
-        search_performed=len(search_results) > 0,
+        sources=sources if chat_request.include_sources and sources else None,
+        search_performed=search_thinking is not None and search_thinking.total_results > 0,
         model=settings.llm_model,
         tokens_used=tokens_used,
         processing_time_ms=processing_time

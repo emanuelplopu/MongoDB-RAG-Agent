@@ -17,6 +17,9 @@ import {
   XMarkIcon,
   MagnifyingGlassIcon,
   CpuChipIcon,
+  GlobeAltIcon,
+  CheckCircleIcon,
+  XCircleIcon,
 } from '@heroicons/react/24/outline'
 import {
   sessionsApi,
@@ -598,8 +601,8 @@ function MessageBubble({ message }: { message: SessionMessage }) {
           )}
         </div>
         
-        {/* Thinking Panel - Shows search operations */}
-        {message.thinking && message.thinking.operations.length > 0 && (
+        {/* Thinking Panel - Shows search and tool operations */}
+        {message.thinking && ((message.thinking.search?.operations?.length ?? 0) > 0 || (message.thinking.tool_calls?.length ?? 0) > 0) && (
           <div className="mt-2">
             <button
               onClick={() => setShowThinking(!showThinking)}
@@ -611,7 +614,11 @@ function MessageBubble({ message }: { message: SessionMessage }) {
                 <ChevronRightIcon className="h-3 w-3" />
               )}
               <CpuChipIcon className="h-3 w-3" />
-              <span>Search Operations ({message.thinking.operations.length})</span>
+              <span>
+                Agent Operations
+                {(message.thinking.search?.operations?.length ?? 0) > 0 && ` (${message.thinking.search?.operations?.length} search)`}
+                {(message.thinking.tool_calls?.length ?? 0) > 0 && ` (${message.thinking.tool_calls?.length} tool)`}
+              </span>
               <span className="text-[10px] opacity-60">
                 {message.thinking.total_duration_ms.toFixed(0)}ms
               </span>
@@ -619,12 +626,14 @@ function MessageBubble({ message }: { message: SessionMessage }) {
             
             {showThinking && (
               <div className="mt-2 space-y-2 pl-4 border-l-2 border-primary-200 dark:border-primary-800">
-                {message.thinking.operations.map((op, idx) => (
+                {/* Search Operations */}
+                {message.thinking.search?.operations?.map((op, idx) => (
                   <div
-                    key={idx}
-                    className="p-2 rounded-lg bg-surface dark:bg-gray-800/50 text-xs"
+                    key={`search-${idx}`}
+                    className="p-2 rounded-lg bg-surface dark:bg-gray-800/50 text-xs space-y-2"
                   >
-                    <div className="flex items-center gap-2 mb-1">
+                    {/* Header with type and index */}
+                    <div className="flex items-center gap-2">
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
                         op.index_type === 'vector' 
                           ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300' 
@@ -636,6 +645,16 @@ function MessageBubble({ message }: { message: SessionMessage }) {
                         {op.index_name}
                       </span>
                     </div>
+                    
+                    {/* Query sent to search */}
+                    <div className="bg-gray-100 dark:bg-gray-700/50 rounded px-2 py-1">
+                      <span className="text-[10px] text-secondary dark:text-gray-500 font-medium">Query: </span>
+                      <span className="text-primary-900 dark:text-gray-200">
+                        {op.query.length > 100 ? op.query.substring(0, 100) + '...' : op.query}
+                      </span>
+                    </div>
+                    
+                    {/* Stats row */}
                     <div className="flex items-center gap-3 text-secondary dark:text-gray-400">
                       <span className="flex items-center gap-1">
                         <MagnifyingGlassIcon className="h-3 w-3" />
@@ -652,10 +671,106 @@ function MessageBubble({ message }: { message: SessionMessage }) {
                         </span>
                       )}
                     </div>
+                    
+                    {/* Top results excerpts */}
+                    {op.top_results && op.top_results.length > 0 && (
+                      <div className="space-y-1 border-t border-gray-200 dark:border-gray-700 pt-1 mt-1">
+                        <span className="text-[10px] text-secondary dark:text-gray-500 font-medium">Top Results:</span>
+                        {op.top_results.slice(0, 3).map((result, ridx) => (
+                          <div key={ridx} className="bg-gray-50 dark:bg-gray-800 rounded px-2 py-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-medium text-primary-700 dark:text-primary-300 truncate max-w-[150px]">
+                                {result.title}
+                              </span>
+                              {result.score !== null && (
+                                <span className="text-[9px] text-secondary dark:text-gray-500">
+                                  {(result.score * 100).toFixed(0)}%
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[10px] text-gray-600 dark:text-gray-400 line-clamp-2 mt-0.5">
+                              {result.excerpt}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
+                
+                {/* Tool Operations */}
+                {message.thinking.tool_calls?.map((tool, idx) => (
+                  <div
+                    key={`tool-${idx}`}
+                    className="p-2 rounded-lg bg-surface dark:bg-gray-800/50 text-xs space-y-2"
+                  >
+                    {/* Header with tool name and status */}
+                    <div className="flex items-center gap-2">
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                        tool.success
+                          ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300'
+                          : 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300'
+                      }`}>
+                        <span className="flex items-center gap-1">
+                          {tool.tool_name === 'browse_web' ? (
+                            <GlobeAltIcon className="h-3 w-3" />
+                          ) : (
+                            <CpuChipIcon className="h-3 w-3" />
+                          )}
+                          {tool.tool_name}
+                        </span>
+                      </span>
+                      {tool.success ? (
+                        <CheckCircleIcon className="h-3 w-3 text-green-500" />
+                      ) : (
+                        <XCircleIcon className="h-3 w-3 text-red-500" />
+                      )}
+                      <span className="flex items-center gap-1 text-secondary dark:text-gray-500 ml-auto">
+                        <ClockIcon className="h-3 w-3" />
+                        {tool.duration_ms.toFixed(0)}ms
+                      </span>
+                    </div>
+                    
+                    {/* Tool Input Parameters */}
+                    {tool.tool_input && Object.keys(tool.tool_input).length > 0 && (
+                      <div className="bg-gray-100 dark:bg-gray-700/50 rounded px-2 py-1">
+                        <span className="text-[10px] text-secondary dark:text-gray-500 font-medium">Input: </span>
+                        <span className="text-primary-900 dark:text-gray-200 text-[10px]">
+                          {(() => {
+                            const inputStr = JSON.stringify(tool.tool_input)
+                            // Show first 200 chars or full if under limit
+                            return inputStr.length > 200 ? inputStr.substring(0, 200) + '...' : inputStr
+                          })()}
+                        </span>
+                      </div>
+                    )}
+                    
+                    {/* Result summary or error */}
+                    {(tool.result_summary || tool.error) && (
+                      <div className={`rounded px-2 py-1 ${
+                        tool.error 
+                          ? 'bg-red-50 dark:bg-red-900/20' 
+                          : 'bg-green-50 dark:bg-green-900/20'
+                      }`}>
+                        <span className="text-[10px] text-secondary dark:text-gray-500 font-medium">
+                          {tool.error ? 'Error: ' : 'Result: '}
+                        </span>
+                        <span className={`text-[10px] ${
+                          tool.error 
+                            ? 'text-red-700 dark:text-red-300' 
+                            : 'text-green-700 dark:text-green-300'
+                        }`}>
+                          {tool.error || (tool.result_summary.length > 200 
+                            ? tool.result_summary.substring(0, 200) + '...' 
+                            : tool.result_summary)}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                
                 <div className="text-[10px] text-secondary dark:text-gray-500">
-                  Total: {message.thinking.total_results} results in {message.thinking.total_duration_ms.toFixed(0)}ms
+                  Total: {message.thinking.search?.total_results ?? 0} search results in {message.thinking.total_duration_ms.toFixed(0)}ms
                 </div>
               </div>
             )}

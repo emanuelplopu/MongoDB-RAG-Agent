@@ -501,6 +501,12 @@ export interface MetadataRebuildStatus {
 
 // ============== Chat Sessions Types ==============
 
+export interface SearchResultExcerpt {
+  title: string
+  excerpt: string
+  score: number | null
+}
+
 export interface SearchOperation {
   index_type: 'vector' | 'text'
   index_name: string
@@ -508,6 +514,7 @@ export interface SearchOperation {
   results_count: number
   duration_ms: number
   top_score: number | null
+  top_results: SearchResultExcerpt[] | null
 }
 
 export interface SearchThinking {
@@ -515,6 +522,21 @@ export interface SearchThinking {
   query: string
   total_results: number
   operations: SearchOperation[]
+  total_duration_ms: number
+}
+
+export interface ToolOperation {
+  tool_name: string
+  tool_input: Record<string, unknown>
+  success: boolean
+  result_summary: string
+  duration_ms: number
+  error: string | null
+}
+
+export interface AgentThinking {
+  search: SearchThinking | null
+  tool_calls: ToolOperation[]
   total_duration_ms: number
 }
 
@@ -541,7 +563,7 @@ export interface SessionMessage {
     excerpt: string
   }>
   attachments?: Array<AttachmentInfo>
-  thinking?: SearchThinking
+  thinking?: AgentThinking
 }
 
 export interface AttachmentInfo {

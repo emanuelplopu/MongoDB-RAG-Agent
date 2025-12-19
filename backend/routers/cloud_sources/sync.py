@@ -483,17 +483,43 @@ def sync_job_doc_to_response(doc: dict) -> SyncJobResponse:
     completed_at = doc.get("completed_at")
     duration = None
     if started_at and completed_at:
-        duration = (completed_at - started_at).total_seconds()
+        try:
+            duration = (completed_at - started_at).total_seconds()
+        except (TypeError, AttributeError):
+            duration = None
+    
+    # Parse errors safely
+    parsed_errors = []
+    for e in doc.get("errors", []):
+        if isinstance(e, dict):
+            try:
+                # Parse timestamp safely
+                ts = e.get("timestamp")
+                if isinstance(ts, str):
+                    error_ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                elif isinstance(ts, datetime):
+                    error_ts = ts
+                else:
+                    error_ts = datetime.utcnow()
+            except (ValueError, TypeError):
+                error_ts = datetime.utcnow()
+            
+            parsed_errors.append(SyncJobError(
+                file_path=e.get("file_path", ""),
+                error_type=e.get("error_type", "unknown"),
+                message=e.get("message", "Unknown error"),
+                timestamp=error_ts
+            ))
     
     return SyncJobResponse(
         id=str(doc["_id"]),
-        config_id=doc["config_id"],
+        config_id=doc.get("config_id", ""),
         config_name=doc.get("config_name", "Unknown"),
-        user_id=str(doc["user_id"]),
-        type=SyncJobType(doc["type"]),
-        status=SyncJobStatus(doc["status"]),
+        user_id=str(doc.get("user_id", "")),
+        type=SyncJobType(doc.get("type", "full")),
+        status=SyncJobStatus(doc.get("status", "pending")),
         progress=SyncJobProgress(**doc.get("progress", {})),
-        errors=[SyncJobError(**e) if isinstance(e, dict) else e for e in doc.get("errors", [])],
+        errors=parsed_errors,
         started_at=started_at,
         completed_at=completed_at,
         duration_seconds=duration,
@@ -750,11 +776,23 @@ async def get_dashboard(
     }).sort("started_at", -1).limit(5):
         for err in job.get("errors", [])[:1]:
             if isinstance(err, dict):
+                # Parse timestamp safely
+                ts = err.get("timestamp")
+                try:
+                    if isinstance(ts, str):
+                        error_timestamp = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    elif isinstance(ts, datetime):
+                        error_timestamp = ts
+                    else:
+                        error_timestamp = datetime.utcnow()
+                except (ValueError, TypeError):
+                    error_timestamp = datetime.utcnow()
+                
                 recent_errors.append(SyncJobError(
                     file_path=err.get("file_path", ""),
                     error_type=err.get("error_type", "unknown"),
                     message=err.get("message", "Unknown error"),
-                    timestamp=datetime.fromisoformat(err["timestamp"]) if isinstance(err.get("timestamp"), str) else err.get("timestamp", datetime.utcnow())
+                    timestamp=error_timestamp
                 ))
     
     return DashboardResponse(

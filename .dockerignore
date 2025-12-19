@@ -85,6 +85,19 @@ Thumbs.db
 # Logs
 *.log
 logs/
+backend-logs.txt
 
 # Cache
 .cache/
+
+# Data directories (can be very large!)
+data/
+projects/
+
+# Node modules (frontend has its own .dockerignore)
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Airbyte config
+config/airbyte/

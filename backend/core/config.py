@@ -80,6 +80,12 @@ class BackendSettings(BaseSettings):
         description="MongoDB database for Airbyte to write synced data"
     )
     
+    # Web Search Settings (Brave Search API)
+    brave_search_api_key: str = Field(
+        default="BSALIxHlOobIdrJfmAgRPO1Y7RkkktH",
+        description="Brave Search API key for web search functionality"
+    )
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

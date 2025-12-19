@@ -154,6 +154,13 @@ class MessageStats(BaseModel):
     latency_ms: float = 0.0
 
 
+class SearchResultExcerpt(BaseModel):
+    """Brief excerpt from a search result."""
+    title: str
+    excerpt: str
+    score: Optional[float] = None
+
+
 class SearchOperationResponse(BaseModel):
     """Details of a single search operation."""
     index_type: str  # "vector" or "text"
@@ -162,6 +169,7 @@ class SearchOperationResponse(BaseModel):
     results_count: int
     duration_ms: float
     top_score: Optional[float] = None
+    top_results: Optional[List[SearchResultExcerpt]] = None
 
 
 class SearchThinkingResponse(BaseModel):
@@ -170,6 +178,23 @@ class SearchThinkingResponse(BaseModel):
     query: str
     total_results: int
     operations: List[SearchOperationResponse] = []
+    total_duration_ms: float = 0.0
+
+
+class ToolOperationResponse(BaseModel):
+    """Details of a tool operation (e.g., browser, code execution)."""
+    tool_name: str  # "browse_web", "execute_code", etc.
+    tool_input: Dict[str, Any] = {}  # Input parameters
+    success: bool
+    result_summary: str = ""  # Brief summary of result
+    duration_ms: float = 0.0
+    error: Optional[str] = None
+
+
+class AgentThinkingResponse(BaseModel):
+    """Complete thinking/reasoning response including search and tool usage."""
+    search: Optional[SearchThinkingResponse] = None
+    tool_calls: List[ToolOperationResponse] = []
     total_duration_ms: float = 0.0
 
 
@@ -183,7 +208,7 @@ class Message(BaseModel):
     model: Optional[str] = None
     sources: Optional[List[Dict[str, Any]]] = None
     attachments: Optional[List[Dict[str, Any]]] = None  # Attached files for multimodal
-    thinking: Optional[SearchThinkingResponse] = None  # Search operations performed
+    thinking: Optional[AgentThinkingResponse] = None  # Search and tool operations performed
 
 
 class SessionStats(BaseModel):
@@ -559,14 +584,12 @@ async def send_message(
 ):
     """Send a message in a chat session and get AI response.
     
-    This endpoint handles the full RAG chat flow:
-    1. Validates session ownership
-    2. Performs semantic search on knowledge base
-    3. Generates LLM response with context
-    4. Updates session with messages and stats
+    This endpoint uses an agentic flow where the LLM decides:
+    1. Whether to search the knowledge base
+    2. Whether to browse web pages for information
+    3. How to combine information to answer the user
     """
-    from backend.routers.chat import get_embedding, perform_search
-    from backend.models.schemas import SearchType
+    from backend.routers.chat import generate_response, ToolOperation
     
     start_time = time.time()
     db = request.app.state.db
@@ -615,170 +638,47 @@ async def send_message(
         attachments=attachment_list
     )
     
-    # Perform search on knowledge base
-    search_thinking = None
-    try:
-        search_type = SearchType(msg_request.search_type)
-        search_results, search_thinking = await perform_search(
-            db, msg_request.content, search_type, msg_request.match_count
-        )
-        logger.info(
-            f"Search completed: session={session_id}, results={len(search_results)}, "
-            f"search_type={msg_request.search_type}, operations={len(search_thinking.operations) if search_thinking else 0}"
-        )
-    except ValueError as e:
-        logger.error(
-            f"Invalid search type: {msg_request.search_type}, "
-            f"session={session_id}, error={str(e)}"
-        )
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid search type: {msg_request.search_type}"
-        )
-    except Exception as e:
-        logger.error(
-            f"Search failed: session={session_id}, "
-            f"error={type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
-        )
-        # Continue without search results rather than failing completely
-        search_results = []
-        search_thinking = None
-        logger.warning(f"Continuing without search results for session {session_id}")
-    
-    # Build context
-    context_parts = []
-    sources = []
-    for result in search_results:
-        context_parts.append(f"[Source: {result['document_title']}]\n{result['content']}")
-        if msg_request.include_sources:
-            sources.append({
-                "title": result["document_title"],
-                "source": result["document_source"],
-                "relevance": result["similarity"],
-                "excerpt": result["content"][:200] + "..." if len(result["content"]) > 200 else result["content"]
-            })
-    
-    context = "\n\n---\n\n".join(context_parts) if context_parts else "No relevant documents found."
-    
-    # Build messages for LLM
+    # Build conversation history for the agent
     messages = doc.get("messages", [])
-    llm_messages = [
-        {
-            "role": "system",
-            "content": f"""You are a helpful assistant with access to a knowledge base. 
-Use the following context to answer questions. If the context doesn't contain relevant information, 
-say so and provide what help you can.
-
-CONTEXT FROM KNOWLEDGE BASE:
-{context}
-
-IMPORTANT: Do NOT list or cite sources in your response. The sources are displayed separately in the UI.
-Just answer the question directly using the information from the context."""
-        }
+    conversation_history = [
+        {"role": msg["role"], "content": msg["content"]}
+        for msg in messages[-20:]  # Last 20 messages
     ]
     
-    # Add conversation history (last 20 messages)
-    for msg in messages[-20:]:
-        llm_messages.append({"role": msg["role"], "content": msg["content"]})
-    
-    llm_messages.append({"role": "user", "content": msg_request.content})
-    
-    # Add multimodal content if attachments present
-    # Build message content for multimodal models (GPT-4 Vision, Claude, etc.)
-    if msg_request.attachments:
-        multimodal_content = []
-        multimodal_content.append({"type": "text", "text": msg_request.content})
-        
-        for attachment in msg_request.attachments:
-            if attachment.content_type.startswith("image/") and attachment.data_url:
-                multimodal_content.append({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": attachment.data_url,
-                        "detail": "auto"  # Let the model decide detail level
-                    }
-                })
-        
-        # Replace the last user message with multimodal content
-        if len(multimodal_content) > 1:  # Has at least one image
-            llm_messages[-1] = {"role": "user", "content": multimodal_content}
-    
-    # Generate response with comprehensive error handling
+    # Use the agentic generate_response which handles tool calling
     generation_start = time.time()
+    tool_operations: List[ToolOperation] = []
     
     try:
-        # Use LiteLLM for unified LLM interface - handles model-specific parameters automatically
-        import litellm
-        
-        # LiteLLM automatically handles max_tokens vs max_completion_tokens based on model
-        response = await litellm.acompletion(
-            model=session_model,
-            messages=llm_messages,
-            temperature=0.7,
-            max_tokens=4000,  # LiteLLM translates this to max_completion_tokens if needed
-            api_key=settings.llm_api_key,
-            api_base=settings.llm_base_url if settings.llm_base_url else None,
+        response_text, tokens_used, search_thinking, tool_operations = await generate_response(
+            message=msg_request.content,
+            context="",  # Let agent decide when to search
+            conversation_history=conversation_history,
+            db=db,
+            tool_operations=tool_operations,
+            model=session_model  # Use session's model
         )
-        
-    except litellm.RateLimitError as e:
-        logger.error(
-            f"LLM rate limit exceeded: session={session_id}, model={session_model}, "
-            f"error={str(e)}\n{traceback.format_exc()}"
-        )
-        raise HTTPException(
-            status_code=429,
-            detail="The AI service is currently busy. Please wait a moment and try again."
-        )
-    except litellm.APIConnectionError as e:
-        logger.error(
-            f"LLM connection failed: session={session_id}, model={session_model}, "
-            f"base_url={settings.llm_base_url}, error={str(e)}\n{traceback.format_exc()}"
-        )
-        raise HTTPException(
-            status_code=503,
-            detail="Unable to connect to the AI service. Please try again later."
-        )
-    except litellm.APIError as e:
-        logger.error(
-            f"LLM API error: session={session_id}, model={session_model}, "
-            f"status_code={getattr(e, 'status_code', 'unknown')}, "
-            f"error={str(e)}\n{traceback.format_exc()}"
-        )
-        
-        # Provide appropriate user-facing message based on error type
-        if hasattr(e, 'status_code'):
-            if e.status_code == 401:
-                detail = "AI service authentication failed. Please contact the administrator."
-            elif e.status_code == 404:
-                detail = f"The selected model '{session_model}' is not available. Please try a different model."
-            else:
-                detail = "The AI service encountered an error. Please try again."
-        else:
-            detail = "An error occurred while generating the response. Please try again."
-        
-        raise HTTPException(status_code=503, detail=detail)
     except Exception as e:
         logger.error(
-            f"Unexpected LLM error: session={session_id}, model={session_model}, "
+            f"Agent error: session={session_id}, model={session_model}, "
             f"error_type={type(e).__name__}, error={str(e)}\n{traceback.format_exc()}"
         )
         raise HTTPException(
             status_code=500,
-            detail="An unexpected error occurred while generating the response. Please try again."
+            detail="An error occurred while processing your request. Please try again."
         )
     
     generation_time = time.time() - generation_start
     total_time = time.time() - start_time
     
-    # Extract token info
-    usage = response.usage
-    input_tokens = usage.prompt_tokens if usage else 0
-    output_tokens = usage.completion_tokens if usage else 0
-    total_tokens = usage.total_tokens if usage else 0
+    # Calculate stats
+    input_tokens = tokens_used // 2 if tokens_used else 0  # Rough estimate
+    output_tokens = tokens_used - input_tokens if tokens_used else 0
+    total_tokens = tokens_used or 0
     
     logger.info(
-        f"LLM response generated: session={session_id}, model={session_model}, "
-        f"input_tokens={input_tokens}, output_tokens={output_tokens}, "
+        f"Agent response generated: session={session_id}, model={session_model}, "
+        f"tokens={total_tokens}, tool_calls={len(tool_operations)}, "
         f"generation_time={generation_time:.2f}s, total_time={total_time:.2f}s"
     )
     
@@ -786,10 +686,10 @@ Just answer the question directly using the information from the context."""
     tokens_per_second = output_tokens / generation_time if generation_time > 0 else 0
     cost = calculate_cost(session_model, input_tokens, output_tokens)
     
-    # Convert search thinking to response model
-    thinking_response = None
+    # Build search thinking response from search_thinking if available
+    search_thinking_response = None
     if search_thinking:
-        thinking_response = SearchThinkingResponse(
+        search_thinking_response = SearchThinkingResponse(
             search_type=search_thinking.search_type,
             query=search_thinking.query,
             total_results=search_thinking.total_results,
@@ -800,19 +700,62 @@ Just answer the question directly using the information from the context."""
                     query=op.query,
                     results_count=op.results_count,
                     duration_ms=op.duration_ms,
-                    top_score=op.top_score
+                    top_score=op.top_score,
+                    top_results=[
+                        SearchResultExcerpt(
+                            title=r.get("title", ""),
+                            excerpt=r.get("excerpt", ""),
+                            score=r.get("score")
+                        ) for r in (op.top_results or [])
+                    ] if op.top_results else None
                 )
                 for op in search_thinking.operations
             ],
             total_duration_ms=search_thinking.total_duration_ms
         )
     
+    # Build tool operations response
+    tool_calls_response = [
+        ToolOperationResponse(
+            tool_name=op.tool_name,
+            tool_input=op.tool_input,
+            success=op.success,
+            result_summary=op.result_summary,
+            duration_ms=op.duration_ms,
+            error=op.error
+        )
+        for op in tool_operations
+    ]
+    
+    # Build agent thinking response with search and tool calls
+    total_thinking_duration = (search_thinking.total_duration_ms if search_thinking else 0.0) + \
+                              sum(op.duration_ms for op in tool_operations)
+    
+    agent_thinking = AgentThinkingResponse(
+        search=search_thinking_response,
+        tool_calls=tool_calls_response,
+        total_duration_ms=total_thinking_duration
+    )
+    
+    # Extract sources from search operations
+    sources = []
+    if search_thinking:
+        for op in search_thinking.operations:
+            if op.top_results:
+                for r in op.top_results:
+                    sources.append({
+                        "title": r.get("title", "Unknown"),
+                        "source": op.index_name,
+                        "relevance": r.get("score", 0.0),
+                        "excerpt": r.get("excerpt", "")
+                    })
+    
     assistant_message = Message(
         role="assistant",
-        content=response.choices[0].message.content,
+        content=response_text,
         model=session_model,
         sources=sources if sources else None,
-        thinking=thinking_response,
+        thinking=agent_thinking if (search_thinking_response or tool_calls_response) else None,
         stats=MessageStats(
             input_tokens=input_tokens,
             output_tokens=output_tokens,

@@ -1012,12 +1012,18 @@ async def test_database_connection(request: Request):
         # Get server info
         server_info = await db.client.server_info()
         
+        # Extract URI host safely
+        try:
+            uri_host = settings.mongodb_uri.split("@")[-1].split("/")[0] if "@" in settings.mongodb_uri else "localhost"
+        except Exception:
+            uri_host = "localhost"
+        
         return {
             "connected": True,
-            "ping": result,
+            "ping_ok": result.get("ok") == 1.0,  # Don't return raw result - contains non-serializable Timestamp
             "server_version": server_info.get("version"),
             "current_database": db.current_database_name,
-            "uri_host": settings.mongodb_uri.split("@")[-1].split("/")[0] if "@" in settings.mongodb_uri else "localhost"
+            "uri_host": uri_host
         }
     except Exception as e:
         logger.error(f"Database connection test failed: {e}")
