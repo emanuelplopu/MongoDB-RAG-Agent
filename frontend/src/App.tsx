@@ -18,6 +18,7 @@ import CloudSourcesPage from './pages/CloudSourcesPage'
 import CloudSourceConnectionsPage from './pages/CloudSourceConnectionsPage'
 import CloudSourceConnectPage from './pages/CloudSourceConnectPage'
 import EmailCloudConfigPage from './pages/EmailCloudConfigPage'
+import PromptManagementPage from './pages/PromptManagementPage'
 import LoginPage from './pages/LoginPage'
 import NotFoundPage from './pages/NotFoundPage'
 
@@ -40,6 +41,7 @@ function App() {
             <Route path="system/ingestion" element={<IngestionManagementPage />} />
             <Route path="system/config" element={<ConfigurationPage />} />
             <Route path="system/users" element={<UserManagementPage />} />
+            <Route path="system/prompts" element={<PromptManagementPage />} />
             <Route path="cloud-sources" element={<CloudSourcesPage />} />
             <Route path="cloud-sources/connections" element={<CloudSourceConnectionsPage />} />
             <Route path="cloud-sources/connections/:connectionId" element={<CloudSourceConnectionsPage />} />

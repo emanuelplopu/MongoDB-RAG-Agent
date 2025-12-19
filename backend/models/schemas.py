@@ -344,6 +344,116 @@ class ConfigResponse(BaseModel):
     database: str
 
 
+# ============== Prompt Template Models ==============
+
+class ToolParameterSchema(BaseModel):
+    """Schema for a tool parameter."""
+    name: str = Field(..., description="Parameter name")
+    type: str = Field(default="string", description="Parameter type")
+    description: str = Field(default="", description="Parameter description")
+    required: bool = Field(default=False, description="Whether parameter is required")
+
+
+class ToolSchema(BaseModel):
+    """Schema for an agent tool."""
+    name: str = Field(..., description="Tool name")
+    description: str = Field(..., description="Tool description for the LLM")
+    parameters: List[ToolParameterSchema] = Field(default_factory=list)
+    enabled: bool = Field(default=True, description="Whether tool is enabled")
+
+
+class PromptVersion(BaseModel):
+    """A version of a prompt template."""
+    version: int = Field(..., description="Version number")
+    system_prompt: str = Field(..., description="System prompt content")
+    tools: List[ToolSchema] = Field(default_factory=list, description="Tool definitions")
+    created_at: datetime = Field(default_factory=datetime.now)
+    created_by: Optional[str] = Field(None, description="User who created this version")
+    notes: str = Field(default="", description="Version notes/changelog")
+    is_active: bool = Field(default=False, description="Whether this version is active")
+
+
+class PromptTemplate(BaseModel):
+    """Prompt template with version history."""
+    id: Optional[str] = Field(None, description="Template ID")
+    name: str = Field(..., description="Template name")
+    description: str = Field(default="", description="Template description")
+    category: str = Field(default="chat", description="Category: chat, search, etc.")
+    versions: List[PromptVersion] = Field(default_factory=list)
+    active_version: int = Field(default=1, description="Currently active version number")
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+    created_by: Optional[str] = Field(None, description="User who created the template")
+
+
+class PromptTemplateCreate(BaseModel):
+    """Request to create a new prompt template."""
+    name: str = Field(..., description="Template name", min_length=1, max_length=100)
+    description: str = Field(default="", max_length=500)
+    category: str = Field(default="chat")
+    system_prompt: str = Field(..., description="Initial system prompt", min_length=1)
+    tools: List[ToolSchema] = Field(default_factory=list)
+    notes: str = Field(default="Initial version")
+
+
+class PromptTemplateUpdate(BaseModel):
+    """Request to update prompt template metadata."""
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    description: Optional[str] = Field(None, max_length=500)
+    category: Optional[str] = None
+
+
+class PromptVersionCreate(BaseModel):
+    """Request to create a new version of a prompt template."""
+    system_prompt: str = Field(..., description="System prompt content", min_length=1)
+    tools: List[ToolSchema] = Field(default_factory=list)
+    notes: str = Field(default="")
+
+
+class PromptTestRequest(BaseModel):
+    """Request to test a prompt template."""
+    template_id: str = Field(..., description="Template ID to test")
+    version: Optional[int] = Field(None, description="Version to test (default: active)")
+    test_message: str = Field(..., description="Test message to send")
+    mock_tool_responses: Dict[str, str] = Field(
+        default_factory=dict, 
+        description="Mock responses for tools (tool_name -> response)"
+    )
+
+
+class PromptTestResponse(BaseModel):
+    """Response from testing a prompt."""
+    success: bool
+    response: str = Field(default="", description="LLM response")
+    tool_calls: List[Dict[str, Any]] = Field(default_factory=list, description="Tools called")
+    tokens_used: int = Field(default=0)
+    duration_ms: float = Field(default=0)
+    error: Optional[str] = None
+
+
+class PromptCompareRequest(BaseModel):
+    """Request to compare two prompt versions."""
+    template_id: str
+    version_a: int
+    version_b: int
+
+
+class PromptCompareResponse(BaseModel):
+    """Response comparing two prompt versions."""
+    version_a: PromptVersion
+    version_b: PromptVersion
+    prompt_diff: str = Field(default="", description="Diff of system prompts")
+    tools_added: List[str] = Field(default_factory=list)
+    tools_removed: List[str] = Field(default_factory=list)
+    tools_modified: List[str] = Field(default_factory=list)
+
+
+class PromptTemplateListResponse(BaseModel):
+    """List of prompt templates."""
+    templates: List[PromptTemplate]
+    total: int
+
+
 # ============== Generic Response Models ==============
 
 class SuccessResponse(BaseModel):

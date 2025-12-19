@@ -11,6 +11,8 @@ from pydantic import BaseModel, Field
 
 from backend.core.config import settings
 from backend.routers.auth import get_current_user, UserResponse
+from backend.agent.schemas import AgentMode, AgentModeConfig
+from backend.agent.coordinator import FederatedAgent
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +200,20 @@ class AgentThinkingResponse(BaseModel):
     total_duration_ms: float = 0.0
 
 
+class FederatedAgentTraceResponse(BaseModel):
+    """Federated agent trace for transparency."""
+    id: str
+    mode: str
+    models: Dict[str, str]  # {"orchestrator": "...", "worker": "..."}
+    iterations: int
+    orchestrator_steps: List[Dict[str, Any]] = []
+    worker_steps: List[Dict[str, Any]] = []
+    sources: Dict[str, Any] = {}  # {"documents": [...], "web_links": [...]}
+    timing: Dict[str, float] = {}  # {"total_ms": ..., "orchestrator_ms": ..., "worker_ms": ...}
+    tokens: Dict[str, int] = {}  # {"total": ..., "orchestrator": ..., "worker": ...}
+    cost_usd: float = 0.0
+
+
 class Message(BaseModel):
     """Chat message with stats."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -209,6 +225,7 @@ class Message(BaseModel):
     sources: Optional[List[Dict[str, Any]]] = None
     attachments: Optional[List[Dict[str, Any]]] = None  # Attached files for multimodal
     thinking: Optional[AgentThinkingResponse] = None  # Search and tool operations performed
+    agent_trace: Optional[Dict[str, Any]] = None  # Federated agent full trace
 
 
 class SessionStats(BaseModel):
@@ -277,6 +294,7 @@ class SendMessageRequest(BaseModel):
     match_count: int = 10
     include_sources: bool = True
     attachments: Optional[List[AttachmentInfo]] = None  # File attachments for multimodal
+    agent_mode: Optional[str] = None  # "auto", "thinking", "fast" - overrides session default
 
 
 class CreateFolderRequest(BaseModel):
@@ -584,13 +602,12 @@ async def send_message(
 ):
     """Send a message in a chat session and get AI response.
     
-    This endpoint uses an agentic flow where the LLM decides:
-    1. Whether to search the knowledge base
-    2. Whether to browse web pages for information
-    3. How to combine information to answer the user
+    This endpoint uses the Federated Agent system:
+    1. Orchestrator (thinking LLM) analyzes intent and plans
+    2. Workers execute parallel searches across all accessible databases
+    3. Results are evaluated and refined if needed
+    4. Final response is synthesized with full source attribution
     """
-    from backend.routers.chat import generate_response, ToolOperation
-    
     start_time = time.time()
     db = request.app.state.db
     collection = await get_sessions_collection(request)
@@ -645,117 +662,106 @@ async def send_message(
         for msg in messages[-20:]  # Last 20 messages
     ]
     
-    # Use the agentic generate_response which handles tool calling
+    # Get active profile information
+    active_profile_key = None
+    active_profile_database = None
+    try:
+        from src.profile import get_profile_manager
+        pm = get_profile_manager(settings.profiles_path)
+        active_profile_key = pm.active_profile_key
+        if pm.active_profile:
+            active_profile_database = pm.active_profile.database
+    except Exception as e:
+        logger.warning(f"Could not get active profile: {e}")
+    
+    # Determine agent mode
+    agent_mode_str = msg_request.agent_mode or settings.agent_mode
+    try:
+        agent_mode = AgentMode(agent_mode_str)
+    except ValueError:
+        agent_mode = AgentMode.AUTO
+    
+    # Configure federated agent
+    config = AgentModeConfig(
+        mode=agent_mode,
+        orchestrator_model=settings.orchestrator_model,
+        worker_model=settings.worker_model,
+        max_iterations=settings.agent_max_iterations,
+        parallel_workers=settings.agent_parallel_workers
+    )
+    
+    # Create and run federated agent
+    agent = FederatedAgent(config=config)
     generation_start = time.time()
-    tool_operations: List[ToolOperation] = []
     
     try:
-        response_text, tokens_used, search_thinking, tool_operations = await generate_response(
-            message=msg_request.content,
-            context="",  # Let agent decide when to search
+        response_text, trace = await agent.process(
+            user_message=msg_request.content,
+            user_id=user.id if user else "anonymous",
+            user_email=user.email if user else "anonymous@local",
+            session_id=session_id,
             conversation_history=conversation_history,
-            db=db,
-            tool_operations=tool_operations,
-            model=session_model  # Use session's model
+            active_profile_key=active_profile_key,
+            active_profile_database=active_profile_database,
+            accessible_profile_keys=[active_profile_key] if active_profile_key else None
         )
     except Exception as e:
         logger.error(
-            f"Agent error: session={session_id}, model={session_model}, "
+            f"Federated agent error: session={session_id}, "
             f"error_type={type(e).__name__}, error={str(e)}\n{traceback.format_exc()}"
         )
         raise HTTPException(
             status_code=500,
             detail="An error occurred while processing your request. Please try again."
         )
+    finally:
+        await agent.cleanup()
     
     generation_time = time.time() - generation_start
     total_time = time.time() - start_time
     
-    # Calculate stats
-    input_tokens = tokens_used // 2 if tokens_used else 0  # Rough estimate
-    output_tokens = tokens_used - input_tokens if tokens_used else 0
-    total_tokens = tokens_used or 0
+    # Get token counts from trace
+    total_tokens = trace.total_tokens
+    input_tokens = trace.orchestrator_tokens  # Rough approximation
+    output_tokens = trace.worker_tokens
     
     logger.info(
-        f"Agent response generated: session={session_id}, model={session_model}, "
-        f"tokens={total_tokens}, tool_calls={len(tool_operations)}, "
+        f"Federated agent response: session={session_id}, mode={agent_mode}, "
+        f"iterations={trace.iterations}, tokens={total_tokens}, "
         f"generation_time={generation_time:.2f}s, total_time={total_time:.2f}s"
     )
     
     # Calculate stats
     tokens_per_second = output_tokens / generation_time if generation_time > 0 else 0
-    cost = calculate_cost(session_model, input_tokens, output_tokens)
+    cost = trace.estimated_cost_usd or calculate_cost(session_model, input_tokens, output_tokens)
     
-    # Build search thinking response from search_thinking if available
-    search_thinking_response = None
-    if search_thinking:
-        search_thinking_response = SearchThinkingResponse(
-            search_type=search_thinking.search_type,
-            query=search_thinking.query,
-            total_results=search_thinking.total_results,
-            operations=[
-                SearchOperationResponse(
-                    index_type=op.index_type,
-                    index_name=op.index_name,
-                    query=op.query,
-                    results_count=op.results_count,
-                    duration_ms=op.duration_ms,
-                    top_score=op.top_score,
-                    top_results=[
-                        SearchResultExcerpt(
-                            title=r.get("title", ""),
-                            excerpt=r.get("excerpt", ""),
-                            score=r.get("score")
-                        ) for r in (op.top_results or [])
-                    ] if op.top_results else None
-                )
-                for op in search_thinking.operations
-            ],
-            total_duration_ms=search_thinking.total_duration_ms
-        )
+    # Convert trace to response format
+    trace_response = trace.to_response_dict()
     
-    # Build tool operations response
-    tool_calls_response = [
-        ToolOperationResponse(
-            tool_name=op.tool_name,
-            tool_input=op.tool_input,
-            success=op.success,
-            result_summary=op.result_summary,
-            duration_ms=op.duration_ms,
-            error=op.error
-        )
-        for op in tool_operations
-    ]
-    
-    # Build agent thinking response with search and tool calls
-    total_thinking_duration = (search_thinking.total_duration_ms if search_thinking else 0.0) + \
-                              sum(op.duration_ms for op in tool_operations)
-    
-    agent_thinking = AgentThinkingResponse(
-        search=search_thinking_response,
-        tool_calls=tool_calls_response,
-        total_duration_ms=total_thinking_duration
-    )
-    
-    # Extract sources from search operations
+    # Build sources from trace
     sources = []
-    if search_thinking:
-        for op in search_thinking.operations:
-            if op.top_results:
-                for r in op.top_results:
-                    sources.append({
-                        "title": r.get("title", "Unknown"),
-                        "source": op.index_name,
-                        "relevance": r.get("score", 0.0),
-                        "excerpt": r.get("excerpt", "")
-                    })
+    for doc_ref in trace.all_documents[:10]:  # Top 10 documents
+        sources.append({
+            "title": doc_ref.title,
+            "source": doc_ref.source_type,
+            "database": doc_ref.source_database,
+            "relevance": doc_ref.similarity_score,
+            "excerpt": doc_ref.excerpt[:300]
+        })
+    for web_ref in trace.all_web_links[:5]:  # Top 5 web links
+        sources.append({
+            "title": web_ref.title,
+            "source": "web",
+            "url": web_ref.url,
+            "excerpt": web_ref.excerpt[:300]
+        })
     
     assistant_message = Message(
         role="assistant",
         content=response_text,
         model=session_model,
         sources=sources if sources else None,
-        thinking=agent_thinking if (search_thinking_response or tool_calls_response) else None,
+        agent_trace=trace_response,
         stats=MessageStats(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -867,13 +873,14 @@ async def send_message(
             f"error={type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
         )
         # The response was generated successfully, so we return it even if DB update fails
-        # This avoids losing the response entirely
         logger.warning(f"Returning response despite DB update failure for session {session_id}")
     
     return {
         "user_message": user_message,
         "assistant_message": assistant_message,
-        "session_stats": SessionStats(**new_stats)
+        "session_stats": SessionStats(**new_stats),
+        "title": title_update.get("title"),  # Return updated title if changed
+        "agent_trace": trace_response  # Full trace for transparency
     }
 
 

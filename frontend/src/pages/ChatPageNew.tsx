@@ -30,6 +30,7 @@ import {
 } from '../api/client'
 import { useChatSidebar } from '../contexts/ChatSidebarContext'
 import { useAuth } from '../contexts/AuthContext'
+import FederatedAgentPanel from '../components/FederatedAgentPanel'
 
 // Local storage keys
 const STORAGE_KEYS = {
@@ -242,7 +243,7 @@ export default function ChatPage() {
         attachments: messageAttachments,
       })
       
-      // Update session with real messages
+      // Update session with real messages and title if provided
       setCurrentSession(prev => {
         if (!prev) return null
         const messages = prev.messages.filter(m => !m.id.startsWith('temp-'))
@@ -250,13 +251,19 @@ export default function ChatPage() {
           ...prev,
           messages: [...messages, response.user_message, response.assistant_message],
           stats: response.session_stats,
+          title: response.title || prev.title,  // Update title if returned
         }
       })
 
-      // Update sessions list
+      // Update sessions list with title if changed
       setSessions(prev => prev.map(s => 
         s.id === session!.id 
-          ? { ...s, updated_at: new Date().toISOString(), stats: response.session_stats }
+          ? { 
+              ...s, 
+              updated_at: new Date().toISOString(), 
+              stats: response.session_stats,
+              title: response.title || s.title  // Update title if returned
+            }
           : s
       ))
     } catch (err: unknown) {
@@ -775,6 +782,11 @@ function MessageBubble({ message }: { message: SessionMessage }) {
               </div>
             )}
           </div>
+        )}
+        
+        {/* Federated Agent Panel - New orchestrator-worker trace */}
+        {message.agent_trace && (
+          <FederatedAgentPanel trace={message.agent_trace} />
         )}
         
         {/* Sources */}

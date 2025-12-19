@@ -49,6 +49,38 @@ class BackendSettings(BaseSettings):
     max_match_count: int = Field(default=50)
     default_text_weight: float = Field(default=0.3)
     
+    # Agent Settings
+    agent_max_tool_iterations: int = Field(
+        default=5,
+        description="Maximum number of tool calls the agent can make per response"
+    )
+    agent_mode: str = Field(
+        default="auto",
+        description="Default agent mode: auto, thinking, or fast"
+    )
+    
+    # Orchestrator Model (thinking/planning model)
+    orchestrator_model: str = Field(
+        default="gpt-4o",
+        description="Model for orchestrator (planning, evaluation, synthesis)"
+    )
+    
+    # Worker Model (fast execution model)
+    worker_model: str = Field(
+        default="gemini/gemini-2.0-flash-exp",
+        description="Model for workers (search execution, summarization)"
+    )
+    
+    # Federated Agent Settings
+    agent_max_iterations: int = Field(
+        default=3,
+        description="Maximum orchestrator-worker iterations"
+    )
+    agent_parallel_workers: int = Field(
+        default=4,
+        description="Maximum parallel worker tasks"
+    )
+    
     # Profile Settings
     profiles_path: str = Field(default="profiles.yaml")
     
@@ -85,6 +117,11 @@ class BackendSettings(BaseSettings):
         default="BSALIxHlOobIdrJfmAgRPO1Y7RkkktH",
         description="Brave Search API key for web search functionality"
     )
+    
+    @property
+    def brave_api_key(self) -> str:
+        """Alias for brave_search_api_key for compatibility."""
+        return self.brave_search_api_key
     
     class Config:
         env_file = ".env"

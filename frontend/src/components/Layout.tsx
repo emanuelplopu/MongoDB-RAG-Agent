@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Outlet, useLocation, useNavigate, Link } from 'react-router-dom'
 import {
   ChatBubbleLeftRightIcon,
   MagnifyingGlassIcon,
@@ -28,6 +28,7 @@ import {
   HomeIcon,
   CloudIcon,
   EnvelopeIcon,
+  CommandLineIcon,
 } from '@heroicons/react/24/outline'
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid'
 import ThemeToggle from './ThemeToggle'
@@ -52,6 +53,7 @@ const systemMenuItems = [
   { name: 'Ingestion', href: '/system/ingestion', icon: ArrowPathIcon },
   { name: 'Configuration', href: '/system/config', icon: WrenchScrewdriverIcon },
   { name: 'Users', href: '/system/users', icon: UsersIcon },
+  { name: 'Prompts', href: '/system/prompts', icon: CommandLineIcon },
 ]
 
 export default function Layout() {
@@ -138,12 +140,6 @@ export default function Layout() {
     await logout()
     setUserMenuOpen(false)
     navigate('/login')
-  }
-
-  const handleMenuItemClick = (href: string) => {
-    navigate(href)
-    setUserMenuOpen(false)
-    setSidebarOpen(false)
   }
 
   const SidebarContent = () => (
@@ -352,9 +348,10 @@ export default function Layout() {
                   ? location.pathname === item.href 
                   : location.pathname.startsWith(item.href)
                 return (
-                  <button
+                  <Link
                     key={item.name}
-                    onClick={() => handleMenuItemClick(item.href)}
+                    to={item.href}
+                    onClick={() => setUserMenuOpen(false)}
                     className={`w-full flex items-center gap-3 px-4 py-2 text-sm transition-colors ${
                       isActive
                         ? 'bg-primary-100 dark:bg-primary-900/50 text-primary-700 dark:text-primary-300'
@@ -363,7 +360,7 @@ export default function Layout() {
                   >
                     <item.icon className="h-5 w-5" />
                     {item.name}
-                  </button>
+                  </Link>
                 )
               })}
               
@@ -393,9 +390,10 @@ export default function Layout() {
                       {systemMenuItems.map((subItem) => {
                         const isSubActive = location.pathname === subItem.href
                         return (
-                          <button
+                          <Link
                             key={subItem.name}
-                            onClick={() => handleMenuItemClick(subItem.href)}
+                            to={subItem.href}
+                            onClick={() => setUserMenuOpen(false)}
                             className={`w-full flex items-center gap-3 px-4 py-1.5 text-sm transition-colors ${
                               isSubActive
                                 ? 'text-primary-700 dark:text-primary-300 bg-primary-50 dark:bg-primary-900/30'
@@ -404,7 +402,7 @@ export default function Layout() {
                           >
                             <subItem.icon className="h-4 w-4" />
                             {subItem.name}
-                          </button>
+                          </Link>
                         )
                       })}
                     </div>

@@ -561,9 +561,77 @@ export interface SessionMessage {
     source: string
     relevance: number
     excerpt: string
+    database?: string
+    url?: string
   }>
   attachments?: Array<AttachmentInfo>
   thinking?: AgentThinking
+  agent_trace?: FederatedAgentTrace
+}
+
+// Federated Agent Trace - new orchestrator-worker system
+export interface FederatedAgentTrace {
+  id: string
+  mode: string
+  models: {
+    orchestrator: string
+    worker: string
+  }
+  iterations: number
+  orchestrator_steps: Array<{
+    phase: string
+    reasoning: string
+    output: string
+    duration_ms: number
+    tokens: number
+  }>
+  worker_steps: Array<{
+    task_id: string
+    task_type: string
+    tool: string
+    input: Record<string, unknown>
+    output: string
+    documents: Array<{
+      id: string
+      title: string
+      source: string
+      excerpt: string
+      score: number
+    }>
+    web_links: Array<{
+      url: string
+      title: string
+    }>
+    duration_ms: number
+    success: boolean
+  }>
+  sources: {
+    documents: Array<{
+      id: string
+      document_id: string
+      title: string
+      source_type: string
+      source_database: string
+      excerpt: string
+      score: number
+    }>
+    web_links: Array<{
+      url: string
+      title: string
+      excerpt: string
+    }>
+  }
+  timing: {
+    total_ms: number
+    orchestrator_ms: number
+    worker_ms: number
+  }
+  tokens: {
+    total: number
+    orchestrator: number
+    worker: number
+  }
+  cost_usd: number
 }
 
 export interface AttachmentInfo {
@@ -624,6 +692,8 @@ export interface SendMessageResponse {
   user_message: SessionMessage
   assistant_message: SessionMessage
   session_stats: SessionStats
+  title?: string | null  // Updated session title if changed
+  agent_trace?: FederatedAgentTrace  // Full trace for transparency
 }
 
 // API Functions
@@ -2032,6 +2102,140 @@ export const cloudSourcesApi = {
 
   clearCache: async (connectionId: string): Promise<void> => {
     await api.delete(`/cloud-sources/cache/clear/${connectionId}`)
+  },
+}
+
+// ============== Prompt Management Types ==============
+
+export interface ToolParameter {
+  name: string
+  type: string
+  description: string
+  required: boolean
+}
+
+export interface ToolSchema {
+  name: string
+  description: string
+  parameters: ToolParameter[]
+  enabled: boolean
+}
+
+export interface PromptVersion {
+  version: number
+  system_prompt: string
+  tools: ToolSchema[]
+  created_at: string
+  created_by: string | null
+  notes: string
+  is_active: boolean
+}
+
+export interface PromptTemplate {
+  id: string | null
+  name: string
+  description: string
+  category: string
+  versions: PromptVersion[]
+  active_version: number
+  created_at: string
+  updated_at: string
+  created_by: string | null
+}
+
+export interface PromptTestResult {
+  success: boolean
+  response: string
+  tool_calls: Array<{ name: string; arguments: string }>
+  tokens_used: number
+  duration_ms: number
+  error: string | null
+}
+
+export interface PromptComparison {
+  version_a: PromptVersion
+  version_b: PromptVersion
+  prompt_diff: string
+  tools_added: string[]
+  tools_removed: string[]
+  tools_modified: string[]
+}
+
+// ============== Prompt Management API ==============
+
+export const promptsApi = {
+  list: async (category?: string): Promise<{ templates: PromptTemplate[]; total: number }> => {
+    const params = category ? { category } : {}
+    const response = await api.get('/prompts', { params })
+    return response.data
+  },
+
+  get: async (templateId: string): Promise<PromptTemplate> => {
+    const response = await api.get(`/prompts/${templateId}`)
+    return response.data
+  },
+
+  create: async (data: {
+    name: string
+    description?: string
+    category?: string
+    system_prompt: string
+    tools?: ToolSchema[]
+    notes?: string
+  }): Promise<PromptTemplate> => {
+    const response = await api.post('/prompts', data)
+    return response.data
+  },
+
+  update: async (templateId: string, data: {
+    name?: string
+    description?: string
+    category?: string
+  }): Promise<PromptTemplate> => {
+    const response = await api.patch(`/prompts/${templateId}`, data)
+    return response.data
+  },
+
+  delete: async (templateId: string): Promise<void> => {
+    await api.delete(`/prompts/${templateId}`)
+  },
+
+  createVersion: async (templateId: string, data: {
+    system_prompt: string
+    tools?: ToolSchema[]
+    notes?: string
+  }): Promise<PromptTemplate> => {
+    const response = await api.post(`/prompts/${templateId}/versions`, data)
+    return response.data
+  },
+
+  activateVersion: async (templateId: string, version: number): Promise<PromptTemplate> => {
+    const response = await api.post(`/prompts/${templateId}/versions/${version}/activate`)
+    return response.data
+  },
+
+  getVersion: async (templateId: string, version: number): Promise<PromptVersion> => {
+    const response = await api.get(`/prompts/${templateId}/versions/${version}`)
+    return response.data
+  },
+
+  test: async (data: {
+    template_id: string
+    version?: number
+    test_message: string
+    mock_tool_responses?: Record<string, string>
+  }): Promise<PromptTestResult> => {
+    const response = await api.post('/prompts/test', data)
+    return response.data
+  },
+
+  compare: async (data: {
+    template_id: string
+    version_a: number
+    version_b: number
+  }): Promise<PromptComparison> => {
+    const response = await api.post('/prompts/compare', data)
+    return response.data
   },
 }
 

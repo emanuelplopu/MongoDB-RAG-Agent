@@ -26,7 +26,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.exceptions import RequestValidationError
 
 from backend.routers import chat, search, profiles, ingestion, system, sessions, auth
-from backend.routers import status, indexes, ingestion_queue, local_llm
+from backend.routers import status, indexes, ingestion_queue, local_llm, prompts
 from backend.routers.cloud_sources import (
     connections_router as cloud_connections,
     oauth_router as cloud_oauth,
@@ -36,6 +36,7 @@ from backend.routers.cloud_sources import (
 )
 from backend.routers.system import load_config_from_db
 from backend.routers.ingestion import check_and_resume_interrupted_jobs, graceful_shutdown_handler
+from backend.routers.prompts import initialize_default_templates
 from backend.core.config import settings
 from backend.core.database import DatabaseManager
 
@@ -154,6 +155,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
             logger.info(f"Resumed interrupted ingestion job: {resumed_job}")
     except Exception as e:
         logger.warning(f"Failed to check for interrupted jobs: {e}")
+    
+    # Initialize default prompt templates
+    try:
+        await initialize_default_templates(db_manager)
+    except Exception as e:
+        logger.warning(f"Failed to initialize default prompts: {e}")
     
     logger.info(f"API ready at http://0.0.0.0:{settings.api_port}")
     
@@ -441,6 +448,12 @@ app.include_router(
     cloud_cache,
     prefix="/api/v1/cloud-sources",
     tags=["Cloud Sources Cache"]
+)
+
+app.include_router(
+    prompts.router,
+    prefix="/api/v1/prompts",
+    tags=["Prompt Management"]
 )
 
 

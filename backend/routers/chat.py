@@ -356,30 +356,57 @@ async def generate_response(message: str, context: str, conversation_history: li
         all_context_parts.append(context)
     
     # System prompt with tool instructions
-    system_prompt = """You are a helpful AI assistant with access to multiple tools:
+    system_prompt = """You are a helpful AI assistant with access to tools. You MUST use these tools to answer questions - NEVER respond without using tools first.
 
-1. **search_knowledge_base**: Search the internal knowledge base for information from ingested documents (company data, uploaded files, internal documents).
+## Available Tools:
 
-2. **browse_web**: Fetch and read content from any web URL. Use this for:
-   - Looking up company information in official registries (Firmenbuch, Handelsregister, etc.)
-   - Checking company websites for owner/director information (Impressum)
-   - Verifying current facts online
-   - Finding information not available in the knowledge base
+### 1. search_knowledge_base
+Search internal documents using hybrid search (vector + text). The knowledge base contains documents about the user's company, projects, and internal information.
+- **ALWAYS call this multiple times** with different queries (at least 2-3 searches per question)
+- Start with broad context queries, then get specific
+- If a search returns no results, TRY DIFFERENT TERMS - don't give up!
+- When user says "my company" - search for company info, organization, business, etc.
 
-3. **web_search**: Search the web to find relevant URLs when you don't have a specific address.
+### 2. browse_web  
+Fetch and read content from a web URL. Use when you have a specific URL to visit.
 
-## When to use tools:
-- If the user asks about internal/company documents → use search_knowledge_base
-- If the user asks to look something up online, check a website, or find current information → use browse_web or web_search
-- If the user asks about company ownership/directors → try browsing official registry websites or company Impressum pages
+### 3. web_search
+Search the web using Brave Search to find URLs.
 
-## Important:
-- You CAN browse the web - use the browse_web tool with URLs
-- For Austrian companies: use https://www.firmenbuch.at/ or https://justizonline.gv.at/
-- For German companies: use https://www.handelsregister.de/ or https://www.unternehmensregister.de/
-- Always check the Impressum page of company websites for owner/director information
+## CRITICAL RULES:
 
-Provide helpful, accurate responses based on the information you find."""
+### Rule 1: NEVER give advice without searching first
+**WRONG**: Explaining to user what they should do or look for
+**RIGHT**: Actually searching and finding the information
+
+### Rule 2: When user references "my company" or "our organization"
+You MUST search the knowledge base first:
+1. search_knowledge_base("company name organization")
+2. search_knowledge_base("business overview about us")
+3. Then search for the specific topic they asked about
+
+### Rule 3: Don't give up after one search
+- If search returns empty, try 2-3 MORE searches with different terms
+- Try synonyms: "accounting" → "finance", "invoices", "bookkeeping"
+- Try broader terms: "vendor" → "supplier", "partner", "company"
+
+### Rule 4: Step-by-step questions require step-by-step tool usage
+When user asks "go step by step":
+1. Search for each piece of information separately
+2. Use multiple tool calls in sequence
+3. Gather all info before responding
+
+## Example - User asks: "find the owner of our accounting company"
+DO THIS:
+1. search_knowledge_base("company organization name") - find company name
+2. search_knowledge_base("accounting finance invoices") - find accounting docs
+3. search_knowledge_base("accounting firm vendor partner") - find accounting vendor
+4. web_search("[accounting company name] owner") - search web for owner
+5. browse_web("[company website]/about") - check their website
+
+DO NOT: Explain what the user should do. Actually DO the searches.
+
+Remember: You have access to the user's company documents. Search them! Multiple times! With different queries!"""
     
     # Build messages
     messages = [{"role": "system", "content": system_prompt}]
@@ -392,7 +419,7 @@ Provide helpful, accurate responses based on the information you find."""
     messages.append({"role": "user", "content": message})
     
     # Maximum tool call iterations to prevent infinite loops
-    max_iterations = 5
+    max_iterations = settings.agent_max_tool_iterations
     iteration = 0
     total_tokens = 0
     
@@ -401,6 +428,8 @@ Provide helpful, accurate responses based on the information you find."""
         
         try:
             # Call LLM with tools
+            logger.info(f"Calling LLM: model={llm_model}, iteration={iteration}, tools={len(TOOLS_SCHEMA)} defined")
+            
             response = await litellm.acompletion(
                 model=llm_model,
                 messages=messages,
@@ -417,8 +446,9 @@ Provide helpful, accurate responses based on the information you find."""
             
             assistant_message = response.choices[0].message
             
-            # Check if LLM wants to call tools
+            # Log whether tools were called
             if assistant_message.tool_calls:
+                logger.info(f"LLM requested {len(assistant_message.tool_calls)} tool calls")
                 # Add assistant message with tool calls to conversation
                 messages.append({
                     "role": "assistant",
@@ -501,8 +531,8 @@ Provide helpful, accurate responses based on the information you find."""
                                 import httpx
                                 brave_api_key = settings.brave_search_api_key
                                 
-                                async with httpx.AsyncClient() as client:
-                                    response = await client.get(
+                                async with httpx.AsyncClient() as http_client:
+                                    search_response = await http_client.get(
                                         "https://api.search.brave.com/res/v1/web/search",
                                         params={"q": query, "count": 10},
                                         headers={
@@ -512,18 +542,18 @@ Provide helpful, accurate responses based on the information you find."""
                                         timeout=15.0
                                     )
                                     
-                                    if response.status_code == 200:
-                                        data = response.json()
+                                    if search_response.status_code == 200:
+                                        data = search_response.json()
                                         web_results = data.get("web", {}).get("results", [])
                                         
                                         if web_results:
                                             formatted_results = []
                                             for i, result in enumerate(web_results[:8], 1):
                                                 title = result.get("title", "No title")
-                                                url = result.get("url", "")
+                                                result_url = result.get("url", "")
                                                 description = result.get("description", "No description")
                                                 formatted_results.append(
-                                                    f"{i}. **{title}**\n   URL: {url}\n   {description}"
+                                                    f"{i}. **{title}**\n   URL: {result_url}\n   {description}"
                                                 )
                                             
                                             tool_result = f"Web search results for '{query}':\n\n" + "\n\n".join(formatted_results)
@@ -531,9 +561,9 @@ Provide helpful, accurate responses based on the information you find."""
                                         else:
                                             tool_result = f"No results found for '{query}'. Try different keywords."
                                     else:
-                                        tool_result = f"Search API error (status {response.status_code}). Try browsing specific URLs instead."
+                                        tool_result = f"Search API error (status {search_response.status_code}). Try browsing specific URLs instead."
                                         tool_success = False
-                                        tool_error = f"Brave API returned status {response.status_code}"
+                                        tool_error = f"Brave API returned status {search_response.status_code}"
                                         
                             except Exception as e:
                                 logger.error(f"Brave Search error: {e}")
@@ -575,6 +605,7 @@ Provide helpful, accurate responses based on the information you find."""
             
             else:
                 # No tool calls - we have a final response
+                logger.info(f"LLM returned direct response without tool calls")
                 return (
                     assistant_message.content or "",
                     total_tokens,
