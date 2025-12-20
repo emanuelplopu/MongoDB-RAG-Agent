@@ -1,4 +1,4 @@
-"""Configuration validation script for MongoDB RAG Agent."""
+"""Configuration validation script for RecallHub."""
 
 import sys
 from src.settings import load_settings
@@ -21,7 +21,7 @@ def validate_config() -> bool:
     """
     try:
         print("=" * 60)
-        print("MongoDB RAG Agent - Configuration Validation")
+        print("RecallHub - Configuration Validation")
         print("=" * 60)
         print()
 

@@ -2,7 +2,7 @@
 Cloud Source Sync Worker
 
 Manages the synchronization of files from cloud sources into the
-MongoDB RAG document store. Integrates with the existing ingestion
+RecallHub document store. Integrates with the existing ingestion
 pipeline for document processing.
 """
 

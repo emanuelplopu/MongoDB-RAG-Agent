@@ -509,7 +509,7 @@ export default function ChatPage() {
             <ChatBubbleLeftRightIcon className="h-16 w-16 text-primary" />
           </div>
           <h2 className="text-2xl font-semibold text-primary-900 dark:text-gray-100 mb-3">
-            MongoDB RAG Assistant
+            RecallHub Assistant
           </h2>
           <p className="text-secondary dark:text-gray-400 max-w-md mb-6">
             Ask questions about your documents. I'll search through your knowledge base to find relevant information.

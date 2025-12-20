@@ -1,4 +1,4 @@
-"""Settings configuration for MongoDB RAG Agent."""
+"""Settings configuration for RecallHub."""
 
 from pydantic_settings import BaseSettings
 from pydantic import Field, ConfigDict

@@ -1,4 +1,4 @@
-# MongoDB RAG Agent - Intelligent Knowledge Base Search
+# RecallHub - Intelligent Knowledge Base Search
 
 Agentic RAG system combining MongoDB Atlas Vector Search with Pydantic AI for intelligent document retrieval.
 
@@ -36,8 +36,8 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 ### 2. Clone and Setup Project
 
 ```bash
-git clone https://github.com/coleam00/MongoDB-RAG-Agent.git
-cd MongoDB-RAG-Agent
+git clone https://github.com/coleam00/recallhub.git
+cd recallhub
 
 # Create virtual environment and install dependencies
 uv venv
@@ -151,7 +151,7 @@ Now you can ask questions and the agent will search your knowledge base!
 ## Project Structure
 
 ```
-MongoDB-RAG-Agent/
+RecallHub/
 ├── src/                           # MongoDB implementation (COMPLETE)
 │   ├── settings.py               # ✅ Configuration management
 │   ├── providers.py              # ✅ LLM/embedding providers

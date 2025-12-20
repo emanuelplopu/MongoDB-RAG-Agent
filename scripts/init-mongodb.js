@@ -3,7 +3,7 @@
 // It creates the required search indexes for RAG functionality
 
 // Wait for database to be ready
-print("Initializing MongoDB RAG Agent database...");
+print("Initializing RecallHub database...");
 
 // Switch to the RAG database
 db = db.getSiblingDB('rag_db');
@@ -19,7 +19,7 @@ print("Collections created: documents, chunks");
 // or they will be created automatically when the first document is ingested
 
 print("=".repeat(50));
-print("MongoDB RAG Agent database initialized!");
+print("RecallHub database initialized!");
 print("");
 print("IMPORTANT: After ingesting documents, create search indexes:");
 print("");

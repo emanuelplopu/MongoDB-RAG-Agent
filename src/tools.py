@@ -1,4 +1,4 @@
-"""Search tools for MongoDB RAG Agent."""
+"""Search tools for RecallHub."""
 
 import asyncio
 import logging

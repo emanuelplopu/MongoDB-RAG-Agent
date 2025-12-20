@@ -36,7 +36,7 @@ def _bcrypt_verify(password: str, hashed: str) -> bool:
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # JWT settings
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "mongodb-rag-secret-key-change-in-production")
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "recallhub-secret-key-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24 * 7  # 7 days
 

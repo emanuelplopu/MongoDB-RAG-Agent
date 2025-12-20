@@ -1,4 +1,4 @@
-"""Main MongoDB RAG agent implementation with shared state."""
+"""Main RecallHub agent implementation with shared state."""
 
 from pydantic_ai import Agent, RunContext
 from pydantic import BaseModel

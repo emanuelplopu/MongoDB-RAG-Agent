@@ -54,8 +54,8 @@ describe('Layout', () => {
   it('should render the app branding', () => {
     renderWithRouter()
     
-    // Check for app title/header - uses MongoDB RAG branding
-    expect(screen.getAllByText(/MongoDB RAG/i).length).toBeGreaterThan(0)
+    // Check for app title/header - uses RecallHub branding
+    expect(screen.getAllByText(/RecallHub/i).length).toBeGreaterThan(0)
   })
 
   it('should show current page name in header', () => {

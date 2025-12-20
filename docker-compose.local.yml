@@ -1,4 +1,4 @@
-# MongoDB RAG Agent - Fully Local Docker Compose
+# RecallHub - Fully Local Docker Compose
 # Run everything locally including LLM and embeddings via Ollama
 #
 # Usage:

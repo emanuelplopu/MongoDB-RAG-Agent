@@ -1,4 +1,4 @@
-# Airbyte Startup Script for MongoDB RAG Agent
+# Airbyte Startup Script for RecallHub
 # This script starts Airbyte services alongside the main application
 
 param(
@@ -9,7 +9,7 @@ param(
 )
 
 if ($Help) {
-    Write-Host "Airbyte Management Script for MongoDB RAG Agent"
+    Write-Host "Airbyte Management Script for RecallHub"
     Write-Host ""
     Write-Host "Usage: .\start-airbyte.ps1 [options]"
     Write-Host ""
@@ -76,7 +76,7 @@ if ($Status) {
 }
 
 # Default: Start services
-Write-Host "Starting Airbyte services for MongoDB RAG Agent..." -ForegroundColor Cyan
+Write-Host "Starting Airbyte services for RecallHub..." -ForegroundColor Cyan
 Write-Host ""
 Write-Host "This will start:" -ForegroundColor Yellow
 Write-Host "  - Airbyte Database (PostgreSQL)"
@@ -88,7 +88,7 @@ Write-Host "  - Connector Builder Server"
 Write-Host ""
 
 # Create network if it doesn't exist
-$networkExists = docker network ls --format "{{.Name}}" | Select-String "mongodb-rag-agent_rag-network"
+$networkExists = docker network ls --format "{{.Name}}" | Select-String "recallhub_rag-network"
 if (-not $networkExists) {
     Write-Host "Creating Docker network..." -ForegroundColor Yellow
     docker-compose up -d mongodb

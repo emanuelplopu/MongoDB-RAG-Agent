@@ -66,7 +66,7 @@ async def test_hybrid_search():
 async def main():
     """Run all tests."""
     print("=" * 60)
-    print("MongoDB RAG Agent - Search Function Tests")
+    print("RecallHub - Search Function Tests")
     print("=" * 60)
 
     try:

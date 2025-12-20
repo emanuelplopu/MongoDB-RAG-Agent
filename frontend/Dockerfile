@@ -1,4 +1,4 @@
-# MongoDB RAG Frontend - Docker Image
+# RecallHub Frontend - Docker Image
 # Multi-stage build for optimized production
 
 # Stage 1: Build the React app

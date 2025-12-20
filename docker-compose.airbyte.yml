@@ -1,4 +1,4 @@
-# MongoDB RAG Agent - Airbyte Integration
+# RecallHub - Airbyte Integration
 # Airbyte for complex API integrations (Confluence, Jira, Email)
 #
 # Port Assignments (within 11000-11100 range):
@@ -178,4 +178,4 @@ services:
 networks:
   rag-network:
     external: true
-    name: mongodb-rag-agent_rag-network
+    name: recallhub_rag-network

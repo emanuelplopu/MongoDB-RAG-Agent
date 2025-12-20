@@ -1,1 +1,1 @@
-"""Document ingestion pipeline for MongoDB RAG Agent."""
+"""Document ingestion pipeline for RecallHub."""

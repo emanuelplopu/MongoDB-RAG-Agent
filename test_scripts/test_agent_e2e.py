@@ -154,7 +154,7 @@ async def test_conversation_context():
 async def main():
     """Run all end-to-end tests."""
     print("="*80)
-    print("MongoDB RAG Agent - End-to-End Testing")
+    print("RecallHub - End-to-End Testing")
     print("="*80)
 
     message_history = []

@@ -1,4 +1,4 @@
-"""System prompts for MongoDB RAG Agent."""
+"""System prompts for RecallHub."""
 
 MAIN_SYSTEM_PROMPT = """You are a helpful assistant with access to a knowledge base containing documents, invoices, notes, transcripts, and business records.
 

@@ -1,8 +1,8 @@
-# Product Requirements Document: MongoDB Agentic RAG Agent
+# Product Requirements Document: RecallHub
 
 ## Executive Summary
 
-The MongoDB Agentic RAG Agent is an intelligent document retrieval and question-answering system that combines semantic vector search with full-text keyword search to deliver highly relevant responses from a knowledge base. Built on MongoDB Atlas Vector Search and Pydantic AI, this system enables users to interact conversationally with their document collections through an intelligent agent that can perform both conceptual queries and precise keyword searches.
+RecallHub is an intelligent document retrieval and question-answering system that combines semantic vector search with full-text keyword search to deliver highly relevant responses from a knowledge base. Built on MongoDB Atlas Vector Search and Pydantic AI, this system enables users to interact conversationally with their document collections through an intelligent agent that can perform both conceptual queries and precise keyword searches.
 
 The core innovation lies in leveraging MongoDB's native `$rankFusion` operator for hybrid search, which seamlessly combines vector embeddings with traditional full-text search using Reciprocal Rank Fusion. This approach provides superior retrieval accuracy compared to single-method search systems. The ingestion pipeline uses Docling for multi-format document processing and intelligent chunking that preserves document structure and semantic boundaries.
 

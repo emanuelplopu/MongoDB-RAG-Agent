@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines the architecture for integrating multiple cloud data sources (Google Drive, OneDrive, Dropbox, Email, OwnCloud, Confluence, Jira, etc.) into the MongoDB RAG Agent.
+This document outlines the architecture for integrating multiple cloud data sources (Google Drive, OneDrive, Dropbox, Email, OwnCloud, Confluence, Jira, etc.) into RecallHub.
 
 ## Core Design Principles
 

@@ -8,7 +8,6 @@ import {
   Cog6ToothIcon,
   Bars3Icon,
   XMarkIcon,
-  CircleStackIcon,
   PlusIcon,
   FolderIcon,
   FolderPlusIcon,
@@ -527,16 +526,20 @@ export default function Layout() {
           onClick={() => setUserMenuOpen(!userMenuOpen)}
           className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors"
         >
-          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary to-primary-600 flex items-center justify-center text-white text-sm font-medium">
+          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-sm font-medium">
             {isAuthenticated && user ? (
               user.name.charAt(0).toUpperCase()
             ) : (
-              <CircleStackIcon className="h-5 w-5" />
+              <svg className="h-5 w-5" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 10h6c2.76 0 5 2.24 5 5s-2.24 5-5 5h-4" stroke="white" strokeWidth="2.5" strokeLinecap="round" fill="none"/>
+                <path d="M14 18l-3 3-3-3" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+                <path d="M11 21v2" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
+              </svg>
             )}
           </div>
           <div className="flex-1 text-left">
             <div className="text-sm font-medium text-primary-900 dark:text-gray-200 truncate">
-              {isAuthenticated && user ? user.name : 'MongoDB RAG'}
+              {isAuthenticated && user ? user.name : 'RecallHub'}
             </div>
             {isAuthenticated && user && (
               <div className="text-xs text-secondary dark:text-gray-500 truncate">{user.email}</div>

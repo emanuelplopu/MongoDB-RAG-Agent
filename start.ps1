@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    MongoDB RAG Agent - Full Stack Startup Script
+    RecallHub - Full Stack Startup Script
     
 .DESCRIPTION
     Starts all services (MongoDB, Backend, Frontend) using Docker Compose
@@ -58,7 +58,7 @@ function Write-Info($text) {
 # Banner
 Write-Host ""
 Write-Host "  ================================================" -ForegroundColor Magenta
-Write-Host "       MongoDB RAG Agent - Full Stack Setup       " -ForegroundColor Magenta
+Write-Host "           RecallHub - Full Stack Setup           " -ForegroundColor Magenta
 Write-Host "  ================================================" -ForegroundColor Magenta
 Write-Host ""
 

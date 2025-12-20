@@ -133,7 +133,7 @@ export const handlers = [
   }),
 
   http.get(`${API_BASE}/system/info`, () => {
-    return HttpResponse.json({ version: '1.0.0', name: 'MongoDB RAG Agent' })
+    return HttpResponse.json({ version: '1.0.0', name: 'RecallHub' })
   }),
 
   http.get(`${API_BASE}/system/indexes`, () => {

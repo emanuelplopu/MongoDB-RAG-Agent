@@ -1,7 +1,7 @@
 [project]
-name = "mongodb-rag-agent"
+name = "recallhub"
 version = "0.1.0"
-description = "Agentic RAG system with MongoDB Atlas Vector Search"
+description = "RecallHub - Intelligent Knowledge Base Search with MongoDB Atlas Vector Search"
 requires-python = ">=3.10"
 dependencies = [
     "pydantic>=2.10.0",

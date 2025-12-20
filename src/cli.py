@@ -167,7 +167,7 @@ def display_welcome():
     profile_name = get_active_profile_name()
 
     welcome = Panel(
-        "[bold blue]MongoDB RAG Agent[/bold blue]\n\n"
+        "[bold blue]RecallHub[/bold blue]\n\n"
         "[green]Intelligent knowledge base search with MongoDB Atlas Vector Search[/green]\n"
         f"[dim]LLM: {settings.llm_model}[/dim]\n"
         f"[dim]Profile: {profile_name} | Database: {settings.mongodb_database}[/dim]\n\n"

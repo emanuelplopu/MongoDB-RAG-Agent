@@ -1,5 +1,5 @@
 """
-FastAPI Backend for MongoDB RAG Agent.
+FastAPI Backend for RecallHub.
 
 Production-ready API server with endpoints for:
 - Chat/Query with RAG agent
@@ -129,7 +129,7 @@ class RequestTimeoutMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     """Application lifespan manager - startup and shutdown."""
     # Startup
-    logger.info("Starting MongoDB RAG Agent API...")
+    logger.info("Starting RecallHub API...")
     
     # Initialize database connection
     db_manager = DatabaseManager()
@@ -175,7 +175,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     yield
     
     # Shutdown - gracefully handle running ingestion jobs
-    logger.info("Shutting down MongoDB RAG Agent API...")
+    logger.info("Shutting down RecallHub API...")
     
     try:
         await graceful_shutdown_handler(db_manager)
@@ -188,9 +188,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
 # Create FastAPI app
 app = FastAPI(
-    title="MongoDB RAG Agent API",
+    title="RecallHub API",
     description="""
-    Production-ready API for the MongoDB RAG Agent system.
+    Production-ready API for the RecallHub system.
     
     ## Features
     - **Chat**: Conversational AI with RAG-powered responses
@@ -235,7 +235,7 @@ def _is_admin_request(request: Request) -> bool:
         token = auth_header[7:]  # Remove "Bearer " prefix
         from jose import jwt
         import os
-        secret_key = os.getenv("JWT_SECRET_KEY", "mongodb-rag-secret-key-change-in-production")
+        secret_key = os.getenv("JWT_SECRET_KEY", "recallhub-secret-key-change-in-production")
         payload = jwt.decode(token, secret_key, algorithms=["HS256"])
         
         # Look up user in database to check admin status
@@ -470,7 +470,7 @@ app.include_router(
 async def root():
     """Root endpoint with API information."""
     return {
-        "name": "MongoDB RAG Agent API",
+        "name": "RecallHub API",
         "version": "1.0.0",
         "status": "running",
         "docs": "/docs",

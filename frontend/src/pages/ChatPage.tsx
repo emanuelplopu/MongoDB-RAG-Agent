@@ -121,7 +121,7 @@ export default function ChatPage() {
               <DocumentTextIcon className="h-12 w-12 text-primary" />
             </div>
             <h2 className="text-2xl font-semibold text-primary-900 dark:text-primary-200 mb-2">
-              MongoDB RAG Assistant
+              RecallHub Assistant
             </h2>
             <p className="text-secondary dark:text-gray-400 max-w-md">
               Ask questions about your documents. I'll search through your knowledge base to find relevant information.

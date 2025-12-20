@@ -1,4 +1,4 @@
-# Docker ignore file for MongoDB RAG Agent
+# Docker ignore file for RecallHub
 # Prevents unnecessary files from being included in the Docker image
 
 # Python

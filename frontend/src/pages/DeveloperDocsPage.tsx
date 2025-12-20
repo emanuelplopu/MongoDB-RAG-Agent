@@ -102,7 +102,7 @@ export default function DeveloperDocsPage() {
             Developer API Documentation
           </h1>
           <p className="mt-2 text-gray-600 dark:text-gray-400">
-            Complete API reference for the MongoDB RAG Agent system
+            Complete API reference for the RecallHub system
           </p>
         </div>
       </div>

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Docker entrypoint script for MongoDB RAG Agent
+# Docker entrypoint script for RecallHub
 # Handles initialization and command routing
 
 set -e
@@ -10,7 +10,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}MongoDB RAG Agent - Docker Container${NC}"
+echo -e "${GREEN}RecallHub - Docker Container${NC}"
 echo "========================================"
 
 # Wait for MongoDB to be available

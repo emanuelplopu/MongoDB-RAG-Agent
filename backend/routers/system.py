@@ -363,7 +363,7 @@ async def get_info():
     uptime = (datetime.now() - _startup_time).total_seconds()
     
     return {
-        "name": "MongoDB RAG Agent API",
+        "name": "RecallHub API",
         "version": "1.0.0",
         "description": "Production-ready RAG API with hybrid search",
         "uptime_seconds": uptime,

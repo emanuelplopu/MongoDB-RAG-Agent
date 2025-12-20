@@ -1,8 +1,8 @@
-# MongoDB RAG Agent Development Instructions
+# RecallHub Development Instructions
 
 ## Project Overview
 
-Agentic RAG system combining MongoDB Atlas Vector Search with Pydantic AI for intelligent document retrieval. Uses Docling for multi-format ingestion, Motor for async MongoDB operations, and hybrid search via `$rankFusion`. Built with UV, type-safe Pydantic models, and conversational CLI.
+RecallHub - Intelligent Knowledge Base Search combining MongoDB Atlas Vector Search with Pydantic AI for intelligent document retrieval. Uses Docling for multi-format ingestion, Motor for async MongoDB operations, and hybrid search via `$rankFusion`. Built with UV, type-safe Pydantic models, and conversational CLI.
 
 ## Core Principles
 

@@ -1,4 +1,4 @@
-"""Dependencies for MongoDB RAG Agent."""
+"""Dependencies for RecallHub."""
 
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List

@@ -1,4 +1,4 @@
-# MongoDB RAG Backend - Docker Image
+# RecallHub Backend - Docker Image
 # Multi-stage build for optimized production image
 
 # ============================================

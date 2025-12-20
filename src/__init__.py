@@ -1,1 +1,1 @@
-"""MongoDB RAG Agent - Intelligent Knowledge Base Search."""
+"""RecallHub - Intelligent Knowledge Base Search."""

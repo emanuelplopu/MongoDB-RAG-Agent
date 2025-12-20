@@ -1,4 +1,4 @@
-"""Comprehensive End-to-End Testing of MongoDB RAG Agent.
+"""Comprehensive End-to-End Testing of RecallHub.
 
 Tests:
 1. Full ingestion pipeline validation
@@ -270,7 +270,7 @@ async def main():
     """Run comprehensive end-to-end tests."""
     print("="*80)
     print("COMPREHENSIVE END-TO-END TESTING")
-    print("MongoDB RAG Agent - Document-Specific Validation")
+    print("RecallHub - Document-Specific Validation")
     print("="*80)
 
     # Step 1: Deep database validation
