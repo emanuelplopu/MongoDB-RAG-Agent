@@ -21,7 +21,8 @@ import {
 import {
   localLlmApi, systemApi, profilesApi,
   DiscoveryResult, LocalProvider, ModelRecommendation, OfflineModeConfig,
-  Profile, SystemStats, CustomEndpoint, NetworkScanResult, ConfigOptions
+  Profile, SystemStats, CustomEndpoint, NetworkScanResult, ConfigOptions,
+  LLMModel, EmbeddingModel, LLMProviderConfigResponse, LLMProviderConfigRequest
 } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -54,12 +55,31 @@ export default function ConfigurationPage() {
   const [isSaving, setIsSaving] = useState(false)
   const [isPulling, setIsPulling] = useState<string | null>(null)
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
-  const [activeTab, setActiveTab] = useState<'offline' | 'network' | 'models' | 'profiles' | 'search'>('offline')
+  const [activeTab, setActiveTab] = useState<'offline' | 'network' | 'models' | 'profiles' | 'search' | 'llm'>('llm')
     
     // Search settings state
     const [configOptions, setConfigOptions] = useState<ConfigOptions | null>(null)
     const [defaultMatchCount, setDefaultMatchCount] = useState<number>(10)
     const [isSavingSearch, setIsSavingSearch] = useState(false)
+    
+    // Editable model config state
+    const [llmModel, setLlmModel] = useState<string>('')
+    const [embeddingModel, setEmbeddingModel] = useState<string>('')
+    const [embeddingDimension, setEmbeddingDimension] = useState<number>(1536)
+    const [llmModels, setLlmModels] = useState<LLMModel[]>([])
+    const [embeddingModels, setEmbeddingModels] = useState<EmbeddingModel[]>([])
+    
+    // LLM Provider config state
+    const [llmProviderConfig, setLlmProviderConfig] = useState<LLMProviderConfigResponse | null>(null)
+    const [orchestratorProvider, setOrchestratorProvider] = useState<string>('openai')
+    const [orchestratorModel, setOrchestratorModel] = useState<string>('')
+    const [workerProvider, setWorkerProvider] = useState<string>('google')
+    const [workerModel, setWorkerModel] = useState<string>('')
+    const [openaiApiKey, setOpenaiApiKey] = useState<string>('')
+    const [googleApiKey, setGoogleApiKey] = useState<string>('')
+    const [anthropicApiKey, setAnthropicApiKey] = useState<string>('')
+    const [fastLlmApiKey, setFastLlmApiKey] = useState<string>('')
+    const [isSavingLlmConfig, setIsSavingLlmConfig] = useState(false)
   
   // Network scanning state
   const [customEndpoints, setCustomEndpoints] = useState<CustomEndpoint[]>([])
@@ -73,12 +93,15 @@ export default function ConfigurationPage() {
   const fetchData = useCallback(async () => {
     setIsLoading(true)
     try {
-      const [statsRes, profilesRes, configRes, endpointsRes, configOptionsRes] = await Promise.all([
+      const [statsRes, profilesRes, configRes, endpointsRes, configOptionsRes, llmModelsRes, embeddingModelsRes, llmProviderRes] = await Promise.all([
         systemApi.stats(),
         profilesApi.list(),
         localLlmApi.getOfflineConfig(),
         localLlmApi.getCustomEndpoints(),
-        systemApi.getConfigOptions()
+        systemApi.getConfigOptions(),
+        systemApi.listLLMModels(),
+        systemApi.listEmbeddingModels(),
+        systemApi.getLLMProviderConfig()
       ])
       setSystemStats(statsRes)
       setProfiles(profilesRes.profiles)
@@ -86,6 +109,17 @@ export default function ConfigurationPage() {
       setCustomEndpoints(endpointsRes.endpoints)
       setConfigOptions(configOptionsRes)
       setDefaultMatchCount(configOptionsRes.current.default_match_count)
+      setLlmModel(configOptionsRes.current.llm_model)
+      setEmbeddingModel(configOptionsRes.current.embedding_model)
+      setEmbeddingDimension(configOptionsRes.current.embedding_dimension)
+      setLlmModels(llmModelsRes.models)
+      setEmbeddingModels(embeddingModelsRes.models)
+      // Set LLM provider config
+      setLlmProviderConfig(llmProviderRes)
+      setOrchestratorProvider(llmProviderRes.orchestrator_provider)
+      setOrchestratorModel(llmProviderRes.orchestrator_model)
+      setWorkerProvider(llmProviderRes.worker_provider)
+      setWorkerModel(llmProviderRes.worker_model)
     } catch (err) {
       console.error('Error fetching data:', err)
     } finally {
@@ -362,6 +396,7 @@ export default function ConfigurationPage() {
       {/* Tabs */}
       <div className="flex gap-2 border-b border-gray-200 dark:border-gray-700 overflow-x-auto">
         {[
+          { id: 'llm', label: 'LLM Providers', icon: BoltIcon },
           { id: 'offline', label: 'Offline Mode', icon: WifiIcon },
           { id: 'network', label: 'Network Scan', icon: GlobeAltIcon },
           { id: 'models', label: 'Local Models', icon: CpuChipIcon },
@@ -382,6 +417,249 @@ export default function ConfigurationPage() {
           </button>
         ))}
       </div>
+
+      {/* LLM Providers Tab */}
+      {activeTab === 'llm' && (
+        <div className="space-y-6">
+          {/* Orchestrator LLM */}
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+            <div className="flex items-center gap-3 mb-4">
+              <BoltIcon className="h-5 w-5 text-primary" />
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Orchestrator LLM (Thinking Model)</h3>
+            </div>
+            <p className="text-sm text-secondary dark:text-gray-400 mb-4">
+              The orchestrator handles complex reasoning, planning, and synthesis. Choose a powerful model for best results.
+            </p>
+            
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">Provider</label>
+                <select
+                  value={orchestratorProvider}
+                  onChange={(e) => {
+                    setOrchestratorProvider(e.target.value)
+                    // Reset model when provider changes
+                    const provider = llmProviderConfig?.providers.find(p => p.id === e.target.value)
+                    if (provider && provider.models.length > 0) {
+                      setOrchestratorModel(provider.models[0])
+                    }
+                  }}
+                  className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-primary-900 dark:text-gray-200"
+                >
+                  {llmProviderConfig?.providers.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">Model</label>
+                <select
+                  value={orchestratorModel}
+                  onChange={(e) => setOrchestratorModel(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-primary-900 dark:text-gray-200"
+                >
+                  {(llmProviderConfig?.providers.find(p => p.id === orchestratorProvider)?.models || []).map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                  {orchestratorModel && !llmProviderConfig?.providers.find(p => p.id === orchestratorProvider)?.models.includes(orchestratorModel) && (
+                    <option value={orchestratorModel}>{orchestratorModel}</option>
+                  )}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Worker/Fast LLM */}
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+            <div className="flex items-center gap-3 mb-4">
+              <BoltIcon className="h-5 w-5 text-green-500" />
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Worker LLM (Fast Model)</h3>
+            </div>
+            <p className="text-sm text-secondary dark:text-gray-400 mb-4">
+              The worker handles parallel tasks like search summarization and quick responses. Choose a fast, cost-effective model.
+            </p>
+            
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">Provider</label>
+                <select
+                  value={workerProvider}
+                  onChange={(e) => {
+                    setWorkerProvider(e.target.value)
+                    // Reset model when provider changes
+                    const provider = llmProviderConfig?.providers.find(p => p.id === e.target.value)
+                    if (provider && provider.models.length > 0) {
+                      setWorkerModel(provider.models[0])
+                    }
+                  }}
+                  className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-primary-900 dark:text-gray-200"
+                >
+                  {llmProviderConfig?.providers.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">Model</label>
+                <select
+                  value={workerModel}
+                  onChange={(e) => setWorkerModel(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-primary-900 dark:text-gray-200"
+                >
+                  {(llmProviderConfig?.providers.find(p => p.id === workerProvider)?.models || []).map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                  {workerModel && !llmProviderConfig?.providers.find(p => p.id === workerProvider)?.models.includes(workerModel) && (
+                    <option value={workerModel}>{workerModel}</option>
+                  )}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* API Keys */}
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+            <div className="flex items-center gap-3 mb-4">
+              <Cog6ToothIcon className="h-5 w-5 text-amber-500" />
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">API Keys</h3>
+            </div>
+            <p className="text-sm text-secondary dark:text-gray-400 mb-4">
+              Configure API keys for each provider. Keys are stored securely and only masked values are displayed.
+            </p>
+            
+            <div className="space-y-4">
+              {/* OpenAI API Key */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  OpenAI API Key
+                  {llmProviderConfig?.openai_api_key_set && (
+                    <span className="ml-2 text-xs text-green-500">✓ Set ({llmProviderConfig.openai_api_key_masked})</span>
+                  )}
+                </label>
+                <input
+                  type="password"
+                  value={openaiApiKey}
+                  onChange={(e) => setOpenaiApiKey(e.target.value)}
+                  placeholder={llmProviderConfig?.openai_api_key_set ? '••••••••••••' : 'sk-...'}
+                  className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200"
+                />
+                <p className="text-xs text-secondary dark:text-gray-500 mt-1">Required for OpenAI models (GPT-5, GPT-4, etc.)</p>
+              </div>
+
+              {/* Google API Key */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  Google API Key (Gemini)
+                  {llmProviderConfig?.google_api_key_set && (
+                    <span className="ml-2 text-xs text-green-500">✓ Set ({llmProviderConfig.google_api_key_masked})</span>
+                  )}
+                </label>
+                <input
+                  type="password"
+                  value={googleApiKey}
+                  onChange={(e) => setGoogleApiKey(e.target.value)}
+                  placeholder={llmProviderConfig?.google_api_key_set ? '••••••••••••' : 'AIza...'}
+                  className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200"
+                />
+                <p className="text-xs text-secondary dark:text-gray-500 mt-1">Required for Google Gemini models</p>
+              </div>
+
+              {/* Anthropic API Key */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  Anthropic API Key (Claude)
+                  {llmProviderConfig?.anthropic_api_key_set && (
+                    <span className="ml-2 text-xs text-green-500">✓ Set ({llmProviderConfig.anthropic_api_key_masked})</span>
+                  )}
+                </label>
+                <input
+                  type="password"
+                  value={anthropicApiKey}
+                  onChange={(e) => setAnthropicApiKey(e.target.value)}
+                  placeholder={llmProviderConfig?.anthropic_api_key_set ? '••••••••••••' : 'sk-ant-...'}
+                  className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200"
+                />
+                <p className="text-xs text-secondary dark:text-gray-500 mt-1">Required for Anthropic Claude models</p>
+              </div>
+
+              {/* Fast LLM API Key (optional separate key) */}
+              <div className="rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-4">
+                <label className="block text-sm font-medium text-blue-900 dark:text-blue-200 mb-2">
+                  Fast LLM API Key (Optional)
+                  {llmProviderConfig?.fast_llm_api_key_set && (
+                    <span className="ml-2 text-xs text-green-500">✓ Set</span>
+                  )}
+                </label>
+                <input
+                  type="password"
+                  value={fastLlmApiKey}
+                  onChange={(e) => setFastLlmApiKey(e.target.value)}
+                  placeholder="Optional separate API key for worker LLM"
+                  className="w-full rounded-lg border border-blue-300 dark:border-blue-700 bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200"
+                />
+                <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+                  If set, the worker LLM will use this key instead of the provider's main key. Useful for using different billing accounts.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Save Button */}
+          <div className="flex justify-end gap-3">
+            <button
+              onClick={async () => {
+                setIsSavingLlmConfig(true)
+                setMessage(null)
+                try {
+                  const config: LLMProviderConfigRequest = {
+                    orchestrator_provider: orchestratorProvider,
+                    orchestrator_model: orchestratorModel,
+                    worker_provider: workerProvider,
+                    worker_model: workerModel,
+                  }
+                  // Only include API keys if they've been changed
+                  if (openaiApiKey) config.openai_api_key = openaiApiKey
+                  if (googleApiKey) config.google_api_key = googleApiKey
+                  if (anthropicApiKey) config.anthropic_api_key = anthropicApiKey
+                  if (fastLlmApiKey) config.fast_llm_api_key = fastLlmApiKey
+                  
+                  await systemApi.saveLLMProviderConfig(config)
+                  setMessage({ type: 'success', text: 'LLM provider configuration saved! Changes take effect immediately.' })
+                  // Clear API key inputs after saving
+                  setOpenaiApiKey('')
+                  setGoogleApiKey('')
+                  setAnthropicApiKey('')
+                  setFastLlmApiKey('')
+                  // Refresh config
+                  const newConfig = await systemApi.getLLMProviderConfig()
+                  setLlmProviderConfig(newConfig)
+                } catch (err) {
+                  setMessage({ type: 'error', text: 'Failed to save LLM configuration' })
+                } finally {
+                  setIsSavingLlmConfig(false)
+                }
+              }}
+              disabled={isSavingLlmConfig}
+              className="flex items-center gap-2 rounded-xl bg-primary px-6 py-2 font-medium text-white transition-all hover:bg-primary-700 disabled:opacity-50"
+            >
+              {isSavingLlmConfig && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
+              Save LLM Configuration
+            </button>
+          </div>
+
+          {/* Info Card */}
+          <div className="rounded-2xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-6">
+            <h4 className="text-sm font-medium text-blue-900 dark:text-blue-200 mb-2">How it works</h4>
+            <ul className="text-sm text-blue-800 dark:text-blue-300 space-y-1">
+              <li>• <strong>Orchestrator LLM:</strong> Handles complex reasoning, planning search strategies, and synthesizing final answers</li>
+              <li>• <strong>Worker LLM:</strong> Performs fast parallel tasks like summarizing search results and generating quick responses</li>
+              <li>• You can mix providers (e.g., GPT-5 for thinking + Gemini Flash for fast tasks)</li>
+              <li>• API keys are stored securely and loaded at startup</li>
+              <li>• Ollama (local) doesn't require an API key</li>
+            </ul>
+          </div>
+        </div>
+      )}
 
       {/* Offline Mode Tab */}
       {activeTab === 'offline' && (
@@ -937,27 +1215,90 @@ export default function ConfigurationPage() {
                 )}
               </div>
 
-              {/* Current Config Display */}
+              {/* Current Config Display - Now Editable */}
               <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
-                <h4 className="text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">Current Configuration</h4>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-secondary dark:text-gray-400">LLM Model:</span>
-                    <span className="text-primary-900 dark:text-gray-200 font-mono text-xs">
-                      {configOptions?.current.llm_model || 'Loading...'}
-                    </span>
+                <h4 className="text-sm font-medium text-primary-900 dark:text-gray-200 mb-3">Model Configuration</h4>
+                <div className="space-y-4">
+                  {/* LLM Model */}
+                  <div>
+                    <label className="block text-xs text-secondary dark:text-gray-400 mb-1">LLM Model</label>
+                    <select
+                      value={llmModel}
+                      onChange={(e) => setLlmModel(e.target.value)}
+                      className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none"
+                    >
+                      {llmModels.map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {model.id}
+                        </option>
+                      ))}
+                      {/* Add current model if not in list */}
+                      {llmModel && !llmModels.find(m => m.id === llmModel) && (
+                        <option value={llmModel}>{llmModel}</option>
+                      )}
+                    </select>
+                    {configOptions && llmModel !== configOptions.current.llm_model && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                        Changed from: {configOptions.current.llm_model}
+                      </p>
+                    )}
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-secondary dark:text-gray-400">Embedding Model:</span>
-                    <span className="text-primary-900 dark:text-gray-200 font-mono text-xs">
-                      {configOptions?.current.embedding_model || 'Loading...'}
-                    </span>
+
+                  {/* Embedding Model */}
+                  <div>
+                    <label className="block text-xs text-secondary dark:text-gray-400 mb-1">Embedding Model</label>
+                    <select
+                      value={embeddingModel}
+                      onChange={(e) => {
+                        const selected = e.target.value
+                        setEmbeddingModel(selected)
+                        // Auto-set dimension based on model
+                        const modelInfo = embeddingModels.find(m => m.id === selected)
+                        if (modelInfo) {
+                          setEmbeddingDimension(modelInfo.dimension)
+                        }
+                      }}
+                      className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none"
+                    >
+                      {embeddingModels.map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {model.id} ({model.dimension}d)
+                        </option>
+                      ))}
+                      {/* Add current model if not in list */}
+                      {embeddingModel && !embeddingModels.find(m => m.id === embeddingModel) && (
+                        <option value={embeddingModel}>{embeddingModel}</option>
+                      )}
+                    </select>
+                    {configOptions && embeddingModel !== configOptions.current.embedding_model && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                        Changed from: {configOptions.current.embedding_model}
+                      </p>
+                    )}
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-secondary dark:text-gray-400">Embedding Dimensions:</span>
-                    <span className="text-primary-900 dark:text-gray-200 font-mono text-xs">
-                      {configOptions?.current.embedding_dimension || 'Loading...'}
-                    </span>
+
+                  {/* Embedding Dimensions */}
+                  <div>
+                    <label className="block text-xs text-secondary dark:text-gray-400 mb-1">Embedding Dimensions</label>
+                    <select
+                      value={embeddingDimension}
+                      onChange={(e) => setEmbeddingDimension(Number(e.target.value))}
+                      className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none"
+                    >
+                      {(configOptions?.options.embedding_dimensions || [256, 512, 768, 1024, 1536, 3072]).map((dim) => (
+                        <option key={dim} value={dim}>
+                          {dim} dimensions
+                        </option>
+                      ))}
+                    </select>
+                    {configOptions && embeddingDimension !== configOptions.current.embedding_dimension && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                        Changed from: {configOptions.current.embedding_dimension}
+                      </p>
+                    )}
+                    <p className="text-xs text-secondary dark:text-gray-500 mt-1">
+                      Note: Changing dimensions requires re-indexing all documents
+                    </p>
                   </div>
                 </div>
               </div>
@@ -970,22 +1311,36 @@ export default function ConfigurationPage() {
                   setIsSavingSearch(true)
                   setMessage(null)
                   try {
-                    await systemApi.saveConfigToDb({ default_match_count: defaultMatchCount })
-                    setMessage({ type: 'success', text: 'Search settings saved successfully! Changes will persist across restarts.' })
+                    await systemApi.saveConfigToDb({ 
+                      default_match_count: defaultMatchCount,
+                      llm_model: llmModel,
+                      embedding_model: embeddingModel,
+                      embedding_dimension: embeddingDimension
+                    })
+                    setMessage({ type: 'success', text: 'Configuration saved successfully! Changes will persist across restarts.' })
                     // Refresh config options
                     const newConfig = await systemApi.getConfigOptions()
                     setConfigOptions(newConfig)
+                    setLlmModel(newConfig.current.llm_model)
+                    setEmbeddingModel(newConfig.current.embedding_model)
+                    setEmbeddingDimension(newConfig.current.embedding_dimension)
+                    setDefaultMatchCount(newConfig.current.default_match_count)
                   } catch (err) {
-                    setMessage({ type: 'error', text: 'Failed to save search settings' })
+                    setMessage({ type: 'error', text: 'Failed to save configuration' })
                   } finally {
                     setIsSavingSearch(false)
                   }
                 }}
-                disabled={isSavingSearch || !!(configOptions && defaultMatchCount === configOptions.current.default_match_count)}
+                disabled={isSavingSearch || !!(configOptions && 
+                  defaultMatchCount === configOptions.current.default_match_count &&
+                  llmModel === configOptions.current.llm_model &&
+                  embeddingModel === configOptions.current.embedding_model &&
+                  embeddingDimension === configOptions.current.embedding_dimension
+                )}
                 className="flex items-center gap-2 rounded-xl bg-primary px-6 py-2 font-medium text-white transition-all hover:bg-primary-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
               >
                 {isSavingSearch && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
-                Save Search Settings
+                Save Configuration
               </button>
             </div>
           </div>

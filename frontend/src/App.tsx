@@ -19,6 +19,9 @@ import CloudSourceConnectionsPage from './pages/CloudSourceConnectionsPage'
 import CloudSourceConnectPage from './pages/CloudSourceConnectPage'
 import EmailCloudConfigPage from './pages/EmailCloudConfigPage'
 import PromptManagementPage from './pages/PromptManagementPage'
+import DeveloperDocsPage from './pages/DeveloperDocsPage'
+import APIKeysPage from './pages/APIKeysPage'
+import ArchivedChatsPage from './pages/ArchivedChatsPage'
 import LoginPage from './pages/LoginPage'
 import NotFoundPage from './pages/NotFoundPage'
 
@@ -28,6 +31,7 @@ function App() {
       <ChatSidebarProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/api-docs" element={<DeveloperDocsPage />} />
           <Route path="/" element={<Layout />}>
             <Route index element={<HomePage />} />
             <Route path="chat" element={<ChatPageNew />} />
@@ -42,6 +46,8 @@ function App() {
             <Route path="system/config" element={<ConfigurationPage />} />
             <Route path="system/users" element={<UserManagementPage />} />
             <Route path="system/prompts" element={<PromptManagementPage />} />
+                        <Route path="system/api-keys" element={<APIKeysPage />} />
+                        <Route path="archived-chats" element={<ArchivedChatsPage />} />
             <Route path="cloud-sources" element={<CloudSourcesPage />} />
             <Route path="cloud-sources/connections" element={<CloudSourceConnectionsPage />} />
             <Route path="cloud-sources/connections/:connectionId" element={<CloudSourceConnectionsPage />} />

@@ -31,11 +31,22 @@ class BackendSettings(BaseSettings):
     mongodb_vector_index: str = Field(default="vector_index")
     mongodb_text_index: str = Field(default="text_index")
     
-    # LLM Settings
+    # LLM Settings (Primary/Orchestrator)
     llm_provider: str = Field(default="openai")
     llm_api_key: str = Field(default="")
     llm_model: str = Field(default="gpt-4o")
     llm_base_url: str = Field(default="https://api.openai.com/v1")
+    
+    # Provider-specific API Keys
+    openai_api_key: str = Field(default="", description="OpenAI API key")
+    google_api_key: str = Field(default="", description="Google Gemini API key")
+    anthropic_api_key: str = Field(default="", description="Anthropic Claude API key")
+    
+    # Fast/Worker LLM Settings (separate from orchestrator)
+    fast_llm_provider: str = Field(default="google", description="Provider for fast/worker model")
+    fast_llm_model: str = Field(default="gemini-2.0-flash-exp", description="Fast model name")
+    fast_llm_api_key: str = Field(default="", description="API key for fast model (if different)")
+    fast_llm_base_url: str = Field(default="", description="Base URL for fast model (if custom)")
     
     # Embedding Settings
     embedding_provider: str = Field(default="openai")
@@ -64,11 +75,19 @@ class BackendSettings(BaseSettings):
         default="gpt-4o",
         description="Model for orchestrator (planning, evaluation, synthesis)"
     )
+    orchestrator_provider: str = Field(
+        default="openai",
+        description="Provider for orchestrator model"
+    )
     
     # Worker Model (fast execution model)
     worker_model: str = Field(
-        default="gemini/gemini-2.0-flash-exp",
+        default="gemini-2.0-flash-exp",
         description="Model for workers (search execution, summarization)"
+    )
+    worker_provider: str = Field(
+        default="google",
+        description="Provider for worker model"
     )
     
     # Federated Agent Settings
@@ -122,6 +141,38 @@ class BackendSettings(BaseSettings):
     def brave_api_key(self) -> str:
         """Alias for brave_search_api_key for compatibility."""
         return self.brave_search_api_key
+    
+    def get_api_key_for_provider(self, provider: str) -> str:
+        """Get the API key for a specific provider.
+        
+        Args:
+            provider: Provider name (openai, google, anthropic, ollama)
+        
+        Returns:
+            API key for the provider, or empty string if not set
+        """
+        provider = provider.lower()
+        if provider == "openai":
+            return self.openai_api_key or self.llm_api_key
+        elif provider == "google" or provider == "gemini":
+            return self.google_api_key or self.llm_api_key
+        elif provider == "anthropic" or provider == "claude":
+            return self.anthropic_api_key or self.llm_api_key
+        elif provider == "ollama":
+            return ""  # Ollama doesn't need an API key
+        else:
+            return self.llm_api_key
+    
+    def get_orchestrator_api_key(self) -> str:
+        """Get the API key for the orchestrator model."""
+        return self.get_api_key_for_provider(self.orchestrator_provider)
+    
+    def get_worker_api_key(self) -> str:
+        """Get the API key for the worker model."""
+        # First check if a specific fast LLM key is set
+        if self.fast_llm_api_key:
+            return self.fast_llm_api_key
+        return self.get_api_key_for_provider(self.worker_provider)
     
     class Config:
         env_file = ".env"

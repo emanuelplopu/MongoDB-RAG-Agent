@@ -251,6 +251,8 @@ class ChatSession(BaseModel):
     messages: List[Message] = Field(default_factory=list)
     stats: SessionStats = Field(default_factory=SessionStats)
     is_pinned: bool = False
+    is_archived: bool = False
+    archived_at: Optional[datetime] = None
     profile: Optional[str] = None
 
 
@@ -306,6 +308,11 @@ class UpdateFolderRequest(BaseModel):
     name: Optional[str] = None
     color: Optional[str] = None
     is_expanded: Optional[bool] = None
+
+
+class BulkSessionsRequest(BaseModel):
+    """Request for bulk session operations."""
+    session_ids: List[str] = Field(..., min_length=1)
 
 
 class ModelInfo(BaseModel):
@@ -443,9 +450,13 @@ async def delete_folder(
 async def list_sessions(
     request: Request,
     folder_id: Optional[str] = None,
+    include_archived: bool = False,
     user: Optional[UserResponse] = Depends(get_current_user)
 ):
-    """List all chat sessions for the current user, optionally filtered by folder."""
+    """List all chat sessions for the current user, optionally filtered by folder.
+    
+    By default, archived sessions are excluded. Pass include_archived=true to include them.
+    """
     sessions_collection = await get_sessions_collection(request)
     folders_collection = await get_folders_collection(request)
     
@@ -455,6 +466,10 @@ async def list_sessions(
         query["user_id"] = user.id
     else:
         query["user_id"] = None  # Only show sessions without owner if not logged in
+    
+    # Exclude archived by default
+    if not include_archived:
+        query["is_archived"] = {"$ne": True}
     
     if folder_id is not None:
         query["folder_id"] = folder_id if folder_id != "none" else None
@@ -589,6 +604,161 @@ async def delete_session(
         raise HTTPException(status_code=404, detail="Session not found")
     
     return {"success": True}
+
+
+# ============== Archive Endpoints ==============
+
+@router.get("/archived/list")
+async def list_archived_sessions(
+    request: Request,
+    user: Optional[UserResponse] = Depends(get_current_user)
+):
+    """List all archived chat sessions for the current user."""
+    collection = await get_sessions_collection(request)
+    
+    query = {"is_archived": True}
+    if user:
+        query["user_id"] = user.id
+    else:
+        query["user_id"] = None
+    
+    sessions = []
+    async for doc in collection.find(query).sort("archived_at", -1):
+        doc["id"] = str(doc["_id"])
+        del doc["_id"]
+        # Don't return full messages in list view
+        doc["messages"] = []
+        sessions.append(ChatSession(**doc))
+    
+    return {"sessions": sessions}
+
+
+@router.post("/archive")
+async def archive_sessions(
+    request: Request,
+    bulk_request: BulkSessionsRequest,
+    user: Optional[UserResponse] = Depends(get_current_user)
+):
+    """Archive multiple chat sessions."""
+    collection = await get_sessions_collection(request)
+    
+    query = {"_id": {"$in": bulk_request.session_ids}}
+    if user:
+        query["user_id"] = user.id
+    
+    result = await collection.update_many(
+        query,
+        {
+            "$set": {
+                "is_archived": True,
+                "archived_at": datetime.now(),
+                "is_pinned": False  # Unpin when archiving
+            }
+        }
+    )
+    
+    return {
+        "success": True,
+        "archived_count": result.modified_count
+    }
+
+
+@router.post("/restore")
+async def restore_sessions(
+    request: Request,
+    bulk_request: BulkSessionsRequest,
+    user: Optional[UserResponse] = Depends(get_current_user)
+):
+    """Restore multiple archived chat sessions."""
+    collection = await get_sessions_collection(request)
+    
+    query = {
+        "_id": {"$in": bulk_request.session_ids},
+        "is_archived": True
+    }
+    if user:
+        query["user_id"] = user.id
+    
+    result = await collection.update_many(
+        query,
+        {
+            "$set": {
+                "is_archived": False,
+                "archived_at": None
+            }
+        }
+    )
+    
+    return {
+        "success": True,
+        "restored_count": result.modified_count
+    }
+
+
+@router.post("/delete-permanent")
+async def delete_sessions_permanently(
+    request: Request,
+    bulk_request: BulkSessionsRequest,
+    user: Optional[UserResponse] = Depends(get_current_user)
+):
+    """Permanently delete multiple chat sessions (cannot be undone)."""
+    collection = await get_sessions_collection(request)
+    
+    query = {"_id": {"$in": bulk_request.session_ids}}
+    if user:
+        query["user_id"] = user.id
+    
+    result = await collection.delete_many(query)
+    
+    return {
+        "success": True,
+        "deleted_count": result.deleted_count
+    }
+
+
+@router.get("/{session_id}/export")
+async def export_session(
+    request: Request,
+    session_id: str,
+    user: Optional[UserResponse] = Depends(get_current_user)
+):
+    """Export a chat session as JSON for download."""
+    collection = await get_sessions_collection(request)
+    
+    query = {"_id": session_id}
+    if user:
+        query["user_id"] = user.id
+    
+    doc = await collection.find_one(query)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    doc["id"] = str(doc["_id"])
+    del doc["_id"]
+    
+    # Format for export
+    session = ChatSession(**doc)
+    export_data = {
+        "exported_at": datetime.now().isoformat(),
+        "session": {
+            "id": session.id,
+            "title": session.title,
+            "model": session.model,
+            "created_at": session.created_at.isoformat(),
+            "updated_at": session.updated_at.isoformat(),
+            "messages": [
+                {
+                    "role": msg.role,
+                    "content": msg.content,
+                    "timestamp": msg.timestamp.isoformat() if msg.timestamp else None
+                }
+                for msg in session.messages
+            ],
+            "stats": session.stats.model_dump() if session.stats else None
+        }
+    }
+    
+    return export_data
 
 
 # ============== Message Endpoints ==============

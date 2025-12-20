@@ -29,6 +29,9 @@ import {
   CloudIcon,
   EnvelopeIcon,
   CommandLineIcon,
+  CodeBracketIcon,
+  KeyIcon,
+  ArchiveBoxIcon,
 } from '@heroicons/react/24/outline'
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid'
 import ThemeToggle from './ThemeToggle'
@@ -41,8 +44,10 @@ const baseMenuItems = [
   { name: 'Home', href: '/', icon: HomeIcon, adminOnly: false, exact: true },
   { name: 'Search', href: '/search', icon: MagnifyingGlassIcon, adminOnly: false },
   { name: 'Documents', href: '/documents', icon: DocumentTextIcon, adminOnly: false },
+  { name: 'Archived Chats', href: '/archived-chats', icon: ArchiveBoxIcon, adminOnly: false },
   { name: 'Cloud Sources', href: '/cloud-sources', icon: CloudIcon, adminOnly: false },
   { name: 'Email & Cloud Config', href: '/email-cloud-config', icon: EnvelopeIcon, adminOnly: false },
+  { name: 'API Docs', href: '/api-docs', icon: CodeBracketIcon, adminOnly: false, external: true },
   { name: 'Profiles', href: '/profiles', icon: UserCircleIcon, adminOnly: true },
 ]
 
@@ -54,6 +59,7 @@ const systemMenuItems = [
   { name: 'Configuration', href: '/system/config', icon: WrenchScrewdriverIcon },
   { name: 'Users', href: '/system/users', icon: UsersIcon },
   { name: 'Prompts', href: '/system/prompts', icon: CommandLineIcon },
+  { name: 'API Keys', href: '/system/api-keys', icon: KeyIcon },
 ]
 
 export default function Layout() {
@@ -74,6 +80,8 @@ export default function Layout() {
     showNewFolder,
     newFolderName,
     contextMenu,
+    isSelectMode,
+    selectedSessions,
     handleNewChat,
     handleSelectSession,
     handleDeleteSession,
@@ -87,6 +95,12 @@ export default function Layout() {
     setShowNewFolder,
     setNewFolderName,
     setContextMenu,
+    toggleSelectMode,
+    toggleSessionSelection,
+    selectAllSessions,
+    clearSelection,
+    archiveSelected,
+    deleteSelected,
   } = useChatSidebar()
 
   // Group sessions by folder
@@ -144,15 +158,74 @@ export default function Layout() {
 
   const SidebarContent = () => (
     <div className="flex flex-col h-full">
-      {/* Top Section - New Chat Button */}
+      {/* Top Section - New Chat Button or Select Mode Actions */}
       <div className="p-3 flex-shrink-0">
-        <button
-          onClick={() => handleNewChat()}
-          className="w-full flex items-center gap-2 px-4 py-3 rounded-xl border border-surface-variant dark:border-gray-600 hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-sm font-medium text-primary-900 dark:text-gray-200"
-        >
-          <PlusIcon className="h-5 w-5" />
-          New chat
-        </button>
+        {isSelectMode ? (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-primary-900 dark:text-gray-200">
+                {selectedSessions.size} selected
+              </span>
+              <button
+                onClick={toggleSelectMode}
+                className="text-sm text-primary-600 dark:text-primary-400 hover:underline"
+              >
+                Cancel
+              </button>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={selectAllSessions}
+                className="flex-1 px-2 py-1.5 text-xs bg-surface-variant dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
+              >
+                Select All
+              </button>
+              <button
+                onClick={clearSelection}
+                className="flex-1 px-2 py-1.5 text-xs bg-surface-variant dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
+              >
+                Clear
+              </button>
+            </div>
+            {selectedSessions.size > 0 && (
+              <div className="flex gap-2">
+                <button
+                  onClick={archiveSelected}
+                  className="flex-1 px-2 py-1.5 text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 rounded-lg hover:bg-amber-200 dark:hover:bg-amber-900/50"
+                >
+                  Archive ({selectedSessions.size})
+                </button>
+                <button
+                  onClick={() => {
+                    if (confirm(`Delete ${selectedSessions.size} chat(s)? This cannot be undone.`)) {
+                      deleteSelected()
+                    }
+                  }}
+                  className="flex-1 px-2 py-1.5 text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50"
+                >
+                  Delete ({selectedSessions.size})
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleNewChat()}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-surface-variant dark:border-gray-600 hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-sm font-medium text-primary-900 dark:text-gray-200"
+            >
+              <PlusIcon className="h-5 w-5" />
+              New chat
+            </button>
+            <button
+              onClick={toggleSelectMode}
+              className="px-3 py-3 rounded-xl border border-surface-variant dark:border-gray-600 hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-sm text-secondary dark:text-gray-400"
+              title="Select multiple chats"
+            >
+              <CheckIcon className="h-5 w-5" />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Folders Section (Projects) */}
@@ -239,7 +312,10 @@ export default function Layout() {
                       isActive={currentSession?.id === session.id && isOnChatPage}
                       isEditing={editingTitle === session.id}
                       editValue={editingTitleValue}
+                      isSelectMode={isSelectMode}
+                      isSelected={selectedSessions.has(session.id)}
                       onSelect={() => handleSelectSession(session.id)}
+                      onToggleSelect={() => toggleSessionSelection(session.id)}
                       onEditChange={setEditingTitleValue}
                       onEditSave={() => handleUpdateTitle(session.id)}
                       onEditCancel={() => setEditingTitle(null)}
@@ -280,7 +356,10 @@ export default function Layout() {
                     isActive={currentSession?.id === session.id && isOnChatPage}
                     isEditing={editingTitle === session.id}
                     editValue={editingTitleValue}
+                    isSelectMode={isSelectMode}
+                    isSelected={selectedSessions.has(session.id)}
                     onSelect={() => handleSelectSession(session.id)}
+                    onToggleSelect={() => toggleSessionSelection(session.id)}
                     onEditChange={setEditingTitleValue}
                     onEditSave={() => handleUpdateTitle(session.id)}
                     onEditCancel={() => setEditingTitle(null)}
@@ -306,7 +385,10 @@ export default function Layout() {
                     isActive={currentSession?.id === session.id && isOnChatPage}
                     isEditing={editingTitle === session.id}
                     editValue={editingTitleValue}
+                    isSelectMode={isSelectMode}
+                    isSelected={selectedSessions.has(session.id)}
                     onSelect={() => handleSelectSession(session.id)}
+                    onToggleSelect={() => toggleSessionSelection(session.id)}
                     onEditChange={setEditingTitleValue}
                     onEditSave={() => handleUpdateTitle(session.id)}
                     onEditCancel={() => setEditingTitle(null)}
@@ -598,7 +680,10 @@ function SessionItem({
   isActive,
   isEditing,
   editValue,
+  isSelectMode,
+  isSelected,
   onSelect,
+  onToggleSelect,
   onEditChange,
   onEditSave,
   onEditCancel,
@@ -608,7 +693,10 @@ function SessionItem({
   isActive: boolean
   isEditing: boolean
   editValue: string
+  isSelectMode: boolean
+  isSelected: boolean
   onSelect: () => void
+  onToggleSelect: () => void
   onEditChange: (value: string) => void
   onEditSave: () => void
   onEditCancel: () => void
@@ -616,15 +704,27 @@ function SessionItem({
 }) {
   return (
     <div
-      onClick={onSelect}
+      onClick={isSelectMode ? onToggleSelect : onSelect}
       onContextMenu={onContextMenu}
       className={`flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer group transition-colors ${
-        isActive
-          ? 'bg-primary-100 dark:bg-primary-900/50 text-primary-900 dark:text-primary-100'
-          : 'hover:bg-surface-variant dark:hover:bg-gray-800 text-primary-900 dark:text-gray-300'
+        isSelected
+          ? 'bg-primary-200 dark:bg-primary-800/50 text-primary-900 dark:text-primary-100'
+          : isActive
+            ? 'bg-primary-100 dark:bg-primary-900/50 text-primary-900 dark:text-primary-100'
+            : 'hover:bg-surface-variant dark:hover:bg-gray-800 text-primary-900 dark:text-gray-300'
       }`}
     >
-      <ChatBubbleLeftRightIcon className="h-4 w-4 flex-shrink-0 text-secondary" />
+      {isSelectMode ? (
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={onToggleSelect}
+          onClick={(e) => e.stopPropagation()}
+          className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+        />
+      ) : (
+        <ChatBubbleLeftRightIcon className="h-4 w-4 flex-shrink-0 text-secondary" />
+      )}
       {isEditing ? (
         <input
           type="text"

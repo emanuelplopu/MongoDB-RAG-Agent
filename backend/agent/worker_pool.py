@@ -20,6 +20,7 @@ from backend.agent.schemas import (
 )
 from backend.agent.federated_search import FederatedSearch, get_federated_search
 from backend.core.config import settings
+from backend.routers.prompts import get_agent_prompt_sync
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class WorkerPool:
     def __init__(
         self,
         model: str = None,
+        provider: str = None,
         max_workers: int = 4,
         federated_search: FederatedSearch = None
     ):
@@ -37,14 +39,41 @@ class WorkerPool:
         
         Args:
             model: LLM model for worker tasks (summarization, etc.)
+            provider: LLM provider (openai, google, anthropic)
             max_workers: Maximum concurrent workers
             federated_search: FederatedSearch instance for database searches
         """
         self.model = model or settings.worker_model
+        self.provider = provider or settings.worker_provider
         self.max_workers = max_workers
         self.federated_search = federated_search or get_federated_search()
         self.steps: List[WorkerStep] = []
         self._http_client: Optional[httpx.AsyncClient] = None
+    
+    def _get_model_string(self) -> str:
+        """Get the model string in LiteLLM format with provider prefix."""
+        provider = self.provider.lower()
+        model = self.model
+        
+        if provider == "openai":
+            return model  # No prefix needed
+        elif provider == "google" or provider == "gemini":
+            if not model.startswith("gemini/"):
+                return f"gemini/{model}"
+            return model
+        elif provider == "anthropic" or provider == "claude":
+            if not model.startswith("anthropic/"):
+                return f"anthropic/{model}"
+            return model
+        elif provider == "ollama":
+            if not model.startswith("ollama/"):
+                return f"ollama/{model}"
+            return model
+        return model
+    
+    def _get_api_key(self) -> str:
+        """Get the API key for the worker model."""
+        return settings.get_worker_api_key()
     
     def reset(self):
         """Reset steps for a new session."""
@@ -415,18 +444,20 @@ class WorkerPool:
         # Use LLM to summarize
         from litellm import acompletion
         
-        prompt = f"""Summarize the following search results in relation to: {task.context_hint or task.query}
-
-{chr(10).join(all_content[:10])}
-
-Provide a concise summary of the key findings."""
+        # Get prompt from database/defaults
+        prompt_template = get_agent_prompt_sync("worker_summarize")
+        prompt = prompt_template.format(
+            context_hint=task.context_hint or task.query,
+            content=chr(10).join(all_content[:10])
+        )
         
         try:
             response = await acompletion(
-                model=self.model,
+                model=self._get_model_string(),
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=500
+                max_tokens=500,
+                api_key=self._get_api_key(),
             )
             return response.choices[0].message.content
         except Exception as e:
@@ -458,20 +489,20 @@ Provide a concise summary of the key findings."""
                 "quality": result.result_quality
             })
         
-        prompt = f"""The original query was: {task.query}
-
-Previous search results:
-{results_summary}
-
-Based on these results, suggest a refined search query that might find better results.
-Just respond with the refined query, nothing else."""
+        # Get prompt from database/defaults
+        prompt_template = get_agent_prompt_sync("worker_refine_query")
+        prompt = prompt_template.format(
+            query=task.query,
+            results_summary=results_summary
+        )
         
         try:
             response = await acompletion(
-                model=self.model,
+                model=self._get_model_string(),
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.5,
-                max_tokens=100
+                max_tokens=100,
+                api_key=self._get_api_key(),
             )
             return response.choices[0].message.content.strip()
         except Exception as e:

@@ -407,6 +407,43 @@ export interface ConfigUpdateResponse {
   }
 }
 
+// LLM Provider Configuration Types
+export interface LLMProviderInfo {
+  id: string
+  name: string
+  models: string[]
+}
+
+export interface LLMProviderConfigResponse {
+  orchestrator_provider: string
+  orchestrator_model: string
+  worker_provider: string
+  worker_model: string
+  embedding_provider: string
+  openai_api_key_set: boolean
+  openai_api_key_masked: string
+  google_api_key_set: boolean
+  google_api_key_masked: string
+  anthropic_api_key_set: boolean
+  anthropic_api_key_masked: string
+  fast_llm_api_key_set: boolean
+  updated_at: string | null
+  providers: LLMProviderInfo[]
+}
+
+export interface LLMProviderConfigRequest {
+  orchestrator_provider?: string
+  orchestrator_model?: string
+  worker_provider?: string
+  worker_model?: string
+  embedding_provider?: string
+  openai_api_key?: string
+  google_api_key?: string
+  anthropic_api_key?: string
+  fast_llm_api_key?: string
+  embedding_api_key?: string
+}
+
 export interface IngestionStatus {
   status: string
   job_id?: string
@@ -662,6 +699,8 @@ export interface ChatSession {
   messages: SessionMessage[]
   stats: SessionStats
   is_pinned: boolean
+  is_archived: boolean
+  archived_at?: string
   profile?: string
 }
 
@@ -1034,6 +1073,17 @@ export const systemApi = {
     const response = await api.get('/system/config/saved')
     return response.data
   },
+
+  // LLM Provider Configuration
+  getLLMProviderConfig: async (): Promise<LLMProviderConfigResponse> => {
+    const response = await api.get('/system/llm-providers')
+    return response.data
+  },
+
+  saveLLMProviderConfig: async (config: LLMProviderConfigRequest): Promise<{ success: boolean; message: string }> => {
+    const response = await api.post('/system/llm-providers', config)
+    return response.data
+  },
 }
 
 // ============== Chat Sessions API ==============
@@ -1130,6 +1180,32 @@ export const sessionsApi = {
   // Model pricing
   getModelPricing: async (): Promise<{ models: ModelPricingInfo[] }> => {
     const response = await api.get('/sessions/meta/models')
+    return response.data
+  },
+
+  // Archive operations
+  listArchived: async (): Promise<{ sessions: ChatSession[] }> => {
+    const response = await api.get('/sessions/archived/list')
+    return response.data
+  },
+
+  archiveSessions: async (sessionIds: string[]): Promise<{ success: boolean; archived_count: number }> => {
+    const response = await api.post('/sessions/archive', { session_ids: sessionIds })
+    return response.data
+  },
+
+  restoreSessions: async (sessionIds: string[]): Promise<{ success: boolean; restored_count: number }> => {
+    const response = await api.post('/sessions/restore', { session_ids: sessionIds })
+    return response.data
+  },
+
+  deletePermanently: async (sessionIds: string[]): Promise<{ success: boolean; deleted_count: number }> => {
+    const response = await api.post('/sessions/delete-permanent', { session_ids: sessionIds })
+    return response.data
+  },
+
+  exportSession: async (sessionId: string): Promise<any> => {
+    const response = await api.get(`/sessions/${sessionId}/export`)
     return response.data
   },
 }
@@ -1270,6 +1346,66 @@ export const authApi = {
 
   deleteUser: async (userId: string): Promise<{ success: boolean; message: string }> => {
     const response = await api.delete(`/auth/users/${userId}`)
+    return response.data
+  },
+}
+
+// ============== API Keys Types ==============
+
+export interface APIKeyResponse {
+  id: string
+  name: string
+  key_prefix: string
+  created_at: string
+  last_used_at: string | null
+  expires_at: string | null
+  is_active: boolean
+  scopes: string[]
+}
+
+export interface APIKeyCreatedResponse {
+  id: string
+  name: string
+  key: string  // Only returned on creation
+  key_prefix: string
+  created_at: string
+  expires_at: string | null
+  scopes: string[]
+  warning: string
+}
+
+export interface CreateAPIKeyRequest {
+  name: string
+  expires_in_days?: number
+  scopes?: string[]
+}
+
+// ============== API Keys API ==============
+
+export const apiKeysApi = {
+  list: async (): Promise<APIKeyResponse[]> => {
+    const response = await api.get('/auth/api-keys')
+    return response.data
+  },
+
+  create: async (data: CreateAPIKeyRequest): Promise<APIKeyCreatedResponse> => {
+    const response = await api.post('/auth/api-keys', data)
+    return response.data
+  },
+
+  revoke: async (keyId: string): Promise<{ success: boolean; message: string }> => {
+    const response = await api.delete(`/auth/api-keys/${keyId}`)
+    return response.data
+  },
+
+  toggle: async (keyId: string): Promise<{ success: boolean; is_active: boolean; message: string }> => {
+    const response = await api.put(`/auth/api-keys/${keyId}/toggle`)
+    return response.data
+  },
+
+  // Admin: list all keys
+  listAll: async (): Promise<APIKeyResponse[]> => {
+    const response = await api.get('/auth/admin/api-keys')
     return response.data
   },
 }

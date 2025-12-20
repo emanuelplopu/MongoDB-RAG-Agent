@@ -21,6 +21,7 @@ from backend.agent.orchestrator import Orchestrator
 from backend.agent.worker_pool import WorkerPool
 from backend.agent.federated_search import FederatedSearch, get_federated_search
 from backend.core.config import settings
+from backend.routers.prompts import get_agent_prompt_sync
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +43,14 @@ class FederatedAgent:
         self.config = config or AgentModeConfig()
         self.federated_search = federated_search or get_federated_search()
         
-        # Initialize components
-        self.orchestrator = Orchestrator(model=self.config.orchestrator_model)
+        # Initialize components with provider configuration
+        self.orchestrator = Orchestrator(
+            model=self.config.orchestrator_model,
+            provider=settings.orchestrator_provider
+        )
         self.worker_pool = WorkerPool(
             model=self.config.worker_model,
+            provider=settings.worker_provider,
             max_workers=self.config.parallel_workers,
             federated_search=self.federated_search
         )
@@ -316,6 +321,27 @@ class FederatedAgent:
         
         return response
     
+    def _get_worker_model_string(self) -> str:
+        """Get the worker model string in LiteLLM format."""
+        provider = settings.worker_provider.lower()
+        model = self.config.worker_model
+        
+        if provider == "openai":
+            return model
+        elif provider == "google" or provider == "gemini":
+            if not model.startswith("gemini/"):
+                return f"gemini/{model}"
+            return model
+        elif provider == "anthropic" or provider == "claude":
+            if not model.startswith("anthropic/"):
+                return f"anthropic/{model}"
+            return model
+        elif provider == "ollama":
+            if not model.startswith("ollama/"):
+                return f"ollama/{model}"
+            return model
+        return model
+    
     async def _generate_fast_response(
         self,
         user_message: str,
@@ -331,6 +357,7 @@ class FederatedAgent:
             Response text
         """
         from litellm import acompletion
+        from backend.core.config import settings
         
         # Compile context from results
         context_parts = []
@@ -342,26 +369,24 @@ class FederatedAgent:
         
         context = "\n\n".join(context_parts) if context_parts else "No relevant information found."
         
-        prompt = f"""Based on the following information, answer the user's question.
-
-User Question: {user_message}
-
-Available Information:
-{context}
-
-Instructions:
-- Answer directly and concisely
-- Cite sources when using specific information: [Source: document/page title]
-- If information is not found, say so clearly
-
-Answer:"""
+        # Get prompt from database/defaults
+        prompt_template = get_agent_prompt_sync("agent_fast_response")
+        prompt = prompt_template.format(
+            user_message=user_message,
+            context=context
+        )
         
         try:
+            # Use the correct model string and API key based on provider
+            model_string = self._get_worker_model_string()
+            api_key = settings.get_worker_api_key()
+            
             response = await acompletion(
-                model=self.config.worker_model,
+                model=model_string,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
-                max_tokens=1500
+                max_tokens=1500,
+                api_key=api_key,
             )
             return response.choices[0].message.content
         except Exception as e:

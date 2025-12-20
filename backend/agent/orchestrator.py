@@ -7,6 +7,7 @@ The Orchestrator is responsible for:
 4. Synthesizing final responses
 
 It uses a "thinking" model (like GPT-5.1 or o1) for complex reasoning.
+Prompts are loaded from the database for easy customization.
 """
 
 import json
@@ -19,145 +20,53 @@ from backend.agent.schemas import (
     OrchestratorStep, OrchestratorPhase, WorkerResult, DocumentReference
 )
 from backend.core.config import settings
+from backend.routers.prompts import get_agent_prompt_sync, DEFAULT_AGENT_PROMPTS
 
 logger = logging.getLogger(__name__)
 
 
-# Prompts for each orchestrator phase
-ANALYZE_PROMPT = """You are analyzing a user's request to determine what information they need.
-
-**User Message:**
-{user_message}
-
-**Conversation History:**
-{conversation_history}
-
-**Available Data Sources:**
-- profile: Shared company/organization documents
-- cloud: Cloud storage (Google Drive, Dropbox, etc.)
-- personal: User's private data (emails, personal documents)
-- web: Internet search
-
-**Analyze and respond with JSON:**
-{{
-    "intent_summary": "Brief description of what the user wants",
-    "key_entities": ["list", "of", "important", "terms"],
-    "sources_needed": ["list of source types needed"],
-    "is_complex": true/false,
-    "requires_multiple_searches": true/false,
-    "reasoning": "Your reasoning about how to approach this"
-}}"""
-
-PLAN_PROMPT = """You are creating a search plan based on the analysis.
-
-**Analysis:**
-{analysis}
-
-**Available Sources:**
-{available_sources}
-
-**Create a plan with tasks. Each task should:**
-- Have a clear, focused query
-- Target specific sources when possible
-- Be parallelizable when independent
-
-**Respond with JSON:**
-{{
-    "intent_summary": "What the user wants",
-    "reasoning": "Your strategy",
-    "strategy": "parallel" | "sequential" | "iterative",
-    "tasks": [
-        {{
-            "id": "unique_id",
-            "type": "search_profile" | "search_cloud" | "search_personal" | "search_all" | "web_search",
-            "query": "the search query",
-            "sources": ["source_ids if specific"],
-            "priority": 1,
-            "depends_on": [],
-            "max_results": 10,
-            "context_hint": "what to look for"
-        }}
-    ],
-    "success_criteria": "What would make this answer complete",
-    "max_iterations": 3
-}}
-
-Important:
-- For "who am I" or identity questions, search personal data first
-- For company/organization questions, search profile first
-- Use web_search for external information only
-- Create 2-4 focused tasks rather than one broad task"""
-
-EVALUATE_PROMPT = """You are evaluating search results to decide if more searching is needed.
-
-**Original Intent:**
-{intent}
-
-**Success Criteria:**
-{success_criteria}
-
-**Results from Workers:**
-{results_summary}
-
-**Evaluate and respond with JSON:**
-{{
-    "phase": "initial" | "refinement" | "final",
-    "findings_summary": "What was found",
-    "gaps_identified": ["list of missing information"],
-    "decision": "sufficient" | "need_refinement" | "need_expansion" | "cannot_answer",
-    "follow_up_tasks": [
-        // Only if decision is need_refinement or need_expansion
-        {{
-            "id": "unique_id",
-            "type": "search type",
-            "query": "refined query",
-            "sources": [],
-            "priority": 1,
-            "depends_on": [],
-            "max_results": 10,
-            "context_hint": "what to look for"
-        }}
-    ],
-    "reasoning": "Why this decision",
-    "confidence": 0.0-1.0
-}}
-
-Guidelines:
-- If key information is found, decision should be "sufficient"
-- If results are empty but there are other search strategies, try "need_refinement"
-- If results are partial, consider "need_expansion" for broader search
-- "cannot_answer" only if exhausted all options"""
-
-SYNTHESIZE_PROMPT = """You are synthesizing a final answer from search results.
-
-**User's Question:**
-{user_message}
-
-**All Retrieved Information:**
-{all_results}
-
-**Instructions:**
-1. Answer the question directly and completely
-2. Cite sources inline: [Source: document_title] or [Source: url]
-3. If information is incomplete, acknowledge what's missing
-4. Be specific - quote relevant excerpts
-5. Organize the answer logically
-
-If the search found no relevant information, say so clearly and explain what you searched for."""
+# Default prompts (used when database is not available)
+# These are loaded from prompts.py and can be overridden in the database
+def _get_default_prompt(key: str) -> str:
+    """Get default prompt, falling back to hardcoded if needed."""
+    return get_agent_prompt_sync(key)
 
 
 class Orchestrator:
     """High-level thinking model that plans and coordinates searches."""
     
-    def __init__(self, model: str = None):
+    def __init__(self, model: str = None, provider: str = None):
         """Initialize orchestrator.
         
         Args:
             model: LLM model to use for orchestration
+            provider: LLM provider (openai, google, anthropic)
         """
         self.model = model or settings.orchestrator_model
+        self.provider = provider or settings.orchestrator_provider
         self.steps: List[OrchestratorStep] = []
         self._client = None
+    
+    def _get_model_string(self) -> str:
+        """Get the model string in LiteLLM format with provider prefix."""
+        provider = self.provider.lower()
+        model = self.model
+        
+        if provider == "openai":
+            return model  # No prefix needed
+        elif provider == "google" or provider == "gemini":
+            if not model.startswith("gemini/"):
+                return f"gemini/{model}"
+            return model
+        elif provider == "anthropic" or provider == "claude":
+            if not model.startswith("anthropic/"):
+                return f"anthropic/{model}"
+            return model
+        elif provider == "ollama":
+            if not model.startswith("ollama/"):
+                return f"ollama/{model}"
+            return model
+        return model
     
     def reset(self):
         """Reset steps for a new session."""
@@ -180,15 +89,21 @@ class Orchestrator:
             Parsed response dict (or {"response": text} if not JSON)
         """
         from litellm import acompletion
+        from backend.core.config import settings
         
         start_time = time.time()
         
         try:
+            # Get the model string with provider prefix
+            model_string = self._get_model_string()
+            api_key = settings.get_orchestrator_api_key()
+            
             response = await acompletion(
-                model=self.model,
+                model=model_string,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2 if phase != OrchestratorPhase.SYNTHESIZE else 0.7,
                 max_tokens=2000,
+                api_key=api_key,
             )
             
             content = response.choices[0].message.content
@@ -266,7 +181,7 @@ class Orchestrator:
         else:
             history_str = "(No previous messages)"
         
-        prompt = ANALYZE_PROMPT.format(
+        prompt = _get_default_prompt("agent_analyze").format(
             user_message=user_message,
             conversation_history=history_str
         )
@@ -301,7 +216,7 @@ class Orchestrator:
             for s in available_sources
         ])
         
-        prompt = PLAN_PROMPT.format(
+        prompt = _get_default_prompt("agent_plan").format(
             analysis=json.dumps(analysis, indent=2),
             available_sources=sources_str
         )
@@ -387,7 +302,7 @@ class Orchestrator:
                 ]
             results_summary.append(summary)
         
-        prompt = EVALUATE_PROMPT.format(
+        prompt = _get_default_prompt("agent_evaluate").format(
             intent=plan.intent_summary,
             success_criteria=plan.success_criteria,
             results_summary=json.dumps(results_summary, indent=2)
@@ -471,7 +386,7 @@ class Orchestrator:
         else:
             results_str = "No relevant information was found in the searches."
         
-        prompt = SYNTHESIZE_PROMPT.format(
+        prompt = _get_default_prompt("agent_synthesize").format(
             user_message=user_message,
             all_results=results_str
         )

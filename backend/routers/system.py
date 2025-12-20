@@ -49,6 +49,25 @@ class ConfigUpdateRequest(BaseModel):
     default_match_count: Optional[int] = None
 
 
+class LLMProviderConfig(BaseModel):
+    """LLM provider configuration for orchestrator and worker."""
+    # Orchestrator (thinking) LLM settings
+    orchestrator_provider: Optional[str] = None
+    orchestrator_model: Optional[str] = None
+    openai_api_key: Optional[str] = None
+    google_api_key: Optional[str] = None
+    anthropic_api_key: Optional[str] = None
+    
+    # Worker (fast) LLM settings
+    worker_provider: Optional[str] = None
+    worker_model: Optional[str] = None
+    fast_llm_api_key: Optional[str] = None  # Optional separate key for fast LLM
+    
+    # Embedding settings
+    embedding_provider: Optional[str] = None
+    embedding_api_key: Optional[str] = None
+
+
 # Collection name for persisted config
 CONFIG_COLLECTION = "system_config"
 CONFIG_DOC_ID = "active_config"
@@ -831,6 +850,231 @@ async def load_config_from_db(db) -> bool:
         return False
     except Exception as e:
         logger.warning(f"Failed to load config from database: {e}")
+        return False
+
+
+# LLM Provider configuration collection
+LLM_CONFIG_COLLECTION = "llm_config"
+LLM_CONFIG_DOC_ID = "provider_config"
+
+
+@router.get("/llm-providers")
+async def get_llm_provider_config(request: Request):
+    """
+    Get current LLM provider configuration.
+    
+    Returns provider settings without exposing full API keys.
+    """
+    db = request.app.state.db
+    
+    # Get from database if exists
+    try:
+        collection = db.db[LLM_CONFIG_COLLECTION]
+        doc = await collection.find_one({"_id": LLM_CONFIG_DOC_ID})
+        
+        # Mask API keys (show only last 4 characters)
+        def mask_key(key: str) -> str:
+            if not key:
+                return ""
+            if len(key) <= 4:
+                return "****"
+            return "****" + key[-4:]
+        
+        if doc:
+            return {
+                "orchestrator_provider": doc.get("orchestrator_provider", settings.orchestrator_provider),
+                "orchestrator_model": doc.get("orchestrator_model", settings.orchestrator_model),
+                "worker_provider": doc.get("worker_provider", settings.worker_provider),
+                "worker_model": doc.get("worker_model", settings.worker_model),
+                "embedding_provider": doc.get("embedding_provider", settings.embedding_provider),
+                "openai_api_key_set": bool(doc.get("openai_api_key") or settings.openai_api_key),
+                "openai_api_key_masked": mask_key(doc.get("openai_api_key") or settings.openai_api_key),
+                "google_api_key_set": bool(doc.get("google_api_key") or settings.google_api_key),
+                "google_api_key_masked": mask_key(doc.get("google_api_key") or settings.google_api_key),
+                "anthropic_api_key_set": bool(doc.get("anthropic_api_key") or settings.anthropic_api_key),
+                "anthropic_api_key_masked": mask_key(doc.get("anthropic_api_key") or settings.anthropic_api_key),
+                "fast_llm_api_key_set": bool(doc.get("fast_llm_api_key") or settings.fast_llm_api_key),
+                "updated_at": doc.get("updated_at"),
+                "providers": [
+                    {"id": "openai", "name": "OpenAI", "models": ["gpt-5.2", "gpt-5.1", "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]},
+                    {"id": "google", "name": "Google Gemini", "models": ["gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]},
+                    {"id": "anthropic", "name": "Anthropic Claude", "models": ["claude-3-5-sonnet-latest", "claude-3-opus-latest", "claude-3-haiku-20240307"]},
+                    {"id": "ollama", "name": "Ollama (Local)", "models": []},
+                ],
+            }
+    except Exception as e:
+        logger.warning(f"Failed to get LLM config from database: {e}")
+    
+    # Return defaults from settings
+    return {
+        "orchestrator_provider": settings.orchestrator_provider,
+        "orchestrator_model": settings.orchestrator_model,
+        "worker_provider": settings.worker_provider,
+        "worker_model": settings.worker_model,
+        "embedding_provider": settings.embedding_provider,
+        "openai_api_key_set": bool(settings.openai_api_key),
+        "openai_api_key_masked": "",
+        "google_api_key_set": bool(settings.google_api_key),
+        "google_api_key_masked": "",
+        "anthropic_api_key_set": bool(settings.anthropic_api_key),
+        "anthropic_api_key_masked": "",
+        "fast_llm_api_key_set": bool(settings.fast_llm_api_key),
+        "updated_at": None,
+        "providers": [
+            {"id": "openai", "name": "OpenAI", "models": ["gpt-5.2", "gpt-5.1", "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]},
+            {"id": "google", "name": "Google Gemini", "models": ["gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]},
+            {"id": "anthropic", "name": "Anthropic Claude", "models": ["claude-3-5-sonnet-latest", "claude-3-opus-latest", "claude-3-haiku-20240307"]},
+            {"id": "ollama", "name": "Ollama (Local)", "models": []},
+        ],
+    }
+
+
+@router.post("/llm-providers")
+async def save_llm_provider_config(request: Request, config: LLMProviderConfig):
+    """
+    Save LLM provider configuration to database.
+    
+    API keys are stored encrypted (in production you should use proper secrets management).
+    """
+    db = request.app.state.db
+    
+    try:
+        collection = db.db[LLM_CONFIG_COLLECTION]
+        
+        # Get existing config to preserve keys that aren't being updated
+        existing = await collection.find_one({"_id": LLM_CONFIG_DOC_ID}) or {}
+        
+        # Build update document
+        update_doc = {
+            "_id": LLM_CONFIG_DOC_ID,
+            "updated_at": datetime.now().isoformat(),
+        }
+        
+        # Update providers
+        if config.orchestrator_provider is not None:
+            update_doc["orchestrator_provider"] = config.orchestrator_provider
+            settings.orchestrator_provider = config.orchestrator_provider
+        else:
+            update_doc["orchestrator_provider"] = existing.get("orchestrator_provider", settings.orchestrator_provider)
+        
+        if config.orchestrator_model is not None:
+            update_doc["orchestrator_model"] = config.orchestrator_model
+            settings.orchestrator_model = config.orchestrator_model
+        else:
+            update_doc["orchestrator_model"] = existing.get("orchestrator_model", settings.orchestrator_model)
+        
+        if config.worker_provider is not None:
+            update_doc["worker_provider"] = config.worker_provider
+            settings.worker_provider = config.worker_provider
+        else:
+            update_doc["worker_provider"] = existing.get("worker_provider", settings.worker_provider)
+        
+        if config.worker_model is not None:
+            update_doc["worker_model"] = config.worker_model
+            settings.worker_model = config.worker_model
+        else:
+            update_doc["worker_model"] = existing.get("worker_model", settings.worker_model)
+        
+        if config.embedding_provider is not None:
+            update_doc["embedding_provider"] = config.embedding_provider
+            settings.embedding_provider = config.embedding_provider
+        else:
+            update_doc["embedding_provider"] = existing.get("embedding_provider", settings.embedding_provider)
+        
+        # Update API keys (only if provided - empty string clears, None preserves)
+        if config.openai_api_key is not None:
+            update_doc["openai_api_key"] = config.openai_api_key
+            settings.openai_api_key = config.openai_api_key
+        else:
+            update_doc["openai_api_key"] = existing.get("openai_api_key", "")
+        
+        if config.google_api_key is not None:
+            update_doc["google_api_key"] = config.google_api_key
+            settings.google_api_key = config.google_api_key
+        else:
+            update_doc["google_api_key"] = existing.get("google_api_key", "")
+        
+        if config.anthropic_api_key is not None:
+            update_doc["anthropic_api_key"] = config.anthropic_api_key
+            settings.anthropic_api_key = config.anthropic_api_key
+        else:
+            update_doc["anthropic_api_key"] = existing.get("anthropic_api_key", "")
+        
+        if config.fast_llm_api_key is not None:
+            update_doc["fast_llm_api_key"] = config.fast_llm_api_key
+            settings.fast_llm_api_key = config.fast_llm_api_key
+        else:
+            update_doc["fast_llm_api_key"] = existing.get("fast_llm_api_key", "")
+        
+        if config.embedding_api_key is not None:
+            update_doc["embedding_api_key"] = config.embedding_api_key
+            settings.embedding_api_key = config.embedding_api_key
+        else:
+            update_doc["embedding_api_key"] = existing.get("embedding_api_key", "")
+        
+        # Upsert to database
+        await collection.replace_one(
+            {"_id": LLM_CONFIG_DOC_ID},
+            update_doc,
+            upsert=True
+        )
+        
+        logger.info(f"Saved LLM provider config: orchestrator={update_doc.get('orchestrator_provider')}/{update_doc.get('orchestrator_model')}, worker={update_doc.get('worker_provider')}/{update_doc.get('worker_model')}")
+        
+        return {
+            "success": True,
+            "message": "LLM provider configuration saved",
+            "config": {
+                "orchestrator_provider": update_doc.get("orchestrator_provider"),
+                "orchestrator_model": update_doc.get("orchestrator_model"),
+                "worker_provider": update_doc.get("worker_provider"),
+                "worker_model": update_doc.get("worker_model"),
+                "embedding_provider": update_doc.get("embedding_provider"),
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to save LLM provider config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def load_llm_config_from_db(db) -> bool:
+    """
+    Load LLM provider configuration from database at startup.
+    
+    Returns True if config was loaded, False otherwise.
+    """
+    try:
+        collection = db.db[LLM_CONFIG_COLLECTION]
+        doc = await collection.find_one({"_id": LLM_CONFIG_DOC_ID})
+        
+        if doc:
+            if doc.get("orchestrator_provider"):
+                settings.orchestrator_provider = doc["orchestrator_provider"]
+            if doc.get("orchestrator_model"):
+                settings.orchestrator_model = doc["orchestrator_model"]
+            if doc.get("worker_provider"):
+                settings.worker_provider = doc["worker_provider"]
+            if doc.get("worker_model"):
+                settings.worker_model = doc["worker_model"]
+            if doc.get("embedding_provider"):
+                settings.embedding_provider = doc["embedding_provider"]
+            if doc.get("openai_api_key"):
+                settings.openai_api_key = doc["openai_api_key"]
+            if doc.get("google_api_key"):
+                settings.google_api_key = doc["google_api_key"]
+            if doc.get("anthropic_api_key"):
+                settings.anthropic_api_key = doc["anthropic_api_key"]
+            if doc.get("fast_llm_api_key"):
+                settings.fast_llm_api_key = doc["fast_llm_api_key"]
+            if doc.get("embedding_api_key"):
+                settings.embedding_api_key = doc["embedding_api_key"]
+            
+            logger.info(f"Loaded LLM provider config: orchestrator={settings.orchestrator_provider}/{settings.orchestrator_model}, worker={settings.worker_provider}/{settings.worker_model}")
+            return True
+        return False
+    except Exception as e:
+        logger.warning(f"Failed to load LLM config from database: {e}")
         return False
 
 

@@ -31,6 +31,9 @@ interface ChatSidebarContextType {
   showNewFolder: boolean
   newFolderName: string
   contextMenu: { sessionId: string; x: number; y: number } | null
+  // Multi-select
+  isSelectMode: boolean
+  selectedSessions: Set<string>
 
   // Actions
   loadSessions: () => Promise<void>
@@ -50,6 +53,13 @@ interface ChatSidebarContextType {
   setCurrentSession: React.Dispatch<React.SetStateAction<ChatSession | null>>
   setSessions: React.Dispatch<React.SetStateAction<ChatSession[]>>
   getPricing: (modelId: string) => { input: number; output: number }
+  // Multi-select actions
+  toggleSelectMode: () => void
+  toggleSessionSelection: (sessionId: string) => void
+  selectAllSessions: () => void
+  clearSelection: () => void
+  archiveSelected: () => Promise<void>
+  deleteSelected: () => Promise<void>
 }
 
 const ChatSidebarContext = createContext<ChatSidebarContextType | null>(null)
@@ -80,6 +90,9 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
   const [showNewFolder, setShowNewFolder] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
   const [contextMenu, setContextMenu] = useState<{ sessionId: string; x: number; y: number } | null>(null)
+  // Multi-select state
+  const [isSelectMode, setIsSelectMode] = useState(false)
+  const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set())
 
   // Load collapsed folders from localStorage
   useEffect(() => {
@@ -269,6 +282,75 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
     return pricing?.pricing || { input: 2.50, output: 10.00 }
   }, [modelPricing])
 
+  // Multi-select actions
+  const toggleSelectMode = useCallback(() => {
+    setIsSelectMode(prev => {
+      if (prev) {
+        // Exiting select mode - clear selection
+        setSelectedSessions(new Set())
+      }
+      return !prev
+    })
+  }, [])
+
+  const toggleSessionSelection = useCallback((sessionId: string) => {
+    setSelectedSessions(prev => {
+      const next = new Set(prev)
+      if (next.has(sessionId)) {
+        next.delete(sessionId)
+      } else {
+        next.add(sessionId)
+      }
+      return next
+    })
+  }, [])
+
+  const selectAllSessions = useCallback(() => {
+    setSelectedSessions(new Set(sessions.map(s => s.id)))
+  }, [sessions])
+
+  const clearSelection = useCallback(() => {
+    setSelectedSessions(new Set())
+  }, [])
+
+  const archiveSelected = useCallback(async () => {
+    if (selectedSessions.size === 0) return
+    try {
+      const ids = Array.from(selectedSessions)
+      await sessionsApi.archiveSessions(ids)
+      // Remove archived sessions from list
+      setSessions(prev => prev.filter(s => !selectedSessions.has(s.id)))
+      // If current session was archived, clear it
+      if (currentSession && selectedSessions.has(currentSession.id)) {
+        setCurrentSession(null)
+      }
+      setSelectedSessions(new Set())
+      setIsSelectMode(false)
+    } catch (err) {
+      console.error('Failed to archive sessions:', err)
+    }
+  }, [selectedSessions, currentSession])
+
+  const deleteSelected = useCallback(async () => {
+    if (selectedSessions.size === 0) return
+    try {
+      const ids = Array.from(selectedSessions)
+      await sessionsApi.deletePermanently(ids)
+      // Remove deleted sessions from list
+      setSessions(prev => prev.filter(s => !selectedSessions.has(s.id)))
+      // If current session was deleted, clear it
+      if (currentSession && selectedSessions.has(currentSession.id)) {
+        setCurrentSession(null)
+      }
+      // Clean up drafts
+      ids.forEach(id => localStorage.removeItem(STORAGE_KEYS.DRAFT + id))
+      setSelectedSessions(new Set())
+      setIsSelectMode(false)
+    } catch (err) {
+      console.error('Failed to delete sessions:', err)
+    }
+  }, [selectedSessions, currentSession])
+
   const value: ChatSidebarContextType = {
     sessions,
     folders,
@@ -282,6 +364,8 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
     showNewFolder,
     newFolderName,
     contextMenu,
+    isSelectMode,
+    selectedSessions,
     loadSessions,
     handleNewChat,
     handleSelectSession,
@@ -299,6 +383,12 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
     setCurrentSession,
     setSessions,
     getPricing,
+    toggleSelectMode,
+    toggleSessionSelection,
+    selectAllSessions,
+    clearSelection,
+    archiveSelected,
+    deleteSelected,
   }
 
   return (

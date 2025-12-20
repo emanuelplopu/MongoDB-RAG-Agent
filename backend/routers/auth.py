@@ -1,12 +1,14 @@
-"""Authentication router - User registration, login, and JWT management."""
+"""Authentication router - User registration, login, JWT management, and API keys."""
 
 import logging
 import os
 import uuid
+import secrets
+import hashlib
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
 
-from fastapi import APIRouter, HTTPException, Request, Depends, status
+from fastapi import APIRouter, HTTPException, Request, Depends, status, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, EmailStr
 from passlib.context import CryptContext
@@ -93,6 +95,53 @@ class TokenResponse(BaseModel):
     user: UserResponse
 
 
+# ============== API Key Models ==============
+
+class APIKey(BaseModel):
+    """API key model."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    name: str
+    key_hash: str  # Store hashed key, not plain text
+    key_prefix: str  # First 8 chars for identification
+    created_at: datetime = Field(default_factory=datetime.now)
+    last_used_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    is_active: bool = True
+    scopes: List[str] = Field(default_factory=lambda: ["read", "write"])  # Permissions
+
+
+class APIKeyCreate(BaseModel):
+    """Request to create an API key."""
+    name: str = Field(..., min_length=1, max_length=100)
+    expires_in_days: Optional[int] = Field(None, ge=1, le=365)  # Optional expiration
+    scopes: List[str] = Field(default_factory=lambda: ["read", "write"])
+
+
+class APIKeyResponse(BaseModel):
+    """API key response (without full key)."""
+    id: str
+    name: str
+    key_prefix: str
+    created_at: datetime
+    last_used_at: Optional[datetime]
+    expires_at: Optional[datetime]
+    is_active: bool
+    scopes: List[str]
+
+
+class APIKeyCreatedResponse(BaseModel):
+    """Response when API key is created - includes full key (only shown once)."""
+    id: str
+    name: str
+    key: str  # Full API key - only returned on creation!
+    key_prefix: str
+    created_at: datetime
+    expires_at: Optional[datetime]
+    scopes: List[str]
+    warning: str = "Save this key now. It will not be shown again."
+
+
 # ============== Helpers ==============
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -113,31 +162,86 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
+def generate_api_key() -> str:
+    """Generate a secure random API key."""
+    # Format: rag_xxxx...xxxx (40 chars total)
+    return "rag_" + secrets.token_hex(18)
+
+
+def hash_api_key(key: str) -> str:
+    """Hash an API key for storage."""
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def get_api_key_prefix(key: str) -> str:
+    """Get the prefix of an API key for display."""
+    return key[:12] + "..." + key[-4:]
+
+
 async def get_users_collection(request: Request):
     """Get users collection."""
     return request.app.state.db.db["users"]
 
 
+async def get_api_keys_collection(request: Request):
+    """Get API keys collection."""
+    return request.app.state.db.db["api_keys"]
+
+
 async def get_current_user(
     request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key")
 ) -> Optional[UserResponse]:
-    """Get current user from JWT token."""
-    if not credentials:
-        return None
+    """Get current user from JWT token or API key.
     
-    try:
-        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            return None
-    except JWTError:
+    Supports two authentication methods:
+    1. JWT Bearer token in Authorization header
+    2. API key in X-API-Key header
+    """
+    user_id = None
+    
+    # Try API key first
+    if x_api_key:
+        api_keys_collection = await get_api_keys_collection(request)
+        key_hash = hash_api_key(x_api_key)
+        
+        api_key_doc = await api_keys_collection.find_one({
+            "key_hash": key_hash,
+            "is_active": True
+        })
+        
+        if api_key_doc:
+            # Check expiration
+            if api_key_doc.get("expires_at") and api_key_doc["expires_at"] < datetime.now():
+                return None
+            
+            # Update last used
+            await api_keys_collection.update_one(
+                {"_id": api_key_doc["_id"]},
+                {"$set": {"last_used_at": datetime.now()}}
+            )
+            
+            user_id = api_key_doc["user_id"]
+    
+    # Try JWT token
+    if not user_id and credentials:
+        try:
+            payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+            user_id = payload.get("sub")
+        except JWTError:
+            pass
+    
+    if not user_id:
         return None
     
     collection = await get_users_collection(request)
     user_doc = await collection.find_one({"_id": user_id})
     
     if not user_doc:
+        return None
+    
+    if not user_doc.get("is_active", True):
         return None
     
     return UserResponse(
@@ -737,3 +841,176 @@ async def admin_delete_user(
     logger.info(f"Admin {admin.email} deleted user: {user_doc['email']}")
     
     return {"success": True, "message": "User deleted successfully"}
+
+
+# ============== API Key Management Endpoints ==============
+
+@router.get("/api-keys", response_model=List[APIKeyResponse])
+async def list_api_keys(
+    request: Request,
+    user: UserResponse = Depends(require_auth)
+):
+    """
+    List all API keys for the current user.
+    
+    Returns key metadata without the actual key value.
+    """
+    collection = await get_api_keys_collection(request)
+    
+    keys = []
+    async for doc in collection.find({"user_id": user.id}).sort("created_at", -1):
+        keys.append(APIKeyResponse(
+            id=str(doc["_id"]),
+            name=doc["name"],
+            key_prefix=doc["key_prefix"],
+            created_at=doc["created_at"],
+            last_used_at=doc.get("last_used_at"),
+            expires_at=doc.get("expires_at"),
+            is_active=doc.get("is_active", True),
+            scopes=doc.get("scopes", ["read", "write"])
+        ))
+    
+    return keys
+
+
+@router.post("/api-keys", response_model=APIKeyCreatedResponse)
+async def create_api_key(
+    request: Request,
+    key_request: APIKeyCreate,
+    user: UserResponse = Depends(require_auth)
+):
+    """
+    Create a new API key.
+    
+    The full key is only returned once at creation time.
+    Store it securely - it cannot be retrieved later.
+    """
+    collection = await get_api_keys_collection(request)
+    
+    # Generate a secure API key
+    plain_key = generate_api_key()
+    key_hash = hash_api_key(plain_key)
+    key_prefix = get_api_key_prefix(plain_key)
+    
+    # Calculate expiration if specified
+    expires_at = None
+    if key_request.expires_in_days:
+        expires_at = datetime.now() + timedelta(days=key_request.expires_in_days)
+    
+    # Create the API key record
+    api_key = APIKey(
+        user_id=user.id,
+        name=key_request.name,
+        key_hash=key_hash,
+        key_prefix=key_prefix,
+        expires_at=expires_at,
+        scopes=key_request.scopes
+    )
+    
+    doc = api_key.model_dump()
+    doc["_id"] = doc.pop("id")
+    
+    await collection.insert_one(doc)
+    
+    logger.info(f"User {user.email} created API key: {key_request.name}")
+    
+    return APIKeyCreatedResponse(
+        id=api_key.id,
+        name=api_key.name,
+        key=plain_key,  # Only returned once!
+        key_prefix=key_prefix,
+        created_at=api_key.created_at,
+        expires_at=expires_at,
+        scopes=api_key.scopes
+    )
+
+
+@router.delete("/api-keys/{key_id}")
+async def revoke_api_key(
+    request: Request,
+    key_id: str,
+    user: UserResponse = Depends(require_auth)
+):
+    """
+    Revoke (delete) an API key.
+    
+    The key will immediately stop working.
+    """
+    collection = await get_api_keys_collection(request)
+    
+    # Find the key and verify ownership
+    key_doc = await collection.find_one({"_id": key_id})
+    if not key_doc:
+        raise HTTPException(status_code=404, detail="API key not found")
+    
+    if key_doc["user_id"] != user.id and not user.is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized to revoke this key")
+    
+    await collection.delete_one({"_id": key_id})
+    
+    logger.info(f"User {user.email} revoked API key: {key_doc['name']}")
+    
+    return {"success": True, "message": "API key revoked successfully"}
+
+
+@router.put("/api-keys/{key_id}/toggle")
+async def toggle_api_key(
+    request: Request,
+    key_id: str,
+    user: UserResponse = Depends(require_auth)
+):
+    """
+    Enable or disable an API key without deleting it.
+    """
+    collection = await get_api_keys_collection(request)
+    
+    # Find the key and verify ownership
+    key_doc = await collection.find_one({"_id": key_id})
+    if not key_doc:
+        raise HTTPException(status_code=404, detail="API key not found")
+    
+    if key_doc["user_id"] != user.id and not user.is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized to modify this key")
+    
+    new_status = not key_doc.get("is_active", True)
+    await collection.update_one(
+        {"_id": key_id},
+        {"$set": {"is_active": new_status}}
+    )
+    
+    action = "enabled" if new_status else "disabled"
+    logger.info(f"User {user.email} {action} API key: {key_doc['name']}")
+    
+    return {"success": True, "is_active": new_status, "message": f"API key {action}"}
+
+
+# Admin endpoint to list all API keys
+@router.get("/admin/api-keys", response_model=List[APIKeyResponse])
+async def admin_list_all_api_keys(
+    request: Request,
+    admin: UserResponse = Depends(require_admin)
+):
+    """
+    List all API keys in the system (admin only).
+    """
+    collection = await get_api_keys_collection(request)
+    users_collection = await get_users_collection(request)
+    
+    keys = []
+    async for doc in collection.find({}).sort("created_at", -1):
+        # Get user email for context
+        user_doc = await users_collection.find_one({"_id": doc["user_id"]})
+        user_email = user_doc["email"] if user_doc else "unknown"
+        
+        keys.append(APIKeyResponse(
+            id=str(doc["_id"]),
+            name=f"{doc['name']} ({user_email})",
+            key_prefix=doc["key_prefix"],
+            created_at=doc["created_at"],
+            last_used_at=doc.get("last_used_at"),
+            expires_at=doc.get("expires_at"),
+            is_active=doc.get("is_active", True),
+            scopes=doc.get("scopes", ["read", "write"])
+        ))
+    
+    return keys

@@ -34,7 +34,7 @@ from backend.routers.cloud_sources import (
     providers_router as cloud_providers,
     cache_router as cloud_cache,
 )
-from backend.routers.system import load_config_from_db
+from backend.routers.system import load_config_from_db, load_llm_config_from_db
 from backend.routers.ingestion import check_and_resume_interrupted_jobs, graceful_shutdown_handler
 from backend.routers.prompts import initialize_default_templates
 from backend.core.config import settings
@@ -147,6 +147,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
             logger.info("No saved configuration found, using defaults")
     except Exception as e:
         logger.warning(f"Failed to load saved config: {e}")
+    
+    # Load LLM provider configuration from database
+    try:
+        llm_config_loaded = await load_llm_config_from_db(db_manager)
+        if llm_config_loaded:
+            logger.info("Loaded LLM provider configuration from database")
+    except Exception as e:
+        logger.warning(f"Failed to load LLM provider config: {e}")
     
     # Check for and resume interrupted ingestion jobs
     try:

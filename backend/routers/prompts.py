@@ -91,6 +91,27 @@ def openai_format_to_tool_schema(tool_dict: dict) -> ToolSchema:
 
 # ============== CRUD Operations ==============
 
+@router.post("/reinitialize", response_model=SuccessResponse)
+async def reinitialize_prompts(
+    request: Request,
+    force_update: bool = False,
+    current_user: Optional[UserResponse] = Depends(get_current_user)
+):
+    """Re-initialize prompt templates with defaults.
+    
+    Args:
+        force_update: If True, updates existing prompts to latest defaults
+                     (creates new versions, preserving history)
+    """
+    db = request.app.state.db
+    
+    await initialize_default_templates(db, force_update=force_update)
+    
+    if force_update:
+        return SuccessResponse(message="Prompts updated to latest defaults")
+    return SuccessResponse(message="Missing prompts initialized")
+
+
 @router.get("", response_model=PromptTemplateListResponse)
 async def list_templates(
     request: Request,
@@ -488,39 +509,250 @@ async def compare_versions(
 
 # ============== Default Template Initialization ==============
 
-async def initialize_default_templates(db):
-    """Initialize default prompt templates if none exist."""
+# ============== Agent Prompt Definitions ==============
+
+# These are the default prompts for the federated agent system
+DEFAULT_AGENT_PROMPTS = {
+    "agent_analyze": {
+        "name": "Agent Analyze",
+        "description": "Orchestrator prompt for analyzing user intent and determining search strategy",
+        "system_prompt": """You are analyzing a user's request to determine what information they need and which sources to search.
+
+**User Message:**
+{user_message}
+
+**Conversation History:**
+{conversation_history}
+
+**Available Data Sources:**
+- **profile**: Shared company/organization documents (policies, handbooks, internal docs)
+- **cloud**: Cloud storage documents (Google Drive, Dropbox, WebDAV files)
+- **personal**: User's private data (emails, personal documents, private files)
+- **web**: Internet search via Brave Search + browse specific URLs
+
+**Analyze and respond with JSON:**
+{{
+    "intent_summary": "Brief description of what the user wants",
+    "key_entities": ["list", "of", "important", "terms"],
+    "sources_needed": ["profile", "cloud", "personal", "web"],
+    "is_complex": true/false,
+    "requires_multiple_searches": true/false,
+    "requires_web_browsing": true/false,
+    "reasoning": "Your reasoning about how to approach this"
+}}
+
+**Analysis Guidelines:**
+- For identity questions ("who am I", "my role"): prioritize personal data
+- For company questions: prioritize profile documents
+- For cloud files: prioritize cloud storage
+- For current events or external info: use web search
+- Complex questions may need multiple sources"""
+    },
+    "agent_plan": {
+        "name": "Agent Plan",
+        "description": "Orchestrator prompt for creating execution plans with tasks",
+        "system_prompt": """You are creating a search plan based on the analysis.
+
+**Analysis:**
+{analysis}
+
+**Available Sources:**
+{available_sources}
+
+**Create a plan with tasks. Each task should:**
+- Have a clear, focused query
+- Target specific sources when possible
+- Be parallelizable when independent
+
+**Task Types Available:**
+- search_profile: Search shared company/organization documents
+- search_cloud: Search cloud storage (Google Drive, Dropbox, etc.)
+- search_personal: Search user's private data (emails, personal documents)
+- search_all: Search across all accessible sources
+- web_search: Search the internet using Brave Search
+- browse_web: Fetch content from a specific URL
+
+**Respond with JSON:**
+{{
+    "intent_summary": "What the user wants",
+    "reasoning": "Your strategy",
+    "strategy": "parallel" | "sequential" | "iterative",
+    "tasks": [
+        {{
+            "id": "unique_id",
+            "type": "search_profile" | "search_cloud" | "search_personal" | "search_all" | "web_search" | "browse_web",
+            "query": "the search query OR URL for browse_web",
+            "sources": ["source_ids if specific"],
+            "priority": 1,
+            "depends_on": [],
+            "max_results": 10,
+            "context_hint": "what to look for"
+        }}
+    ],
+    "success_criteria": "What would make this answer complete",
+    "max_iterations": 3
+}}
+
+**Planning Guidelines:**
+- For "who am I" or identity questions, search personal data first
+- For company/organization questions, search profile first
+- For cloud documents (Google Drive, Dropbox), use search_cloud
+- Use web_search to find URLs, then browse_web to fetch specific pages
+- Create 2-4 focused tasks rather than one broad task
+- Use parallel strategy when tasks are independent
+- Use sequential when later tasks depend on earlier results"""
+    },
+    "agent_evaluate": {
+        "name": "Agent Evaluate",
+        "description": "Orchestrator prompt for evaluating search results and deciding next steps",
+        "system_prompt": """You are evaluating search results to decide if more searching is needed.
+
+**Original Intent:**
+{intent}
+
+**Success Criteria:**
+{success_criteria}
+
+**Results from Workers:**
+{results_summary}
+
+**Evaluate and respond with JSON:**
+{{
+    "phase": "initial" | "refinement" | "final",
+    "findings_summary": "What was found",
+    "gaps_identified": ["list of missing information"],
+    "decision": "sufficient" | "need_refinement" | "need_expansion" | "cannot_answer",
+    "follow_up_tasks": [
+        // Only if decision is need_refinement or need_expansion
+        {{
+            "id": "unique_id",
+            "type": "search type",
+            "query": "refined query",
+            "sources": [],
+            "priority": 1,
+            "depends_on": [],
+            "max_results": 10,
+            "context_hint": "what to look for"
+        }}
+    ],
+    "reasoning": "Why this decision",
+    "confidence": 0.0-1.0
+}}
+
+Guidelines:
+- If key information is found, decision should be "sufficient"
+- If results are empty but there are other search strategies, try "need_refinement"
+- If results are partial, consider "need_expansion" for broader search
+- "cannot_answer" only if exhausted all options"""
+    },
+    "agent_synthesize": {
+        "name": "Agent Synthesize",
+        "description": "Orchestrator prompt for generating final answers from search results",
+        "system_prompt": """You are synthesizing a final answer from search results.
+
+**User's Question:**
+{user_message}
+
+**All Retrieved Information:**
+{all_results}
+
+**Instructions:**
+1. Answer the question directly and completely
+2. Cite sources inline: [Source: document_title] or [Source: url]
+3. If information is incomplete, acknowledge what's missing
+4. Be specific - quote relevant excerpts
+5. Organize the answer logically
+
+If the search found no relevant information, say so clearly and explain what you searched for."""
+    },
+    "agent_fast_response": {
+        "name": "Agent Fast Response",
+        "description": "Worker prompt for generating quick responses from search results",
+        "system_prompt": """Based on the following information, answer the user's question.
+
+**User Question:**
+{user_message}
+
+**Available Information:**
+{context}
+
+**Instructions:**
+- Answer directly and concisely
+- Cite sources when using specific information: [Source: document/page title]
+- If information is not found, say so clearly"""
+    },
+    "worker_summarize": {
+        "name": "Worker Summarize",
+        "description": "Worker prompt for summarizing search results",
+        "system_prompt": """Summarize the following search results in relation to: {context_hint}
+
+{content}
+
+Provide a concise summary of the key findings."""
+    },
+    "worker_refine_query": {
+        "name": "Worker Refine Query",
+        "description": "Worker prompt for refining search queries based on prior results",
+        "system_prompt": """The original query was: {query}
+
+Previous search results:
+{results_summary}
+
+Based on these results, suggest a refined search query that might find better results.
+Just respond with the refined query, nothing else."""
+    }
+}
+
+
+async def initialize_default_templates(db, force_update: bool = False):
+    """Initialize default prompt templates if none exist.
+    
+    Args:
+        db: Database instance
+        force_update: If True, update existing prompts with new defaults
+    """
     collection = db.db.prompt_templates
     
-    count = await collection.count_documents({})
-    if count > 0:
-        return
+    # Check for chat template
+    chat_count = await collection.count_documents({"category": "chat"})
     
-    # Import the current system prompt and tools from chat.py
-    from backend.routers.chat import TOOLS_SCHEMA
-    
-    default_system_prompt = """You are a helpful AI assistant with access to tools. You MUST use these tools to answer questions - NEVER respond without using tools first.
+    if chat_count == 0:
+        # Import the current system prompt and tools from chat.py
+        from backend.routers.chat import TOOLS_SCHEMA
+        
+        default_system_prompt = """You are a helpful AI assistant with access to powerful search and browsing tools. You MUST use these tools to answer questions - NEVER respond without using tools first.
 
 ## Available Tools:
 
 ### 1. search_knowledge_base
-Search internal documents using hybrid search (vector + text). The knowledge base contains documents about the user's company, projects, and internal information.
+Search internal documents using hybrid search (vector + text). The knowledge base contains:
+- **Profile Documents**: Shared company/organization documents
+- **Cloud Storage**: Documents from Google Drive, Dropbox, WebDAV, etc.
+- **Personal Data**: User's private emails, documents, and files
+
+Usage:
 - **ALWAYS call this multiple times** with different queries (at least 2-3 searches per question)
 - Start with broad context queries, then get specific
 - If a search returns no results, TRY DIFFERENT TERMS - don't give up!
 - When user says "my company" - search for company info, organization, business, etc.
 
 ### 2. browse_web  
-Fetch and read content from a web URL. Use when you have a specific URL to visit.
+Fetch and read content from a specific web URL.
+- Use when you have a specific URL to visit
+- Can extract text, markdown, or links from pages
+- Good for reading company websites, documentation, articles
 
 ### 3. web_search
-Search the web using Brave Search to find URLs.
+Search the internet using Brave Search.
+- Use to find URLs when you don't have a specific address
+- Returns titles, snippets, and URLs from search results
+- Good for finding current information, company registries, external data
 
 ## CRITICAL RULES:
 
-### Rule 1: NEVER give advice without searching first
-**WRONG**: Explaining to user what they should do or look for
-**RIGHT**: Actually searching and finding the information
+### Rule 1: ALWAYS search before responding
+**WRONG**: Explaining what the user should do or look for
+**RIGHT**: Actually calling the tools and finding the information
 
 ### Rule 2: When user references "my company" or "our organization"
 You MUST search the knowledge base first:
@@ -532,51 +764,118 @@ You MUST search the knowledge base first:
 - If search returns empty, try 2-3 MORE searches with different terms
 - Try synonyms: "accounting" → "finance", "invoices", "bookkeeping"
 - Try broader terms: "vendor" → "supplier", "partner", "company"
+- Try different source types: internal docs vs cloud storage vs web
 
-### Rule 4: Step-by-step questions require step-by-step tool usage
-When user asks "go step by step":
-1. Search for each piece of information separately
-2. Use multiple tool calls in sequence
-3. Gather all info before responding
+### Rule 4: Combine tools effectively
+- Use search_knowledge_base for internal data
+- Use web_search to find relevant URLs
+- Use browse_web to fetch content from those URLs
+- Chain tools together for comprehensive answers
 
-## Example - User asks: "find the owner of our accounting company"
-DO THIS:
+### Rule 5: Cite your sources
+- Always mention where information came from
+- Include document titles for internal sources
+- Include URLs for web sources
+
+## Example - User asks: "find the owner of our accounting firm"
+
 1. search_knowledge_base("company organization name") - find company name
-2. search_knowledge_base("accounting finance invoices") - find accounting docs
-3. search_knowledge_base("accounting firm vendor partner") - find accounting vendor
-4. web_search("[accounting company name] owner") - search web for owner
-5. browse_web("[company website]/about") - check their website
+2. search_knowledge_base("accounting finance vendor") - find accounting docs
+3. web_search("[accounting company name] owner CEO") - search web
+4. browse_web("[company website]/about") - check their website
+5. Synthesize findings with citations
 
-DO NOT: Explain what the user should do. Actually DO the searches.
+Remember: You have access to the user's company documents AND the internet. Use both! Search multiple times with different queries!"""
 
-Remember: You have access to the user's company documents. Search them! Multiple times! With different queries!"""
-
-    # Convert TOOLS_SCHEMA to ToolSchema format
-    tools = [openai_format_to_tool_schema(t) for t in TOOLS_SCHEMA]
+        # Convert TOOLS_SCHEMA to ToolSchema format
+        tools = [openai_format_to_tool_schema(t) for t in TOOLS_SCHEMA]
+        
+        initial_version = {
+            "version": 1,
+            "system_prompt": default_system_prompt,
+            "tools": [t.model_dump() for t in tools],
+            "created_at": datetime.now(),
+            "created_by": "system",
+            "notes": "Default system prompt with RAG tools",
+            "is_active": True
+        }
+        
+        default_template = {
+            "name": "Default Chat Agent",
+            "description": "Main system prompt for the RAG chat agent with search and browsing tools",
+            "category": "chat",
+            "versions": [initial_version],
+            "active_version": 1,
+            "created_at": datetime.now(),
+            "updated_at": datetime.now(),
+            "created_by": "system"
+        }
+        
+        await collection.insert_one(default_template)
+        logger.info("Initialized default chat prompt template")
     
-    initial_version = {
-        "version": 1,
-        "system_prompt": default_system_prompt,
-        "tools": [t.model_dump() for t in tools],
-        "created_at": datetime.now(),
-        "created_by": "system",
-        "notes": "Default system prompt with RAG tools",
-        "is_active": True
-    }
-    
-    default_template = {
-        "name": "Default Chat Agent",
-        "description": "Main system prompt for the RAG chat agent with search and browsing tools",
-        "category": "chat",
-        "versions": [initial_version],
-        "active_version": 1,
-        "created_at": datetime.now(),
-        "updated_at": datetime.now(),
-        "created_by": "system"
-    }
-    
-    await collection.insert_one(default_template)
-    logger.info("Initialized default prompt template")
+    # Initialize agent prompts
+    for prompt_key, prompt_data in DEFAULT_AGENT_PROMPTS.items():
+        existing = await collection.find_one({"category": prompt_key})
+        if existing and not force_update:
+            continue
+        
+        if existing and force_update:
+            # Update existing prompt with new default as a new version
+            versions = existing.get("versions", [])
+            next_version = max([v.get("version", 0) for v in versions], default=0) + 1
+            
+            new_version = {
+                "version": next_version,
+                "system_prompt": prompt_data["system_prompt"],
+                "tools": [],
+                "created_at": datetime.now(),
+                "created_by": "system",
+                "notes": "Updated from defaults",
+                "is_active": True
+            }
+            
+            # Mark all old versions as inactive
+            for v in versions:
+                v["is_active"] = False
+            versions.append(new_version)
+            
+            await collection.update_one(
+                {"_id": existing["_id"]},
+                {
+                    "$set": {
+                        "versions": versions,
+                        "active_version": next_version,
+                        "updated_at": datetime.now()
+                    }
+                }
+            )
+            logger.info(f"Updated agent prompt template: {prompt_key} to v{next_version}")
+            continue
+        
+        initial_version = {
+            "version": 1,
+            "system_prompt": prompt_data["system_prompt"],
+            "tools": [],  # Agent prompts don't have tools
+            "created_at": datetime.now(),
+            "created_by": "system",
+            "notes": "Default agent prompt",
+            "is_active": True
+        }
+        
+        template = {
+            "name": prompt_data["name"],
+            "description": prompt_data["description"],
+            "category": prompt_key,
+            "versions": [initial_version],
+            "active_version": 1,
+            "created_at": datetime.now(),
+            "updated_at": datetime.now(),
+            "created_by": "system"
+        }
+        
+        await collection.insert_one(template)
+        logger.info(f"Initialized agent prompt template: {prompt_key}")
 
 
 # ============== Get Active Prompt ==============
@@ -609,3 +908,45 @@ async def get_active_prompt(db, category: str = "chat") -> tuple:
             return system_prompt, tools
     
     return None, None
+
+
+async def get_agent_prompt(db, prompt_key: str) -> str:
+    """Get an agent prompt from the database.
+    
+    Args:
+        db: Database instance
+        prompt_key: The prompt category key (e.g., 'agent_analyze', 'agent_plan')
+    
+    Returns:
+        The system prompt string, or the default if not found
+    """
+    collection = db.db.prompt_templates
+    
+    doc = await collection.find_one({"category": prompt_key})
+    if doc:
+        active_version = doc.get("active_version", 1)
+        for v in doc.get("versions", []):
+            if v.get("version") == active_version:
+                return v.get("system_prompt", "")
+    
+    # Fall back to default prompts
+    if prompt_key in DEFAULT_AGENT_PROMPTS:
+        return DEFAULT_AGENT_PROMPTS[prompt_key]["system_prompt"]
+    
+    return ""
+
+
+def get_agent_prompt_sync(prompt_key: str) -> str:
+    """Get an agent prompt synchronously (returns default).
+    
+    This is used when database is not available or for initialization.
+    
+    Args:
+        prompt_key: The prompt category key
+    
+    Returns:
+        The default system prompt string
+    """
+    if prompt_key in DEFAULT_AGENT_PROMPTS:
+        return DEFAULT_AGENT_PROMPTS[prompt_key]["system_prompt"]
+    return ""
