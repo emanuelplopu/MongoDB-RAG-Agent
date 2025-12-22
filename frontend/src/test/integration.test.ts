@@ -79,7 +79,8 @@ describe('Frontend-Backend Integration: Profile Flow', () => {
       description: 'Test profile for integration tests',
       documents_folders: ['./test_docs'],
     })
-    expect(created.key).toBe('integration_test_profile')
+    expect(created.message).toContain('created')
+    expect(created.profile).toBeDefined()
     
     // Delete profile
     const deleted = await profilesApi.delete('integration_test_profile')

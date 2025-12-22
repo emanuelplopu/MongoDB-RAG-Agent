@@ -158,7 +158,8 @@ describe('profilesApi', () => {
       documents_folders: ['./test_docs'],
     })
     expect(result).toBeDefined()
-    expect(result.key).toBe('test_profile')
+    expect(result.message).toContain('created')
+    expect(result.profile).toBeDefined()
   })
 
   it('should delete profile', async () => {

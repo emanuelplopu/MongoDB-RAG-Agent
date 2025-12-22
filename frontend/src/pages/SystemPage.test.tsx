@@ -2,11 +2,28 @@
  * Unit tests for System page component.
  */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
 import { server } from '../test/server'
 import SystemPage from './SystemPage'
+import { mockUser } from '../test/test-utils'
+
+// Mock the AuthContext module - SystemPage needs admin user
+vi.mock('../contexts/AuthContext', () => ({
+  useAuth: () => ({
+    user: mockUser, // mockUser.is_admin = true
+    isLoading: false,
+    isAuthenticated: true,
+    sessionExpired: false,
+    login: vi.fn(),
+    register: vi.fn(),
+    logout: vi.fn(),
+    refreshUser: vi.fn(),
+    dismissSessionExpired: vi.fn(),
+  }),
+  AuthProvider: ({ children }: { children: React.ReactNode }) => children,
+}))
 
 // Wrapper with router context
 const renderWithRouter = (ui: React.ReactElement) => {
@@ -19,7 +36,10 @@ const renderWithRouter = (ui: React.ReactElement) => {
 
 // Start MSW server before tests
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
-afterEach(() => server.resetHandlers())
+afterEach(() => {
+  server.resetHandlers()
+  vi.clearAllMocks()
+})
 afterAll(() => server.close())
 
 
