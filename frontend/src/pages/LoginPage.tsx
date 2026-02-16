@@ -33,7 +33,7 @@ export default function LoginPage() {
         }
         await register(email, name, password)
       }
-      navigate('/')
+      navigate('/dashboard')
     } catch (err: any) {
       // Handle ApiError with user-friendly messages
       if (err instanceof ApiError) {

@@ -2,7 +2,7 @@
  * Unit tests for System page component.
  */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi, beforeEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
 import { server } from '../test/server'

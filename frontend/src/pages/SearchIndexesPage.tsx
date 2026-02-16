@@ -40,7 +40,7 @@ export default function SearchIndexesPage() {
   
   useEffect(() => {
     if (!authLoading && (!user || !user.is_admin)) {
-      navigate('/')
+      navigate('/dashboard')
     }
   }, [user, authLoading, navigate])
   

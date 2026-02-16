@@ -35,7 +35,7 @@ export default function StatusPage() {
   
   useEffect(() => {
     if (!authLoading && (!user || !user.is_admin)) {
-      navigate('/')
+      navigate('/dashboard')
     }
   }, [user, authLoading, navigate])
   

@@ -7,7 +7,6 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import LoginPage from './LoginPage'
-import * as client from '../api/client'
 
 // Mock navigate
 const mockNavigate = vi.fn()

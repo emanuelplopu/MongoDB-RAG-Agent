@@ -72,7 +72,7 @@ export default function ProfilesPage() {
   // Redirect non-admins after auth is loaded
   useEffect(() => {
     if (!isAuthLoading && user && !user.is_admin) {
-      navigate('/')
+      navigate('/dashboard')
     }
   }, [isAuthLoading, user, navigate])
 
