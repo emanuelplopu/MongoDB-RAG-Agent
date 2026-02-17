@@ -1063,7 +1063,6 @@ async def send_message(
 async def send_message_stream(
     request: Request,
     session_id: str,
-    msg_request: SendMessageRequest = Body(...),
     user: Optional[UserResponse] = Depends(get_current_user)
 ):
     """Send a message and stream back agent operations via SSE.
@@ -1080,6 +1079,16 @@ async def send_message_stream(
     - response: Final response with full data
     - error: An error occurred
     """
+    # Manually parse the request body to avoid FastAPI body parsing issues
+    try:
+        body_bytes = await request.body()
+        body_data = json.loads(body_bytes)
+        msg_request = SendMessageRequest(**body_data)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Invalid request data: {str(e)}")
+    
     db = request.app.state.db
     collection = await get_sessions_collection(request)
     

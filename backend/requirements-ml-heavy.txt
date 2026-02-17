@@ -1,0 +1,23 @@
+# Heavy ML dependencies - CHANGE RARELY
+# These take 10-15 minutes to install
+# Sorted by install time (slowest first)
+#
+# IMPORTANT: Only modify this file when you need to change ML/AI capabilities
+# Changes here will trigger a full rebuild of the ML layer (~10-15 min)
+
+# PyTorch ecosystem (pulled by whisper, transformers)
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Whisper for audio transcription
+openai-whisper>=20240930
+
+# Transformers for NLP
+transformers>=4.47.0
+
+# Docling for document parsing (pulls many deps)
+docling>=2.14.0
+docling-core>=2.4.0
+
+# Audio processing
+pydub>=0.25.0

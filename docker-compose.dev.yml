@@ -1,0 +1,41 @@
+# RecallHub - Development Docker Compose Override
+# ================================================
+# Hot-reload mode: Code changes take effect immediately without rebuilding
+#
+# Usage:
+#   docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# Benefits:
+#   - Zero rebuild time for code changes
+#   - Instant hot-reload via uvicorn --reload
+#   - Source code mounted as volumes
+#
+# When to use:
+#   - Daily development work
+#   - Testing API changes
+#   - Debugging
+#
+# When NOT to use:
+#   - Adding new dependencies (use regular build)
+#   - Production deployment
+
+services:
+  backend:
+    volumes:
+      # Mount source code for hot reload - changes don't require rebuild
+      - ./src:/app/src:ro
+      - ./backend:/app/backend:ro
+      - ./profiles.yaml:/app/profiles.yaml:ro
+      - ./documents:/app/documents
+      - ./projects:/app/projects
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+    # Override CMD to enable hot-reload
+    command: ["python", "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/backend", "--reload-dir", "/app/src"]
+
+  frontend:
+    volumes:
+      # Mount frontend source for development
+      - ./frontend/src:/app/src:ro
+      - ./frontend/public:/app/public:ro

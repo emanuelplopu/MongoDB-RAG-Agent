@@ -1,11 +1,24 @@
-# RecallHub Backend - ML Heavy Version (for training/embedding)
-# Use this when you need full ML capabilities (transformers, whisper, etc.)
-# WARNING: This image will be much larger (~5-8GB)
+# RecallHub Backend - ML Heavy Version (Optimized for Layer Caching)
+# =====================================================================
+# Layer Strategy for Fast Incremental Builds:
+#   Layer 1: System deps + Python venv (rarely changes)
+#   Layer 2: Heavy ML deps - torch, transformers, whisper, docling (~10GB, changes rarely)
+#   Layer 3: API deps - fastapi, pydantic, etc (~500MB, changes occasionally)
+#   Layer 4: Playwright browser (~400MB, rarely changes)
+#   Layer 5: Application code (changes frequently - FASTEST to rebuild)
+#
+# Build Commands:
+#   Fast build (default):  docker-compose build backend
+#   Full rebuild:          docker-compose build --no-cache backend
+#
+# Requires BuildKit: DOCKER_BUILDKIT=1
+
+# syntax=docker/dockerfile:1.4
 
 # ============================================
-# Stage 1: Builder - Install dependencies
+# Stage 1: Base Builder with Python venv
 # ============================================
-FROM python:3.11-slim AS builder
+FROM python:3.11-slim AS base-builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
@@ -17,41 +30,60 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install UV package manager
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:$PATH"
-
 WORKDIR /app
 
-# Copy dependency files for caching
-COPY pyproject.toml ./
+# Create virtual environment
+RUN python -m venv /app/.venv
+ENV PATH="/app/.venv/bin:$PATH" \
+    VIRTUAL_ENV="/app/.venv"
 
-# Create venv and install ALL dependencies including ML packages
-RUN uv venv /app/.venv && \
-    . /app/.venv/bin/activate && \
-    uv sync --no-dev --no-editable --compile-bytecode && \
-    # Clean up caches
-    find /app/.venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
-    find /app/.venv -type f -name "*.pyc" -delete 2>/dev/null || true && \
-    rm -rf /root/.cache/uv /root/.cache/pip ~/.cache
+# Upgrade pip once
+RUN pip install --upgrade pip
 
 # ============================================
-# Stage 2: Playwright - Install browser
+# Stage 2: Heavy ML Dependencies (RARELY CHANGES)
+# These are the slowest to install - torch, transformers, whisper, docling
+# Only rebuilds when requirements-ml-heavy.txt changes
 # ============================================
-FROM python:3.11-slim AS playwright
+FROM base-builder AS ml-deps
 
-# Copy venv from builder
-COPY --from=builder /app/.venv /app/.venv
-ENV PATH="/app/.venv/bin:$PATH"
+# Copy ONLY the ML requirements file first for layer caching
+COPY backend/requirements-ml-heavy.txt ./requirements-ml-heavy.txt
 
-# Install playwright WITH browser for full functionality
-RUN python -m ensurepip --upgrade && \
-    python -m pip install --no-cache-dir playwright && \
-    python -m playwright install chromium --with-deps && \
-    rm -rf /root/.cache/pip
+# Install heavy ML dependencies with cache mount
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements-ml-heavy.txt
 
 # ============================================
-# Stage 3: Runtime - Final image
+# Stage 3: API/Core Dependencies (CHANGES OCCASIONALLY)
+# FastAPI, pydantic, httpx, etc - quick to install
+# Only rebuilds when requirements-api.txt changes
+# ============================================
+FROM ml-deps AS api-deps
+
+# Copy ONLY the API requirements file for layer caching
+COPY backend/requirements-api.txt ./requirements-api.txt
+
+# Install API dependencies with cache mount
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements-api.txt && \
+    # Clean up pycache to reduce image size
+    find /app/.venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+
+# ============================================
+# Stage 4: Playwright with Browser
+# Only rebuilds if api-deps layer changes
+# ============================================
+FROM api-deps AS playwright-stage
+
+# Install playwright and chromium browser
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install playwright && \
+    python -m playwright install chromium --with-deps
+
+# ============================================
+# Stage 5: Runtime - Final Image
+# Application code is copied LAST for fastest rebuilds
 # ============================================
 FROM python:3.11-slim AS runtime
 
@@ -88,11 +120,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy virtual environment and browser cache
-COPY --from=playwright /app/.venv /app/.venv
-COPY --from=playwright /root/.cache/ms-playwright /root/.cache/ms-playwright
+# Copy virtual environment and playwright cache from build stages
+COPY --from=playwright-stage /app/.venv /app/.venv
+COPY --from=playwright-stage /root/.cache/ms-playwright /root/.cache/ms-playwright
 
-# Copy application code
+# ============================================
+# APPLICATION CODE - LAST LAYER (CHANGES FREQUENTLY)
+# This is the only layer that rebuilds when you change code
+# Build time: ~30 seconds
+# ============================================
 COPY src/ ./src/
 COPY backend/ ./backend/
 COPY profiles.yaml ./
