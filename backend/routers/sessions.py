@@ -8,7 +8,7 @@ import asyncio
 import traceback
 from datetime import datetime
 from typing import Optional, List, Dict, Any, AsyncGenerator
-from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi import APIRouter, HTTPException, Request, Depends, Body
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -1061,9 +1061,9 @@ async def send_message(
 
 @router.post("/{session_id}/messages/stream")
 async def send_message_stream(
-    session_id: str,
-    msg_request: SendMessageRequest,
     request: Request,
+    session_id: str,
+    msg_request: SendMessageRequest = Body(...),
     user: Optional[UserResponse] = Depends(get_current_user)
 ):
     """Send a message and stream back agent operations via SSE.
