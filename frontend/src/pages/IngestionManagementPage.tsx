@@ -83,7 +83,7 @@ export default function IngestionManagementPage() {
   
   useEffect(() => {
     if (!authLoading && (!user || !user.is_admin)) {
-      navigate('/')
+      navigate('/dashboard')
     }
   }, [user, authLoading, navigate])
   

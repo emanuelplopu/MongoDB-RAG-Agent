@@ -8,7 +8,8 @@ import { MemoryRouter } from 'react-router-dom'
 import App from './App'
 
 // Mock all page components to simplify testing
-vi.mock('./pages/HomePage', () => ({ default: () => <div data-testid="home-page">Home Page</div> }))
+vi.mock('./pages/DashboardPage', () => ({ default: () => <div data-testid="dashboard-page">Dashboard Page</div> }))
+vi.mock('./pages/LandingPage', () => ({ default: () => <div data-testid="landing-page">Landing Page</div> }))
 vi.mock('./pages/ChatPageNew', () => ({ default: () => <div data-testid="chat-page">Chat Page</div> }))
 vi.mock('./pages/SearchPage', () => ({ default: () => <div data-testid="search-page">Search Page</div> }))
 vi.mock('./pages/DocumentsPage', () => ({ default: () => <div data-testid="documents-page">Documents Page</div> }))
@@ -31,14 +32,15 @@ vi.mock('./pages/ArchivedChatsPage', () => ({ default: () => <div data-testid="a
 vi.mock('./pages/LoginPage', () => ({ default: () => <div data-testid="login-page">Login Page</div> }))
 vi.mock('./pages/NotFoundPage', () => ({ default: () => <div data-testid="not-found-page">Not Found</div> }))
 
-// Mock Layout to just render Outlet
-vi.mock('./components/Layout', () => ({
-  default: ({ children }: { children?: React.ReactNode }) => {
-    // Import Outlet dynamically
-    const { Outlet } = require('react-router-dom')
-    return <div data-testid="layout"><Outlet /></div>
-  },
-}))
+// Mock Layout to render children via Outlet
+vi.mock('./components/Layout', async () => {
+  const { Outlet } = await import('react-router-dom')
+  return {
+    default: function MockLayout() {
+      return <div data-testid="layout"><Outlet /></div>
+    },
+  }
+})
 
 // Mock contexts
 vi.mock('./contexts/AuthContext', () => ({
@@ -59,9 +61,14 @@ const renderApp = (initialRoute = '/') => {
 
 describe('App', () => {
   describe('Routing', () => {
-    it('should render home page at root path', () => {
+    it('should render landing page at root path', () => {
       renderApp('/')
-      expect(screen.getByTestId('home-page')).toBeInTheDocument()
+      expect(screen.getByTestId('landing-page')).toBeInTheDocument()
+    })
+
+    it('should render dashboard page at /dashboard', () => {
+      renderApp('/dashboard')
+      expect(screen.getByTestId('dashboard-page')).toBeInTheDocument()
     })
 
     it('should render login page at /login', () => {
@@ -171,9 +178,15 @@ describe('App', () => {
   })
 
   describe('Layout wrapper', () => {
-    it('should wrap main routes with Layout', () => {
-      renderApp('/')
+    it('should wrap dashboard page with Layout', () => {
+      renderApp('/dashboard')
       expect(screen.getByTestId('layout')).toBeInTheDocument()
+    })
+
+    it('should not wrap landing page with Layout', () => {
+      renderApp('/')
+      expect(screen.getByTestId('landing-page')).toBeInTheDocument()
+      expect(screen.queryByTestId('layout')).not.toBeInTheDocument()
     })
 
     it('should not wrap login page with Layout', () => {
@@ -194,13 +207,13 @@ describe('App', () => {
     it('should wrap app with AuthProvider', () => {
       // The app should render without errors, meaning providers are set up
       renderApp('/')
-      expect(screen.getByTestId('home-page')).toBeInTheDocument()
+      expect(screen.getByTestId('landing-page')).toBeInTheDocument()
     })
 
     it('should wrap app with ChatSidebarProvider', () => {
       // The app should render without errors, meaning providers are set up
-      renderApp('/')
-      expect(screen.getByTestId('home-page')).toBeInTheDocument()
+      renderApp('/dashboard')
+      expect(screen.getByTestId('dashboard-page')).toBeInTheDocument()
     })
   })
 })

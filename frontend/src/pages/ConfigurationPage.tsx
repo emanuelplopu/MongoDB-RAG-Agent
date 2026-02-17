@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
+import ModelVersionSelector from '../components/ModelVersionSelector'
 import {
   Cog6ToothIcon,
   ArrowPathIcon,
@@ -17,12 +18,16 @@ import {
   PlusIcon,
   TrashIcon,
   MagnifyingGlassIcon,
+  WrenchScrewdriverIcon,
+  InformationCircleIcon,
 } from '@heroicons/react/24/outline'
 import {
   localLlmApi, systemApi, profilesApi,
   DiscoveryResult, LocalProvider, ModelRecommendation, OfflineModeConfig,
   Profile, SystemStats, CustomEndpoint, NetworkScanResult, ConfigOptions,
-  LLMModel, EmbeddingModel, LLMProviderConfigResponse, LLMProviderConfigRequest
+  LLMModel, EmbeddingModel, LLMProviderConfigResponse, LLMProviderConfigRequest,
+  ProviderModelInfo, FetchModelsResponse, ProviderTestResponse,
+  AgentTool, ToolTestResponse
 } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -55,7 +60,7 @@ export default function ConfigurationPage() {
   const [isSaving, setIsSaving] = useState(false)
   const [isPulling, setIsPulling] = useState<string | null>(null)
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
-  const [activeTab, setActiveTab] = useState<'offline' | 'network' | 'models' | 'profiles' | 'search' | 'llm'>('llm')
+  const [activeTab, setActiveTab] = useState<'offline' | 'network' | 'models' | 'profiles' | 'search' | 'llm' | 'tools'>('llm')
     
     // Search settings state
     const [configOptions, setConfigOptions] = useState<ConfigOptions | null>(null)
@@ -80,6 +85,24 @@ export default function ConfigurationPage() {
     const [anthropicApiKey, setAnthropicApiKey] = useState<string>('')
     const [fastLlmApiKey, setFastLlmApiKey] = useState<string>('')
     const [isSavingLlmConfig, setIsSavingLlmConfig] = useState(false)
+    
+    // Provider models and testing state
+    const [_providerModels, setProviderModels] = useState<Record<string, ProviderModelInfo[]>>({})
+    const [isFetchingModels, setIsFetchingModels] = useState<string | null>(null)
+    const [isTestingProvider, setIsTestingProvider] = useState<string | null>(null)
+    const [testLogs, setTestLogs] = useState<string[]>([])
+    const [testResult, setTestResult] = useState<ProviderTestResponse | null>(null)
+    const [selectedTestProvider, setSelectedTestProvider] = useState<string>('openai')
+    const [selectedTestModel, setSelectedTestModel] = useState<string>('')
+    const [testPrompt, setTestPrompt] = useState<string>('Hello! Please respond with a brief greeting to test the connection.')
+    
+    // Agent Tools state
+    const [agentTools, setAgentTools] = useState<AgentTool[]>([])
+    const [selectedTool, setSelectedTool] = useState<AgentTool | null>(null)
+    const [isTestingTool, setIsTestingTool] = useState<string | null>(null)
+    const [toolTestResult, setToolTestResult] = useState<ToolTestResponse | null>(null)
+    const [toolTestLogs, setToolTestLogs] = useState<string[]>([])
+    const [toolTestParams, setToolTestParams] = useState<Record<string, string>>({})
   
   // Network scanning state
   const [customEndpoints, setCustomEndpoints] = useState<CustomEndpoint[]>([])
@@ -101,7 +124,7 @@ export default function ConfigurationPage() {
         systemApi.getConfigOptions(),
         systemApi.listLLMModels(),
         systemApi.listEmbeddingModels(),
-        systemApi.getLLMProviderConfig()
+        systemApi.getLLMProviderConfig(),
       ])
       setSystemStats(statsRes)
       setProfiles(profilesRes.profiles)
@@ -120,6 +143,13 @@ export default function ConfigurationPage() {
       setOrchestratorModel(llmProviderRes.orchestrator_model)
       setWorkerProvider(llmProviderRes.worker_provider)
       setWorkerModel(llmProviderRes.worker_model)
+      // Fetch agent tools
+      try {
+        const toolsRes = await systemApi.listTools()
+        setAgentTools(toolsRes.tools)
+      } catch (toolsErr) {
+        console.error('Error fetching tools:', toolsErr)
+      }
     } catch (err) {
       console.error('Error fetching data:', err)
     } finally {
@@ -142,7 +172,7 @@ export default function ConfigurationPage() {
   
   useEffect(() => {
     if (!authLoading && (!user || !user.is_admin)) {
-      navigate('/')
+      navigate('/dashboard')
     }
   }, [user, authLoading, navigate])
   
@@ -369,6 +399,156 @@ export default function ConfigurationPage() {
     )
   }
 
+  // Fetch models from provider API
+  const handleFetchModels = async (providerId: string) => {
+    setIsFetchingModels(providerId)
+    setTestLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] Fetching models from ${providerId}...`])
+    
+    try {
+      const result: FetchModelsResponse = await systemApi.fetchModelsFromApi(providerId)
+      
+      // Add logs from response
+      if (result.logs) {
+        setTestLogs(prev => [...prev, ...result.logs])
+      }
+      
+      if (result.success) {
+        // Update provider models
+        setProviderModels(prev => ({
+          ...prev,
+          [providerId]: result.models
+        }))
+        
+        // Update the llmProviderConfig with new models
+        if (llmProviderConfig) {
+          const updatedProviders = llmProviderConfig.providers.map(p => 
+            p.id === providerId 
+              ? { ...p, models: result.models.map(m => m.id) }
+              : p
+          )
+          setLlmProviderConfig({ ...llmProviderConfig, providers: updatedProviders })
+        }
+        
+        setMessage({ type: 'success', text: `Fetched ${result.total || result.models.length} models from ${providerId}` })
+      } else {
+        setMessage({ type: 'error', text: result.error || 'Failed to fetch models' })
+      }
+    } catch (err) {
+      console.error('Error fetching models:', err)
+      setTestLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ERROR: ${err}`])
+      setMessage({ type: 'error', text: 'Failed to fetch models from API' })
+    } finally {
+      setIsFetchingModels(null)
+    }
+  }
+
+  // Test provider connection
+  const handleTestProvider = async () => {
+    if (!selectedTestModel) {
+      setMessage({ type: 'error', text: 'Please select a model to test' })
+      return
+    }
+    
+    setIsTestingProvider(selectedTestProvider)
+    setTestLogs([`[${new Date().toLocaleTimeString()}] Starting connection test...`])
+    setTestResult(null)
+    
+    try {
+      const result: ProviderTestResponse = await systemApi.testProviderConnection({
+        provider: selectedTestProvider,
+        model: selectedTestModel,
+        prompt: testPrompt
+      })
+      
+      // Add logs from response
+      if (result.logs) {
+        setTestLogs(result.logs)
+      }
+      
+      setTestResult(result)
+      
+      if (result.success) {
+        setMessage({ type: 'success', text: `Connection test passed! Latency: ${result.latency_ms.toFixed(0)}ms` })
+      } else {
+        setMessage({ type: 'error', text: result.error || 'Connection test failed' })
+      }
+    } catch (err) {
+      console.error('Error testing provider:', err)
+      setTestLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ERROR: ${err}`])
+      setMessage({ type: 'error', text: 'Failed to test connection' })
+    } finally {
+      setIsTestingProvider(null)
+    }
+  }
+
+  // Test agent tool
+  const handleTestTool = async (tool: AgentTool) => {
+    setIsTestingTool(tool.id)
+    setToolTestLogs([`[${new Date().toLocaleTimeString()}] Starting ${tool.name} test...`])
+    setToolTestResult(null)
+    
+    try {
+      const result: ToolTestResponse = await systemApi.testTool({
+        tool_id: tool.id,
+        parameters: toolTestParams
+      })
+      
+      // Add logs from response
+      if (result.logs) {
+        setToolTestLogs(result.logs)
+      }
+      
+      setToolTestResult(result)
+      
+      if (result.success) {
+        setMessage({ type: 'success', text: `${tool.name} test passed! Latency: ${result.latency_ms.toFixed(0)}ms` })
+      } else {
+        setMessage({ type: 'error', text: result.error || 'Tool test failed' })
+      }
+    } catch (err) {
+      console.error('Error testing tool:', err)
+      setToolTestLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ERROR: ${err}`])
+      setMessage({ type: 'error', text: 'Failed to test tool' })
+    } finally {
+      setIsTestingTool(null)
+    }
+  }
+
+  // Handle model version switching
+  const handleModelChange = async (modelType: 'orchestrator' | 'worker' | 'embedding', modelId: string) => {
+    try {
+      const switchRequest: any = {}
+      
+      switch (modelType) {
+        case 'orchestrator':
+          switchRequest.orchestrator_model = modelId
+          setOrchestratorModel(modelId)
+          break
+        case 'worker':
+          switchRequest.worker_model = modelId
+          setWorkerModel(modelId)
+          break
+        case 'embedding':
+          switchRequest.embedding_model = modelId
+          setEmbeddingModel(modelId)
+          break
+      }
+      
+      const result = await systemApi.switchModelVersions(switchRequest)
+      
+      if (result.success) {
+        setMessage({ type: 'success', text: `Successfully switched ${modelType} to ${modelId}` })
+        // Refresh the LLM provider config to reflect changes
+        const updatedConfig = await systemApi.getLLMProviderConfig()
+        setLlmProviderConfig(updatedConfig)
+      } else {
+        setMessage({ type: 'error', text: result.message || `Failed to switch ${modelType} model` })
+      }
+    } catch (err: any) {
+      setMessage({ type: 'error', text: `Error switching ${modelType} model: ${err.message}` })
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -397,6 +577,7 @@ export default function ConfigurationPage() {
       <div className="flex gap-2 border-b border-gray-200 dark:border-gray-700 overflow-x-auto">
         {[
           { id: 'llm', label: 'LLM Providers', icon: BoltIcon },
+          { id: 'tools', label: 'Agent Tools', icon: WrenchScrewdriverIcon },
           { id: 'offline', label: 'Offline Mode', icon: WifiIcon },
           { id: 'network', label: 'Network Scan', icon: GlobeAltIcon },
           { id: 'models', label: 'Local Models', icon: CpuChipIcon },
@@ -530,12 +711,22 @@ export default function ConfigurationPage() {
             <div className="space-y-4">
               {/* OpenAI API Key */}
               <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
-                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
-                  OpenAI API Key
-                  {llmProviderConfig?.openai_api_key_set && (
-                    <span className="ml-2 text-xs text-green-500">✓ Set ({llmProviderConfig.openai_api_key_masked})</span>
-                  )}
-                </label>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-medium text-primary-900 dark:text-gray-200">
+                    OpenAI API Key
+                    {llmProviderConfig?.openai_api_key_set && (
+                      <span className="ml-2 text-xs text-green-500">✓ Set ({llmProviderConfig.openai_api_key_masked})</span>
+                    )}
+                  </label>
+                  <button
+                    onClick={() => handleFetchModels('openai')}
+                    disabled={isFetchingModels === 'openai'}
+                    className="flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-lg bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-800/40 disabled:opacity-50"
+                  >
+                    {isFetchingModels === 'openai' ? <ArrowPathIcon className="h-3 w-3 animate-spin" /> : <ArrowDownTrayIcon className="h-3 w-3" />}
+                    Fetch Models
+                  </button>
+                </div>
                 <input
                   type="password"
                   value={openaiApiKey}
@@ -548,12 +739,22 @@ export default function ConfigurationPage() {
 
               {/* Google API Key */}
               <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
-                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
-                  Google API Key (Gemini)
-                  {llmProviderConfig?.google_api_key_set && (
-                    <span className="ml-2 text-xs text-green-500">✓ Set ({llmProviderConfig.google_api_key_masked})</span>
-                  )}
-                </label>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-medium text-primary-900 dark:text-gray-200">
+                    Google API Key (Gemini)
+                    {llmProviderConfig?.google_api_key_set && (
+                      <span className="ml-2 text-xs text-green-500">✓ Set ({llmProviderConfig.google_api_key_masked})</span>
+                    )}
+                  </label>
+                  <button
+                    onClick={() => handleFetchModels('google')}
+                    disabled={isFetchingModels === 'google'}
+                    className="flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-lg bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-800/40 disabled:opacity-50"
+                  >
+                    {isFetchingModels === 'google' ? <ArrowPathIcon className="h-3 w-3 animate-spin" /> : <ArrowDownTrayIcon className="h-3 w-3" />}
+                    Fetch Models
+                  </button>
+                </div>
                 <input
                   type="password"
                   value={googleApiKey}
@@ -566,12 +767,22 @@ export default function ConfigurationPage() {
 
               {/* Anthropic API Key */}
               <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
-                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
-                  Anthropic API Key (Claude)
-                  {llmProviderConfig?.anthropic_api_key_set && (
-                    <span className="ml-2 text-xs text-green-500">✓ Set ({llmProviderConfig.anthropic_api_key_masked})</span>
-                  )}
-                </label>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-medium text-primary-900 dark:text-gray-200">
+                    Anthropic API Key (Claude)
+                    {llmProviderConfig?.anthropic_api_key_set && (
+                      <span className="ml-2 text-xs text-green-500">✓ Set ({llmProviderConfig.anthropic_api_key_masked})</span>
+                    )}
+                  </label>
+                  <button
+                    onClick={() => handleFetchModels('anthropic')}
+                    disabled={isFetchingModels === 'anthropic'}
+                    className="flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-lg bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-800/40 disabled:opacity-50"
+                  >
+                    {isFetchingModels === 'anthropic' ? <ArrowPathIcon className="h-3 w-3 animate-spin" /> : <ArrowDownTrayIcon className="h-3 w-3" />}
+                    Fetch Models
+                  </button>
+                </div>
                 <input
                   type="password"
                   value={anthropicApiKey}
@@ -580,6 +791,26 @@ export default function ConfigurationPage() {
                   className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200"
                 />
                 <p className="text-xs text-secondary dark:text-gray-500 mt-1">Required for Anthropic Claude models</p>
+              </div>
+
+              {/* Ollama (Local) - Fetch Only */}
+              <div className="rounded-xl bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-medium text-purple-900 dark:text-purple-200">
+                    Ollama (Local LLMs)
+                  </label>
+                  <button
+                    onClick={() => handleFetchModels('ollama')}
+                    disabled={isFetchingModels === 'ollama'}
+                    className="flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-lg bg-purple-100 dark:bg-purple-800/30 text-purple-700 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-700/40 disabled:opacity-50"
+                  >
+                    {isFetchingModels === 'ollama' ? <ArrowPathIcon className="h-3 w-3 animate-spin" /> : <ArrowDownTrayIcon className="h-3 w-3" />}
+                    Discover Models
+                  </button>
+                </div>
+                <p className="text-xs text-purple-600 dark:text-purple-400">
+                  No API key needed. Click "Discover Models" to find locally installed Ollama models.
+                </p>
               </div>
 
               {/* Fast LLM API Key (optional separate key) */}
@@ -647,6 +878,118 @@ export default function ConfigurationPage() {
             </button>
           </div>
 
+          {/* Test Provider Connection */}
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+            <div className="flex items-center gap-3 mb-4">
+              <PlayIcon className="h-5 w-5 text-green-500" />
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Test Provider Connection</h3>
+            </div>
+            <p className="text-sm text-secondary dark:text-gray-400 mb-4">
+              Test your API configuration by sending a simple prompt to verify the connection is working.
+            </p>
+            
+            <div className="grid gap-4 md:grid-cols-3 mb-4">
+              <div>
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">Provider</label>
+                <select
+                  value={selectedTestProvider}
+                  onChange={(e) => {
+                    setSelectedTestProvider(e.target.value)
+                    // Reset model and set default
+                    const provider = llmProviderConfig?.providers.find(p => p.id === e.target.value)
+                    if (provider && provider.models.length > 0) {
+                      setSelectedTestModel(provider.models[0])
+                    } else {
+                      setSelectedTestModel('')
+                    }
+                  }}
+                  className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-primary-900 dark:text-gray-200"
+                >
+                  {llmProviderConfig?.providers.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">Model</label>
+                <select
+                  value={selectedTestModel}
+                  onChange={(e) => setSelectedTestModel(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-primary-900 dark:text-gray-200"
+                >
+                  <option value="">Select a model...</option>
+                  {(llmProviderConfig?.providers.find(p => p.id === selectedTestProvider)?.models || []).map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-end">
+                <button
+                  onClick={handleTestProvider}
+                  disabled={isTestingProvider !== null || !selectedTestModel}
+                  className="flex items-center gap-2 rounded-xl bg-green-600 px-6 py-2 font-medium text-white transition-all hover:bg-green-700 disabled:opacity-50 w-full justify-center"
+                >
+                  {isTestingProvider ? <ArrowPathIcon className="h-4 w-4 animate-spin" /> : <PlayIcon className="h-4 w-4" />}
+                  Test Connection
+                </button>
+              </div>
+            </div>
+            
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">Test Prompt</label>
+              <input
+                type="text"
+                value={testPrompt}
+                onChange={(e) => setTestPrompt(e.target.value)}
+                placeholder="Enter a test prompt..."
+                className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-primary-900 dark:text-gray-200"
+              />
+            </div>
+            
+            {/* Test Result */}
+            {testResult && (
+              <div className={`rounded-xl p-4 mb-4 ${testResult.success ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800'}`}>
+                <div className="flex items-center gap-2 mb-2">
+                  {testResult.success ? (
+                    <CheckCircleIcon className="h-5 w-5 text-green-600 dark:text-green-400" />
+                  ) : (
+                    <ExclamationTriangleIcon className="h-5 w-5 text-red-600 dark:text-red-400" />
+                  )}
+                  <span className={`font-medium ${testResult.success ? 'text-green-900 dark:text-green-200' : 'text-red-900 dark:text-red-200'}`}>
+                    {testResult.success ? `Success - ${testResult.latency_ms.toFixed(0)}ms` : 'Failed'}
+                  </span>
+                </div>
+                {testResult.response && (
+                  <div className="bg-white dark:bg-gray-800 rounded-lg p-3 text-sm text-primary-900 dark:text-gray-200 mt-2">
+                    <strong>Response:</strong> {testResult.response}
+                  </div>
+                )}
+                {testResult.error && (
+                  <p className="text-sm text-red-600 dark:text-red-400 mt-2">{testResult.error}</p>
+                )}
+              </div>
+            )}
+            
+            {/* Logs Textarea */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200">Logs</label>
+                <button
+                  onClick={() => setTestLogs([])}
+                  className="text-xs text-secondary hover:text-primary-700 dark:text-gray-400 dark:hover:text-gray-200"
+                >
+                  Clear Logs
+                </button>
+              </div>
+              <textarea
+                readOnly
+                value={testLogs.join('\n')}
+                className="w-full h-48 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 px-3 py-2 text-xs font-mono text-primary-900 dark:text-gray-200 resize-none"
+                placeholder="Logs will appear here..."
+              />
+            </div>
+          </div>
+
           {/* Info Card */}
           <div className="rounded-2xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-6">
             <h4 className="text-sm font-medium text-blue-900 dark:text-blue-200 mb-2">How it works</h4>
@@ -657,6 +1000,240 @@ export default function ConfigurationPage() {
               <li>• API keys are stored securely and loaded at startup</li>
               <li>• Ollama (local) doesn't require an API key</li>
             </ul>
+          </div>
+        </div>
+      )}
+
+      {/* Advanced Model Version Management */}
+      {activeTab === 'llm' && (
+        <div className="space-y-6">
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+            <div className="flex items-center gap-3 mb-4">
+              <WrenchScrewdriverIcon className="h-5 w-5 text-purple-500" />
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Advanced Model Version Management</h3>
+            </div>
+            <p className="text-sm text-secondary dark:text-gray-400 mb-4">
+              Browse and switch between all available model versions with detailed information about capabilities, pricing, and compatibility.
+            </p>
+            
+            <ModelVersionSelector 
+              currentOrchestrator={orchestratorModel}
+              currentWorker={workerModel}
+              currentEmbedding={embeddingModel}
+              onModelChange={handleModelChange}
+              showSwitchButton={true}
+              className="border-0"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Agent Tools Tab */}
+      {activeTab === 'tools' && (
+        <div className="space-y-6">
+          {/* Tools Overview Help */}
+          <div className="rounded-2xl bg-blue-50 dark:bg-blue-900/20 p-6">
+            <div className="flex items-start gap-3">
+              <InformationCircleIcon className="h-6 w-6 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+              <div>
+                <h3 className="text-lg font-medium text-blue-900 dark:text-blue-100 mb-2">About Agent Tools</h3>
+                <p className="text-sm text-blue-800 dark:text-blue-200 mb-3">
+                  Tools are capabilities that the AI agent can use to help answer your questions. The agent automatically decides which tools to use based on your query.
+                </p>
+                <ul className="text-sm text-blue-700 dark:text-blue-300 space-y-1 list-disc list-inside">
+                  <li>The agent can call multiple tools in sequence to gather information</li>
+                  <li>Tool calls are shown in the chat interface as "thinking" steps</li>
+                  <li>You can test each tool below to verify it's working correctly</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          {/* Tools List */}
+          <div className="space-y-4">
+            {agentTools.map(tool => (
+              <div key={tool.id} className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+                <div className="flex items-start justify-between mb-4">
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">{tool.icon}</span>
+                    <div>
+                      <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">{tool.name}</h3>
+                      <span className="text-xs bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded text-gray-600 dark:text-gray-400">
+                        {tool.category}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setSelectedTool(tool)
+                      setToolTestParams({})
+                      setToolTestResult(null)
+                      setToolTestLogs([])
+                    }}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      selectedTool?.id === tool.id
+                        ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300'
+                        : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                    }`}
+                  >
+                    {selectedTool?.id === tool.id ? 'Selected' : 'Select to Test'}
+                  </button>
+                </div>
+
+                <p className="text-sm text-secondary dark:text-gray-400 mb-4">{tool.description}</p>
+
+                {/* Expandable Help Text */}
+                <details className="mb-4">
+                  <summary className="text-sm font-medium text-primary-700 dark:text-primary-300 cursor-pointer hover:text-primary-800 dark:hover:text-primary-200">
+                    View detailed help
+                  </summary>
+                  <div className="mt-3 p-4 bg-gray-50 dark:bg-gray-900 rounded-lg">
+                    <pre className="text-xs text-gray-700 dark:text-gray-300 whitespace-pre-wrap font-mono">
+                      {tool.help_text}
+                    </pre>
+                  </div>
+                </details>
+
+                {/* Parameters */}
+                <div className="mb-4">
+                  <h4 className="text-sm font-medium text-primary-900 dark:text-gray-300 mb-2">Parameters</h4>
+                  <div className="space-y-2">
+                    {tool.parameters.map(param => (
+                      <div key={param.name} className="flex items-center gap-2 text-sm">
+                        <code className="px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded text-gray-800 dark:text-gray-300">
+                          {param.name}
+                        </code>
+                        <span className="text-gray-500 dark:text-gray-500">({param.type})</span>
+                        {param.required && <span className="text-red-500 text-xs">required</span>}
+                        <span className="text-gray-600 dark:text-gray-400">- {param.description}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Test Section (shown when tool is selected) */}
+                {selectedTool?.id === tool.id && (
+                  <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+                    <h4 className="text-sm font-medium text-primary-900 dark:text-gray-300 mb-3">Test Tool</h4>
+                    
+                    {/* Parameter inputs */}
+                    <div className="space-y-3 mb-4">
+                      {tool.parameters.map(param => (
+                        <div key={param.name}>
+                          <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">
+                            {param.name} {param.required && <span className="text-red-500">*</span>}
+                          </label>
+                          {param.type === 'enum' && param.options ? (
+                            <select
+                              value={toolTestParams[param.name] || param.default || ''}
+                              onChange={(e) => setToolTestParams(prev => ({ ...prev, [param.name]: e.target.value }))}
+                              className="w-full rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm"
+                            >
+                              {param.options.map(opt => (
+                                <option key={opt} value={opt}>{opt}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              type="text"
+                              value={toolTestParams[param.name] || ''}
+                              onChange={(e) => setToolTestParams(prev => ({ ...prev, [param.name]: e.target.value }))}
+                              placeholder={param.description}
+                              className="w-full rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm"
+                            />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Test Button */}
+                    <button
+                      onClick={() => handleTestTool(tool)}
+                      disabled={isTestingTool === tool.id}
+                      className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50"
+                    >
+                      {isTestingTool === tool.id ? (
+                        <>
+                          <ArrowPathIcon className="h-4 w-4 animate-spin" />
+                          Testing...
+                        </>
+                      ) : (
+                        <>
+                          <PlayIcon className="h-4 w-4" />
+                          Run Test
+                        </>
+                      )}
+                    </button>
+
+                    {/* Test Result */}
+                    {toolTestResult && toolTestResult.tool_id === tool.id && (
+                      <div className={`mt-4 p-4 rounded-lg ${
+                        toolTestResult.success 
+                          ? 'bg-green-50 dark:bg-green-900/20' 
+                          : 'bg-red-50 dark:bg-red-900/20'
+                      }`}>
+                        <div className="flex items-center gap-2 mb-2">
+                          {toolTestResult.success ? (
+                            <CheckCircleIcon className="h-5 w-5 text-green-600 dark:text-green-400" />
+                          ) : (
+                            <XCircleIcon className="h-5 w-5 text-red-600 dark:text-red-400" />
+                          )}
+                          <span className={`font-medium ${
+                            toolTestResult.success 
+                              ? 'text-green-700 dark:text-green-300' 
+                              : 'text-red-700 dark:text-red-300'
+                          }`}>
+                            {toolTestResult.success ? 'Test Passed' : 'Test Failed'}
+                          </span>
+                          <span className="text-sm text-gray-500 dark:text-gray-400">
+                            ({toolTestResult.latency_ms.toFixed(0)}ms)
+                          </span>
+                        </div>
+                        
+                        {toolTestResult.result && (
+                          <p className="text-sm text-gray-700 dark:text-gray-300 mb-2">
+                            {toolTestResult.result}
+                          </p>
+                        )}
+                        
+                        {toolTestResult.result_preview && (
+                          <div className="mt-2 p-3 bg-white dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700">
+                            <pre className="text-xs text-gray-600 dark:text-gray-400 whitespace-pre-wrap overflow-x-auto">
+                              {toolTestResult.result_preview}
+                            </pre>
+                          </div>
+                        )}
+                        
+                        {toolTestResult.error && (
+                          <p className="text-sm text-red-600 dark:text-red-400 mt-2">
+                            Error: {toolTestResult.error}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Test Logs */}
+                    {toolTestLogs.length > 0 && selectedTool?.id === tool.id && (
+                      <div className="mt-4">
+                        <h5 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Test Logs</h5>
+                        <textarea
+                          readOnly
+                          value={toolTestLogs.join('\n')}
+                          className="w-full h-32 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 px-3 py-2 text-xs font-mono text-gray-700 dark:text-gray-300"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {agentTools.length === 0 && (
+              <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+                <WrenchScrewdriverIcon className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                <p>No tools available</p>
+              </div>
+            )}
           </div>
         </div>
       )}

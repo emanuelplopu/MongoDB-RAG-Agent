@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import {
   CpuChipIcon,
   DocumentTextIcon,
@@ -13,6 +14,7 @@ import { useAuth } from '../contexts/AuthContext'
 
 export default function StatusPage() {
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const { user, isLoading: authLoading } = useAuth()
   
   const [dashboard, setDashboard] = useState<StatusDashboard | null>(null)
@@ -27,7 +29,7 @@ export default function StatusPage() {
       setDashboard(data)
     } catch (err) {
       console.error('Error fetching status:', err)
-      setError('Failed to load status dashboard')
+      setError(t('status.failedToLoad'))
     } finally {
       setIsLoading(false)
     }
@@ -77,15 +79,15 @@ export default function StatusPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-200">System Status</h2>
-          <p className="text-sm text-secondary dark:text-gray-400">KPIs and metrics overview</p>
+          <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-200">{t('status.title')}</h2>
+          <p className="text-sm text-secondary dark:text-gray-400">{t('status.subtitle')}</p>
         </div>
         <button
           onClick={fetchData}
           className="flex items-center gap-2 rounded-xl bg-surface-variant dark:bg-gray-700 px-4 py-2 text-sm font-medium text-primary-700 dark:text-primary-300 transition-all hover:bg-primary-100 dark:hover:bg-gray-600"
         >
           <ArrowPathIcon className="h-4 w-4" />
-          Refresh
+          {t('common.refresh')}
         </button>
       </div>
 
@@ -102,13 +104,13 @@ export default function StatusPage() {
                 <div className="rounded-xl bg-primary-100 dark:bg-primary-900/50 p-2">
                   <FolderIcon className="h-5 w-5 text-primary" />
                 </div>
-                <span className="text-sm font-medium text-secondary dark:text-gray-400">Profiles</span>
+                <span className="text-sm font-medium text-secondary dark:text-gray-400">{t('status.profiles')}</span>
               </div>
               <p className="text-2xl font-semibold text-primary-900 dark:text-gray-200">
                 {dashboard.total_profiles}
               </p>
               <p className="text-xs text-secondary dark:text-gray-500 mt-1">
-                Active: {dashboard.active_profile}
+                {t('status.active')}: {dashboard.active_profile}
               </p>
             </div>
 
@@ -117,7 +119,7 @@ export default function StatusPage() {
                 <div className="rounded-xl bg-blue-100 dark:bg-blue-900/50 p-2">
                   <DocumentTextIcon className="h-5 w-5 text-blue-600" />
                 </div>
-                <span className="text-sm font-medium text-secondary dark:text-gray-400">Total Documents</span>
+                <span className="text-sm font-medium text-secondary dark:text-gray-400">{t('status.totalDocuments')}</span>
               </div>
               <p className="text-2xl font-semibold text-primary-900 dark:text-gray-200">
                 {dashboard.total_documents.toLocaleString()}
@@ -129,7 +131,7 @@ export default function StatusPage() {
                 <div className="rounded-xl bg-green-100 dark:bg-green-900/50 p-2">
                   <CpuChipIcon className="h-5 w-5 text-green-600" />
                 </div>
-                <span className="text-sm font-medium text-secondary dark:text-gray-400">Total Chunks</span>
+                <span className="text-sm font-medium text-secondary dark:text-gray-400">{t('status.totalChunks')}</span>
               </div>
               <p className="text-2xl font-semibold text-primary-900 dark:text-gray-200">
                 {dashboard.total_chunks.toLocaleString()}
@@ -141,7 +143,7 @@ export default function StatusPage() {
                 <div className="rounded-xl bg-purple-100 dark:bg-purple-900/50 p-2">
                   <ClockIcon className="h-5 w-5 text-purple-600" />
                 </div>
-                <span className="text-sm font-medium text-secondary dark:text-gray-400">API Uptime</span>
+                <span className="text-sm font-medium text-secondary dark:text-gray-400">{t('status.apiUptime')}</span>
               </div>
               <p className="text-2xl font-semibold text-primary-900 dark:text-gray-200">
                 {formatUptime(dashboard.api_uptime_seconds)}
@@ -151,21 +153,21 @@ export default function StatusPage() {
 
           {/* System Metrics */}
           <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
-            <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200 mb-4">System Resources</h3>
+            <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200 mb-4">{t('status.systemResources', 'System Resources')}</h3>
             <div className="grid gap-4 md:grid-cols-3">
               <ResourceMeter
-                label="CPU Usage"
+                label={t('status.cpuUsage', 'CPU Usage')}
                 value={dashboard.system_metrics.cpu_percent}
                 color="blue"
               />
               <ResourceMeter
-                label="Memory Usage"
+                label={t('status.memoryUsage', 'Memory Usage')}
                 value={dashboard.system_metrics.memory_percent}
                 color="green"
                 detail={`${dashboard.system_metrics.memory_used_gb.toFixed(1)} / ${dashboard.system_metrics.memory_total_gb.toFixed(1)} GB`}
               />
               <ResourceMeter
-                label="Disk Usage"
+                label={t('status.diskUsage', 'Disk Usage')}
                 value={dashboard.system_metrics.disk_percent}
                 color="purple"
                 detail={`${dashboard.system_metrics.disk_used_gb.toFixed(1)} / ${dashboard.system_metrics.disk_total_gb.toFixed(1)} GB`}
@@ -175,18 +177,18 @@ export default function StatusPage() {
 
           {/* Active Configuration */}
           <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
-            <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200 mb-4">Active Configuration</h3>
+            <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200 mb-4">{t('status.activeConfig', 'Active Configuration')}</h3>
             <div className="grid gap-4 md:grid-cols-3">
               <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
-                <p className="text-sm text-secondary dark:text-gray-400">LLM Provider</p>
+                <p className="text-sm text-secondary dark:text-gray-400">{t('status.provider')}</p>
                 <p className="font-medium text-primary-900 dark:text-gray-200">{dashboard.llm_provider}</p>
               </div>
               <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
-                <p className="text-sm text-secondary dark:text-gray-400">LLM Model</p>
+                <p className="text-sm text-secondary dark:text-gray-400">{t('status.model')}</p>
                 <p className="font-medium text-primary-900 dark:text-gray-200 truncate">{dashboard.llm_model}</p>
               </div>
               <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
-                <p className="text-sm text-secondary dark:text-gray-400">Embedding Model</p>
+                <p className="text-sm text-secondary dark:text-gray-400">{t('status.embeddingModel', 'Embedding Model')}</p>
                 <p className="font-medium text-primary-900 dark:text-gray-200 truncate">{dashboard.embedding_model}</p>
               </div>
             </div>
@@ -194,18 +196,18 @@ export default function StatusPage() {
 
           {/* Profile Stats */}
           <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
-            <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200 mb-4">Profile Statistics</h3>
+            <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200 mb-4">{t('status.profileStats', 'Profile Statistics')}</h3>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-200 dark:border-gray-700">
-                    <th className="text-left py-3 px-4 text-secondary dark:text-gray-400 font-medium">Profile</th>
-                    <th className="text-left py-3 px-4 text-secondary dark:text-gray-400 font-medium">Database</th>
-                    <th className="text-right py-3 px-4 text-secondary dark:text-gray-400 font-medium">Documents</th>
-                    <th className="text-right py-3 px-4 text-secondary dark:text-gray-400 font-medium">Chunks</th>
-                    <th className="text-right py-3 px-4 text-secondary dark:text-gray-400 font-medium">Storage</th>
-                    <th className="text-right py-3 px-4 text-secondary dark:text-gray-400 font-medium">Jobs</th>
-                    <th className="text-left py-3 px-4 text-secondary dark:text-gray-400 font-medium">Last Ingestion</th>
+                    <th className="text-left py-3 px-4 text-secondary dark:text-gray-400 font-medium">{t('profiles.name')}</th>
+                    <th className="text-left py-3 px-4 text-secondary dark:text-gray-400 font-medium">{t('profiles.database')}</th>
+                    <th className="text-right py-3 px-4 text-secondary dark:text-gray-400 font-medium">{t('documents.title')}</th>
+                    <th className="text-right py-3 px-4 text-secondary dark:text-gray-400 font-medium">{t('status.chunks', 'Chunks')}</th>
+                    <th className="text-right py-3 px-4 text-secondary dark:text-gray-400 font-medium">{t('status.storage', 'Storage')}</th>
+                    <th className="text-right py-3 px-4 text-secondary dark:text-gray-400 font-medium">{t('status.jobs', 'Jobs')}</th>
+                    <th className="text-left py-3 px-4 text-secondary dark:text-gray-400 font-medium">{t('status.lastIngestion', 'Last Ingestion')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -226,7 +228,7 @@ export default function StatusPage() {
                       <td className="py-3 px-4 text-right text-secondary dark:text-gray-400">{formatBytes(profile.storage_size_bytes)}</td>
                       <td className="py-3 px-4 text-right text-secondary dark:text-gray-400">{profile.ingestion_jobs_count}</td>
                       <td className="py-3 px-4 text-secondary dark:text-gray-400">
-                        {profile.last_ingestion ? new Date(profile.last_ingestion).toLocaleDateString() : 'Never'}
+                        {profile.last_ingestion ? new Date(profile.last_ingestion).toLocaleDateString() : t('apiKeys.never')}
                       </td>
                     </tr>
                   ))}

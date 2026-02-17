@@ -1,8 +1,11 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '../contexts/AuthContext'
 import { ExclamationCircleIcon } from '@heroicons/react/24/outline'
 import { ApiError } from '../api/client'
+import { useLocalizedNavigate } from '../components/LocalizedLink'
+import ThemeSwitcher from '../components/ThemeSwitcher'
+import LanguageSwitcher from '../components/LanguageSwitcher'
 
 export default function LoginPage() {
   const [isLogin, setIsLogin] = useState(true)
@@ -14,7 +17,8 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false)
   
   const { login, register } = useAuth()
-  const navigate = useNavigate()
+  const navigate = useLocalizedNavigate()
+  const { t } = useTranslation()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -27,7 +31,7 @@ export default function LoginPage() {
         await login(email, password)
       } else {
         if (!name.trim()) {
-          setError('Name is required')
+          setError(t('login.nameRequired'))
           setIsLoading(false)
           return
         }
@@ -41,13 +45,13 @@ export default function LoginPage() {
         setErrorId(err.errorId || null)
       } else if (err?.status === 401) {
         // Authentication failed - show specific message
-        setError('Invalid email or password. Please try again.')
+        setError(t('login.invalidCredentials'))
       } else if (err?.status >= 500) {
         // Server error - show error ID if available
-        setError('Unable to connect to the server. Please try again later.')
+        setError(t('login.serverError'))
         setErrorId(err?.errorId || null)
       } else {
-        setError(err.message || 'Authentication failed. Please try again.')
+        setError(err.message || t('login.authFailed'))
       }
     } finally {
       setIsLoading(false)
@@ -56,6 +60,12 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-background dark:bg-gray-900 flex items-center justify-center px-4">
+      {/* Top Bar with Language and Theme Switchers */}
+      <div className="absolute top-4 right-4 z-50 flex items-center gap-2">
+        <LanguageSwitcher />
+        <ThemeSwitcher />
+      </div>
+
       <div className="max-w-md w-full">
         {/* Logo */}
         <div className="text-center mb-8">
@@ -66,9 +76,9 @@ export default function LoginPage() {
               <path d="M11 21v2" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
             </svg>
           </div>
-          <h1 className="text-2xl font-bold text-primary-900 dark:text-white">RecallHub</h1>
+          <h1 className="text-2xl font-bold text-primary-900 dark:text-white">{t('common.appName')}</h1>
           <p className="text-secondary dark:text-gray-400 mt-2">
-            {isLogin ? 'Sign in to your account' : 'Create a new account'}
+            {isLogin ? t('login.signInTitle') : t('login.signUpTitle')}
           </p>
         </div>
 
@@ -78,14 +88,14 @@ export default function LoginPage() {
             {!isLogin && (
               <div>
                 <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
-                  Name
+                  {t('login.name')}
                 </label>
                 <input
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="w-full px-4 py-3 rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
-                  placeholder="Your name"
+                  placeholder={t('login.namePlaceholder')}
                   required={!isLogin}
                 />
               </div>
@@ -93,28 +103,28 @@ export default function LoginPage() {
 
             <div>
               <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
-                Email
+                {t('login.email')}
               </label>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full px-4 py-3 rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
-                placeholder="you@example.com"
+                placeholder={t('login.emailPlaceholder')}
                 required
               />
             </div>
 
             <div>
               <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
-                Password
+                {t('login.password')}
               </label>
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full px-4 py-3 rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
-                placeholder="••••••••"
+                placeholder={t('login.passwordPlaceholder')}
                 required
                 minLength={6}
               />
@@ -128,7 +138,7 @@ export default function LoginPage() {
                     <p className="text-red-600 dark:text-red-400 text-sm">{error}</p>
                     {errorId && (
                       <p className="text-red-500/70 dark:text-red-400/70 text-xs mt-1">
-                        Error ID: {errorId}
+                        {t('login.errorId')}: {errorId}
                       </p>
                     )}
                   </div>
@@ -147,10 +157,10 @@ export default function LoginPage() {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                   </svg>
-                  {isLogin ? 'Signing in...' : 'Creating account...'}
+                  {isLogin ? t('login.signingIn') : t('login.creatingAccount')}
                 </span>
               ) : (
-                isLogin ? 'Sign in' : 'Create account'
+                isLogin ? t('login.signIn') : t('login.createAccount')
               )}
             </button>
           </form>
@@ -164,7 +174,7 @@ export default function LoginPage() {
               }}
               className="text-sm text-primary hover:underline"
             >
-              {isLogin ? "Don't have an account? Sign up" : 'Already have an account? Sign in'}
+              {isLogin ? t('login.noAccount') : t('login.hasAccount')}
             </button>
           </div>
         </div>
@@ -176,7 +186,7 @@ export default function LoginPage() {
             onClick={() => navigate('/')}
             className="text-sm text-secondary dark:text-gray-500 hover:text-primary dark:hover:text-primary-300"
           >
-            Continue without account
+            {t('login.continueWithout')}
           </button>
         </div>
       </div>

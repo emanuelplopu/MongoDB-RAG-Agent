@@ -2,9 +2,9 @@
  * Test utilities with common wrappers and mock providers.
  */
 
-import React, { ReactNode, ReactElement, createContext, useContext } from 'react'
+import { ReactNode, ReactElement, createContext, useContext } from 'react'
 import { render, RenderOptions } from '@testing-library/react'
-import { BrowserRouter, MemoryRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, MemoryRouter } from 'react-router-dom'
 
 // Mock user for authenticated tests
 export const mockUser = {
@@ -12,6 +12,7 @@ export const mockUser = {
   email: 'test@example.com',
   name: 'Test User',
   is_admin: true,
+  is_active: true,
   created_at: '2025-01-01T00:00:00Z',
 }
 
@@ -20,6 +21,7 @@ export const mockNonAdminUser = {
   email: 'user@example.com',
   name: 'Regular User',
   is_admin: false,
+  is_active: true,
   created_at: '2025-01-01T00:00:00Z',
 }
 

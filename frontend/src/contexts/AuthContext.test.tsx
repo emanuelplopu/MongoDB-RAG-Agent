@@ -134,7 +134,7 @@ describe('AuthContext', () => {
     })
 
     it('should validate token on mount if it exists', async () => {
-      const mockUser = { id: '1', email: 'test@test.com', name: 'Test', is_admin: false, created_at: '' }
+      const mockUser = { id: '1', email: 'test@test.com', name: 'Test', is_admin: false, is_active: true, created_at: '' }
       vi.mocked(getAuthToken).mockReturnValue('valid-token')
       vi.mocked(authApi.getMe).mockResolvedValue(mockUser)
       
@@ -165,7 +165,9 @@ describe('AuthContext', () => {
       const user = userEvent.setup()
       const mockResponse = {
         access_token: 'new-token',
-        user: { id: '1', email: 'test@example.com', name: 'Test User', is_admin: false, created_at: '' }
+        token_type: 'bearer',
+        expires_in: 604800,
+        user: { id: '1', email: 'test@example.com', name: 'Test User', is_admin: false, is_active: true, created_at: '' }
       }
       vi.mocked(authApi.login).mockResolvedValue(mockResponse)
       
@@ -209,10 +211,10 @@ describe('AuthContext', () => {
   describe('Logout', () => {
     it('should logout successfully', async () => {
       const user = userEvent.setup()
-      const mockUser = { id: '1', email: 'test@test.com', name: 'Test', is_admin: false, created_at: '' }
+      const mockUser = { id: '1', email: 'test@test.com', name: 'Test', is_admin: false, is_active: true, created_at: '' }
       vi.mocked(getAuthToken).mockReturnValue('valid-token')
       vi.mocked(authApi.getMe).mockResolvedValue(mockUser)
-      vi.mocked(authApi.logout).mockResolvedValue(undefined)
+      vi.mocked(authApi.logout).mockResolvedValue({ success: true })
       
       renderWithProviders(<TestConsumer />)
       
@@ -231,7 +233,7 @@ describe('AuthContext', () => {
 
     it('should handle logout error gracefully', async () => {
       const user = userEvent.setup()
-      const mockUser = { id: '1', email: 'test@test.com', name: 'Test', is_admin: false, created_at: '' }
+      const mockUser = { id: '1', email: 'test@test.com', name: 'Test', is_admin: false, is_active: true, created_at: '' }
       vi.mocked(getAuthToken).mockReturnValue('valid-token')
       vi.mocked(authApi.getMe).mockResolvedValue(mockUser)
       vi.mocked(authApi.logout).mockRejectedValue(new Error('Network error'))
@@ -257,7 +259,9 @@ describe('AuthContext', () => {
       const user = userEvent.setup()
       const mockResponse = {
         access_token: 'new-token',
-        user: { id: '1', email: 'test@example.com', name: 'Test User', is_admin: false, created_at: '' }
+        token_type: 'bearer',
+        expires_in: 604800,
+        user: { id: '1', email: 'test@example.com', name: 'Test User', is_admin: false, is_active: true, created_at: '' }
       }
       vi.mocked(authApi.register).mockResolvedValue(mockResponse)
       
@@ -283,7 +287,7 @@ describe('AuthContext', () => {
 
   describe('Session expired handling', () => {
     it('should handle unauthorized events', async () => {
-      const mockUser = { id: '1', email: 'test@test.com', name: 'Test', is_admin: false, created_at: '' }
+      const mockUser = { id: '1', email: 'test@test.com', name: 'Test', is_admin: false, is_active: true, created_at: '' }
       vi.mocked(getAuthToken).mockReturnValue('valid-token')
       vi.mocked(authApi.getMe).mockResolvedValue(mockUser)
       

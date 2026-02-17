@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ExclamationTriangleIcon, ArrowRightOnRectangleIcon, UserIcon } from '@heroicons/react/24/outline'
-import { useNavigate } from 'react-router-dom'
+import { useLocalizedNavigate } from './LocalizedLink'
 
 interface SessionExpiredModalProps {
   isOpen: boolean
@@ -9,7 +10,8 @@ interface SessionExpiredModalProps {
 }
 
 export default function SessionExpiredModal({ isOpen, onClose, onContinueAsGuest }: SessionExpiredModalProps) {
-  const navigate = useNavigate()
+  const navigate = useLocalizedNavigate()
+  const { t } = useTranslation()
   const [isLoading, setIsLoading] = useState(false)
   const [isVisible, setIsVisible] = useState(false)
   const [isAnimating, setIsAnimating] = useState(false)
@@ -81,8 +83,7 @@ export default function SessionExpiredModal({ isOpen, onClose, onContinueAsGuest
         {/* Description */}
         <div className="mt-2">
           <p className="text-sm text-gray-600 dark:text-gray-400 text-center">
-            Your session has expired. Please log in again to continue with your account, 
-            or continue as a guest to browse without saving your preferences.
+            {t('errors.sessionExpired.message')}
           </p>
         </div>
 

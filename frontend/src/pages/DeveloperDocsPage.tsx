@@ -176,22 +176,56 @@ export default function DeveloperDocsPage() {
             </div>
 
             <div>
-              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">Authentication</h3>
-              <p className="text-gray-600 dark:text-gray-400 mb-2">
-                Most endpoints require a JWT token. Obtain one via login:
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">Authentication Methods</h3>
+              <p className="text-gray-600 dark:text-gray-400 mb-3">
+                The API supports two authentication methods:
               </p>
-              <pre className="bg-gray-100 dark:bg-gray-700 p-3 rounded text-sm font-mono overflow-x-auto">
-{`# Login to get a token
+              
+              {/* Method 1: API Key */}
+              <div className="mb-6">
+                <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-2 flex items-center gap-2">
+                  <span className="px-2 py-0.5 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 text-xs rounded">RECOMMENDED</span>
+                  Method 1: API Key (for external services)
+                </h4>
+                <p className="text-gray-600 dark:text-gray-400 mb-2 text-sm">
+                  Create an API key from the <a href="/system/api-keys" className="text-indigo-600 dark:text-indigo-400 hover:underline">API Keys page</a> and use it in the X-API-Key header:
+                </p>
+                <pre className="bg-gray-100 dark:bg-gray-700 p-3 rounded text-sm font-mono overflow-x-auto">
+{`# Using API Key (best for external apps like FocusAhead)
+curl -X POST "${window.location.origin}/api/v1/search/hybrid" \\
+  -H "X-API-Key: rag_your_api_key_here" \\
+  -H "Content-Type: application/json" \\
+  -d '{"query": "search term"}'
+
+# Chat with the agent
+curl -X POST "${window.location.origin}/api/v1/sessions/SESSION_ID/messages" \\
+  -H "X-API-Key: rag_your_api_key_here" \\
+  -H "Content-Type: application/json" \\
+  -d '{"content": "What are my current projects?"}'`}
+                </pre>
+              </div>
+
+              {/* Method 2: JWT Token */}
+              <div>
+                <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-2">
+                  Method 2: JWT Bearer Token (for web sessions)
+                </h4>
+                <p className="text-gray-600 dark:text-gray-400 mb-2 text-sm">
+                  Obtain a JWT token via login for web-based authentication:
+                </p>
+                <pre className="bg-gray-100 dark:bg-gray-700 p-3 rounded text-sm font-mono overflow-x-auto">
+{`# Login to get a JWT token
 curl -X POST "${window.location.origin}/api/v1/auth/login" \\
   -H "Content-Type: application/json" \\
   -d '{"email": "user@example.com", "password": "password"}'
 
-# Use token in requests
+# Use JWT token in requests
 curl "${window.location.origin}/api/v1/search/hybrid" \\
-  -H "Authorization: Bearer YOUR_TOKEN" \\
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{"query": "search term"}'`}
-              </pre>
+                </pre>
+              </div>
             </div>
 
             <div>
@@ -359,20 +393,28 @@ GET /api/v1/status/dashboard`}
 {`import requests
 
 API_URL = "${window.location.origin}/api/v1"
-TOKEN = "your_jwt_token"
+API_KEY = "rag_your_api_key_here"  # From /system/api-keys
 
 headers = {
-    "Authorization": f"Bearer {TOKEN}",
+    "X-API-Key": API_KEY,
     "Content-Type": "application/json"
 }
 
-# Search
+# Search your knowledge base
 response = requests.post(
     f"{API_URL}/search/hybrid",
     headers=headers,
-    json={"query": "search term"}
+    json={"query": "project status", "match_count": 10}
 )
-results = response.json()`}
+results = response.json()
+
+# Query the RAG agent
+response = requests.post(
+    f"{API_URL}/chat/query",
+    headers=headers,
+    json={"query": "What are my current tasks?"}
+)
+answer = response.json()`}
                 </pre>
               </div>
               
@@ -380,42 +422,53 @@ results = response.json()`}
                 <h3 className="font-medium text-gray-900 dark:text-white mb-2">JavaScript/TypeScript</h3>
                 <pre className="bg-gray-100 dark:bg-gray-700 p-3 rounded text-xs font-mono overflow-x-auto">
 {`const API_URL = "${window.location.origin}/api/v1";
-const TOKEN = "your_jwt_token";
+const API_KEY = "rag_your_api_key_here";
 
-// Search
+// Search knowledge base
 const response = await fetch(
   \`\${API_URL}/search/hybrid\`,
   {
     method: "POST",
     headers: {
-      "Authorization": \`Bearer \${TOKEN}\`,
+      "X-API-Key": API_KEY,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      query: "search term"
+      query: "search term",
+      match_count: 10
     })
   }
 );
-const results = await response.json();`}
+const results = await response.json();
+
+// Query RAG agent
+const answer = await fetch(
+  \`\${API_URL}/chat/query\`,
+  {
+    method: "POST",
+    headers: { "X-API-Key": API_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ query: "Summarize my projects" })
+  }
+).then(r => r.json());`}
                 </pre>
               </div>
               
               <div>
                 <h3 className="font-medium text-gray-900 dark:text-white mb-2">cURL</h3>
                 <pre className="bg-gray-100 dark:bg-gray-700 p-3 rounded text-xs font-mono overflow-x-auto">
-{`# Search
+{`# Search with API Key
 curl -X POST \\
   "${window.location.origin}/api/v1/search/hybrid" \\
-  -H "Authorization: Bearer TOKEN" \\
+  -H "X-API-Key: rag_your_key" \\
   -H "Content-Type: application/json" \\
   -d '{"query": "search term"}'
 
-# Chat
+# Query RAG Agent
 curl -X POST \\
-  "${window.location.origin}/api/v1/sessions/ID/messages" \\
-  -H "Authorization: Bearer TOKEN" \\
+  "${window.location.origin}/api/v1/chat/query" \\
+  -H "X-API-Key: rag_your_key" \\
   -H "Content-Type: application/json" \\
-  -d '{"content": "Hello"}'`}
+  -d '{"query": "What tasks are pending?"}'`}
                 </pre>
               </div>
             </div>

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
-import { Outlet, useLocation, useNavigate, Link } from 'react-router-dom'
+import { Outlet, useLocation } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import {
   ChatBubbleLeftRightIcon,
   MagnifyingGlassIcon,
@@ -33,32 +34,34 @@ import {
   ArchiveBoxIcon,
 } from '@heroicons/react/24/outline'
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid'
-import ThemeToggle from './ThemeToggle'
+import ThemeSwitcher from './ThemeSwitcher'
+import LanguageSwitcher from './LanguageSwitcher'
+import { LocalizedLink, useLocalizedNavigate } from './LocalizedLink'
 import { useChatSidebar } from '../contexts/ChatSidebarContext'
 import { useAuth } from '../contexts/AuthContext'
 import { ChatSession } from '../api/client'
 
 // User menu items (shown in dropdown like OpenAI's user menu)
 const baseMenuItems = [
-  { name: 'Home', href: '/', icon: HomeIcon, adminOnly: false, exact: true },
-  { name: 'Search', href: '/search', icon: MagnifyingGlassIcon, adminOnly: false },
-  { name: 'Documents', href: '/documents', icon: DocumentTextIcon, adminOnly: false },
-  { name: 'Archived Chats', href: '/archived-chats', icon: ArchiveBoxIcon, adminOnly: false },
-  { name: 'Cloud Sources', href: '/cloud-sources', icon: CloudIcon, adminOnly: false },
-  { name: 'Email & Cloud Config', href: '/email-cloud-config', icon: EnvelopeIcon, adminOnly: false },
-  { name: 'API Docs', href: '/api-docs', icon: CodeBracketIcon, adminOnly: false, external: true },
-  { name: 'Profiles', href: '/profiles', icon: UserCircleIcon, adminOnly: true },
+  { nameKey: 'nav.dashboard', href: '/dashboard', icon: HomeIcon, adminOnly: false, exact: true },
+  { nameKey: 'nav.search', href: '/search', icon: MagnifyingGlassIcon, adminOnly: false },
+  { nameKey: 'nav.documents', href: '/documents', icon: DocumentTextIcon, adminOnly: false },
+  { nameKey: 'nav.archivedChats', href: '/archived-chats', icon: ArchiveBoxIcon, adminOnly: false },
+  { nameKey: 'nav.cloudSources', href: '/cloud-sources', icon: CloudIcon, adminOnly: false },
+  { nameKey: 'nav.emailCloudConfig', href: '/email-cloud-config', icon: EnvelopeIcon, adminOnly: false },
+  { nameKey: 'nav.apiDocs', href: '/api-docs', icon: CodeBracketIcon, adminOnly: false, external: true },
+  { nameKey: 'nav.profiles', href: '/profiles', icon: UserCircleIcon, adminOnly: true },
 ]
 
 // System sub-menu items (admin only)
 const systemMenuItems = [
-  { name: 'Status', href: '/system/status', icon: ChartBarIcon },
-  { name: 'Search Indexes', href: '/system/indexes', icon: MagnifyingGlassCircleIcon },
-  { name: 'Ingestion', href: '/system/ingestion', icon: ArrowPathIcon },
-  { name: 'Configuration', href: '/system/config', icon: WrenchScrewdriverIcon },
-  { name: 'Users', href: '/system/users', icon: UsersIcon },
-  { name: 'Prompts', href: '/system/prompts', icon: CommandLineIcon },
-  { name: 'API Keys', href: '/system/api-keys', icon: KeyIcon },
+  { nameKey: 'nav.status', href: '/system/status', icon: ChartBarIcon },
+  { nameKey: 'nav.searchIndexes', href: '/system/indexes', icon: MagnifyingGlassCircleIcon },
+  { nameKey: 'nav.ingestion', href: '/system/ingestion', icon: ArrowPathIcon },
+  { nameKey: 'nav.configuration', href: '/system/config', icon: WrenchScrewdriverIcon },
+  { nameKey: 'nav.users', href: '/system/users', icon: UsersIcon },
+  { nameKey: 'nav.prompts', href: '/system/prompts', icon: CommandLineIcon },
+  { nameKey: 'nav.apiKeys', href: '/system/api-keys', icon: KeyIcon },
 ]
 
 export default function Layout() {
@@ -66,7 +69,8 @@ export default function Layout() {
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const userMenuRef = useRef<HTMLDivElement>(null)
   const location = useLocation()
-  const navigate = useNavigate()
+  const navigate = useLocalizedNavigate()
+  const { t } = useTranslation()
   const { user, isAuthenticated, isLoading: isAuthLoading, logout } = useAuth()
   const {
     sessions,
@@ -121,15 +125,15 @@ export default function Layout() {
   // Check if we're on the chat page
   const isOnChatPage = location.pathname.startsWith('/chat')
   
-  // Check if we're on the home page
-  const isOnHomePage = location.pathname === '/'
+  // Check if we're on the dashboard page
+  const isOnDashboardPage = location.pathname === '/dashboard'
 
   // Get page title for non-chat pages
   const getPageTitle = () => {
-    if (isOnHomePage) return 'Home'
-    if (isOnChatPage) return 'Chat'
+    if (isOnDashboardPage) return t('nav.dashboard')
+    if (isOnChatPage) return t('nav.chat')
     const item = baseMenuItems.find(n => !n.exact && location.pathname.startsWith(n.href))
-    return item?.name || 'Chat'
+    return item ? t(item.nameKey) : t('nav.chat')
   }
 
   // Filter menu items based on user admin status
@@ -163,13 +167,13 @@ export default function Layout() {
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-primary-900 dark:text-gray-200">
-                {selectedSessions.size} selected
+                {selectedSessions.size} {t('common.selected')}
               </span>
               <button
                 onClick={toggleSelectMode}
                 className="text-sm text-primary-600 dark:text-primary-400 hover:underline"
               >
-                Cancel
+                {t('common.cancel')}
               </button>
             </div>
             <div className="flex gap-2">
@@ -177,13 +181,13 @@ export default function Layout() {
                 onClick={selectAllSessions}
                 className="flex-1 px-2 py-1.5 text-xs bg-surface-variant dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
               >
-                Select All
+                              {t('sidebar.selectAll')}
               </button>
               <button
                 onClick={clearSelection}
                 className="flex-1 px-2 py-1.5 text-xs bg-surface-variant dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
               >
-                Clear
+                              {t('common.clear')}
               </button>
             </div>
             {selectedSessions.size > 0 && (
@@ -192,17 +196,17 @@ export default function Layout() {
                   onClick={archiveSelected}
                   className="flex-1 px-2 py-1.5 text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 rounded-lg hover:bg-amber-200 dark:hover:bg-amber-900/50"
                 >
-                  Archive ({selectedSessions.size})
+                                    {t('sidebar.archive')} ({selectedSessions.size})
                 </button>
                 <button
                   onClick={() => {
-                    if (confirm(`Delete ${selectedSessions.size} chat(s)? This cannot be undone.`)) {
+                    if (confirm(t('confirm.deleteMultiple', { count: selectedSessions.size }))) {
                       deleteSelected()
                     }
                   }}
                   className="flex-1 px-2 py-1.5 text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50"
                 >
-                  Delete ({selectedSessions.size})
+                                    {t('common.delete')} ({selectedSessions.size})
                 </button>
               </div>
             )}
@@ -214,12 +218,12 @@ export default function Layout() {
               className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-surface-variant dark:border-gray-600 hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-sm font-medium text-primary-900 dark:text-gray-200"
             >
               <PlusIcon className="h-5 w-5" />
-              New chat
+              {t('sidebar.newChat')}
             </button>
             <button
               onClick={toggleSelectMode}
               className="px-3 py-3 rounded-xl border border-surface-variant dark:border-gray-600 hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-sm text-secondary dark:text-gray-400"
-              title="Select multiple chats"
+              title={t('sidebar.selectMultiple')}
             >
               <CheckIcon className="h-5 w-5" />
             </button>
@@ -230,7 +234,7 @@ export default function Layout() {
       {/* Folders Section (Projects) */}
       <div className="px-3 flex-shrink-0">
         <div className="text-xs font-medium text-secondary dark:text-gray-500 uppercase tracking-wider px-2 py-2">
-          Projects
+          {t('sidebar.projects')}
         </div>
         
         {/* New Folder Input */}
@@ -245,7 +249,7 @@ export default function Layout() {
                 if (e.key === 'Enter') handleCreateFolder()
                 if (e.key === 'Escape') setShowNewFolder(false)
               }}
-              placeholder="Folder name"
+              placeholder={t('sidebar.folderName')}
               className="flex-1 text-sm bg-transparent border-b border-primary focus:outline-none dark:text-gray-200"
               autoFocus
             />
@@ -262,7 +266,7 @@ export default function Layout() {
             className="flex items-center gap-2 px-2 py-2 text-sm text-secondary hover:text-primary dark:text-gray-400 dark:hover:text-primary-300 w-full rounded-lg hover:bg-surface-variant dark:hover:bg-gray-800"
           >
             <FolderPlusIcon className="h-4 w-4" />
-            New project
+            {t('sidebar.newProject')}
           </button>
         )}
 
@@ -293,7 +297,7 @@ export default function Layout() {
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
-                    if (confirm(`Delete folder "${folder.name}"?`)) {
+                    if (confirm(t('confirm.deleteFolder', { name: folder.name }))) {
                       handleDeleteFolder(folder.id)
                     }
                   }}
@@ -346,7 +350,7 @@ export default function Layout() {
             {pinnedSessions.length > 0 && (
               <div className="mb-2">
                 <div className="px-2 py-1 text-xs font-medium text-secondary dark:text-gray-500 uppercase tracking-wider">
-                  Pinned
+                  {t('sidebar.pinned')}
                 </div>
                 {pinnedSessions.map(session => (
                   <SessionItem
@@ -375,7 +379,7 @@ export default function Layout() {
             {(sessionsByFolder.get(null) || []).length > 0 && (
               <div>
                 <div className="px-2 py-1 text-xs font-medium text-secondary dark:text-gray-500 uppercase tracking-wider">
-                  Your chats
+                  {t('sidebar.yourChats')}
                 </div>
                 {(sessionsByFolder.get(null) || []).map(session => (
                   <SessionItem
@@ -402,7 +406,7 @@ export default function Layout() {
 
             {sessions.length === 0 && !isSidebarLoading && (
               <div className="text-center py-8 text-secondary dark:text-gray-500 text-sm">
-                No chats yet
+                {t('sidebar.noChats')}
               </div>
             )}
           </div>
@@ -429,8 +433,8 @@ export default function Layout() {
                   ? location.pathname === item.href 
                   : location.pathname.startsWith(item.href)
                 return (
-                  <Link
-                    key={item.name}
+                  <LocalizedLink
+                    key={item.nameKey}
                     to={item.href}
                     onClick={() => setUserMenuOpen(false)}
                     className={`w-full flex items-center gap-3 px-4 py-2 text-sm transition-colors ${
@@ -440,8 +444,8 @@ export default function Layout() {
                     }`}
                   >
                     <item.icon className="h-5 w-5" />
-                    {item.name}
-                  </Link>
+                    {t(item.nameKey)}
+                  </LocalizedLink>
                 )
               })}
               
@@ -458,7 +462,7 @@ export default function Layout() {
                   >
                     <div className="flex items-center gap-3">
                       <Cog6ToothIcon className="h-5 w-5" />
-                      System
+                      {t('nav.system')}
                     </div>
                     {systemMenuOpen ? (
                       <ChevronDownIcon className="h-4 w-4" />
@@ -471,8 +475,8 @@ export default function Layout() {
                       {systemMenuItems.map((subItem) => {
                         const isSubActive = location.pathname === subItem.href
                         return (
-                          <Link
-                            key={subItem.name}
+                          <LocalizedLink
+                            key={subItem.nameKey}
                             to={subItem.href}
                             onClick={() => setUserMenuOpen(false)}
                             className={`w-full flex items-center gap-3 px-4 py-1.5 text-sm transition-colors ${
@@ -482,8 +486,8 @@ export default function Layout() {
                             }`}
                           >
                             <subItem.icon className="h-4 w-4" />
-                            {subItem.name}
-                          </Link>
+                            {t(subItem.nameKey)}
+                          </LocalizedLink>
                         )
                       })}
                     </div>
@@ -492,10 +496,15 @@ export default function Layout() {
               )}
             </div>
             
-            {/* Theme Toggle */}
             <div className="px-4 py-2 border-t border-surface-variant dark:border-gray-700 flex items-center justify-between">
-              <span className="text-sm text-secondary dark:text-gray-400">Theme</span>
-              <ThemeToggle />
+              <span className="text-sm text-secondary dark:text-gray-400">{t('nav.theme')}</span>
+              <ThemeSwitcher compact={false} />
+            </div>
+            
+            {/* Language Switcher */}
+            <div className="px-4 py-2 border-t border-surface-variant dark:border-gray-700 flex items-center justify-between">
+              <span className="text-sm text-secondary dark:text-gray-400">{t('language.select')}</span>
+              <LanguageSwitcher compact={false} />
             </div>
             
             {/* Auth Actions */}
@@ -506,7 +515,7 @@ export default function Layout() {
                   className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
                 >
                   <ArrowRightOnRectangleIcon className="h-5 w-5" />
-                  Log out
+                  {t('nav.signOut')}
                 </button>
               ) : (
                 <button
@@ -514,7 +523,7 @@ export default function Layout() {
                   className="w-full flex items-center gap-3 px-4 py-2 text-sm text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/20"
                 >
                   <ArrowRightOnRectangleIcon className="h-5 w-5" />
-                  Sign in
+                  {t('nav.signIn')}
                 </button>
               )}
             </div>
@@ -558,7 +567,7 @@ export default function Layout() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background dark:bg-gray-900">
           <div className="text-center">
             <div className="animate-spin h-10 w-10 border-4 border-primary border-t-transparent rounded-full mx-auto mb-4" />
-            <p className="text-secondary dark:text-gray-400">Loading...</p>
+            <p className="text-secondary dark:text-gray-400">{t('common.loading')}</p>
           </div>
         </div>
       )}
@@ -606,7 +615,7 @@ export default function Layout() {
         </div>
 
         {/* Page content */}
-        <main className={isOnChatPage || isOnHomePage ? (isOnHomePage ? 'py-6 px-4 sm:px-6 lg:px-8' : '') : 'py-6 px-4 sm:px-6 lg:px-8'}>
+        <main className={isOnChatPage || isOnDashboardPage ? (isOnDashboardPage ? 'py-6 px-4 sm:px-6 lg:px-8' : '') : 'py-6 px-4 sm:px-6 lg:px-8'}>
           <Outlet />
         </main>
       </div>
@@ -634,12 +643,12 @@ export default function Layout() {
                     {session.is_pinned ? (
                       <>
                         <StarIcon className="h-4 w-4" />
-                        Unpin
+                        {t('sidebar.unpin')}
                       </>
                     ) : (
                       <>
                         <StarIconSolid className="h-4 w-4 text-yellow-500" />
-                        Pin
+                        {t('sidebar.pin')}
                       </>
                     )}
                   </button>
@@ -652,11 +661,11 @@ export default function Layout() {
                     className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-surface-variant dark:hover:bg-gray-700 dark:text-gray-200"
                   >
                     <PencilIcon className="h-4 w-4" />
-                    Rename
+                    {t('sidebar.rename')}
                   </button>
                   <button
                     onClick={() => {
-                      if (confirm(`Delete chat "${session.title}"?`)) {
+                      if (confirm(t('confirm.deleteChat', { title: session.title }))) {
                         handleDeleteSession(session.id)
                       } else {
                         setContextMenu(null)
@@ -665,7 +674,7 @@ export default function Layout() {
                     className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
                   >
                     <TrashIcon className="h-4 w-4" />
-                    Delete
+                    {t('common.delete')}
                   </button>
                 </>
               )
@@ -705,6 +714,7 @@ function SessionItem({
   onEditCancel: () => void
   onContextMenu: (e: React.MouseEvent) => void
 }) {
+  const { t } = useTranslation()
   return (
     <div
       onClick={isSelectMode ? onToggleSelect : onSelect}
@@ -743,7 +753,7 @@ function SessionItem({
           onClick={(e) => e.stopPropagation()}
         />
       ) : (
-        <span className="flex-1 text-sm truncate">{session.title || 'New Chat'}</span>
+        <span className="flex-1 text-sm truncate">{session.title || t('chat.newChat')}</span>
       )}
       {session.is_pinned && (
         <StarIconSolid className="h-3 w-3 text-yellow-500 flex-shrink-0" />

@@ -9,7 +9,7 @@ const AUTH_TOKEN_KEY = 'auth_token'
 // Retry configuration
 const MAX_RETRIES = 3
 const RETRY_DELAY = 1000 // ms
-const TIMEOUT = 30000 // 30 seconds
+const TIMEOUT = 300000 // 300 seconds
 const AUTH_CHECK_TIMEOUT = 5000 // 5 seconds for auth verification
 
 // Custom error class for API errors
@@ -59,6 +59,11 @@ export class ApiError extends Error {
 
     // Authentication errors
     if (this.status === 401) {
+      // If the server provided a specific message (like "Invalid email or password"), use it
+      // Otherwise, show the generic session expired message
+      if (this.message && this.message !== 'An error occurred' && !this.message.includes('Not authenticated')) {
+        return this.message
+      }
       return 'Your session has expired. Please log in again.'
     }
 
@@ -412,6 +417,103 @@ export interface LLMProviderInfo {
   id: string
   name: string
   models: string[]
+  categories?: string[]
+  supports_fetch?: boolean
+}
+
+export interface ProviderModelInfo {
+  id: string
+  name: string
+  type?: string
+  category?: string
+  context?: number
+  dimension?: number
+  multimodal?: boolean
+  audio?: boolean
+  description?: string
+  installed?: boolean
+  size_gb?: number
+  owned_by?: string
+  created?: number
+}
+
+export interface FetchModelsResponse {
+  success: boolean
+  provider: string
+  models: ProviderModelInfo[]
+  categories?: string[]
+  total?: number
+  logs: string[]
+  is_default?: boolean
+  error?: string
+  note?: string
+  ollama_url?: string
+}
+
+export interface ProviderTestRequest {
+  provider: string
+  model: string
+  api_key?: string
+  prompt?: string
+}
+
+export interface ProviderTestResponse {
+  success: boolean
+  provider: string
+  model: string
+  response?: string
+  error?: string
+  latency_ms: number
+  logs: string[]
+}
+
+// Agent Tools types
+export interface ToolParameter {
+  name: string
+  type: string
+  required: boolean
+  description: string
+  options?: string[]
+  default?: string
+}
+
+export interface AgentTool {
+  id: string
+  name: string
+  icon: string
+  category: string
+  description: string
+  help_text: string
+  parameters: ToolParameter[]
+  test_config: {
+    requires_db?: boolean
+    requires_api_key?: string
+    test_query?: string
+    test_url?: string
+    expected_response?: string
+  }
+}
+
+export interface ToolsListResponse {
+  tools: AgentTool[]
+  total: number
+  categories: string[]
+}
+
+export interface ToolTestRequest {
+  tool_id: string
+  parameters?: Record<string, string>
+}
+
+export interface ToolTestResponse {
+  success: boolean
+  tool_id: string
+  tool_name: string
+  result?: string
+  result_preview?: string
+  error?: string
+  latency_ms: number
+  logs: string[]
 }
 
 export interface LLMProviderConfigResponse {
@@ -1084,6 +1186,57 @@ export const systemApi = {
     const response = await api.post('/system/llm-providers', config)
     return response.data
   },
+
+  // Provider Models Fetch & Test
+  getProviderModelsDetailed: async (providerId: string): Promise<{
+    provider: string
+    models: ProviderModelInfo[]
+    categories: string[]
+    total: number
+  }> => {
+    const response = await api.get(`/system/llm-providers/models/${providerId}`)
+    return response.data
+  },
+
+  fetchModelsFromApi: async (providerId: string, apiKey?: string): Promise<FetchModelsResponse> => {
+    const response = await api.post(`/system/llm-providers/fetch-models/${providerId}`, null, {
+      params: apiKey ? { api_key: apiKey } : {}
+    })
+    return response.data
+  },
+
+  testProviderConnection: async (request: ProviderTestRequest): Promise<ProviderTestResponse> => {
+    const response = await api.post('/system/llm-providers/test', request)
+    return response.data
+  },
+
+  // Agent Tools
+  listTools: async (): Promise<ToolsListResponse> => {
+    const response = await api.get('/system/tools')
+    return response.data
+  },
+
+  getToolDetails: async (toolId: string): Promise<AgentTool> => {
+    const response = await api.get(`/system/tools/${toolId}`)
+    return response.data
+  },
+
+  testTool: async (request: ToolTestRequest): Promise<ToolTestResponse> => {
+    const response = await api.post('/system/tools/test', request)
+    return response.data
+  },
+
+  switchModelVersions: async (switchRequest: {
+    orchestrator_model?: string
+    orchestrator_provider?: string
+    worker_model?: string
+    worker_provider?: string
+    embedding_model?: string
+    embedding_provider?: string
+  }): Promise<any> => {
+    const response = await api.post('/model-versions/switch', switchRequest)
+    return response.data
+  }
 }
 
 // ============== Chat Sessions API ==============
@@ -1125,6 +1278,7 @@ export const sessionsApi = {
       match_count?: number
       include_sources?: boolean
       attachments?: AttachmentInfo[]
+      agent_mode?: 'auto' | 'thinking' | 'fast'
     }
   ): Promise<SendMessageResponse> => {
     const response = await api.post(`/sessions/${sessionId}/messages`, {
@@ -1133,6 +1287,7 @@ export const sessionsApi = {
       match_count: options?.match_count || 10,
       include_sources: options?.include_sources ?? true,
       attachments: options?.attachments || null,
+      agent_mode: options?.agent_mode || null,
     })
     return response.data
   },

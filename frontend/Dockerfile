@@ -21,7 +21,10 @@ RUN npm run build
 # Stage 2: Serve with nginx
 FROM nginx:alpine as production
 
-# Copy custom nginx config
+# Copy custom nginx configs
+# Main config with rate limiting zones
+COPY nginx.main.conf /etc/nginx/nginx.conf
+# Server block config
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Copy built assets from builder stage

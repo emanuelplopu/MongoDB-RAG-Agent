@@ -1,10 +1,12 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { MagnifyingGlassIcon, DocumentTextIcon, ClockIcon } from '@heroicons/react/24/outline'
 import { searchApi, SearchResult, SearchResponse } from '../api/client'
 
 type SearchType = 'hybrid' | 'semantic' | 'text'
 
 export default function SearchPage() {
+  const { t } = useTranslation()
   const [query, setQuery] = useState('')
   const [searchType, setSearchType] = useState<SearchType>('hybrid')
   const [matchCount, setMatchCount] = useState(10)
@@ -44,7 +46,7 @@ export default function SearchPage() {
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search your knowledge base..."
+              placeholder={t('search.placeholder')}
               className="w-full rounded-2xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 py-3 pl-12 pr-4 text-primary-900 dark:text-gray-200 placeholder:text-secondary dark:placeholder:text-gray-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
@@ -89,7 +91,7 @@ export default function SearchPage() {
               disabled={!query.trim() || isLoading}
               className="ml-auto rounded-xl bg-primary px-6 py-2 font-medium text-white transition-all hover:bg-primary-700 disabled:bg-secondary disabled:cursor-not-allowed"
             >
-              {isLoading ? 'Searching...' : 'Search'}
+              {isLoading ? t('common.loading') : t('search.searchButton')}
             </button>
           </div>
         </form>
@@ -148,7 +150,7 @@ export default function SearchPage() {
         {results.length === 0 && !isLoading && lastSearch && (
           <div className="rounded-2xl bg-surface-variant dark:bg-gray-800 p-8 text-center">
             <MagnifyingGlassIcon className="mx-auto h-12 w-12 text-secondary dark:text-gray-500 mb-3" />
-            <p className="text-secondary dark:text-gray-400">No results found for your query.</p>
+            <p className="text-secondary dark:text-gray-400">{t('search.noResults')}</p>
           </div>
         )}
       </div>

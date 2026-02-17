@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, act, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { ChatSidebarProvider, useChatSidebar } from './ChatSidebarContext'
@@ -107,6 +107,8 @@ describe('ChatSidebarContext', () => {
     })
     vi.mocked(client.systemApi.listLLMModels).mockResolvedValue({
       models: [],
+      provider: 'openai',
+      cached: false,
     })
     vi.mocked(client.sessionsApi.getModelPricing).mockResolvedValue({
       models: [],

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import {
   UserCircleIcon,
   PlusIcon,
@@ -16,6 +17,7 @@ import { useAuth } from '../contexts/AuthContext'
 
 export default function ProfilesPage() {
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const { user, isLoading: isAuthLoading } = useAuth()
   const [profiles, setProfiles] = useState<Record<string, Profile>>({})
   const [activeProfile, setActiveProfile] = useState<string>('')
@@ -60,9 +62,9 @@ export default function ProfilesPage() {
       console.error('Error fetching profiles:', err)
       // Handle 403 by redirecting non-admins
       if (err?.status === 403) {
-        setError('Admin access required to view profiles.')
+        setError(t('profiles.adminAccess'))
       } else {
-        setError('Failed to load profiles.')
+        setError(t('profiles.loadFailed', 'Failed to load profiles.'))
       }
     } finally {
       setIsLoading(false)
@@ -91,7 +93,7 @@ export default function ProfilesPage() {
       setAccessMatrix(matrix)
     } catch (err) {
       console.error('Error fetching access matrix:', err)
-      setMatrixError('Failed to load access matrix.')
+      setMatrixError(t('profiles.matrixFailed', 'Failed to load access matrix.'))
     } finally {
       setIsLoadingMatrix(false)
     }
@@ -114,7 +116,7 @@ export default function ProfilesPage() {
       fetchAccessMatrix()
     } catch (err) {
       console.error('Error toggling access:', err)
-      setMatrixError('Failed to update access.')
+      setMatrixError(t('profiles.accessFailed', 'Failed to update access.'))
     }
   }
 
@@ -123,22 +125,22 @@ export default function ProfilesPage() {
       setSwitchMessage(null)
       const response = await profilesApi.switch(profileKey)
       setActiveProfile(profileKey)
-      setSwitchMessage(response.message || `Switched to ${profileKey}`)
+      setSwitchMessage(response.message || t('profiles.switchSuccess', { name: profileKey }))
       
       // Clear message after 3 seconds
       setTimeout(() => setSwitchMessage(null), 3000)
     } catch (err) {
       console.error('Error switching profile:', err)
-      setError('Failed to switch profile.')
+      setError(t('profiles.switchFailed', 'Failed to switch profile.'))
     }
   }
 
   const handleDelete = async (profileKey: string) => {
     if (profileKey === 'default') {
-      alert('Cannot delete the default profile.')
+      alert(t('profiles.cannotDeleteDefault', 'Cannot delete the default profile.'))
       return
     }
-    if (!confirm(`Are you sure you want to delete profile "${profileKey}"?`)) {
+    if (!confirm(t('confirm.deleteProfile', { name: profileKey }))) {
       return
     }
 
@@ -147,7 +149,7 @@ export default function ProfilesPage() {
       fetchProfiles()
     } catch (err) {
       console.error('Error deleting profile:', err)
-      setError('Failed to delete profile.')
+      setError(t('profiles.deleteFailed', 'Failed to delete profile.'))
     }
   }
 
@@ -169,7 +171,7 @@ export default function ProfilesPage() {
       fetchProfiles()
     } catch (err) {
       console.error('Error creating profile:', err)
-      setError('Failed to create profile.')
+      setError(t('profiles.createFailed', 'Failed to create profile.'))
     }
   }
 

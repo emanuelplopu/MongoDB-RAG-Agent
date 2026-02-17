@@ -1,0 +1,651 @@
+{
+  "common": {
+    "appName": "RecallHub",
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success",
+    "cancel": "Cancel",
+    "save": "Save",
+    "delete": "Delete",
+    "edit": "Edit",
+    "create": "Create",
+    "close": "Close",
+    "back": "Back",
+    "next": "Next",
+    "previous": "Previous",
+    "search": "Search",
+    "filter": "Filter",
+    "refresh": "Refresh",
+    "submit": "Submit",
+    "confirm": "Confirm",
+    "yes": "Yes",
+    "no": "No",
+    "all": "All",
+    "none": "None",
+    "selected": "selected",
+    "actions": "Actions",
+    "settings": "Settings",
+    "viewAll": "View All",
+    "manage": "Manage",
+    "noData": "No data available",
+    "unknownError": "An unknown error occurred",
+    "clear": "Clear",
+    "add": "Add",
+    "remove": "Remove",
+    "enable": "Enable",
+    "disable": "Disable",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "test": "Test",
+    "copy": "Copy",
+    "copied": "Copied!",
+    "selectAll": "Select All",
+    "deselectAll": "Deselect All",
+    "sortBy": "Sort by",
+    "ascending": "Ascending",
+    "descending": "Descending"
+  },
+  "theme": {
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System",
+    "switchTo": "Switch to {{mode}} mode"
+  },
+  "language": {
+    "english": "English",
+    "german": "Deutsch",
+    "select": "Select language"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "chat": "Chat",
+    "search": "Search",
+    "documents": "Documents",
+    "archivedChats": "Archived Chats",
+    "cloudSources": "Cloud Sources",
+    "emailCloudConfig": "Email & Cloud Config",
+    "apiDocs": "API Docs",
+    "profiles": "Profiles",
+    "system": "System",
+    "status": "Status",
+    "searchIndexes": "Search Indexes",
+    "ingestion": "Ingestion",
+    "configuration": "Configuration",
+    "users": "Users",
+    "prompts": "Prompts",
+    "apiKeys": "API Keys",
+    "theme": "Theme",
+    "signOut": "Log out",
+    "signIn": "Sign in"
+  },
+  "sidebar": {
+    "newChat": "New chat",
+    "selectMultiple": "Select multiple chats",
+    "projects": "Projects",
+    "newProject": "New project",
+    "folderName": "Folder name",
+    "pinned": "Pinned",
+    "yourChats": "Your chats",
+    "noChats": "No chats yet",
+    "selectAll": "Select All",
+    "clear": "Clear",
+    "archive": "Archive",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "rename": "Rename"
+  },
+  "landing": {
+    "welcomeTo": "Welcome to",
+    "subtitle": "Your intelligent knowledge management platform. Search, chat, and discover insights across all your documents with AI-powered search and conversational retrieval.",
+    "getStarted": "Get Started",
+    "goToDashboard": "Go to Dashboard",
+    "startChat": "Start Chat",
+    "featuresTitle": "Powerful Features for Your Knowledge",
+    "featuresSubtitle": "Everything you need to organize, search, and interact with your knowledge base",
+    "features": {
+      "aiSearch": {
+        "title": "AI-Powered Search",
+        "description": "Find exactly what you need with semantic search that understands meaning, not just keywords. Hybrid search combines vector embeddings with full-text search for the best results."
+      },
+      "multiFormat": {
+        "title": "Multi-Format Ingestion",
+        "description": "Process documents in any format - PDFs, Word docs, audio files, and more. Automatic chunking and embedding creation makes your content instantly searchable."
+      },
+      "conversational": {
+        "title": "Conversational AI",
+        "description": "Chat naturally with your knowledge base. Get answers with source citations, follow-up questions, and context-aware responses powered by advanced RAG technology."
+      },
+      "profiles": {
+        "title": "Knowledge Profiles",
+        "description": "Organize your knowledge into separate profiles for different projects, teams, or use cases. Switch contexts instantly while keeping data isolated and secure."
+      },
+      "cloud": {
+        "title": "Cloud Integration",
+        "description": "Connect to Google Drive, Dropbox, OneDrive, and more. Sync your cloud files automatically and keep your knowledge base always up-to-date."
+      }
+    },
+    "benefitsTitle": "Built for Security and Performance",
+    "benefitsSubtitle": "RecallHub is designed with enterprise requirements in mind. Host it on your own infrastructure, maintain full control of your data, and integrate seamlessly with your existing tools.",
+    "benefits": {
+      "security": "Enterprise-grade security with JWT authentication",
+      "selfHosted": "Self-hosted solution for full data control",
+      "llmProviders": "Support for multiple LLM providers",
+      "realtime": "Real-time document processing status",
+      "apiFirst": "API-first design for easy integration"
+    },
+    "aiResponse": "AI-powered response with sources",
+    "ctaTitle": "Ready to Transform Your Knowledge Management?",
+    "ctaSubtitleAuth": "Welcome back, {{name}}! Continue exploring your knowledge base.",
+    "ctaSubtitleGuest": "Join RecallHub today and unlock the power of AI-driven knowledge retrieval.",
+    "getStartedFree": "Get Started Free",
+    "footerTagline": "Intelligent Knowledge Management"
+  },
+  "login": {
+    "signInTitle": "Sign in to your account",
+    "signUpTitle": "Create a new account",
+    "name": "Name",
+    "namePlaceholder": "Your name",
+    "email": "Email",
+    "emailPlaceholder": "you@example.com",
+    "password": "Password",
+    "passwordPlaceholder": "••••••••",
+    "nameRequired": "Name is required",
+    "invalidCredentials": "Invalid email or password. Please try again.",
+    "serverError": "Unable to connect to the server. Please try again later.",
+    "authFailed": "Authentication failed. Please try again.",
+    "errorId": "Error ID",
+    "signIn": "Sign in",
+    "signingIn": "Signing in...",
+    "createAccount": "Create account",
+    "creatingAccount": "Creating account...",
+    "noAccount": "Don't have an account? Sign up",
+    "hasAccount": "Already have an account? Sign in",
+    "continueWithout": "Continue without account"
+  },
+  "dashboard": {
+    "greeting": {
+      "morning": "Good morning",
+      "afternoon": "Good afternoon",
+      "evening": "Good evening"
+    },
+    "overview": "Here's an overview of your knowledge base activity",
+    "failedToLoad": "Failed to load some dashboard data",
+    "quickActions": {
+      "newChat": "New Chat",
+      "startConversation": "Start a conversation",
+      "search": "Search",
+      "findDocuments": "Find documents",
+      "documents": "Documents",
+      "browseLibrary": "Browse library",
+      "ingestion": "Ingestion",
+      "manageFiles": "Manage files"
+    },
+    "recentChats": {
+      "title": "Recent Chats",
+      "newChat": "New Chat",
+      "noChats": "No recent chats",
+      "startFirst": "Start your first conversation",
+      "messages": "messages"
+    },
+    "recentDocuments": {
+      "title": "Recently Ingested Files",
+      "noDocuments": "No documents ingested yet",
+      "startIngestion": "Start ingestion",
+      "chunks": "chunks"
+    },
+    "ingestionActivity": {
+      "title": "Ingestion Activity",
+      "running": "Running Ingestion",
+      "progress": "Progress",
+      "filesProcessed": "{{processed}} / {{total}} files processed",
+      "noActivity": "No ingestion activity yet",
+      "defaultProfile": "Default Profile",
+      "docs": "docs",
+      "chunksCreated": "chunks"
+    },
+    "profiles": {
+      "title": "Knowledge Profiles",
+      "active": "Active",
+      "noDescription": "No description",
+      "noProfiles": "No profiles configured"
+    },
+    "tips": {
+      "title": "Tips for Better Results",
+      "beSpecific": {
+        "title": "Be Specific",
+        "description": "Include context and details in your questions for more accurate answers."
+      },
+      "checkSources": {
+        "title": "Check Sources",
+        "description": "Click on source documents to verify information and explore further."
+      },
+      "useSearch": {
+        "title": "Use Search",
+        "description": "Search your documents directly for quick lookups and discovery."
+      }
+    },
+    "time": {
+      "justNow": "Just now",
+      "minutesAgo": "{{count}}m ago",
+      "hoursAgo": "{{count}}h ago",
+      "daysAgo": "{{count}}d ago"
+    },
+    "status": {
+      "completed": "Completed",
+      "running": "Running",
+      "failed": "Failed",
+      "idle": "Idle"
+    }
+  },
+  "chat": {
+    "newChat": "New Chat",
+    "sendMessage": "Send message",
+    "typePlaceholder": "Type a message...",
+    "emptyState": {
+      "title": "Start a Conversation",
+      "subtitle": "Ask questions about your documents and get AI-powered answers with source citations."
+    },
+    "sources": "Sources",
+    "noSources": "No sources found",
+    "thinking": "Thinking...",
+    "regenerate": "Regenerate response",
+    "copy": "Copy",
+    "copied": "Copied!",
+    "deleteMessage": "Delete message",
+    "confirmDelete": "Delete this chat?",
+    "agentMode": {
+      "label": "Agent Mode",
+      "auto": {
+        "label": "Auto",
+        "description": "Automatically chooses mode based on query complexity",
+        "details": "Uses FAST mode for short/simple queries. Uses THINKING mode for complex queries."
+      },
+      "thinking": {
+        "label": "Thinking",
+        "description": "Full orchestrator-worker pipeline for complex questions",
+        "details": "Uses the Orchestrator to analyze intent, create search plans, execute parallel searches, and synthesize comprehensive answers."
+      },
+      "fast": {
+        "label": "Fast",
+        "description": "Direct search without orchestration for quick answers",
+        "details": "Skips the Orchestrator and performs direct hybrid search. Good for simple factual questions."
+      }
+    },
+    "model": {
+      "label": "Model",
+      "select": "Select model"
+    },
+    "attachments": {
+      "add": "Add attachment",
+      "remove": "Remove attachment",
+      "tooLarge": "File is too large (max 20MB)",
+      "tokens": "tokens"
+    },
+    "settings": {
+      "title": "Chat Settings",
+      "model": "Model",
+      "agentMode": "Agent Mode"
+    },
+    "metrics": {
+      "time": "Time",
+      "tokens": "Tokens",
+      "cost": "Cost",
+      "speed": "Speed"
+    },
+    "errors": {
+      "sendFailed": "Failed to send message",
+      "sessionNotFound": "Session not found"
+    }
+  },
+  "search": {
+    "title": "Search",
+    "placeholder": "Search your documents...",
+    "searchButton": "Search",
+    "results": "Results",
+    "noResults": "No results found",
+    "filters": {
+      "title": "Filters",
+      "documentType": "Document Type",
+      "dateRange": "Date Range",
+      "profile": "Profile"
+    },
+    "relevance": "Relevance",
+    "viewDocument": "View Document"
+  },
+  "documents": {
+    "title": "Documents",
+    "upload": "Upload",
+    "delete": "Delete",
+    "preview": "Preview",
+    "download": "Download",
+    "noDocuments": "No documents found",
+    "uploadPrompt": "Upload documents to get started",
+    "details": {
+      "title": "Title",
+      "type": "Type",
+      "size": "Size",
+      "chunks": "Chunks",
+      "createdAt": "Created",
+      "source": "Source"
+    },
+    "confirmDelete": "Delete this document?",
+    "deleteSuccess": "Document deleted successfully",
+    "deleteFailed": "Failed to delete document",
+    "search": "Search documents...",
+    "folders": "Folders",
+    "allFolders": "All Folders",
+    "viewMode": {
+      "grid": "Grid view",
+      "list": "List view",
+      "tree": "Tree view"
+    },
+    "sort": {
+      "name": "Name",
+      "date": "Date",
+      "size": "Size",
+      "chunks": "Chunks"
+    },
+    "pagination": {
+      "showing": "Showing {{from}}-{{to}} of {{total}}",
+      "perPage": "per page"
+    },
+    "rebuildMetadata": "Rebuild Metadata",
+    "rebuildStatus": "Rebuild Status",
+    "selected": "{{count}} selected",
+    "deleteSelected": "Delete selected"
+  },
+  "archived": {
+    "title": "Archived Chats",
+    "noChats": "No archived chats",
+    "restore": "Restore",
+    "delete": "Delete permanently",
+    "search": "Search archived chats...",
+    "confirmDelete": "Permanently delete this chat?",
+    "restoreSuccess": "Chat restored successfully",
+    "deleteSuccess": "Chat deleted permanently"
+  },
+  "profiles": {
+    "title": "Knowledge Profiles",
+    "create": "Create Profile",
+    "edit": "Edit Profile",
+    "delete": "Delete Profile",
+    "activate": "Activate",
+    "active": "Active",
+    "name": "Name",
+    "key": "Key",
+    "description": "Description",
+    "database": "Database",
+    "embeddingModel": "Embedding Model",
+    "documentsFolder": "Documents Folder",
+    "confirmDelete": "Delete this profile?",
+    "deleteWarning": "This will delete all documents and data in this profile.",
+    "noProfiles": "No profiles configured",
+    "createSuccess": "Profile created successfully",
+    "updateSuccess": "Profile updated successfully",
+    "deleteSuccess": "Profile deleted successfully",
+    "switchSuccess": "Switched to profile: {{name}}",
+    "accessMatrix": "Access Matrix",
+    "adminAccess": "Admin access required to view profiles"
+  },
+  "status": {
+    "title": "System Status",
+    "subtitle": "KPIs and metrics overview",
+    "refresh": "Refresh",
+    "profiles": "Profiles",
+    "active": "Active",
+    "totalDocuments": "Total Documents",
+    "totalChunks": "Total Chunks",
+    "apiUptime": "API Uptime",
+    "llmConfig": "LLM Configuration",
+    "embeddingConfig": "Embedding Configuration",
+    "provider": "Provider",
+    "model": "Model",
+    "dimension": "Dimension",
+    "storageStats": "Storage Statistics",
+    "databaseSize": "Database Size",
+    "collectionsCount": "Collections",
+    "failedToLoad": "Failed to load status dashboard"
+  },
+  "users": {
+    "title": "User Management",
+    "create": "Create User",
+    "edit": "Edit User",
+    "delete": "Delete User",
+    "name": "Name",
+    "email": "Email",
+    "password": "Password",
+    "newPassword": "New Password",
+    "role": "Role",
+    "admin": "Admin",
+    "user": "User",
+    "status": "Status",
+    "active": "Active",
+    "inactive": "Inactive",
+    "lastLogin": "Last Login",
+    "createdAt": "Created",
+    "confirmDelete": "Delete this user?",
+    "accessDenied": "Access Denied",
+    "adminRequired": "You need administrator privileges to access this page.",
+    "createSuccess": "User created successfully",
+    "updateSuccess": "User updated successfully",
+    "deleteSuccess": "User deleted successfully",
+    "toggleStatus": "Toggle status",
+    "editUser": "Edit User",
+    "deleteUser": "Delete User",
+    "noUsers": "No users found",
+    "you": "You"
+  },
+  "ingestion": {
+    "title": "Ingestion Management",
+    "start": "Start Ingestion",
+    "stop": "Stop",
+    "pause": "Pause",
+    "resume": "Resume",
+    "selectFolder": "Select Folder",
+    "allFolders": "All Folders",
+    "status": "Status",
+    "progress": "Progress",
+    "filesProcessed": "Files Processed",
+    "chunksCreated": "Chunks Created",
+    "running": "Running",
+    "completed": "Completed",
+    "failed": "Failed",
+    "idle": "Idle",
+    "queue": "Ingestion Queue",
+    "history": "History",
+    "lastRun": "Last Run",
+    "filesInQueue": "Files in queue",
+    "clearQueue": "Clear Queue",
+    "retryFailed": "Retry Failed",
+    "noJobs": "No ingestion jobs",
+    "errors": "Errors"
+  },
+  "indexes": {
+    "title": "Search Indexes",
+    "create": "Create Index",
+    "rebuild": "Rebuild",
+    "delete": "Delete",
+    "name": "Name",
+    "type": "Type",
+    "status": "Status",
+    "documents": "Documents",
+    "lastUpdated": "Last Updated",
+    "noIndexes": "No indexes configured",
+    "vectorSearch": "Vector Search",
+    "fullText": "Full Text",
+    "hybrid": "Hybrid",
+    "ready": "Ready",
+    "building": "Building",
+    "error": "Error"
+  },
+  "config": {
+    "title": "Configuration",
+    "tabs": {
+      "llm": "LLM Providers",
+      "offline": "Offline Mode",
+      "network": "Network Discovery",
+      "models": "Model Management",
+      "profiles": "Profiles",
+      "search": "Search Settings",
+      "tools": "Agent Tools"
+    },
+    "llm": {
+      "title": "LLM Provider Configuration",
+      "orchestrator": "Orchestrator",
+      "worker": "Worker",
+      "provider": "Provider",
+      "model": "Model",
+      "apiKey": "API Key",
+      "baseUrl": "Base URL",
+      "testConnection": "Test Connection",
+      "fetchModels": "Fetch Models",
+      "saveConfig": "Save Configuration",
+      "testPrompt": "Test Prompt",
+      "testResult": "Test Result",
+      "success": "Connection successful",
+      "failed": "Connection failed"
+    },
+    "offline": {
+      "title": "Offline Mode",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "description": "Run with local LLM providers without internet connection"
+    },
+    "network": {
+      "title": "Network Discovery",
+      "scan": "Scan Network",
+      "scanning": "Scanning...",
+      "presets": "Network Presets",
+      "customRange": "Custom Range",
+      "discovered": "Discovered Endpoints",
+      "noEndpoints": "No endpoints discovered"
+    },
+    "search": {
+      "title": "Search Settings",
+      "defaultMatches": "Default Match Count",
+      "minRelevance": "Minimum Relevance Score"
+    },
+    "tools": {
+      "title": "Agent Tools",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "test": "Test Tool",
+      "noTools": "No tools configured"
+    }
+  },
+  "prompts": {
+    "title": "Prompt Management",
+    "system": "System Prompt",
+    "create": "Create Prompt",
+    "edit": "Edit Prompt",
+    "delete": "Delete Prompt",
+    "name": "Name",
+    "description": "Description",
+    "content": "Content",
+    "active": "Active",
+    "default": "Default",
+    "setDefault": "Set as Default",
+    "noPrompts": "No prompts configured",
+    "createSuccess": "Prompt created successfully",
+    "updateSuccess": "Prompt updated successfully",
+    "deleteSuccess": "Prompt deleted successfully"
+  },
+  "apiKeys": {
+    "title": "API Keys",
+    "create": "Create API Key",
+    "revoke": "Revoke",
+    "name": "Name",
+    "key": "Key",
+    "createdAt": "Created",
+    "lastUsed": "Last Used",
+    "expiresAt": "Expires",
+    "never": "Never",
+    "confirmRevoke": "Revoke this API key?",
+    "noKeys": "No API keys configured",
+    "createSuccess": "API key created successfully",
+    "copyKey": "Copy Key",
+    "keyCopied": "Key copied to clipboard",
+    "keyWarning": "Make sure to copy your API key now. You won't be able to see it again!"
+  },
+  "cloudSources": {
+    "title": "Cloud Sources",
+    "connect": "Connect",
+    "disconnect": "Disconnect",
+    "sync": "Sync Now",
+    "lastSync": "Last synced",
+    "configure": "Configure",
+    "providers": {
+      "googleDrive": "Google Drive",
+      "dropbox": "Dropbox",
+      "oneDrive": "OneDrive",
+      "webdav": "WebDAV",
+      "gmail": "Gmail",
+      "outlook": "Outlook",
+      "imap": "IMAP Email",
+      "confluence": "Confluence",
+      "jira": "Jira"
+    },
+    "status": {
+      "connected": "Connected",
+      "disconnected": "Disconnected",
+      "syncing": "Syncing",
+      "error": "Error"
+    },
+    "noConnections": "No cloud sources connected",
+    "connections": "Connections",
+    "addConnection": "Add Connection",
+    "manageConnections": "Manage Connections",
+    "syncStatus": "Sync Status",
+    "documentsIngested": "Documents Ingested"
+  },
+  "email": {
+    "title": "Email & Cloud Configuration",
+    "providers": "Email Providers",
+    "cloudProviders": "Cloud Providers",
+    "configure": "Configure",
+    "test": "Test Connection",
+    "sync": "Sync",
+    "lastSync": "Last Sync",
+    "settings": {
+      "server": "Server",
+      "port": "Port",
+      "username": "Username",
+      "password": "Password",
+      "useSsl": "Use SSL",
+      "folders": "Folders to sync"
+    }
+  },
+  "preview": {
+    "title": "Document Preview",
+    "metadata": "Metadata",
+    "chunks": "Chunks",
+    "content": "Content",
+    "noContent": "No content available",
+    "download": "Download Original",
+    "close": "Close"
+  },
+  "errors": {
+    "notFound": {
+      "title": "Page Not Found",
+      "message": "The page you're looking for doesn't exist.",
+      "goHome": "Go Home"
+    },
+    "unauthorized": "You are not authorized to perform this action",
+    "sessionExpired": {
+      "title": "Session Expired",
+      "message": "Your session has expired. Please sign in again.",
+      "signIn": "Sign In"
+    }
+  },
+  "confirm": {
+    "deleteChat": "Delete chat \"{{title}}\"?",
+    "deleteFolder": "Delete folder \"{{name}}\"?",
+    "deleteMultiple": "Delete {{count}} chat(s)? This cannot be undone.",
+    "archiveMultiple": "Archive {{count}} chat(s)?",
+    "deleteDocument": "Delete document \"{{name}}\"?",
+    "deleteProfile": "Delete profile \"{{name}}\"?",
+    "deleteUser": "Delete user \"{{name}}\"?",
+    "revokeApiKey": "Revoke this API key?",
+    "disconnectSource": "Disconnect this cloud source?"
+  }
+}

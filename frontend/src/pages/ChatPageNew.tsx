@@ -20,6 +20,8 @@ import {
   GlobeAltIcon,
   CheckCircleIcon,
   XCircleIcon,
+  InformationCircleIcon,
+  Cog6ToothIcon,
 } from '@heroicons/react/24/outline'
 import {
   sessionsApi,
@@ -50,6 +52,31 @@ const formatTps = (tps: number | undefined | null): string => {
   return `${tps.toFixed(1)} tok/s`
 }
 
+// Agent mode configuration with descriptions
+const AGENT_MODES = {
+  auto: {
+    label: 'Auto',
+    icon: '🔄',
+    description: 'Automatically chooses mode based on query complexity',
+    details: 'Uses FAST mode for short/simple queries (<50 chars). Uses THINKING mode for complex queries with words like "analyze", "step by step", "compare", "explain", "why", "how does".',
+    color: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300',
+  },
+  thinking: {
+    label: 'Thinking',
+    icon: '🧠',
+    description: 'Full orchestrator-worker pipeline for complex questions',
+    details: 'Always uses the Orchestrator (GPT-5.2) to analyze intent, create a search plan, execute parallel searches via Workers, evaluate results, and synthesize a comprehensive answer. Best for multi-step questions, research tasks, and when you need thorough answers.',
+    color: 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300',
+  },
+  fast: {
+    label: 'Fast',
+    icon: '⚡',
+    description: 'Direct search without orchestration for quick answers',
+    details: 'Skips the Orchestrator entirely and performs a direct hybrid search. Faster but less thorough. Good for simple factual questions or when you know the information exists in documents.',
+    color: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300',
+  },
+} as const
+
 export default function ChatPage() {
   const {
     currentSession,
@@ -68,6 +95,9 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showModelSelector, setShowModelSelector] = useState(false)
+  const [showAgentModeSelector, setShowAgentModeSelector] = useState(false)
+  const [agentMode, setAgentMode] = useState<'auto' | 'thinking' | 'fast'>('auto')
+  const [showSettingsInfo, setShowSettingsInfo] = useState(false)
   const [attachments, setAttachments] = useState<AttachmentInfo[]>([])
   const [attachmentTokens, setAttachmentTokens] = useState<number>(0)
   
@@ -241,6 +271,7 @@ export default function ChatPage() {
     try {
       const response = await sessionsApi.sendMessage(session.id, messageContent, {
         attachments: messageAttachments,
+        agent_mode: agentMode,
       })
       
       // Update session with real messages and title if provided
@@ -350,6 +381,151 @@ export default function ChatPage() {
                           </button>
                         )
                       })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Agent Mode Selector */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowAgentModeSelector(!showAgentModeSelector)}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${AGENT_MODES[agentMode].color} hover:opacity-80 text-sm transition-all`}
+                >
+                  <span>{AGENT_MODES[agentMode].icon}</span>
+                  <span>{AGENT_MODES[agentMode].label}</span>
+                  <ChevronDownIcon className="h-4 w-4" />
+                </button>
+                {showAgentModeSelector && (
+                  <div className="absolute right-0 mt-1 w-80 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-surface-variant dark:border-gray-600 z-50">
+                    <div className="p-2">
+                      <div className="text-xs font-medium text-secondary dark:text-gray-400 px-2 py-1 uppercase flex items-center gap-1">
+                        Agent Mode
+                        <div className="group relative inline-block">
+                          <InformationCircleIcon className="h-3.5 w-3.5 cursor-help" />
+                          <div className="absolute left-0 bottom-full mb-2 w-64 p-2 bg-gray-900 text-white text-[10px] rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                            Controls how the AI processes your question. Different modes trade off between speed and thoroughness.
+                          </div>
+                        </div>
+                      </div>
+                      {(Object.entries(AGENT_MODES) as [keyof typeof AGENT_MODES, typeof AGENT_MODES[keyof typeof AGENT_MODES]][]).map(([mode, config]) => (
+                        <button
+                          key={mode}
+                          onClick={() => {
+                            setAgentMode(mode)
+                            setShowAgentModeSelector(false)
+                          }}
+                          className={`w-full flex flex-col px-3 py-2 rounded-lg text-left hover:bg-surface-variant dark:hover:bg-gray-700 ${
+                            agentMode === mode ? 'bg-primary-50 dark:bg-primary-900/30' : ''
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span>{config.icon}</span>
+                            <span className="text-sm font-medium dark:text-gray-200">{config.label}</span>
+                            {agentMode === mode && (
+                              <CheckCircleIcon className="h-4 w-4 text-primary ml-auto" />
+                            )}
+                          </div>
+                          <p className="text-xs text-secondary dark:text-gray-400 mt-1 ml-6">
+                            {config.description}
+                          </p>
+                        </button>
+                      ))}
+                      {/* Detailed explanation */}
+                      <div className="mt-2 mx-2 p-2 bg-surface-variant dark:bg-gray-700 rounded-lg">
+                        <div className="flex items-start gap-2">
+                          <InformationCircleIcon className="h-4 w-4 text-primary flex-shrink-0 mt-0.5" />
+                          <div className="text-[10px] text-secondary dark:text-gray-400">
+                            <strong className="text-primary-700 dark:text-primary-300">Current: {AGENT_MODES[agentMode].label}</strong>
+                            <p className="mt-1">{AGENT_MODES[agentMode].details}</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Settings Info Button */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowSettingsInfo(!showSettingsInfo)}
+                  className="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 text-secondary hover:text-primary transition-colors"
+                  title="View hidden settings that affect behavior"
+                >
+                  <Cog6ToothIcon className="h-5 w-5" />
+                </button>
+                {showSettingsInfo && (
+                  <div className="absolute right-0 mt-1 w-96 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-surface-variant dark:border-gray-600 z-50">
+                    <div className="p-3">
+                      <div className="flex items-center gap-2 mb-3">
+                        <Cog6ToothIcon className="h-4 w-4 text-primary" />
+                        <span className="text-sm font-medium dark:text-gray-200">Settings That Affect Behavior</span>
+                      </div>
+                      <div className="space-y-3 text-xs">
+                        {/* Agent Mode */}
+                        <div className="p-2 bg-surface-variant dark:bg-gray-700 rounded-lg">
+                          <div className="flex items-center gap-2 font-medium text-primary-700 dark:text-primary-300">
+                            <span>{AGENT_MODES[agentMode].icon}</span>
+                            Agent Mode: {AGENT_MODES[agentMode].label}
+                          </div>
+                          <p className="text-secondary dark:text-gray-400 mt-1">
+                            {AGENT_MODES[agentMode].description}
+                          </p>
+                        </div>
+                        
+                        {/* Auto Mode Threshold */}
+                        <div className="p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800">
+                          <div className="flex items-center gap-2 font-medium text-yellow-700 dark:text-yellow-300">
+                            <InformationCircleIcon className="h-4 w-4" />
+                            Auto Mode Threshold
+                          </div>
+                          <p className="text-yellow-600 dark:text-yellow-400 mt-1">
+                            In AUTO mode, queries &lt;20 characters use FAST mode (no orchestrator).
+                            Short questions like "what is X?" skip the planning phase.
+                          </p>
+                        </div>
+                        
+                        {/* Search Type */}
+                        <div className="p-2 bg-surface-variant dark:bg-gray-700 rounded-lg">
+                          <div className="flex items-center gap-2 font-medium text-primary-700 dark:text-primary-300">
+                            <MagnifyingGlassIcon className="h-4 w-4" />
+                            Search Type: Hybrid
+                          </div>
+                          <p className="text-secondary dark:text-gray-400 mt-1">
+                            Combines vector (semantic) + text (keyword) search with RRF fusion.
+                          </p>
+                        </div>
+                        
+                        {/* Match Count */}
+                        <div className="p-2 bg-surface-variant dark:bg-gray-700 rounded-lg">
+                          <div className="flex items-center gap-2 font-medium text-primary-700 dark:text-primary-300">
+                            <DocumentTextIcon className="h-4 w-4" />
+                            Max Results: 10
+                          </div>
+                          <p className="text-secondary dark:text-gray-400 mt-1">
+                            Maximum documents retrieved per search operation.
+                          </p>
+                        </div>
+                        
+                        {/* Model Info */}
+                        <div className="p-2 bg-surface-variant dark:bg-gray-700 rounded-lg">
+                          <div className="flex items-center gap-2 font-medium text-primary-700 dark:text-primary-300">
+                            <CpuChipIcon className="h-4 w-4" />
+                            Models
+                          </div>
+                          <div className="text-secondary dark:text-gray-400 mt-1 space-y-1">
+                            <p><span className="font-medium">Chat:</span> {currentSession.model}</p>
+                            <p><span className="font-medium">Orchestrator:</span> gpt-5.2 (planning/synthesis)</p>
+                            <p><span className="font-medium">Worker:</span> gpt-4o-mini (search execution)</p>
+                          </div>
+                        </div>
+                        
+                        <p className="text-[10px] text-center text-secondary dark:text-gray-500 pt-2 border-t border-gray-200 dark:border-gray-700">
+                          These settings affect how the AI processes your questions.
+                          Use THINKING mode for complex queries to ensure thorough processing.
+                        </p>
+                      </div>
                     </div>
                   </div>
                 )}

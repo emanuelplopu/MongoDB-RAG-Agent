@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   UserPlusIcon,
   TrashIcon,
@@ -17,6 +18,7 @@ import { authApi, UserListItem, CreateUserRequest, UpdateUserRequest } from '../
 import { useAuth } from '../contexts/AuthContext'
 
 export default function UserManagementPage() {
+  const { t } = useTranslation()
   const { user: currentUser } = useAuth()
   const [users, setUsers] = useState<UserListItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -52,7 +54,7 @@ export default function UserManagementPage() {
       setUsers(data)
       setError(null)
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to load users')
+      setError(err.response?.data?.detail || t('users.loadFailed', 'Failed to load users'))
     } finally {
       setIsLoading(false)
     }
@@ -73,7 +75,7 @@ export default function UserManagementPage() {
       setCreateForm({ email: '', name: '', password: '', is_admin: false })
       await loadUsers()
     } catch (err: any) {
-      setCreateError(err.response?.data?.detail || 'Failed to create user')
+      setCreateError(err.response?.data?.detail || t('users.createFailed', 'Failed to create user'))
     } finally {
       setIsCreating(false)
     }
@@ -99,7 +101,7 @@ export default function UserManagementPage() {
       setEditForm({})
       await loadUsers()
     } catch (err: any) {
-      setUpdateError(err.response?.data?.detail || 'Failed to update user')
+      setUpdateError(err.response?.data?.detail || t('users.updateFailed', 'Failed to update user'))
     } finally {
       setIsUpdating(false)
     }
@@ -110,7 +112,7 @@ export default function UserManagementPage() {
       await authApi.setUserStatus(user.id, !user.is_active)
       await loadUsers()
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to update user status')
+      setError(err.response?.data?.detail || t('users.statusFailed', 'Failed to update user status'))
     }
   }
 
@@ -123,7 +125,7 @@ export default function UserManagementPage() {
       setDeletingUser(null)
       await loadUsers()
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to delete user')
+      setError(err.response?.data?.detail || t('users.deleteFailed', 'Failed to delete user'))
     } finally {
       setIsDeleting(false)
     }
@@ -147,9 +149,9 @@ export default function UserManagementPage() {
         <div className="max-w-4xl mx-auto">
           <div className="rounded-2xl bg-red-50 dark:bg-red-900/20 p-8 text-center">
             <ShieldExclamationIcon className="h-16 w-16 mx-auto text-red-500 mb-4" />
-            <h1 className="text-xl font-bold text-red-900 dark:text-red-200">Access Denied</h1>
+            <h1 className="text-xl font-bold text-red-900 dark:text-red-200">{t('users.accessDenied')}</h1>
             <p className="text-red-700 dark:text-red-300 mt-2">
-              You need administrator privileges to access this page.
+              {t('users.adminRequired')}
             </p>
           </div>
         </div>
@@ -163,9 +165,9 @@ export default function UserManagementPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-primary-900 dark:text-gray-100">User Management</h1>
+            <h1 className="text-2xl font-bold text-primary-900 dark:text-gray-100">{t('users.title')}</h1>
             <p className="text-secondary dark:text-gray-400 mt-1">
-              Create, edit, and manage user accounts
+              {t('users.subtitle', 'Create, edit, and manage user accounts')}
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -175,14 +177,14 @@ export default function UserManagementPage() {
               className="flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-600 text-primary-900 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
             >
               <ArrowPathIcon className={`h-5 w-5 ${isLoading ? 'animate-spin' : ''}`} />
-              Refresh
+              {t('common.refresh')}
             </button>
             <button
               onClick={() => setShowCreateForm(true)}
               className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-white hover:bg-primary-700"
             >
               <UserPlusIcon className="h-5 w-5" />
-              Create User
+              {t('users.create')}
             </button>
           </div>
         </div>
@@ -201,12 +203,12 @@ export default function UserManagementPage() {
         {showCreateForm && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-surface dark:bg-gray-800 rounded-2xl shadow-xl max-w-md w-full p-6">
-              <h2 className="text-xl font-bold text-primary-900 dark:text-gray-100 mb-4">Create New User</h2>
+              <h2 className="text-xl font-bold text-primary-900 dark:text-gray-100 mb-4">{t('users.createNew', 'Create New User')}</h2>
               
               <form onSubmit={handleCreateUser} className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-1">
-                    Email *
+                    {t('users.email')} *
                   </label>
                   <input
                     type="email"
@@ -220,7 +222,7 @@ export default function UserManagementPage() {
                 
                 <div>
                   <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-1">
-                    Name *
+                    {t('users.name')} *
                   </label>
                   <input
                     type="text"
@@ -235,7 +237,7 @@ export default function UserManagementPage() {
                 
                 <div>
                   <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-1">
-                    Password *
+                    {t('users.password')} *
                   </label>
                   <div className="relative">
                     <input
@@ -266,7 +268,7 @@ export default function UserManagementPage() {
                     className="rounded"
                   />
                   <label htmlFor="is_admin" className="text-sm text-primary-900 dark:text-gray-200">
-                    Administrator privileges
+                    {t('users.adminPrivileges', 'Administrator privileges')}
                   </label>
                 </div>
                 
@@ -285,7 +287,7 @@ export default function UserManagementPage() {
                     }}
                     className="flex-1 px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-600 text-primary-900 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
                   >
-                    Cancel
+                    {t('common.cancel')}
                   </button>
                   <button
                     type="submit"
@@ -293,7 +295,7 @@ export default function UserManagementPage() {
                     className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-primary text-white hover:bg-primary-700 disabled:opacity-50"
                   >
                     {isCreating && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
-                    Create User
+                    {t('users.create')}
                   </button>
                 </div>
               </form>
@@ -305,13 +307,11 @@ export default function UserManagementPage() {
         {editingUser && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-surface dark:bg-gray-800 rounded-2xl shadow-xl max-w-md w-full p-6">
-              <h2 className="text-xl font-bold text-primary-900 dark:text-gray-100 mb-4">Edit User</h2>
+              <h2 className="text-xl font-bold text-primary-900 dark:text-gray-100 mb-4">{t('users.edit')}</h2>
               
               <form onSubmit={handleUpdateUser} className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-1">
-                    Email
-                  </label>
+                    {t('users.email')}
                   <input
                     type="email"
                     value={editForm.email || ''}
@@ -322,7 +322,7 @@ export default function UserManagementPage() {
                 
                 <div>
                   <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-1">
-                    Name
+                    {t('users.name')}
                   </label>
                   <input
                     type="text"
@@ -335,7 +335,7 @@ export default function UserManagementPage() {
                 
                 <div>
                   <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-1">
-                    New Password (leave empty to keep current)
+                    {t('users.newPasswordLabel', 'New Password (leave empty to keep current)')}
                   </label>
                   <div className="relative">
                     <input
@@ -366,10 +366,10 @@ export default function UserManagementPage() {
                     className="rounded"
                   />
                   <label htmlFor="edit_is_admin" className="text-sm text-primary-900 dark:text-gray-200">
-                    Administrator privileges
+                    {t('users.adminPrivileges', 'Administrator privileges')}
                   </label>
                   {editingUser.id === currentUser?.id && (
-                    <span className="text-xs text-secondary dark:text-gray-500">(cannot modify your own admin status)</span>
+                    <span className="text-xs text-secondary dark:text-gray-500">({t('users.cannotModifyOwn', 'cannot modify your own admin status')})</span>
                   )}
                 </div>
                 
@@ -388,7 +388,7 @@ export default function UserManagementPage() {
                     }}
                     className="flex-1 px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-600 text-primary-900 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
                   >
-                    Cancel
+                    {t('common.cancel')}
                   </button>
                   <button
                     type="submit"
@@ -396,7 +396,7 @@ export default function UserManagementPage() {
                     className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-primary text-white hover:bg-primary-700 disabled:opacity-50"
                   >
                     {isUpdating && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
-                    Save Changes
+                    {t('common.save')}
                   </button>
                 </div>
               </form>
@@ -410,10 +410,10 @@ export default function UserManagementPage() {
             <div className="bg-surface dark:bg-gray-800 rounded-2xl shadow-xl max-w-md w-full p-6">
               <div className="text-center">
                 <ExclamationTriangleIcon className="h-16 w-16 mx-auto text-red-500 mb-4" />
-                <h2 className="text-xl font-bold text-primary-900 dark:text-gray-100 mb-2">Delete User?</h2>
+                <h2 className="text-xl font-bold text-primary-900 dark:text-gray-100 mb-2">{t('users.deleteConfirm', 'Delete User?')}</h2>
                 <p className="text-secondary dark:text-gray-400 mb-6">
-                  Are you sure you want to delete <strong>{deletingUser.name}</strong> ({deletingUser.email})?
-                  This action cannot be undone.
+                  {t('users.deleteWarning', 'Are you sure you want to delete')} <strong>{deletingUser.name}</strong> ({deletingUser.email})?
+                  {t('users.cannotUndo', 'This action cannot be undone.')}
                 </p>
                 
                 <div className="flex gap-3">
@@ -421,7 +421,7 @@ export default function UserManagementPage() {
                     onClick={() => setDeletingUser(null)}
                     className="flex-1 px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-600 text-primary-900 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
                   >
-                    Cancel
+                    {t('common.cancel')}
                   </button>
                   <button
                     onClick={handleDeleteUser}
@@ -429,7 +429,7 @@ export default function UserManagementPage() {
                     className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
                   >
                     {isDeleting && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
-                    Delete User
+                    {t('users.delete')}
                   </button>
                 </div>
               </div>
@@ -446,17 +446,17 @@ export default function UserManagementPage() {
           ) : users.length === 0 ? (
             <div className="text-center py-12">
               <UserCircleIcon className="h-16 w-16 mx-auto text-gray-400 mb-4" />
-              <p className="text-secondary dark:text-gray-400">No users found</p>
+              <p className="text-secondary dark:text-gray-400">{t('users.noUsers')}</p>
             </div>
           ) : (
             <table className="w-full">
               <thead className="bg-gray-50 dark:bg-gray-700/50">
                 <tr>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-secondary dark:text-gray-400">User</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-secondary dark:text-gray-400">Status</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-secondary dark:text-gray-400">Role</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-secondary dark:text-gray-400">Created</th>
-                  <th className="text-right py-3 px-4 text-sm font-medium text-secondary dark:text-gray-400">Actions</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-secondary dark:text-gray-400">{t('users.user', 'User')}</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-secondary dark:text-gray-400">{t('users.status')}</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-secondary dark:text-gray-400">{t('users.role')}</th>
+                  <th className="text-left py-3 px-4 text-sm font-medium text-secondary dark:text-gray-400">{t('users.createdAt')}</th>
+                  <th className="text-right py-3 px-4 text-sm font-medium text-secondary dark:text-gray-400">{t('common.actions')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
@@ -488,9 +488,9 @@ export default function UserManagementPage() {
                           : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
                       }`}>
                         {user.is_active ? (
-                          <><CheckCircleIcon className="h-3 w-3" /> Active</>
+                          <><CheckCircleIcon className="h-3 w-3" /> {t('users.active')}</>
                         ) : (
-                          <><XCircleIcon className="h-3 w-3" /> Inactive</>
+                          <><XCircleIcon className="h-3 w-3" /> {t('users.inactive')}</>
                         )}
                       </span>
                     </td>
@@ -500,7 +500,7 @@ export default function UserManagementPage() {
                           ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400'
                           : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-400'
                       }`}>
-                        {user.is_admin ? 'Admin' : 'User'}
+                        {user.is_admin ? t('users.admin') : t('users.user')}
                       </span>
                     </td>
                     <td className="py-4 px-4 text-sm text-secondary dark:text-gray-500">
@@ -511,7 +511,7 @@ export default function UserManagementPage() {
                         <button
                           onClick={() => startEditing(user)}
                           className="p-2 rounded-lg text-primary hover:bg-primary-100 dark:hover:bg-primary-900/30"
-                          title="Edit user"
+                          title={t('users.editUser')}
                         >
                           <PencilIcon className="h-4 w-4" />
                         </button>
@@ -525,7 +525,7 @@ export default function UserManagementPage() {
                               ? 'text-amber-500 hover:bg-amber-100 dark:hover:bg-amber-900/30'
                               : 'text-green-500 hover:bg-green-100 dark:hover:bg-green-900/30'
                           }`}
-                          title={user.is_active ? 'Deactivate user' : 'Activate user'}
+                          title={user.is_active ? t('users.deactivate', 'Deactivate user') : t('users.activate', 'Activate user')}
                         >
                           {user.is_active ? (
                             <XCircleIcon className="h-4 w-4" />
@@ -541,7 +541,7 @@ export default function UserManagementPage() {
                               ? 'text-gray-300 cursor-not-allowed'
                               : 'text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30'
                           }`}
-                          title="Delete user"
+                          title={t('users.deleteUser')}
                         >
                           <TrashIcon className="h-4 w-4" />
                         </button>
@@ -557,23 +557,23 @@ export default function UserManagementPage() {
         {/* Summary stats */}
         <div className="grid gap-4 md:grid-cols-4">
           <div className="rounded-xl bg-surface dark:bg-gray-800 p-4 shadow-elevation-1">
-            <p className="text-sm text-secondary dark:text-gray-400">Total Users</p>
+            <p className="text-sm text-secondary dark:text-gray-400">{t('users.totalUsers', 'Total Users')}</p>
             <p className="text-2xl font-bold text-primary-900 dark:text-gray-100">{users.length}</p>
           </div>
           <div className="rounded-xl bg-surface dark:bg-gray-800 p-4 shadow-elevation-1">
-            <p className="text-sm text-secondary dark:text-gray-400">Active</p>
+            <p className="text-sm text-secondary dark:text-gray-400">{t('users.active')}</p>
             <p className="text-2xl font-bold text-green-600 dark:text-green-400">
               {users.filter(u => u.is_active).length}
             </p>
           </div>
           <div className="rounded-xl bg-surface dark:bg-gray-800 p-4 shadow-elevation-1">
-            <p className="text-sm text-secondary dark:text-gray-400">Inactive</p>
+            <p className="text-sm text-secondary dark:text-gray-400">{t('users.inactive')}</p>
             <p className="text-2xl font-bold text-red-600 dark:text-red-400">
               {users.filter(u => !u.is_active).length}
             </p>
           </div>
           <div className="rounded-xl bg-surface dark:bg-gray-800 p-4 shadow-elevation-1">
-            <p className="text-sm text-secondary dark:text-gray-400">Administrators</p>
+            <p className="text-sm text-secondary dark:text-gray-400">{t('users.administrators', 'Administrators')}</p>
             <p className="text-2xl font-bold text-purple-600 dark:text-purple-400">
               {users.filter(u => u.is_admin).length}
             </p>
