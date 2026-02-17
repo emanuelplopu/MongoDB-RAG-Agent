@@ -136,9 +136,11 @@ class FederatedAgent:
                 accessible_profile_keys=accessible_profile_keys
             )
         
-        # Finalize trace
-        self.trace.orchestrator_steps = self.orchestrator.steps
-        self.trace.worker_steps = self.worker_pool.steps
+        # Finalize trace - use add methods to properly accumulate timing and token stats
+        for step in self.orchestrator.steps:
+            self.trace.add_orchestrator_step(step)
+        for step in self.worker_pool.steps:
+            self.trace.add_worker_step(step)
         self.trace.finalize()
         
         return response, self.trace
@@ -198,6 +200,7 @@ class FederatedAgent:
         # Execution loop
         all_results: List[WorkerResult] = []
         iteration = 0
+        empty_result_iterations = 0  # Track consecutive iterations with no results
         
         while iteration < plan.max_iterations:
             iteration += 1
@@ -222,6 +225,22 @@ class FederatedAgent:
                 accessible_profile_keys=accessible_profile_keys
             )
             all_results.extend(results)
+            
+            # Check if this iteration found any results
+            iteration_docs = sum(len(r.documents_found) for r in results)
+            iteration_links = sum(len(r.web_links_found) for r in results)
+            
+            if iteration_docs == 0 and iteration_links == 0:
+                empty_result_iterations += 1
+                logger.warning(f"Iteration {iteration} found no results ({empty_result_iterations} consecutive empty iterations)")
+                
+                # Early exit if we've had 2 consecutive iterations with no results
+                # No point in continuing to refine queries that aren't finding anything
+                if empty_result_iterations >= 2:
+                    logger.info("Exiting early: 2 consecutive iterations with no results")
+                    break
+            else:
+                empty_result_iterations = 0  # Reset counter if we found something
             
             # Collect sources for trace
             for r in results:

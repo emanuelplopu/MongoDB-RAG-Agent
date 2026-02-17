@@ -100,6 +100,13 @@ export default function ChatPage() {
   const [showSettingsInfo, setShowSettingsInfo] = useState(false)
   const [attachments, setAttachments] = useState<AttachmentInfo[]>([])
   const [attachmentTokens, setAttachmentTokens] = useState<number>(0)
+  const [useStreaming] = useState(true)  // Enable streaming by default
+  const [liveTrace, setLiveTrace] = useState<{
+    orchestrator_steps: Array<{ phase: string; reasoning: string; output: string; duration_ms: number; tokens: number }>
+    worker_steps: Array<{ task_id: string; task_type: string; tool: string; duration_ms: number; success: boolean; documents: Array<{ title: string; score: number; excerpt: string }> }>
+    stats: { total_tokens: number; orchestrator_tokens: number; worker_tokens: number; cost_usd: number }
+  } | null>(null)
+  const streamAbortRef = useRef<{ abort: () => void } | null>(null)
   
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -254,6 +261,7 @@ export default function ChatPage() {
     setError(null)
     localStorage.removeItem(STORAGE_KEYS.DRAFT + session.id)
     setIsLoading(true)
+    setLiveTrace(null)  // Reset live trace
 
     // Optimistically add user message
     const tempUserMessage: SessionMessage = {
@@ -263,63 +271,146 @@ export default function ChatPage() {
       timestamp: new Date().toISOString(),
       attachments: messageAttachments,
     }
+    
+    // Add a temp assistant message for showing live trace
+    const tempAssistantMessage: SessionMessage = {
+      id: 'temp-assistant-' + Date.now(),
+      role: 'assistant',
+      content: '',
+      timestamp: new Date().toISOString(),
+    }
+    
     setCurrentSession(prev => prev ? {
       ...prev,
-      messages: [...prev.messages, tempUserMessage]
+      messages: [...prev.messages, tempUserMessage, tempAssistantMessage]
     } : null)
 
-    try {
-      const response = await sessionsApi.sendMessage(session.id, messageContent, {
-        attachments: messageAttachments,
-        agent_mode: agentMode,
-      })
-      
-      // Update session with real messages and title if provided
-      setCurrentSession(prev => {
-        if (!prev) return null
-        const messages = prev.messages.filter(m => !m.id.startsWith('temp-'))
-        return {
-          ...prev,
-          messages: [...messages, response.user_message, response.assistant_message],
-          stats: response.session_stats,
-          title: response.title || prev.title,  // Update title if returned
-        }
-      })
-
-      // Update sessions list with title if changed
-      setSessions(prev => prev.map(s => 
-        s.id === session!.id 
-          ? { 
-              ...s, 
-              updated_at: new Date().toISOString(), 
-              stats: response.session_stats,
-              title: response.title || s.title  // Update title if returned
-            }
-          : s
-      ))
-    } catch (err: unknown) {
-      console.error('Failed to send message:', err)
-      
-      // Get appropriate error message based on user role
-      let errorMessage: string
-      if (err instanceof ApiError) {
-        errorMessage = err.getUserMessage(user?.is_admin ?? false)
-      } else if (err instanceof Error) {
-        errorMessage = user?.is_admin 
-          ? `Error: ${err.message}`
-          : 'Failed to send message. Please try again.'
-      } else {
-        errorMessage = 'An unexpected error occurred. Please try again.'
+    if (useStreaming) {
+      // Use streaming API
+      const sessionId = session.id
+      const accumulated = {
+        orchestrator_steps: [] as Array<{ phase: string; reasoning: string; output: string; duration_ms: number; tokens: number }>,
+        worker_steps: [] as Array<{ task_id: string; task_type: string; tool: string; duration_ms: number; success: boolean; documents: Array<{ title: string; score: number; excerpt: string }> }>,
+        stats: { total_tokens: 0, orchestrator_tokens: 0, worker_tokens: 0, cost_usd: 0 }
       }
       
-      setError(errorMessage)
-      // Remove temp message on error
-      setCurrentSession(prev => prev ? {
-        ...prev,
-        messages: prev.messages.filter(m => !m.id.startsWith('temp-'))
-      } : null)
-    } finally {
-      setIsLoading(false)
+      streamAbortRef.current = sessionsApi.sendMessageStream(
+        sessionId,
+        messageContent,
+        { attachments: messageAttachments, agent_mode: agentMode },
+        {
+          onStart: () => {
+            // Reset accumulated data
+            accumulated.orchestrator_steps = []
+            accumulated.worker_steps = []
+          },
+          onOrchestratorStep: (step) => {
+            accumulated.orchestrator_steps.push(step)
+            accumulated.stats.orchestrator_tokens += step.tokens
+            accumulated.stats.total_tokens += step.tokens
+            setLiveTrace({ ...accumulated })
+          },
+          onWorkerStep: (step) => {
+            accumulated.worker_steps.push(step as typeof accumulated.worker_steps[0])
+            setLiveTrace({ ...accumulated })
+          },
+          onResponse: (response) => {
+            // Update with final response
+            const assistantMessage: SessionMessage = {
+              id: 'msg-' + Date.now(),
+              role: 'assistant',
+              content: response.content,
+              timestamp: new Date().toISOString(),
+              sources: response.sources,
+              stats: {
+                input_tokens: response.stats.orchestrator_tokens,
+                output_tokens: response.stats.worker_tokens,
+                total_tokens: response.stats.total_tokens,
+                cost_usd: response.stats.cost_usd,
+                tokens_per_second: response.stats.tokens_per_second,
+                latency_ms: response.stats.latency_ms,
+              },
+              agent_trace: response.trace,
+            }
+            
+            setCurrentSession(prev => {
+              if (!prev) return null
+              const messages = prev.messages.filter(m => !m.id.startsWith('temp-'))
+              return {
+                ...prev,
+                messages: [...messages, { ...tempUserMessage, id: 'msg-user-' + Date.now() }, assistantMessage],
+              }
+            })
+            
+            setLiveTrace(null)
+          },
+          onError: (error) => {
+            setError(`Error: ${error}`)
+            setCurrentSession(prev => prev ? {
+              ...prev,
+              messages: prev.messages.filter(m => !m.id.startsWith('temp-'))
+            } : null)
+            setLiveTrace(null)
+          },
+          onDone: () => {
+            setIsLoading(false)
+            streamAbortRef.current = null
+          },
+        }
+      )
+    } else {
+      // Use regular API (non-streaming)
+      try {
+        const response = await sessionsApi.sendMessage(session.id, messageContent, {
+          attachments: messageAttachments,
+          agent_mode: agentMode,
+        })
+        
+        // Update session with real messages and title if provided
+        setCurrentSession(prev => {
+          if (!prev) return null
+          const messages = prev.messages.filter(m => !m.id.startsWith('temp-'))
+          return {
+            ...prev,
+            messages: [...messages, response.user_message, response.assistant_message],
+            stats: response.session_stats,
+            title: response.title || prev.title,
+          }
+        })
+
+        // Update sessions list with title if changed
+        setSessions(prev => prev.map(s => 
+          s.id === session!.id 
+            ? { 
+                ...s, 
+                updated_at: new Date().toISOString(), 
+                stats: response.session_stats,
+                title: response.title || s.title
+              }
+            : s
+        ))
+      } catch (err: unknown) {
+        console.error('Failed to send message:', err)
+        
+        let errorMessage: string
+        if (err instanceof ApiError) {
+          errorMessage = err.getUserMessage(user?.is_admin ?? false)
+        } else if (err instanceof Error) {
+          errorMessage = user?.is_admin 
+            ? `Error: ${err.message}`
+            : 'Failed to send message. Please try again.'
+        } else {
+          errorMessage = 'An unexpected error occurred. Please try again.'
+        }
+        
+        setError(errorMessage)
+        setCurrentSession(prev => prev ? {
+          ...prev,
+          messages: prev.messages.filter(m => !m.id.startsWith('temp-'))
+        } : null)
+      } finally {
+        setIsLoading(false)
+      }
     }
   }
 
@@ -562,11 +653,64 @@ export default function ChatPage() {
                     <SparklesIcon className="h-5 w-5 text-primary" />
                   </div>
                   <div className="flex-1">
-                    <div className="flex space-x-2 py-4">
-                      <div className="h-2 w-2 animate-bounce rounded-full bg-primary" style={{ animationDelay: '0ms' }} />
-                      <div className="h-2 w-2 animate-bounce rounded-full bg-primary" style={{ animationDelay: '150ms' }} />
-                      <div className="h-2 w-2 animate-bounce rounded-full bg-primary" style={{ animationDelay: '300ms' }} />
-                    </div>
+                    {liveTrace ? (
+                      <div className="bg-surface dark:bg-gray-700/50 rounded-xl p-3 space-y-2">
+                        {/* Live Agent Progress */}
+                        <div className="flex items-center gap-2 text-xs text-primary-700 dark:text-primary-300">
+                          <CpuChipIcon className="h-4 w-4 animate-pulse" />
+                          <span className="font-medium">Agent Processing...</span>
+                        </div>
+                        
+                        {/* Orchestrator Steps */}
+                        {liveTrace.orchestrator_steps.length > 0 && (
+                          <div className="space-y-1">
+                            <div className="text-[10px] text-secondary dark:text-gray-400">
+                              🧠 Orchestrator: {liveTrace.orchestrator_steps.length} step(s)
+                            </div>
+                            {liveTrace.orchestrator_steps.slice(-2).map((step, idx) => (
+                              <div key={idx} className="text-[10px] text-gray-600 dark:text-gray-400 pl-4 border-l-2 border-purple-300 dark:border-purple-700">
+                                <span className="capitalize font-medium">{step.phase}</span>
+                                <span className="text-secondary dark:text-gray-500 ml-2">{step.duration_ms.toFixed(0)}ms</span>
+                                {step.reasoning && (
+                                  <p className="line-clamp-1 text-gray-500 dark:text-gray-500">{step.reasoning}</p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        
+                        {/* Worker Steps */}
+                        {liveTrace.worker_steps.length > 0 && (
+                          <div className="space-y-1">
+                            <div className="text-[10px] text-secondary dark:text-gray-400">
+                              ⚡ Workers: {liveTrace.worker_steps.length} task(s)
+                            </div>
+                            {liveTrace.worker_steps.slice(-3).map((step, idx) => (
+                              <div key={idx} className="text-[10px] text-gray-600 dark:text-gray-400 pl-4 border-l-2 border-blue-300 dark:border-blue-700">
+                                <span className="font-medium">{step.task_type}</span>
+                                <span className={`ml-2 ${step.success ? 'text-green-600' : 'text-red-600'}`}>
+                                  {step.documents.length} docs
+                                </span>
+                                <span className="text-secondary dark:text-gray-500 ml-2">{step.duration_ms.toFixed(0)}ms</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        
+                        {/* Live Stats */}
+                        <div className="flex items-center gap-3 text-[10px] text-secondary dark:text-gray-500 pt-1 border-t border-gray-200 dark:border-gray-600">
+                          <span>{liveTrace.stats.total_tokens.toLocaleString()} tokens</span>
+                          <span>🧠 {liveTrace.stats.orchestrator_tokens.toLocaleString()}</span>
+                          <span>⚡ {liveTrace.stats.worker_tokens.toLocaleString()}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex space-x-2 py-4">
+                        <div className="h-2 w-2 animate-bounce rounded-full bg-primary" style={{ animationDelay: '0ms' }} />
+                        <div className="h-2 w-2 animate-bounce rounded-full bg-primary" style={{ animationDelay: '150ms' }} />
+                        <div className="h-2 w-2 animate-bounce rounded-full bg-primary" style={{ animationDelay: '300ms' }} />
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

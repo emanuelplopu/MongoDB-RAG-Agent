@@ -279,7 +279,7 @@ class FederatedSearch:
             k: RRF constant (default 60)
         
         Returns:
-            Deduplicated and ranked results
+            Deduplicated and ranked results with normalized scores (0-1 scale)
         """
         # Separate by search type
         vector_results = [r for r in results if r.get("search_type") == "vector"]
@@ -287,17 +287,39 @@ class FederatedSearch:
         
         rrf_scores = {}
         result_map = {}
+        original_similarity = {}  # Preserve original vector similarity
         
         for rank, doc in enumerate(vector_results):
             chunk_id = str(doc["chunk_id"])
             rrf_scores[chunk_id] = rrf_scores.get(chunk_id, 0) + 1.0 / (k + rank)
             result_map[chunk_id] = doc
+            # Store the original vector similarity score (0-1 scale)
+            if "similarity" in doc:
+                original_similarity[chunk_id] = doc["similarity"]
         
         for rank, doc in enumerate(text_results):
             chunk_id = str(doc["chunk_id"])
             rrf_scores[chunk_id] = rrf_scores.get(chunk_id, 0) + 1.0 / (k + rank)
             if chunk_id not in result_map:
                 result_map[chunk_id] = doc
+        
+        # Normalize RRF scores to 0-1 range
+        # Max possible raw RRF: 2/k (when doc is rank 0 in both searches)
+        # We use min-max normalization for better relative scoring
+        if rrf_scores:
+            min_score = min(rrf_scores.values())
+            max_score = max(rrf_scores.values())
+            score_range = max_score - min_score
+            
+            if score_range > 0:
+                # Normalize to 0.5-1.0 range (all results are somewhat relevant)
+                for chunk_id in rrf_scores:
+                    normalized = (rrf_scores[chunk_id] - min_score) / score_range
+                    rrf_scores[chunk_id] = 0.5 + (normalized * 0.5)
+            else:
+                # All same score, use original similarity or default to 0.75
+                for chunk_id in rrf_scores:
+                    rrf_scores[chunk_id] = original_similarity.get(chunk_id, 0.75)
         
         # Sort by RRF score
         sorted_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
@@ -306,6 +328,9 @@ class FederatedSearch:
         for chunk_id in sorted_ids[:limit]:
             doc = result_map[chunk_id]
             doc["rrf_score"] = rrf_scores[chunk_id]
+            # Also preserve original similarity for reference
+            if chunk_id in original_similarity:
+                doc["vector_similarity"] = original_similarity[chunk_id]
             merged.append(doc)
         
         return merged

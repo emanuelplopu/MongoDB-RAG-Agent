@@ -44,7 +44,7 @@ services:
   backend:
     build:
       context: .
-      dockerfile: backend/Dockerfile
+      dockerfile: backend/Dockerfile.ml-heavy
     container_name: rag-backend
     ports:
       - "11000:8000"

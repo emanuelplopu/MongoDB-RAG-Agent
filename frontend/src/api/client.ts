@@ -1292,6 +1292,140 @@ export const sessionsApi = {
     return response.data
   },
 
+  // Streaming message endpoint
+  sendMessageStream: (
+    sessionId: string,
+    content: string,
+    options?: {
+      attachments?: AttachmentInfo[]
+      agent_mode?: 'auto' | 'thinking' | 'fast'
+    },
+    callbacks?: {
+      onStart?: (data: { mode: string; models: { orchestrator: string; worker: string } }) => void
+      onOrchestratorStep?: (step: {
+        phase: string
+        reasoning: string
+        output: string
+        duration_ms: number
+        tokens: number
+      }) => void
+      onWorkerStep?: (step: {
+        task_id: string
+        task_type: string
+        tool: string
+        input: Record<string, unknown>
+        documents_count: number
+        links_count: number
+        duration_ms: number
+        success: boolean
+        documents: Array<{ title: string; score: number; excerpt: string }>
+      }) => void
+      onResponse?: (response: {
+        content: string
+        sources: Array<{
+          title: string
+          source: string
+          database: string
+          relevance: number
+          excerpt: string
+        }>
+        stats: {
+          total_tokens: number
+          orchestrator_tokens: number
+          worker_tokens: number
+          cost_usd: number
+          tokens_per_second: number
+          latency_ms: number
+        }
+        trace: FederatedAgentTrace
+      }) => void
+      onError?: (error: string) => void
+      onDone?: () => void
+    }
+  ): { abort: () => void } => {
+    const abortController = new AbortController()
+    
+    const fetchStream = async () => {
+      try {
+        const response = await fetch(`${api.defaults.baseURL}/sessions/${sessionId}/messages/stream`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...api.defaults.headers.common as Record<string, string>,
+          },
+          body: JSON.stringify({
+            content,
+            search_type: 'hybrid',
+            match_count: 10,
+            include_sources: true,
+            attachments: options?.attachments || null,
+            agent_mode: options?.agent_mode || null,
+          }),
+          signal: abortController.signal,
+        })
+        
+        if (!response.ok) {
+          throw new Error(`HTTP error ${response.status}`)
+        }
+        
+        const reader = response.body?.getReader()
+        if (!reader) throw new Error('No response body')
+        
+        const decoder = new TextDecoder()
+        let buffer = ''
+        
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
+          
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6))
+                switch (data.type) {
+                  case 'start':
+                    callbacks?.onStart?.(data)
+                    break
+                  case 'orchestrator_step':
+                    callbacks?.onOrchestratorStep?.(data)
+                    break
+                  case 'worker_step':
+                    callbacks?.onWorkerStep?.(data)
+                    break
+                  case 'response':
+                    callbacks?.onResponse?.(data)
+                    break
+                  case 'error':
+                    callbacks?.onError?.(data.message)
+                    break
+                  case 'done':
+                    callbacks?.onDone?.()
+                    break
+                }
+              } catch (e) {
+                console.error('Failed to parse SSE event:', e)
+              }
+            }
+          }
+        }
+      } catch (error) {
+        if ((error as Error).name !== 'AbortError') {
+          callbacks?.onError?.((error as Error).message)
+        }
+      }
+    }
+    
+    fetchStream()
+    
+    return {
+      abort: () => abortController.abort()
+    }
+  },
+
   estimateTokens: async (attachments: AttachmentInfo[]): Promise<{
     attachments: Array<{
       filename: string

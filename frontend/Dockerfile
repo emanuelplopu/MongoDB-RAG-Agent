@@ -9,13 +9,13 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci
+# Install dependencies with frozen lockfile for reproducibility
+RUN npm ci --prefer-offline --no-audit --no-fund
 
 # Copy source code
 COPY . .
 
-# Build for production
+# Build for production with optimization
 RUN npm run build
 
 # Stage 2: Serve with nginx

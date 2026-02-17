@@ -3,10 +3,13 @@
 import logging
 import time
 import uuid
+import json
+import asyncio
 import traceback
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, AsyncGenerator
 from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend.core.config import settings
@@ -1052,6 +1055,229 @@ async def send_message(
         "title": title_update.get("title"),  # Return updated title if changed
         "agent_trace": trace_response  # Full trace for transparency
     }
+
+
+# ============== Streaming Message Endpoint ==============
+
+@router.post("/{session_id}/messages/stream")
+async def send_message_stream(
+    session_id: str,
+    msg_request: SendMessageRequest,
+    request: Request,
+    user: Optional[UserResponse] = Depends(get_current_user)
+):
+    """Send a message and stream back agent operations via SSE.
+    
+    This endpoint streams real-time updates as the agent processes:
+    - Orchestrator steps (analyze, plan, evaluate, synthesize)
+    - Worker executions with search results
+    - Final response with full trace
+    
+    Event types:
+    - orchestrator_step: An orchestrator phase completed
+    - worker_step: A worker task completed
+    - trace_update: Updated aggregate stats
+    - response: Final response with full data
+    - error: An error occurred
+    """
+    db = request.app.state.db
+    collection = await get_sessions_collection(request)
+    
+    # Validate session
+    query = {"_id": session_id}
+    if user:
+        query["user_id"] = user.id
+    
+    doc = await collection.find_one(query)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    async def event_generator() -> AsyncGenerator[str, None]:
+        """Generate SSE events as agent processes."""
+        start_time = time.time()
+        
+        try:
+            # Get session model and profile info
+            session_model = doc.get("model", settings.llm_model)
+            messages = doc.get("messages", [])
+            conversation_history = [
+                {"role": msg["role"], "content": msg["content"]}
+                for msg in messages[-20:]
+            ]
+            
+            # Get active profile
+            active_profile_key = None
+            active_profile_database = None
+            try:
+                from src.profile import get_profile_manager
+                pm = get_profile_manager(settings.profiles_path)
+                active_profile_key = pm.active_profile_key
+                if pm.active_profile:
+                    active_profile_database = pm.active_profile.database
+            except Exception as e:
+                logger.warning(f"Could not get active profile: {e}")
+            
+            # Determine agent mode
+            agent_mode_str = msg_request.agent_mode or settings.agent_mode
+            try:
+                agent_mode = AgentMode(agent_mode_str)
+            except ValueError:
+                agent_mode = AgentMode.AUTO
+            
+            # Configure agent
+            config = AgentModeConfig(
+                mode=agent_mode,
+                orchestrator_model=settings.orchestrator_model,
+                worker_model=settings.worker_model,
+                max_iterations=settings.agent_max_iterations,
+                parallel_workers=settings.agent_parallel_workers
+            )
+            
+            agent = FederatedAgent(config=config)
+            
+            # Send initial event
+            yield f"data: {json.dumps({'type': 'start', 'mode': agent_mode_str, 'models': {'orchestrator': settings.orchestrator_model, 'worker': settings.worker_model}})}\n\n"
+            
+            # Process with polling for step updates
+            response_text, trace = await agent.process(
+                user_message=msg_request.content,
+                user_id=user.id if user else "anonymous",
+                user_email=user.email if user else "anonymous@local",
+                session_id=session_id,
+                conversation_history=conversation_history,
+                active_profile_key=active_profile_key,
+                active_profile_database=active_profile_database,
+                accessible_profile_keys=[active_profile_key] if active_profile_key else None
+            )
+            
+            # Stream orchestrator steps
+            for step in trace.orchestrator_steps:
+                event_data = {
+                    'type': 'orchestrator_step',
+                    'phase': step.phase,
+                    'reasoning': step.reasoning[:300] if step.reasoning else '',
+                    'output': step.output_summary[:200] if step.output_summary else '',
+                    'duration_ms': step.duration_ms,
+                    'tokens': step.tokens_used
+                }
+                yield f"data: {json.dumps(event_data)}\n\n"
+            
+            # Stream worker steps
+            for step in trace.worker_steps:
+                event_data = {
+                    'type': 'worker_step',
+                    'task_id': step.task_id,
+                    'task_type': step.task_type,
+                    'tool': step.tool_name,
+                    'input': step.tool_input,
+                    'documents_count': len(step.documents),
+                    'links_count': len(step.web_links),
+                    'duration_ms': step.duration_ms,
+                    'success': step.success,
+                    'documents': [
+                        {'title': d.title, 'score': d.similarity_score, 'excerpt': d.excerpt[:150]}
+                        for d in step.documents[:3]
+                    ]
+                }
+                yield f"data: {json.dumps(event_data)}\n\n"
+            
+            await agent.cleanup()
+            
+            # Calculate final stats
+            generation_time = time.time() - start_time
+            total_tokens = trace.total_tokens
+            tokens_per_second = total_tokens / generation_time if generation_time > 0 and total_tokens > 0 else 0
+            
+            # Send final response
+            trace_response = trace.to_response_dict()
+            
+            # Build sources
+            sources = []
+            for doc_ref in trace.all_documents[:10]:
+                sources.append({
+                    "title": doc_ref.title,
+                    "source": doc_ref.source_type,
+                    "database": doc_ref.source_database,
+                    "relevance": doc_ref.similarity_score,
+                    "excerpt": doc_ref.excerpt[:300]
+                })
+            
+            final_event = {
+                'type': 'response',
+                'content': response_text,
+                'sources': sources,
+                'stats': {
+                    'total_tokens': total_tokens,
+                    'orchestrator_tokens': trace.orchestrator_tokens,
+                    'worker_tokens': trace.worker_tokens,
+                    'cost_usd': trace.estimated_cost_usd,
+                    'tokens_per_second': round(tokens_per_second, 1),
+                    'latency_ms': round(generation_time * 1000, 0)
+                },
+                'trace': trace_response
+            }
+            yield f"data: {json.dumps(final_event)}\n\n"
+            
+            # Update session in database (same as non-streaming)
+            user_message = Message(
+                role="user",
+                content=msg_request.content,
+                attachments=[a.model_dump() for a in msg_request.attachments] if msg_request.attachments else None
+            )
+            
+            assistant_message = Message(
+                role="assistant",
+                content=response_text,
+                model=session_model,
+                sources=sources if sources else None,
+                agent_trace=trace_response,
+                stats=MessageStats(
+                    input_tokens=trace.orchestrator_tokens,
+                    output_tokens=trace.worker_tokens,
+                    total_tokens=total_tokens,
+                    cost_usd=trace.estimated_cost_usd,
+                    tokens_per_second=round(tokens_per_second, 1),
+                    latency_ms=round(generation_time * 1000, 0)
+                )
+            )
+            
+            current_stats = doc.get("stats", {})
+            new_stats = {
+                "total_messages": current_stats.get("total_messages", 0) + 2,
+                "total_tokens": current_stats.get("total_tokens", 0) + total_tokens,
+                "total_cost_usd": current_stats.get("total_cost_usd", 0) + trace.estimated_cost_usd,
+            }
+            
+            await collection.update_one(
+                {"_id": session_id},
+                {
+                    "$push": {
+                        "messages": {
+                            "$each": [user_message.model_dump(), assistant_message.model_dump()]
+                        }
+                    },
+                    "$set": {
+                        "updated_at": datetime.now(),
+                        "stats": new_stats
+                    }
+                }
+            )
+            
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            
+        except Exception as e:
+            logger.error(f"Streaming error: {e}\n{traceback.format_exc()}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"  # Disable nginx buffering
+        }
+    )
 
 
 @router.delete("/{session_id}/messages")

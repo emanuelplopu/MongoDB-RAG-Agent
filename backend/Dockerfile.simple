@@ -1,0 +1,44 @@
+# Use Python 3.11 slim image
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements file
+COPY requirements.txt ./
+
+# Create virtual environment and install dependencies
+RUN /root/.cargo/bin/uv venv /app/.venv && \
+    . /app/.venv/bin/activate && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY src/ ./src/
+COPY backend/ ./backend/
+COPY profiles.yaml ./
+
+# Create directories for data
+RUN mkdir -p /app/projects /app/data /app/documents
+
+# Set default environment variables
+ENV MONGODB_URI=mongodb://mongodb:27017/?directConnection=true \
+    MONGODB_DATABASE=rag_db \
+    PROFILES_PATH=/app/profiles.yaml
+
+# Expose FastAPI port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/api/v1/system/health || exit 1
+
+# Run FastAPI with uvicorn (using venv python directly)
+CMD ["/app/.venv/bin/python", "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

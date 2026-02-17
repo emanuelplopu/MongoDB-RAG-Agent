@@ -59,8 +59,18 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
     browse_web: { icon: GlobeAltIcon, label: 'Browse Web' },
   }
 
-  const totalDocs = trace.sources.documents.length
-  const totalLinks = trace.sources.web_links.length
+  // Safely access nested properties with defaults
+  const totalDocs = trace.sources?.documents?.length ?? 0
+  const totalLinks = trace.sources?.web_links?.length ?? 0
+  const orchestratorSteps = trace.orchestrator_steps ?? []
+  const workerSteps = trace.worker_steps ?? []
+  const totalMs = trace.timing?.total_ms ?? 0
+  const orchestratorMs = trace.timing?.orchestrator_ms ?? 0
+  const workerMs = trace.timing?.worker_ms ?? 0
+  const totalTokens = trace.tokens?.total ?? 0
+  const orchestratorTokens = trace.tokens?.orchestrator ?? 0
+  const workerTokens = trace.tokens?.worker ?? 0
+  const costUsd = trace.cost_usd ?? 0
 
   return (
     <div className="mt-2">
@@ -84,7 +94,7 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
           {' | '}
           {totalDocs} docs, {totalLinks} links
           {' | '}
-          {trace.timing.total_ms.toFixed(0)}ms
+          {totalMs.toFixed(0)}ms
         </span>
       </button>
 
@@ -92,8 +102,8 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
         <div className="mt-2 space-y-3 pl-4 border-l-2 border-primary-200 dark:border-primary-800">
           {/* Models used */}
           <div className="flex items-center gap-3 text-[10px] text-secondary dark:text-gray-500">
-            <span>🧠 Orchestrator: <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">{trace.models.orchestrator}</code></span>
-            <span>⚡ Worker: <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">{trace.models.worker}</code></span>
+            <span>🧠 Orchestrator: <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">{trace.models?.orchestrator ?? 'N/A'}</code></span>
+            <span>⚡ Worker: <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">{trace.models?.worker ?? 'N/A'}</code></span>
           </div>
 
           {/* Orchestrator Steps */}
@@ -103,15 +113,15 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
               className="flex items-center gap-1 text-xs font-medium text-primary-700 dark:text-primary-300"
             >
               {expandedSections.orchestrator ? <ChevronDownIcon className="h-3 w-3" /> : <ChevronRightIcon className="h-3 w-3" />}
-              🧠 Orchestrator Steps ({trace.orchestrator_steps.length})
+              🧠 Orchestrator Steps ({orchestratorSteps.length})
               <span className="text-[10px] font-normal text-secondary dark:text-gray-500 ml-2">
-                {trace.timing.orchestrator_ms.toFixed(0)}ms
+                {orchestratorMs.toFixed(0)}ms
               </span>
             </button>
 
             {expandedSections.orchestrator && (
               <div className="space-y-2 pl-4">
-                {trace.orchestrator_steps.map((step, idx) => {
+                {orchestratorSteps.map((step, idx) => {
                   const config = phaseConfig[step.phase] || { icon: CpuChipIcon, color: 'text-gray-600' }
                   const PhaseIcon = config.icon
 
@@ -125,7 +135,7 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
                         <span className="font-medium capitalize">{step.phase}</span>
                         <span className="text-[10px] text-secondary dark:text-gray-500 ml-auto flex items-center gap-1">
                           <ClockIcon className="h-3 w-3" />
-                          {step.duration_ms.toFixed(0)}ms
+                          {(step.duration_ms ?? 0).toFixed(0)}ms
                         </span>
                       </div>
                       {step.reasoning && (
@@ -147,15 +157,15 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
               className="flex items-center gap-1 text-xs font-medium text-primary-700 dark:text-primary-300"
             >
               {expandedSections.workers ? <ChevronDownIcon className="h-3 w-3" /> : <ChevronRightIcon className="h-3 w-3" />}
-              ⚡ Worker Executions ({trace.worker_steps.length})
+              ⚡ Worker Executions ({workerSteps.length})
               <span className="text-[10px] font-normal text-secondary dark:text-gray-500 ml-2">
-                {trace.timing.worker_ms.toFixed(0)}ms
+                {workerMs.toFixed(0)}ms
               </span>
             </button>
 
             {expandedSections.workers && (
               <div className="space-y-2 pl-4">
-                {trace.worker_steps.map((step, idx) => {
+                {workerSteps.map((step, idx) => {
                   const config = taskTypeConfig[step.task_type] || { icon: CpuChipIcon, label: step.task_type }
                   const TaskIcon = config.icon
 
@@ -181,7 +191,7 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
                         )}
                         <span className="text-[10px] text-secondary dark:text-gray-500 ml-auto flex items-center gap-1">
                           <ClockIcon className="h-3 w-3" />
-                          {step.duration_ms.toFixed(0)}ms
+                          {(step.duration_ms ?? 0).toFixed(0)}ms
                         </span>
                       </div>
 
@@ -202,25 +212,25 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
                       <div className="flex items-center gap-3 text-[10px] text-secondary dark:text-gray-400">
                         <span className="flex items-center gap-1">
                           <DocumentTextIcon className="h-3 w-3" />
-                          {step.documents.length} docs
+                          {(step.documents ?? []).length} docs
                         </span>
                         <span className="flex items-center gap-1">
                           <GlobeAltIcon className="h-3 w-3" />
-                          {step.web_links.length} links
+                          {(step.web_links ?? []).length} links
                         </span>
                       </div>
 
                       {/* Document excerpts */}
-                      {step.documents.length > 0 && (
+                      {(step.documents ?? []).length > 0 && (
                         <div className="space-y-1 border-t border-gray-200 dark:border-gray-700 pt-1">
-                          {step.documents.slice(0, 2).map((doc, didx) => (
+                          {(step.documents ?? []).slice(0, 2).map((doc, didx) => (
                             <div key={didx} className="bg-gray-50 dark:bg-gray-800 rounded px-2 py-1">
                               <div className="flex items-center justify-between">
                                 <span className="text-[10px] font-medium text-primary-700 dark:text-primary-300 truncate max-w-[180px]">
                                   {doc.title}
                                 </span>
                                 <span className="text-[9px] text-secondary dark:text-gray-500">
-                                  {(doc.score * 100).toFixed(0)}%
+                                  {((doc.score ?? 0) * 100).toFixed(0)}%
                                 </span>
                               </div>
                               <p className="text-[10px] text-gray-600 dark:text-gray-400 line-clamp-1">
@@ -228,9 +238,9 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
                               </p>
                             </div>
                           ))}
-                          {step.documents.length > 2 && (
+                          {(step.documents ?? []).length > 2 && (
                             <span className="text-[9px] text-secondary dark:text-gray-500">
-                              +{step.documents.length - 2} more documents
+                              +{(step.documents ?? []).length - 2} more documents
                             </span>
                           )}
                         </div>
@@ -255,12 +265,12 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
             {expandedSections.sources && (
               <div className="space-y-2 pl-4">
                 {/* Documents */}
-                {trace.sources.documents.length > 0 && (
+                {(trace.sources?.documents ?? []).length > 0 && (
                   <div className="space-y-1">
                     <span className="text-[10px] font-medium text-secondary dark:text-gray-500">
-                      Documents ({trace.sources.documents.length})
+                      Documents ({(trace.sources?.documents ?? []).length})
                     </span>
-                    {trace.sources.documents.slice(0, 5).map((doc, idx) => (
+                    {(trace.sources?.documents ?? []).slice(0, 5).map((doc, idx) => (
                       <div
                         key={idx}
                         className="p-2 rounded bg-gray-50 dark:bg-gray-800 text-xs"
@@ -277,25 +287,25 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
                           {doc.excerpt}
                         </p>
                         <span className="text-[9px] text-secondary dark:text-gray-500">
-                          {doc.source_database} | {(doc.score * 100).toFixed(0)}% match
+                          {doc.source_database} | {((doc.score ?? 0) * 100).toFixed(0)}% match
                         </span>
                       </div>
                     ))}
-                    {trace.sources.documents.length > 5 && (
+                    {(trace.sources?.documents ?? []).length > 5 && (
                       <span className="text-[10px] text-secondary dark:text-gray-500">
-                        +{trace.sources.documents.length - 5} more documents
+                        +{(trace.sources?.documents ?? []).length - 5} more documents
                       </span>
                     )}
                   </div>
                 )}
 
                 {/* Web Links */}
-                {trace.sources.web_links.length > 0 && (
+                {(trace.sources?.web_links ?? []).length > 0 && (
                   <div className="space-y-1">
                     <span className="text-[10px] font-medium text-secondary dark:text-gray-500">
-                      Web Links ({trace.sources.web_links.length})
+                      Web Links ({(trace.sources?.web_links ?? []).length})
                     </span>
-                    {trace.sources.web_links.slice(0, 3).map((link, idx) => (
+                    {(trace.sources?.web_links ?? []).slice(0, 3).map((link, idx) => (
                       <div
                         key={idx}
                         className="p-2 rounded bg-gray-50 dark:bg-gray-800 text-xs"
@@ -315,9 +325,9 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
                         )}
                       </div>
                     ))}
-                    {trace.sources.web_links.length > 3 && (
+                    {(trace.sources?.web_links ?? []).length > 3 && (
                       <span className="text-[10px] text-secondary dark:text-gray-500">
-                        +{trace.sources.web_links.length - 3} more links
+                        +{(trace.sources?.web_links ?? []).length - 3} more links
                       </span>
                     )}
                   </div>
@@ -328,10 +338,10 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
 
           {/* Stats Footer */}
           <div className="flex items-center gap-4 text-[10px] text-secondary dark:text-gray-500 pt-2 border-t border-gray-200 dark:border-gray-700">
-            <span>{trace.tokens.total.toLocaleString()} tokens</span>
-            <span>${trace.cost_usd.toFixed(4)}</span>
+            <span>{totalTokens.toLocaleString()} tokens</span>
+            <span>${costUsd.toFixed(4)}</span>
             <span>
-              🧠 {trace.tokens.orchestrator.toLocaleString()} | ⚡ {trace.tokens.worker.toLocaleString()}
+              🧠 {orchestratorTokens.toLocaleString()} | ⚡ {workerTokens.toLocaleString()}
             </span>
           </div>
         </div>

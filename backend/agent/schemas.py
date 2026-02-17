@@ -268,8 +268,52 @@ class AgentTrace(BaseModel):
                 self.all_web_links.append(link)
     
     def finalize(self):
+        """Finalize the trace with timing and cost calculations."""
         self.completed_at = datetime.now()
         self.total_duration_ms = (self.completed_at - self.started_at).total_seconds() * 1000
+        
+        # Calculate estimated cost based on token usage
+        # Pricing per million tokens (approximate averages)
+        PRICING = {
+            # Orchestrator models (thinking/reasoning) - typically more expensive
+            "gpt-5": {"input": 10.0, "output": 30.0},
+            "gpt-4o": {"input": 2.5, "output": 10.0},
+            "gpt-4": {"input": 30.0, "output": 60.0},
+            "claude-3": {"input": 15.0, "output": 75.0},
+            "gemini-pro": {"input": 1.25, "output": 5.0},
+            # Worker models (fast) - typically cheaper
+            "gpt-4o-mini": {"input": 0.15, "output": 0.6},
+            "gemini-flash": {"input": 0.075, "output": 0.3},
+            "gemini-2.0-flash": {"input": 0.075, "output": 0.3},
+            "claude-haiku": {"input": 0.25, "output": 1.25},
+            # Default fallback
+            "default": {"input": 1.0, "output": 3.0}
+        }
+        
+        def get_pricing(model_name: str) -> dict:
+            model_lower = model_name.lower()
+            for key in PRICING:
+                if key in model_lower:
+                    return PRICING[key]
+            return PRICING["default"]
+        
+        # Calculate orchestrator cost
+        orch_pricing = get_pricing(self.orchestrator_model)
+        # Assume ~70% input, 30% output for orchestrator (planning-heavy)
+        orch_input = int(self.orchestrator_tokens * 0.7)
+        orch_output = int(self.orchestrator_tokens * 0.3)
+        orch_cost = (orch_input / 1_000_000) * orch_pricing["input"] + \
+                    (orch_output / 1_000_000) * orch_pricing["output"]
+        
+        # Calculate worker cost
+        worker_pricing = get_pricing(self.worker_model)
+        # Workers typically have more balanced I/O
+        worker_input = int(self.worker_tokens * 0.5)
+        worker_output = int(self.worker_tokens * 0.5)
+        worker_cost = (worker_input / 1_000_000) * worker_pricing["input"] + \
+                      (worker_output / 1_000_000) * worker_pricing["output"]
+        
+        self.estimated_cost_usd = orch_cost + worker_cost
     
     def to_response_dict(self) -> Dict[str, Any]:
         """Convert to a dict suitable for API response."""
