@@ -73,6 +73,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     name: str = Field(..., min_length=2, max_length=100)
     password: str = Field(..., min_length=6, max_length=100)
+    invite_code: Optional[str] = Field(None, description="Invite code (required if registration mode is 'invite'")
 
 
 class LoginRequest(BaseModel):
@@ -256,10 +257,11 @@ async def get_current_user(
 
 async def require_auth(
     request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key")
 ) -> UserResponse:
     """Require authentication - raises 401 if not authenticated."""
-    user = await get_current_user(request, credentials)
+    user = await get_current_user(request, credentials, x_api_key)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -271,10 +273,11 @@ async def require_auth(
 
 async def require_admin(
     request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key")
 ) -> UserResponse:
     """Require admin authentication - raises 403 if not admin."""
-    user = await require_auth(request, credentials)
+    user = await require_auth(request, credentials, x_api_key)
     if not user.is_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -287,7 +290,39 @@ async def require_admin(
 
 @router.post("/register", response_model=TokenResponse)
 async def register(request: Request, reg_request: RegisterRequest):
-    """Register a new user."""
+    """Register a new user.
+    
+    Registration can be controlled via environment variables:
+    - REGISTRATION_MODE: 'open', 'invite', or 'closed'
+    - INVITE_CODE or INVITE_CODES: Required codes for 'invite' mode
+    """
+    from backend.core.security import (
+        get_registration_mode, 
+        validate_invite_code,
+        is_registration_enabled
+    )
+    
+    # Check registration mode
+    mode = get_registration_mode()
+    
+    if mode == "closed":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Public registration is disabled. Contact an administrator."
+        )
+    
+    if mode == "invite":
+        if not reg_request.invite_code:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invite code is required for registration"
+            )
+        if not validate_invite_code(reg_request.invite_code):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Invalid invite code"
+            )
+    
     collection = await get_users_collection(request)
     
     # Check if email already exists

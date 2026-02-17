@@ -125,6 +125,14 @@ class ProfileConfig(BaseModel):
     text_index: str = Field(default="text_index")
     embedding_model: Optional[str] = None
     llm_model: Optional[str] = None
+    
+    # Model version configuration
+    orchestrator_model: Optional[str] = None
+    orchestrator_provider: Optional[str] = None
+    worker_model: Optional[str] = None
+    worker_provider: Optional[str] = None
+    embedding_provider: Optional[str] = None
+    
     airbyte: Optional["AirbyteConfig"] = None
     cloud_sources: List["CloudSourceAssociation"] = Field(default_factory=list)
 

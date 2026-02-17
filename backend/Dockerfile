@@ -41,9 +41,10 @@ FROM python:3.11-slim AS playwright
 COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Install playwright and chromium (cached separately)
-RUN pip install --no-cache-dir playwright && \
-    playwright install chromium --with-deps && \
+# Install pip into venv and then playwright with chromium
+RUN python -m ensurepip --upgrade && \
+    python -m pip install --no-cache-dir playwright && \
+    python -m playwright install chromium --with-deps && \
     rm -rf /root/.cache/pip /var/lib/apt/lists/*
 
 # ============================================

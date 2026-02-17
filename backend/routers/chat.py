@@ -430,16 +430,24 @@ Remember: You have access to the user's company documents. Search them! Multiple
             # Call LLM with tools
             logger.info(f"Calling LLM: model={llm_model}, iteration={iteration}, tools={len(TOOLS_SCHEMA)} defined")
             
-            response = await litellm.acompletion(
-                model=llm_model,
-                messages=messages,
-                tools=TOOLS_SCHEMA,
-                tool_choice="auto",
-                temperature=0.7,
-                max_tokens=2000,
-                api_key=settings.llm_api_key,
-                api_base=settings.llm_base_url if settings.llm_base_url else None,
-            )
+            # Handle newer OpenAI models that require max_completion_tokens
+            llm_params = {
+                "model": llm_model,
+                "messages": messages,
+                "tools": TOOLS_SCHEMA,
+                "tool_choice": "auto",
+                "temperature": 0.7,
+                "api_key": settings.llm_api_key,
+                "api_base": settings.llm_base_url if settings.llm_base_url else None,
+            }
+            
+            # Check if this is a newer OpenAI model
+            if "gpt-5" in llm_model.lower() or "gpt-4o" in llm_model.lower():
+                llm_params["max_completion_tokens"] = 2000
+            else:
+                llm_params["max_tokens"] = 2000
+            
+            response = await litellm.acompletion(**llm_params)
             
             if response.usage:
                 total_tokens += response.usage.total_tokens

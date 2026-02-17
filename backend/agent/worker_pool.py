@@ -452,13 +452,22 @@ class WorkerPool:
         )
         
         try:
-            response = await acompletion(
-                model=self._get_model_string(),
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=500,
-                api_key=self._get_api_key(),
-            )
+            # Handle newer OpenAI models that require max_completion_tokens
+            model_string = self._get_model_string()
+            llm_params = {
+                "model": model_string,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3,
+                "api_key": self._get_api_key(),
+            }
+            
+            # Check if this is a newer OpenAI model
+            if "gpt-5" in model_string.lower() or "gpt-4o" in model_string.lower():
+                llm_params["max_completion_tokens"] = 500
+            else:
+                llm_params["max_tokens"] = 500
+            
+            response = await acompletion(**llm_params)
             return response.choices[0].message.content
         except Exception as e:
             logger.error(f"Summarization failed: {e}")
@@ -497,13 +506,22 @@ class WorkerPool:
         )
         
         try:
-            response = await acompletion(
-                model=self._get_model_string(),
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.5,
-                max_tokens=100,
-                api_key=self._get_api_key(),
-            )
+            # Handle newer OpenAI models that require max_completion_tokens
+            model_string = self._get_model_string()
+            llm_params = {
+                "model": model_string,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.5,
+                "api_key": self._get_api_key(),
+            }
+            
+            # Check if this is a newer OpenAI model
+            if "gpt-5" in model_string.lower() or "gpt-4o" in model_string.lower():
+                llm_params["max_completion_tokens"] = 100
+            else:
+                llm_params["max_tokens"] = 100
+            
+            response = await acompletion(**llm_params)
             return response.choices[0].message.content.strip()
         except Exception as e:
             logger.error(f"Query refinement failed: {e}")

@@ -1,6 +1,7 @@
 """Profile management router."""
 
 import logging
+from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request, Depends
 
 from backend.models.schemas import (
@@ -11,6 +12,12 @@ from backend.models.schemas import (
     CloudSourceType
 )
 from backend.core.config import settings
+from backend.core.profile_models import (
+    ProfileModelManager, 
+    GlobalModelManager,
+    get_active_profile_models,
+    update_profile_model_settings
+)
 from backend.routers.auth import require_auth, require_admin, UserResponse, get_user_accessible_profiles
 
 logger = logging.getLogger(__name__)
@@ -724,8 +731,161 @@ async def update_airbyte_config(
             message=f"Updated Airbyte configuration for profile: {profile_key}"
         )
         
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Failed to update Airbyte config: {e}")
+        logger.error(f"Failed to update Airbyte configuration for {profile_key}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============== Profile Model Version Management ==============
+
+@router.get("/{profile_key}/models", response_model=dict)
+async def get_profile_models(
+    profile_key: str,
+    request: Request,
+    user: UserResponse = Depends(require_auth)
+):
+    """
+    Get model configuration for a specific profile.
+    
+    Returns the effective model configuration considering profile settings and global defaults.
+    """
+    try:
+        pm = get_profile_manager()
+        
+        # Check if user has access to this profile
+        accessible_profiles = await get_user_accessible_profiles(user, request)
+        if profile_key not in accessible_profiles:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied to this profile"
+            )
+        
+        if profile_key not in pm.list_profiles():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Profile '{profile_key}' not found"
+            )
+        
+        profile_config = pm.get_profile(profile_key)
+        model_config = get_active_profile_models(profile_config)
+        
+        return {
+            "profile": profile_key,
+            "models": model_config,
+            "is_default": profile_key == pm.active_profile_key
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get profile models for {profile_key}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/{profile_key}/models", response_model=SuccessResponse)
+async def update_profile_models(
+    profile_key: str,
+    request: Request,
+    model_updates: dict,
+    user: UserResponse = Depends(require_auth)
+):
+    """
+    Update model configuration for a specific profile.
+    
+    Only updates the specified fields. Other fields retain their current values.
+    """
+    try:
+        pm = get_profile_manager()
+        
+        # Check if user has access to this profile
+        accessible_profiles = await get_user_accessible_profiles(user, request)
+        if profile_key not in accessible_profiles:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied to this profile"
+            )
+        
+        if profile_key not in pm.list_profiles():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Profile '{profile_key}' not found"
+            )
+        
+        profile_config = pm.get_profile(profile_key)
+        updates = update_profile_model_settings(profile_config, **model_updates)
+        
+        # Save updated profile
+        pm.save_profile(profile_key, profile_config)
+        
+        return SuccessResponse(
+            success=True,
+            message=f"Updated model configuration for profile: {profile_key}",
+            data=updates
+        )
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to update profile models for {profile_key}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/global/models", response_model=dict)
+async def get_global_models(
+    user: UserResponse = Depends(require_auth)
+):
+    """
+    Get global/default model configuration.
+    
+    Admin only. Shows the system-wide default model settings.
+    """
+    if not user.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required"
+        )
+    
+    try:
+        global_config = GlobalModelManager.get_global_config()
+        return {
+            "models": global_config,
+            "active_profile": get_profile_manager().active_profile_key
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get global models: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/global/models", response_model=SuccessResponse)
+async def update_global_models(
+    request: Request,
+    model_updates: dict,
+    user: UserResponse = Depends(require_admin)
+):
+    """
+    Update global/default model configuration.
+    
+    Admin only. Updates system-wide default model settings.
+    """
+    try:
+        updates = GlobalModelManager.update_global_models(**model_updates)
+        
+        # Persist to database
+        db = request.app.state.db
+        collection = db.db["system_config"]
+        await collection.update_one(
+            {"_id": "global_models"},
+            {"$set": {**updates, "updated_at": datetime.now().isoformat()}},
+            upsert=True
+        )
+        
+        return SuccessResponse(
+            success=True,
+            message="Updated global model configuration",
+            data=updates
+        )
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to update global models: {e}")
         raise HTTPException(status_code=500, detail=str(e))

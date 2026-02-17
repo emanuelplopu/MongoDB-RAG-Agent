@@ -395,17 +395,25 @@ async def test_prompt(
     start_time = time.time()
     
     try:
+        # Handle newer OpenAI models that require max_completion_tokens
+        llm_params = {
+            "model": settings.llm_model,
+            "messages": messages,
+            "tools": tools if tools else None,
+            "tool_choice": "auto" if tools else None,
+            "temperature": 0.7,
+            "api_key": settings.llm_api_key,
+            "api_base": settings.llm_base_url if settings.llm_base_url else None,
+        }
+        
+        # Check if this is a newer OpenAI model
+        if "gpt-5" in settings.llm_model.lower() or "gpt-4o" in settings.llm_model.lower():
+            llm_params["max_completion_tokens"] = 1000
+        else:
+            llm_params["max_tokens"] = 1000
+        
         # Call LLM
-        response = await litellm.acompletion(
-            model=settings.llm_model,
-            messages=messages,
-            tools=tools if tools else None,
-            tool_choice="auto" if tools else None,
-            temperature=0.7,
-            max_tokens=1000,
-            api_key=settings.llm_api_key,
-            api_base=settings.llm_base_url if settings.llm_base_url else None,
-        )
+        response = await litellm.acompletion(**llm_params)
         
         duration_ms = (time.time() - start_time) * 1000
         tokens_used = response.usage.total_tokens if response.usage else 0

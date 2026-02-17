@@ -98,13 +98,21 @@ class Orchestrator:
             model_string = self._get_model_string()
             api_key = settings.get_orchestrator_api_key()
             
-            response = await acompletion(
-                model=model_string,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2 if phase != OrchestratorPhase.SYNTHESIZE else 0.7,
-                max_tokens=2000,
-                api_key=api_key,
-            )
+            # Handle newer OpenAI models that require max_completion_tokens
+            llm_params = {
+                "model": model_string,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.2 if phase != OrchestratorPhase.SYNTHESIZE else 0.7,
+                "api_key": api_key,
+            }
+            
+            # Check if this is a newer OpenAI model that requires max_completion_tokens
+            if "gpt-5" in model_string.lower() or "gpt-4o" in model_string.lower():
+                llm_params["max_completion_tokens"] = 2000
+            else:
+                llm_params["max_tokens"] = 2000
+            
+            response = await acompletion(**llm_params)
             
             content = response.choices[0].message.content
             tokens_used = response.usage.total_tokens if response.usage else 0

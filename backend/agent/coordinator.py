@@ -381,13 +381,21 @@ class FederatedAgent:
             model_string = self._get_worker_model_string()
             api_key = settings.get_worker_api_key()
             
-            response = await acompletion(
-                model=model_string,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
-                max_tokens=1500,
-                api_key=api_key,
-            )
+            # Handle newer OpenAI models that require max_completion_tokens
+            llm_params = {
+                "model": model_string,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7,
+                "api_key": api_key,
+            }
+            
+            # Check if this is a newer OpenAI model
+            if "gpt-5" in model_string.lower() or "gpt-4o" in model_string.lower():
+                llm_params["max_completion_tokens"] = 1500
+            else:
+                llm_params["max_tokens"] = 1500
+            
+            response = await acompletion(**llm_params)
             return response.choices[0].message.content
         except Exception as e:
             logger.error(f"Fast response generation failed: {e}")

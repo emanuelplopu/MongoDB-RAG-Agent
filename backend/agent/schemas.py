@@ -354,13 +354,13 @@ class AgentTrace(BaseModel):
 class AgentModeConfig(BaseModel):
     """Per-session agent configuration."""
     mode: AgentMode = AgentMode.AUTO
-    orchestrator_model: str = "gpt-5.1"
-    worker_model: str = "gemini-2.0-flash-exp"
+    orchestrator_model: str = "gpt-4o"
+    worker_model: str = "gpt-4o-mini"
     max_iterations: int = 3
     parallel_workers: int = 4
     show_full_trace: bool = True
     # Thresholds for auto mode
-    auto_thinking_threshold: int = 50  # Query length to trigger thinking mode
+    auto_thinking_threshold: int = 20  # Query length to trigger thinking mode
     
     class Config:
         use_enum_values = True

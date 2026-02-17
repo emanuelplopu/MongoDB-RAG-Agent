@@ -26,7 +26,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.exceptions import RequestValidationError
 
 from backend.routers import chat, search, profiles, ingestion, system, sessions, auth
-from backend.routers import status, indexes, ingestion_queue, local_llm, prompts
+from backend.routers import status, indexes, ingestion_queue, local_llm, prompts, model_versions
 from backend.routers.cloud_sources import (
     connections_router as cloud_connections,
     oauth_router as cloud_oauth,
@@ -39,6 +39,12 @@ from backend.routers.ingestion import check_and_resume_interrupted_jobs, gracefu
 from backend.routers.prompts import initialize_default_templates
 from backend.core.config import settings
 from backend.core.database import DatabaseManager
+from backend.core.security import (
+    RateLimitMiddleware,
+    SecurityHeadersMiddleware,
+    validate_jwt_secret,
+    get_docs_urls,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -64,16 +70,33 @@ except RuntimeError:
     # Event loop not running yet, will be configured later
     pass
 
+# Validate JWT secret on startup
+try:
+    _jwt_secret = validate_jwt_secret()
+    logger.info("JWT secret key validated")
+except ValueError as e:
+    logger.critical(f"Security configuration error: {e}")
+    # Don't raise here - let the app start but log the critical issue
+    # In production, this will be caught by health checks
+
 
 # Request timeout middleware to prevent blocking requests
 REQUEST_TIMEOUT_SECONDS = 30  # Default timeout for API requests
+CHAT_TIMEOUT_SECONDS = 300  # Extended timeout for chat/agent endpoints (5 minutes)
 HEALTH_CHECK_PATHS = {"/health", "/api/v1/system/health", "/"}
+
+# Paths that need extended timeout (agent operations can take a while)
+EXTENDED_TIMEOUT_PATHS = {
+    "/api/v1/sessions/",  # Chat messages
+    "/api/v1/chat/",      # Chat completions
+}
 
 
 class RequestTimeoutMiddleware(BaseHTTPMiddleware):
     """Middleware to enforce request timeouts and prevent blocking.
     
     - Health check endpoints get a short timeout (5s)
+    - Chat/agent endpoints get extended timeout (300s)
     - Regular endpoints get a standard timeout (30s)
     - Streaming endpoints are excluded from timeout
     """
@@ -86,6 +109,9 @@ class RequestTimeoutMiddleware(BaseHTTPMiddleware):
         # Short timeout for health checks
         if request.url.path in HEALTH_CHECK_PATHS:
             timeout = 5
+        # Extended timeout for chat/agent endpoints
+        elif any(request.url.path.startswith(p) for p in EXTENDED_TIMEOUT_PATHS):
+            timeout = CHAT_TIMEOUT_SECONDS
         else:
             timeout = REQUEST_TIMEOUT_SECONDS
         
@@ -186,6 +212,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     logger.info("Database connection closed")
 
 
+# Get documentation URLs based on environment
+docs_config = get_docs_urls()
+
 # Create FastAPI app
 app = FastAPI(
     title="RecallHub API",
@@ -200,20 +229,37 @@ app = FastAPI(
     - **System**: Health checks and statistics
     """,
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
+    docs_url=docs_config["docs_url"],
+    redoc_url=docs_config["redoc_url"],
+    openapi_url=docs_config["openapi_url"],
     lifespan=lifespan
 )
 
-# Configure CORS
+# Configure CORS - include production domains
+cors_origins = settings.cors_origins.copy()
+# Add production domains if not already present
+production_origins = [
+    "https://recallhub.app",
+    "https://www.recallhub.app",
+    "https://api.recallhub.app",
+]
+for origin in production_origins:
+    if origin not in cors_origins:
+        cors_origins.append(origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add security headers middleware
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Add rate limiting middleware
+app.add_middleware(RateLimitMiddleware)
 
 # Add request timeout middleware (after CORS)
 app.add_middleware(RequestTimeoutMiddleware)
@@ -462,6 +508,12 @@ app.include_router(
     prompts.router,
     prefix="/api/v1/prompts",
     tags=["Prompt Management"]
+)
+
+app.include_router(
+    model_versions.router,
+    prefix="/api/v1/model-versions",
+    tags=["Model Versions"]
 )
 
 

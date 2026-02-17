@@ -10,6 +10,11 @@ Uses LiteLLM for unified interface with provider-specific optimizations.
 """
 
 import logging
+from typing import Optional, Dict, Any, List
+from litellm import acompletion
+from backend.core.model_versions import get_model_parameter_mapping, is_model_compatible_with_parameter
+
+import logging
 from typing import Optional, Dict, Any, List, Literal
 from dataclasses import dataclass, field
 from enum import Enum
@@ -147,12 +152,27 @@ class LLMClient:
             "model": self._model,
             "messages": messages,
             "temperature": temperature if temperature is not None else self.config.temperature,
-            "max_tokens": max_tokens if max_tokens is not None else self.config.max_tokens,
             **self.config.get_api_key_param(),
             **self.config.get_base_url_param(),
             **self.config.extra_params,
             **kwargs
         }
+        
+        # Handle parameter adaptation based on model compatibility
+        param_mapping = get_model_parameter_mapping(self._model)
+        
+        # Handle max_tokens vs max_completion_tokens
+        if max_tokens is not None:
+            if "max_tokens" in param_mapping:
+                mapped_param = param_mapping["max_tokens"]
+                params[mapped_param] = max_tokens
+                if mapped_param != "max_tokens":
+                    # Remove original if it was mapped
+                    params.pop("max_tokens", None)
+            else:
+                params["max_tokens"] = max_tokens
+        else:
+            params["max_tokens"] = self.config.max_tokens
         
         try:
             response = await acompletion(**params)
