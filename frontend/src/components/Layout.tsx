@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
@@ -39,7 +39,8 @@ import LanguageSwitcher from './LanguageSwitcher'
 import { LocalizedLink, useLocalizedNavigate } from './LocalizedLink'
 import { useChatSidebar } from '../contexts/ChatSidebarContext'
 import { useAuth } from '../contexts/AuthContext'
-import { ChatSession } from '../api/client'
+import { ChatSession, indexesApi } from '../api/client'
+import SidebarWarningToast, { SidebarWarning } from './SidebarWarningToast'
 
 // User menu items (shown in dropdown like OpenAI's user menu)
 const baseMenuItems = [
@@ -67,6 +68,8 @@ const systemMenuItems = [
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
+  const [sidebarWarnings, setSidebarWarnings] = useState<SidebarWarning[]>([])
+  const [dismissedWarnings, setDismissedWarnings] = useState<Set<string>>(new Set())
   const userMenuRef = useRef<HTMLDivElement>(null)
   const location = useLocation()
   const navigate = useLocalizedNavigate()
@@ -153,6 +156,63 @@ export default function Layout() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
+  // Check indexes on load and generate warnings
+  const checkIndexes = useCallback(async () => {
+    if (!isAuthenticated || !user?.is_admin) return
+    
+    try {
+      const dashboard = await indexesApi.getDashboard()
+      const warnings: SidebarWarning[] = []
+      
+      const vectorIndex = dashboard.indexes?.find(idx => idx.type === 'vectorSearch')
+      const textIndex = dashboard.indexes?.find(idx => idx.type === 'search')
+      
+      const vectorMissing = !vectorIndex || vectorIndex.status !== 'READY'
+      const textMissing = !textIndex || textIndex.status !== 'READY'
+      
+      if (vectorMissing && textMissing) {
+        warnings.push({
+          id: 'missing-both-indexes',
+          level: 'critical',
+          message: t('warnings.missingBothIndexes'),
+          path: '/system/indexes',
+          actionLabel: t('warnings.createIndexes'),
+        })
+      } else if (vectorMissing) {
+        warnings.push({
+          id: 'missing-vector-index',
+          level: 'warning',
+          message: t('warnings.missingVectorIndex'),
+          path: '/system/indexes',
+          actionLabel: t('warnings.createIndexes'),
+        })
+      } else if (textMissing) {
+        warnings.push({
+          id: 'missing-text-index',
+          level: 'warning',
+          message: t('warnings.missingTextIndex'),
+          path: '/system/indexes',
+          actionLabel: t('warnings.createIndexes'),
+        })
+      }
+      
+      // Filter out dismissed warnings
+      const filteredWarnings = warnings.filter(w => !dismissedWarnings.has(w.id))
+      setSidebarWarnings(filteredWarnings)
+    } catch (err) {
+      console.error('Error checking indexes:', err)
+    }
+  }, [isAuthenticated, user?.is_admin, dismissedWarnings, t])
+
+  useEffect(() => {
+    checkIndexes()
+  }, [checkIndexes])
+
+  const handleDismissWarning = (id: string) => {
+    setDismissedWarnings(prev => new Set(prev).add(id))
+    setSidebarWarnings(prev => prev.filter(w => w.id !== id))
+  }
+
   const handleLogout = async () => {
     await logout()
     setUserMenuOpen(false)
@@ -230,6 +290,9 @@ export default function Layout() {
           </div>
         )}
       </div>
+
+      {/* Sidebar Warnings */}
+      <SidebarWarningToast warnings={sidebarWarnings} onDismiss={handleDismissWarning} />
 
       {/* Folders Section (Projects) */}
       <div className="px-3 flex-shrink-0">

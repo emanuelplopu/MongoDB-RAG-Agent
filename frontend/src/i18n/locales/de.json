@@ -94,6 +94,12 @@
     "unpin": "Lösen",
     "rename": "Umbenennen"
   },
+  "warnings": {
+    "missingBothIndexes": "Suchindizes fehlen! Vektor- und Textsuche funktionieren erst nach Erstellung der Indizes.",
+    "missingVectorIndex": "Vektorindex fehlt. Semantische Suche funktioniert nicht.",
+    "missingTextIndex": "Textindex fehlt. Volltextsuche funktioniert nicht.",
+    "createIndexes": "Indizes erstellen"
+  },
   "landing": {
     "welcomeTo": "Willkommen bei",
     "subtitle": "Ihre intelligente Wissensmanagement-Plattform. Suchen, chatten und entdecken Sie Erkenntnisse aus all Ihren Dokumenten mit KI-gesteuerter Suche und konversationeller Abfrage.",

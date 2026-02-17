@@ -94,6 +94,12 @@
     "unpin": "Unpin",
     "rename": "Rename"
   },
+  "warnings": {
+    "missingBothIndexes": "Search indexes missing! Vector and text search will not work until indexes are created.",
+    "missingVectorIndex": "Vector index missing. Semantic search will not work.",
+    "missingTextIndex": "Text index missing. Full-text search will not work.",
+    "createIndexes": "Create Indexes"
+  },
   "landing": {
     "welcomeTo": "Welcome to",
     "subtitle": "Your intelligent knowledge management platform. Search, chat, and discover insights across all your documents with AI-powered search and conversational retrieval.",
