@@ -1,6 +1,5 @@
 # Airbyte Startup Script for RecallHub
-# This script starts Airbyte services alongside the main application
-# Enhanced with robust error handling, validation, and monitoring
+# Simplified version with core functionality
 
 param(
     [switch]$Stop,
@@ -34,22 +33,18 @@ if ($Help) {
     exit 0
 }
 
-# Enhanced Docker validation
+# Check if Docker is running
 function Test-DockerAvailability {
     Write-Host "Checking Docker availability..." -ForegroundColor Yellow
-    
     try {
         $dockerInfo = docker info 2>$null
         if (-not $dockerInfo) {
             throw "Docker command failed"
         }
-        
-        # Check if Docker daemon is responsive
         $version = docker version --format "{{.Server.Version}}" 2>$null
         if (-not $version) {
             throw "Cannot get Docker version"
         }
-        
         Write-Host "✓ Docker is running (version: $version)" -ForegroundColor Green
         return $true
     }
@@ -60,7 +55,6 @@ function Test-DockerAvailability {
     }
 }
 
-# Check if Docker is running
 if (-not (Test-DockerAvailability)) {
     exit 1
 }
@@ -101,9 +95,7 @@ if ($Status) {
     Write-Host ""
     
     try {
-        docker-compose -f docker-compose.yml -f docker-compose.airbyte.yml ps `
-            airbyte-db airbyte-temporal airbyte-server airbyte-worker `
-            airbyte-webapp airbyte-connector-builder-server | Select-String -Pattern "Name|rag-airbyte" | Out-Host
+        docker-compose -f docker-compose.yml -f docker-compose.airbyte.yml ps | Select-String "rag-airbyte"
     }
     catch {
         Write-Host "Error getting container status" -ForegroundColor Red
@@ -111,44 +103,30 @@ if ($Status) {
     
     Write-Host ""
     
-    # Check individual service health
+    # Check service health
     $services = @{
-        "Database" = @{port=5432; url=""}
-        "Temporal" = @{port=7233; url=""}
-        "API Server" = @{port=11021; url="http://localhost:11021/api/v1/health"}
-        "Webapp" = @{port=11020; url="http://localhost:11020"}
+        "API Server" = "http://localhost:11021/api/v1/health"
+        "Webapp" = "http://localhost:11020"
     }
     
     foreach ($serviceName in $services.Keys) {
-        $config = $services[$serviceName]
-        Write-Host "$serviceName: " -NoNewline
-        
-        if ($config.url) {
-            try {
-                $response = Invoke-WebRequest -Uri $config.url -TimeoutSec 3 -ErrorAction SilentlyContinue
-                if ($response.StatusCode -eq 200) {
-                    Write-Host "Healthy" -ForegroundColor Green
-                } else {
-                    Write-Host "Unhealthy (Status: $($response.StatusCode))" -ForegroundColor Red
-                }
-            }
-            catch {
-                Write-Host "Not responding" -ForegroundColor Red
-            }
-        } else {
-            # For services without HTTP endpoints, check port
-            $test = Test-NetConnection -ComputerName localhost -Port $config.port -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
-            if ($test.TcpTestSucceeded) {
-                Write-Host "Port reachable" -ForegroundColor Green
+        $url = $services[$serviceName]
+        Write-Host "$serviceName`: " -NoNewline
+        try {
+            $response = Invoke-WebRequest -Uri $url -TimeoutSec 3 -ErrorAction SilentlyContinue
+            if ($response.StatusCode -eq 200) {
+                Write-Host "Healthy" -ForegroundColor Green
             } else {
-                Write-Host "Port unreachable" -ForegroundColor Red
+                Write-Host "Unhealthy (Status: $($response.StatusCode))" -ForegroundColor Red
             }
+        }
+        catch {
+            Write-Host "Not responding" -ForegroundColor Red
         }
     }
     exit 0
 }
 
-# Handle Restart
 if ($Restart) {
     Write-Host "Restarting Airbyte services..." -ForegroundColor Yellow
     & $MyInvocation.MyCommand.Path -Stop > $null
@@ -157,7 +135,6 @@ if ($Restart) {
     exit 0
 }
 
-# Handle HealthCheck
 if ($HealthCheck) {
     Write-Host "Performing comprehensive Airbyte health check..." -ForegroundColor Cyan
     Write-Host ""
@@ -174,24 +151,14 @@ if ($HealthCheck) {
     # Check data directories
     Write-Host ""
     Write-Host "Data Directories:" -ForegroundColor Yellow
-    $dataDirs = @(
-        "data/airbyte/db",
-        "data/airbyte/config",
-        "data/airbyte/workspace",
-        "data/airbyte/local"
-    )
+    $dataDirs = @("data/airbyte/db", "data/airbyte/config", "data/airbyte/workspace", "data/airbyte/local")
     
     foreach ($dir in $dataDirs) {
         if (Test-Path $dir) {
-            $size = (Get-ChildItem $dir -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
-            if ($size) {
-                $sizeMB = [math]::Round($size / 1MB, 2)
-                Write-Host "  $dir : $(Get-ChildItem $dir -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object).Count items ($sizeMB MB)" -ForegroundColor Green
-            } else {
-                Write-Host "  $dir : Empty" -ForegroundColor Yellow
-            }
+            $itemCount = (Get-ChildItem $dir -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object).Count
+            Write-Host "  $dir`: $itemCount items" -ForegroundColor Green
         } else {
-            Write-Host "  $dir : Missing" -ForegroundColor Red
+            Write-Host "  $dir`: Missing" -ForegroundColor Red
         }
     }
     
@@ -201,7 +168,7 @@ if ($HealthCheck) {
     $testPorts = @(11020, 11021, 5432, 7233)
     foreach ($port in $testPorts) {
         $result = Test-NetConnection -ComputerName localhost -Port $port -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
-        Write-Host "  Port $port : " -NoNewline
+        Write-Host "  Port $port`: " -NoNewline
         if ($result.TcpTestSucceeded) {
             Write-Host "Open" -ForegroundColor Green
         } else {
@@ -212,7 +179,6 @@ if ($HealthCheck) {
     exit 0
 }
 
-# Handle Cleanup
 if ($Cleanup) {
     Write-Host "Cleaning up Airbyte containers and data..." -ForegroundColor Yellow
     Write-Host "WARNING: This will remove all Airbyte data!" -ForegroundColor Red
@@ -235,7 +201,7 @@ if ($Cleanup) {
         Write-Host "⚠ Warning: Some containers may not have been removed" -ForegroundColor Yellow
     }
     
-    # Remove data (optional - user can choose)
+    # Remove data
     $removeData = Read-Host "Remove persisted data directories? (y/N)"
     if ($removeData -eq "y" -or $removeData -eq "Y") {
         try {
@@ -256,14 +222,6 @@ if ($Cleanup) {
 # Default: Start services
 Write-Host "Starting Airbyte services for RecallHub..." -ForegroundColor Cyan
 Write-Host ""
-Write-Host "This will start:" -ForegroundColor Yellow
-Write-Host "  - Airbyte Database (PostgreSQL)"
-Write-Host "  - Airbyte Temporal (Workflow Engine)"
-Write-Host "  - Airbyte Server (API)"
-Write-Host "  - Airbyte Worker (Sync Executor)"
-Write-Host "  - Airbyte Webapp (UI)"
-Write-Host "  - Connector Builder Server"
-Write-Host ""
 
 # Pre-flight checks
 Write-Host "Performing pre-flight checks..." -ForegroundColor Yellow
@@ -273,23 +231,8 @@ $dataDir = "data/airbyte"
 if (-not (Test-Path $dataDir)) {
     Write-Host "Creating data directory: $dataDir" -ForegroundColor Yellow
     New-Item -ItemType Directory -Path $dataDir -Force > $null
-    
-    # Create subdirectories
     @("db", "config", "workspace", "local") | ForEach-Object {
         New-Item -ItemType Directory -Path "$dataDir/$_" -Force > $null
-    }
-}
-
-# Create network if it doesn't exist
-$networkExists = docker network ls --format "{{.Name}}" | Select-String "recallhub_rag-network"
-if (-not $networkExists) {
-    Write-Host "Creating Docker network..." -ForegroundColor Yellow
-    try {
-        docker-compose up -d mongodb 2>$null
-        Start-Sleep -Seconds 5
-    }
-    catch {
-        Write-Host "⚠ Warning: Could not create network, continuing anyway" -ForegroundColor Yellow
     }
 }
 
@@ -302,7 +245,7 @@ if ($conflictingContainers) {
     Start-Sleep -Seconds 3
 }
 
-# Pull latest images (optional but recommended)
+# Pull latest images
 $pullImages = Read-Host "Pull latest Airbyte images? (Recommended for first run) (Y/n)"
 if ($pullImages -ne "n" -and $pullImages -ne "N") {
     Write-Host "Pulling Airbyte images..." -ForegroundColor Yellow
@@ -326,17 +269,13 @@ docker-compose -f docker-compose.yml -f docker-compose.airbyte.yml up -d `
 # Check if containers started successfully
 Start-Sleep -Seconds 3
 $runningContainers = docker ps --format "{{.Names}}" | Select-String "rag-airbyte"
-if ($runningContainers.Count -lt 6) {
-    Write-Host "⚠ Warning: Not all containers started successfully" -ForegroundColor Yellow
-    Write-Host "  Running containers: $($runningContainers.Count)/6" -ForegroundColor Yellow
-    Write-Host "  Check logs: .\start-airbyte.ps1 -Logs" -ForegroundColor Yellow
-}
+Write-Host "Started $($runningContainers.Count) containers" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "Waiting for Airbyte to initialize (this may take 2-3 minutes on first run)..." -ForegroundColor Yellow
 
 # Wait for Airbyte API to be healthy
-$maxAttempts = 36  # Increased timeout for first run
+$maxAttempts = 36
 $attempt = 0
 $healthy = $false
 
@@ -351,12 +290,6 @@ while ($attempt -lt $maxAttempts -and -not $healthy) {
     catch {
         $progress = [math]::Round(($attempt / $maxAttempts) * 100, 0)
         Write-Host "  Initializing... ($attempt/$maxAttempts) [$progress%]" -ForegroundColor Gray
-        
-        # Show container status every 5 attempts
-        if ($attempt % 5 -eq 0) {
-            Write-Host "  Container status:" -ForegroundColor Gray
-            docker ps --format "table {{.Names}}\t{{.Status}}" | Select-String "rag-airbyte" | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
-        }
     }
 }
 
@@ -383,10 +316,5 @@ else {
     Write-Host "  2. Check status: .\start-airbyte.ps1 -Status"
     Write-Host "  3. Restart: .\start-airbyte.ps1 -Restart"
     Write-Host "  4. If persistent issues: .\start-airbyte.ps1 -Cleanup then retry"
-    Write-Host ""
-    Write-Host "Common issues:" -ForegroundColor Yellow
-    Write-Host "  - Insufficient Docker resources (increase RAM/CPU in Docker Desktop)"
-    Write-Host "  - Port conflicts (ensure ports 11020-11021 are free)"
-    Write-Host "  - Network issues (ensure Docker network is functioning)"
     exit 1
 }

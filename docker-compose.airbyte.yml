@@ -78,6 +78,7 @@ services:
       - WORKER_ENVIRONMENT=docker
       - LOCAL_ROOT=/tmp/airbyte_local
       - RUN_DATABASE_MIGRATION_ON_STARTUP=true
+      - RUN_DATABASE_MIGRATION_ON_STARTUP=true
       - CONFIGS_DATABASE_MINIMUM_FLYWAY_MIGRATION_VERSION=0.35.15.001
       - JOBS_DATABASE_MINIMUM_FLYWAY_MIGRATION_VERSION=0.29.15.001
     volumes:
@@ -123,6 +124,8 @@ services:
       - WORKFLOW_FAILURE_RESTART_DELAY_SECONDS=600
       - MAX_SYNC_WORKERS=5
       - SHOULD_RUN_NOTIFY_WORKFLOWS=false
+      - SECRET_PERSISTENCE=NONE
+
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./data/airbyte/config:/data
