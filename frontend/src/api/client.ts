@@ -516,6 +516,20 @@ export interface ToolTestResponse {
   logs: string[]
 }
 
+export interface AgentPerformanceConfig {
+  parallel_workers: number
+  max_iterations: number
+  global_max_orchestrators: number
+  global_max_workers: number
+  worker_timeout: number
+  orchestrator_timeout: number
+  total_timeout: number
+  default_mode: string
+  auto_fast_threshold: number
+  skip_evaluation: boolean
+  max_sources_per_search: number
+}
+
 export interface LLMProviderConfigResponse {
   orchestrator_provider: string
   orchestrator_model: string
@@ -1235,6 +1249,17 @@ export const systemApi = {
     embedding_provider?: string
   }): Promise<any> => {
     const response = await api.post('/model-versions/switch', switchRequest)
+    return response.data
+  },
+
+  // Agent Performance Configuration
+  getAgentPerformanceConfig: async (): Promise<AgentPerformanceConfig> => {
+    const response = await api.get('/system/agent-performance')
+    return response.data
+  },
+
+  saveAgentPerformanceConfig: async (config: AgentPerformanceConfig): Promise<{ success: boolean; message: string }> => {
+    const response = await api.post('/system/agent-performance', config)
     return response.data
   }
 }

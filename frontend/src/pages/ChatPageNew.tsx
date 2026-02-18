@@ -105,7 +105,10 @@ export default function ChatPage() {
     orchestrator_steps: Array<{ phase: string; reasoning: string; output: string; duration_ms: number; tokens: number }>
     worker_steps: Array<{ task_id: string; task_type: string; tool: string; duration_ms: number; success: boolean; documents: Array<{ title: string; score: number; excerpt: string }> }>
     stats: { total_tokens: number; orchestrator_tokens: number; worker_tokens: number; cost_usd: number }
+    startTime: number
+    currentPhase: string
   } | null>(null)
+  const [elapsedTime, setElapsedTime] = useState(0)
   const streamAbortRef = useRef<{ abort: () => void } | null>(null)
   
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -148,6 +151,18 @@ export default function ChatPage() {
       inputRef.current?.focus()
     }
   }, [currentSession?.id])
+
+  // Track elapsed time during streaming
+  useEffect(() => {
+    if (liveTrace) {
+      const interval = setInterval(() => {
+        setElapsedTime(Math.floor((Date.now() - liveTrace.startTime) / 1000))
+      }, 1000)
+      return () => clearInterval(interval)
+    } else {
+      setElapsedTime(0)
+    }
+  }, [liveTrace?.startTime])
 
   // Change model for current session
   const handleChangeModel = async (modelId: string) => {
@@ -288,10 +303,13 @@ export default function ChatPage() {
     if (useStreaming) {
       // Use streaming API
       const sessionId = session.id
+      const startTime = Date.now()
       const accumulated = {
         orchestrator_steps: [] as Array<{ phase: string; reasoning: string; output: string; duration_ms: number; tokens: number }>,
         worker_steps: [] as Array<{ task_id: string; task_type: string; tool: string; duration_ms: number; success: boolean; documents: Array<{ title: string; score: number; excerpt: string }> }>,
-        stats: { total_tokens: 0, orchestrator_tokens: 0, worker_tokens: 0, cost_usd: 0 }
+        stats: { total_tokens: 0, orchestrator_tokens: 0, worker_tokens: 0, cost_usd: 0 },
+        startTime,
+        currentPhase: 'starting'
       }
       
       streamAbortRef.current = sessionsApi.sendMessageStream(
@@ -303,32 +321,40 @@ export default function ChatPage() {
             // Reset accumulated data
             accumulated.orchestrator_steps = []
             accumulated.worker_steps = []
+            accumulated.currentPhase = 'starting'
+            setLiveTrace({ ...accumulated })
           },
           onOrchestratorStep: (step) => {
             accumulated.orchestrator_steps.push(step)
-            accumulated.stats.orchestrator_tokens += step.tokens
-            accumulated.stats.total_tokens += step.tokens
+            const stepTokens = step.tokens || 0
+            accumulated.stats.orchestrator_tokens += stepTokens
+            accumulated.stats.total_tokens += stepTokens
+            accumulated.currentPhase = step.phase
             setLiveTrace({ ...accumulated })
           },
           onWorkerStep: (step) => {
             accumulated.worker_steps.push(step as typeof accumulated.worker_steps[0])
+            accumulated.currentPhase = 'executing'
             setLiveTrace({ ...accumulated })
           },
           onResponse: (response) => {
+            // Debug log to see what's coming from the backend
+            console.log('Streaming response received:', response)
+            
             // Update with final response
             const assistantMessage: SessionMessage = {
               id: 'msg-' + Date.now(),
               role: 'assistant',
-              content: response.content,
+              content: response.content || '(No response content received)',
               timestamp: new Date().toISOString(),
               sources: response.sources,
               stats: {
-                input_tokens: response.stats.orchestrator_tokens,
-                output_tokens: response.stats.worker_tokens,
-                total_tokens: response.stats.total_tokens,
-                cost_usd: response.stats.cost_usd,
-                tokens_per_second: response.stats.tokens_per_second,
-                latency_ms: response.stats.latency_ms,
+                input_tokens: response.stats?.orchestrator_tokens || 0,
+                output_tokens: response.stats?.worker_tokens || 0,
+                total_tokens: response.stats?.total_tokens || 0,
+                cost_usd: response.stats?.cost_usd || 0,
+                tokens_per_second: response.stats?.tokens_per_second || 0,
+                latency_ms: response.stats?.latency_ms || 0,
               },
               agent_trace: response.trace,
             }
@@ -655,10 +681,23 @@ export default function ChatPage() {
                   <div className="flex-1">
                     {liveTrace ? (
                       <div className="bg-surface dark:bg-gray-700/50 rounded-xl p-3 space-y-2">
-                        {/* Live Agent Progress */}
-                        <div className="flex items-center gap-2 text-xs text-primary-700 dark:text-primary-300">
-                          <CpuChipIcon className="h-4 w-4 animate-pulse" />
-                          <span className="font-medium">Agent Processing...</span>
+                        {/* Live Agent Progress Header */}
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 text-xs text-primary-700 dark:text-primary-300">
+                            <CpuChipIcon className="h-4 w-4 animate-pulse" />
+                            <span className="font-medium capitalize">
+                              {liveTrace.currentPhase === 'synthesize' ? 'Generating response...' : 
+                               liveTrace.currentPhase === 'executing' ? 'Executing tasks...' :
+                               liveTrace.currentPhase === 'evaluate' ? 'Evaluating results...' :
+                               liveTrace.currentPhase === 'plan' ? 'Planning...' :
+                               liveTrace.currentPhase === 'analyze' ? 'Analyzing...' :
+                               'Starting...'}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 text-[10px] text-secondary dark:text-gray-400">
+                            <span className="font-mono">{elapsedTime}s</span>
+                            <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                          </div>
                         </div>
                         
                         {/* Orchestrator Steps */}
@@ -671,6 +710,7 @@ export default function ChatPage() {
                               <div key={idx} className="text-[10px] text-gray-600 dark:text-gray-400 pl-4 border-l-2 border-purple-300 dark:border-purple-700">
                                 <span className="capitalize font-medium">{step.phase}</span>
                                 <span className="text-secondary dark:text-gray-500 ml-2">{step.duration_ms.toFixed(0)}ms</span>
+                                {step.tokens > 0 && <span className="text-secondary dark:text-gray-500 ml-2">{step.tokens} tok</span>}
                                 {step.reasoning && (
                                   <p className="line-clamp-1 text-gray-500 dark:text-gray-500">{step.reasoning}</p>
                                 )}
@@ -923,7 +963,11 @@ function MessageBubble({ message }: { message: SessionMessage }) {
             <p className="whitespace-pre-wrap">{message.content}</p>
           ) : (
             <div className="prose prose-sm max-w-none dark:prose-invert">
-              <ReactMarkdown>{message.content}</ReactMarkdown>
+              {message.content ? (
+                <ReactMarkdown>{message.content}</ReactMarkdown>
+              ) : (
+                <p className="text-gray-500 italic">Loading response...</p>
+              )}
             </div>
           )}
         </div>

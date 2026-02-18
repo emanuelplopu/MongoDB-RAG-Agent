@@ -1147,48 +1147,78 @@ async def send_message_stream(
             # Send initial event
             yield f"data: {json.dumps({'type': 'start', 'mode': agent_mode_str, 'models': {'orchestrator': settings.orchestrator_model, 'worker': settings.worker_model}})}\n\n"
             
-            # Process with polling for step updates
-            response_text, trace = await agent.process(
-                user_message=msg_request.content,
-                user_id=user.id if user else "anonymous",
-                user_email=user.email if user else "anonymous@local",
-                session_id=session_id,
-                conversation_history=conversation_history,
-                active_profile_key=active_profile_key,
-                active_profile_database=active_profile_database,
-                accessible_profile_keys=[active_profile_key] if active_profile_key else None
-            )
+            # Create event queue for real-time streaming
+            event_queue: asyncio.Queue = asyncio.Queue()
+            response_holder = {'text': '', 'trace': None, 'error': None}
             
-            # Stream orchestrator steps
-            for step in trace.orchestrator_steps:
-                event_data = {
-                    'type': 'orchestrator_step',
-                    'phase': step.phase,
-                    'reasoning': step.reasoning[:300] if step.reasoning else '',
-                    'output': step.output_summary[:200] if step.output_summary else '',
-                    'duration_ms': step.duration_ms,
-                    'tokens': step.tokens_used
-                }
-                yield f"data: {json.dumps(event_data)}\n\n"
+            async def on_event(event_type: str, event_data: dict):
+                """Callback to receive real-time events from agent."""
+                await event_queue.put({'type': event_type, 'data': event_data})
             
-            # Stream worker steps
-            for step in trace.worker_steps:
-                event_data = {
-                    'type': 'worker_step',
-                    'task_id': step.task_id,
-                    'task_type': step.task_type,
-                    'tool': step.tool_name,
-                    'input': step.tool_input,
-                    'documents_count': len(step.documents),
-                    'links_count': len(step.web_links),
-                    'duration_ms': step.duration_ms,
-                    'success': step.success,
-                    'documents': [
-                        {'title': d.title, 'score': d.similarity_score, 'excerpt': d.excerpt[:150]}
-                        for d in step.documents[:3]
-                    ]
-                }
-                yield f"data: {json.dumps(event_data)}\n\n"
+            async def process_agent():
+                """Run agent processing in background."""
+                try:
+                    response_text, trace = await agent.process(
+                        user_message=msg_request.content,
+                        user_id=user.id if user else "anonymous",
+                        user_email=user.email if user else "anonymous@local",
+                        session_id=session_id,
+                        conversation_history=conversation_history,
+                        active_profile_key=active_profile_key,
+                        active_profile_database=active_profile_database,
+                        accessible_profile_keys=[active_profile_key] if active_profile_key else None,
+                        on_event=on_event
+                    )
+                    response_holder['text'] = response_text
+                    response_holder['trace'] = trace
+                except Exception as e:
+                    logger.error(f"Agent processing error: {e}")
+                    response_holder['error'] = str(e)
+                finally:
+                    # Signal completion
+                    await event_queue.put({'type': 'done', 'data': {}})
+            
+            # Start agent processing in background
+            agent_task = asyncio.create_task(process_agent())
+            
+            # Stream events as they arrive
+            while True:
+                try:
+                    event = await asyncio.wait_for(event_queue.get(), timeout=600)  # 10 minute timeout
+                    
+                    if event['type'] == 'done':
+                        break
+                    
+                    # Forward the event immediately
+                    if event['type'] == 'phase':
+                        yield f"data: {json.dumps({'type': 'phase', **event['data']})}\n\n"
+                    elif event['type'] == 'orchestrator_step':
+                        yield f"data: {json.dumps({'type': 'orchestrator_step', **event['data']})}\n\n"
+                    elif event['type'] == 'worker_step':
+                        yield f"data: {json.dumps({'type': 'worker_step', **event['data']})}\n\n"
+                    else:
+                        yield f"data: {json.dumps(event)}\n\n"
+                        
+                except asyncio.TimeoutError:
+                    logger.error("Agent processing timed out")
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'Processing timed out'})}\n\n"
+                    break
+            
+            # Wait for agent task to complete
+            await agent_task
+            
+            if response_holder['error']:
+                yield f"data: {json.dumps({'type': 'error', 'message': response_holder['error']})}\n\n"
+                return
+            
+            response_text = response_holder['text']
+            trace = response_holder['trace']
+            
+            # Log response for debugging
+            logger.info(f"Agent response text length: {len(response_text) if response_text else 0}")
+            if not response_text:
+                logger.error("Agent returned empty response text!")
+                response_text = "I apologize, but I was unable to generate a response. Please try again."
             
             await agent.cleanup()
             

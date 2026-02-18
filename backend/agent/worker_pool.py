@@ -12,7 +12,7 @@ import asyncio
 import logging
 import time
 import httpx
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable, Awaitable
 
 from backend.agent.schemas import (
     TaskDefinition, TaskType, WorkerResult, WorkerStep,
@@ -23,6 +23,9 @@ from backend.core.config import settings
 from backend.routers.prompts import get_agent_prompt_sync
 
 logger = logging.getLogger(__name__)
+
+# Callback type for task completion: (task_id, result, step) -> None
+TaskCompleteCallback = Callable[[str, 'WorkerResult', 'WorkerStep'], Awaitable[None]]
 
 
 class WorkerPool:
@@ -93,7 +96,8 @@ class WorkerPool:
         user_email: str,
         active_profile_key: Optional[str] = None,
         active_profile_database: Optional[str] = None,
-        accessible_profile_keys: Optional[List[str]] = None
+        accessible_profile_keys: Optional[List[str]] = None,
+        on_task_complete: Optional[TaskCompleteCallback] = None
     ) -> List[WorkerResult]:
         """Execute tasks respecting dependencies.
         
@@ -104,6 +108,7 @@ class WorkerPool:
             active_profile_key: Currently active profile key
             active_profile_database: Database of the active profile
             accessible_profile_keys: List of profile keys user has access to
+            on_task_complete: Optional callback called when each task completes
         
         Returns:
             List of WorkerResult for each task
@@ -139,7 +144,7 @@ class WorkerPool:
                 for task in batch
             ], return_exceptions=True)
             
-            # Record results
+            # Record results and call callbacks
             for task, result in zip(batch, results):
                 if isinstance(result, Exception):
                     logger.error(f"Task {task.id} failed with exception: {result}")
@@ -153,6 +158,15 @@ class WorkerPool:
                     )
                 completed[task.id] = result
                 pending.remove(task)
+                
+                # Call the completion callback for real-time streaming
+                if on_task_complete:
+                    try:
+                        # Find the step for this task
+                        step = next((s for s in self.steps if s.task_id == task.id), None)
+                        await on_task_complete(task.id, result, step)
+                    except Exception as e:
+                        logger.error(f"Error calling on_task_complete for task {task.id}: {e}")
         
         return list(completed.values())
     

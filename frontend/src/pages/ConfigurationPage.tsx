@@ -60,7 +60,7 @@ export default function ConfigurationPage() {
   const [isSaving, setIsSaving] = useState(false)
   const [isPulling, setIsPulling] = useState<string | null>(null)
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
-  const [activeTab, setActiveTab] = useState<'offline' | 'network' | 'models' | 'profiles' | 'search' | 'llm' | 'tools'>('llm')
+  const [activeTab, setActiveTab] = useState<'offline' | 'network' | 'models' | 'profiles' | 'search' | 'llm' | 'tools' | 'agent'>('llm')
     
     // Search settings state
     const [configOptions, setConfigOptions] = useState<ConfigOptions | null>(null)
@@ -104,6 +104,65 @@ export default function ConfigurationPage() {
     const [toolTestLogs, setToolTestLogs] = useState<string[]>([])
     const [toolTestParams, setToolTestParams] = useState<Record<string, string>>({})
   
+    // Agent Performance state
+    const [agentConfig, setAgentConfig] = useState({
+      parallel_workers: 4,
+      max_iterations: 3,
+      global_max_orchestrators: 10,
+      global_max_workers: 20,
+      worker_timeout: 60,
+      orchestrator_timeout: 120,
+      total_timeout: 300,
+      default_mode: 'auto',
+      auto_fast_threshold: 50,
+      skip_evaluation: false,
+      max_sources_per_search: 10
+    })
+    const [isSavingAgentConfig, setIsSavingAgentConfig] = useState(false)
+    const [agentConfigErrors, setAgentConfigErrors] = useState<Record<string, string>>({})
+
+    // Validation rules for agent config fields
+    const agentConfigValidation: Record<string, { min: number; max: number; label: string }> = {
+      parallel_workers: { min: 1, max: 20, label: 'Parallel Workers' },
+      max_iterations: { min: 1, max: 10, label: 'Max Iterations' },
+      max_sources_per_search: { min: 1, max: 50, label: 'Max Sources' },
+      global_max_orchestrators: { min: 1, max: 50, label: 'Max Orchestrators' },
+      global_max_workers: { min: 1, max: 100, label: 'Max Workers' },
+      worker_timeout: { min: 10, max: 300, label: 'Worker Timeout' },
+      orchestrator_timeout: { min: 30, max: 600, label: 'Orchestrator Timeout' },
+      total_timeout: { min: 60, max: 3600, label: 'Total Timeout' },
+      auto_fast_threshold: { min: 10, max: 500, label: 'Auto-Fast Threshold' }
+    }
+
+    // Validate a single field and return error message or empty string
+    const validateAgentField = (field: string, value: number): string => {
+      const rules = agentConfigValidation[field]
+      if (!rules) return ''
+      if (isNaN(value)) return `${rules.label} must be a number`
+      if (value < rules.min) return `${rules.label} must be at least ${rules.min}`
+      if (value > rules.max) return `${rules.label} must be at most ${rules.max}`
+      return ''
+    }
+
+    // Handle agent config change with validation
+    const handleAgentConfigChange = (field: string, value: number) => {
+      setAgentConfig(prev => ({ ...prev, [field]: value }))
+      const error = validateAgentField(field, value)
+      setAgentConfigErrors(prev => ({ ...prev, [field]: error }))
+    }
+
+    // Check if there are any validation errors
+    const hasAgentConfigErrors = (): boolean => {
+      const errors: Record<string, string> = {}
+      for (const field of Object.keys(agentConfigValidation)) {
+        const value = agentConfig[field as keyof typeof agentConfig] as number
+        const error = validateAgentField(field, value)
+        if (error) errors[field] = error
+      }
+      setAgentConfigErrors(errors)
+      return Object.keys(errors).length > 0
+    }
+
   // Network scanning state
   const [customEndpoints, setCustomEndpoints] = useState<CustomEndpoint[]>([])
   const [isScanning, setIsScanning] = useState(false)
@@ -149,6 +208,13 @@ export default function ConfigurationPage() {
         setAgentTools(toolsRes.tools)
       } catch (toolsErr) {
         console.error('Error fetching tools:', toolsErr)
+      }
+      // Fetch agent performance config
+      try {
+        const agentConfigRes = await systemApi.getAgentPerformanceConfig()
+        setAgentConfig(agentConfigRes)
+      } catch (agentErr) {
+        console.error('Error fetching agent config:', agentErr)
       }
     } catch (err) {
       console.error('Error fetching data:', err)
@@ -203,6 +269,25 @@ export default function ConfigurationPage() {
       setMessage({ type: 'error', text: 'Failed to save configuration' })
     } finally {
       setIsSaving(false)
+    }
+  }
+
+  const handleSaveAgentConfig = async () => {
+    // Validate all fields before saving
+    if (hasAgentConfigErrors()) {
+      setMessage({ type: 'error', text: 'Please fix validation errors before saving' })
+      return
+    }
+    
+    setIsSavingAgentConfig(true)
+    setMessage(null)
+    try {
+      await systemApi.saveAgentPerformanceConfig(agentConfig)
+      setMessage({ type: 'success', text: 'Agent performance configuration saved successfully' })
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Failed to save agent configuration' })
+    } finally {
+      setIsSavingAgentConfig(false)
     }
   }
 
@@ -578,6 +663,7 @@ export default function ConfigurationPage() {
         {[
           { id: 'llm', label: 'LLM Providers', icon: BoltIcon },
           { id: 'tools', label: 'Agent Tools', icon: WrenchScrewdriverIcon },
+          { id: 'agent', label: 'Agent Performance', icon: CpuChipIcon },
           { id: 'offline', label: 'Offline Mode', icon: WifiIcon },
           { id: 'network', label: 'Network Scan', icon: GlobeAltIcon },
           { id: 'models', label: 'Local Models', icon: CpuChipIcon },
@@ -1930,6 +2016,317 @@ export default function ConfigurationPage() {
               <li>• Higher values provide more comprehensive results but may slow down responses</li>
               <li>• Lower values are faster but may miss relevant information</li>
               <li>• Recommended: 10-20 for most use cases, 50+ for thorough research queries</li>
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {/* Agent Performance Tab */}
+      {activeTab === 'agent' && (
+        <div className="space-y-6">
+          {/* Per-Session Settings */}
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+            <div className="flex items-center gap-3 mb-4">
+              <BoltIcon className="h-5 w-5 text-primary" />
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Per-Session Settings</h3>
+            </div>
+            <p className="text-sm text-secondary dark:text-gray-400 mb-6">
+              Configure how the agent processes requests within a single chat session.
+            </p>
+
+            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+              {/* Parallel Workers */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  Parallel Workers per Chat
+                </label>
+                <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                  Number of concurrent worker tasks per chat session (1-20)
+                </p>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={agentConfig.parallel_workers}
+                  onChange={(e) => handleAgentConfigChange('parallel_workers', Number(e.target.value))}
+                  className={`w-full rounded-lg border ${agentConfigErrors.parallel_workers ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                />
+                {agentConfigErrors.parallel_workers && (
+                  <p className="mt-1 text-xs text-red-500">{agentConfigErrors.parallel_workers}</p>
+                )}
+              </div>
+
+              {/* Max Iterations */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  Max Orchestrator Iterations
+                </label>
+                <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                  Maximum refine cycles before stopping (1-10)
+                </p>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={agentConfig.max_iterations}
+                  onChange={(e) => handleAgentConfigChange('max_iterations', Number(e.target.value))}
+                  className={`w-full rounded-lg border ${agentConfigErrors.max_iterations ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                />
+                {agentConfigErrors.max_iterations && (
+                  <p className="mt-1 text-xs text-red-500">{agentConfigErrors.max_iterations}</p>
+                )}
+              </div>
+
+              {/* Max Sources Per Search */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  Max Sources per Search
+                </label>
+                <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                  Data sources searched in parallel (1-50)
+                </p>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={agentConfig.max_sources_per_search}
+                  onChange={(e) => handleAgentConfigChange('max_sources_per_search', Number(e.target.value))}
+                  className={`w-full rounded-lg border ${agentConfigErrors.max_sources_per_search ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                />
+                {agentConfigErrors.max_sources_per_search && (
+                  <p className="mt-1 text-xs text-red-500">{agentConfigErrors.max_sources_per_search}</p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Global Pool Settings */}
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+            <div className="flex items-center gap-3 mb-4">
+              <CpuChipIcon className="h-5 w-5 text-orange-500" />
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Global Pool Settings</h3>
+            </div>
+            <p className="text-sm text-secondary dark:text-gray-400 mb-6">
+              Limit total concurrent operations across all users to manage server resources.
+            </p>
+
+            <div className="grid gap-6 md:grid-cols-2">
+              {/* Global Max Orchestrators */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  Max Concurrent Orchestrators (All Users)
+                </label>
+                <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                  Total orchestrator instances allowed simultaneously (1-50)
+                </p>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={agentConfig.global_max_orchestrators}
+                  onChange={(e) => handleAgentConfigChange('global_max_orchestrators', Number(e.target.value))}
+                  className={`w-full rounded-lg border ${agentConfigErrors.global_max_orchestrators ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                />
+                {agentConfigErrors.global_max_orchestrators && (
+                  <p className="mt-1 text-xs text-red-500">{agentConfigErrors.global_max_orchestrators}</p>
+                )}
+              </div>
+
+              {/* Global Max Workers */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  Max Concurrent Workers (All Users)
+                </label>
+                <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                  Total worker tasks allowed simultaneously (1-100)
+                </p>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={agentConfig.global_max_workers}
+                  onChange={(e) => handleAgentConfigChange('global_max_workers', Number(e.target.value))}
+                  className={`w-full rounded-lg border ${agentConfigErrors.global_max_workers ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                />
+                {agentConfigErrors.global_max_workers && (
+                  <p className="mt-1 text-xs text-red-500">{agentConfigErrors.global_max_workers}</p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Timeout Settings */}
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+            <div className="flex items-center gap-3 mb-4">
+              <ArrowPathIcon className="h-5 w-5 text-red-500" />
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Timeout Settings</h3>
+            </div>
+            <p className="text-sm text-secondary dark:text-gray-400 mb-6">
+              Set timeouts to prevent runaway requests from blocking resources.
+            </p>
+
+            <div className="grid gap-6 md:grid-cols-3">
+              {/* Worker Timeout */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  Worker Timeout (seconds)
+                </label>
+                <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                  Max time for a single worker task (10-300)
+                </p>
+                <input
+                  type="number"
+                  min={10}
+                  max={300}
+                  value={agentConfig.worker_timeout}
+                  onChange={(e) => handleAgentConfigChange('worker_timeout', Number(e.target.value))}
+                  className={`w-full rounded-lg border ${agentConfigErrors.worker_timeout ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                />
+                {agentConfigErrors.worker_timeout && (
+                  <p className="mt-1 text-xs text-red-500">{agentConfigErrors.worker_timeout}</p>
+                )}
+              </div>
+
+              {/* Orchestrator Timeout */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  Orchestrator Timeout (seconds)
+                </label>
+                <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                  Max time for orchestrator phases (30-600)
+                </p>
+                <input
+                  type="number"
+                  min={30}
+                  max={600}
+                  value={agentConfig.orchestrator_timeout}
+                  onChange={(e) => handleAgentConfigChange('orchestrator_timeout', Number(e.target.value))}
+                  className={`w-full rounded-lg border ${agentConfigErrors.orchestrator_timeout ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                />
+                {agentConfigErrors.orchestrator_timeout && (
+                  <p className="mt-1 text-xs text-red-500">{agentConfigErrors.orchestrator_timeout}</p>
+                )}
+              </div>
+
+              {/* Total Timeout */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  Total Request Timeout (seconds)
+                </label>
+                <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                  Max total time for complete request (60-3600)
+                </p>
+                <input
+                  type="number"
+                  min={60}
+                  max={3600}
+                  value={agentConfig.total_timeout}
+                  onChange={(e) => handleAgentConfigChange('total_timeout', Number(e.target.value))}
+                  className={`w-full rounded-lg border ${agentConfigErrors.total_timeout ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                />
+                {agentConfigErrors.total_timeout && (
+                  <p className="mt-1 text-xs text-red-500">{agentConfigErrors.total_timeout}</p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Mode & Optimization Settings */}
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+            <div className="flex items-center gap-3 mb-4">
+              <Cog6ToothIcon className="h-5 w-5 text-green-500" />
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Mode & Optimization</h3>
+            </div>
+            <p className="text-sm text-secondary dark:text-gray-400 mb-6">
+              Fine-tune how the agent decides to process queries.
+            </p>
+
+            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+              {/* Default Mode */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  Default Agent Mode
+                </label>
+                <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                  How the agent processes queries by default
+                </p>
+                <select
+                  value={agentConfig.default_mode}
+                  onChange={(e) => setAgentConfig(prev => ({ ...prev, default_mode: e.target.value }))}
+                  className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none"
+                >
+                  <option value="auto">Auto (Adaptive)</option>
+                  <option value="fast">Fast (Skip orchestration)</option>
+                  <option value="thinking">Thinking (Full orchestration)</option>
+                </select>
+              </div>
+
+              {/* Auto Fast Threshold */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  Auto-Fast Query Threshold
+                </label>
+                <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                  Use fast mode for queries shorter than this (chars)
+                </p>
+                <input
+                  type="number"
+                  min={10}
+                  max={500}
+                  value={agentConfig.auto_fast_threshold}
+                  onChange={(e) => handleAgentConfigChange('auto_fast_threshold', Number(e.target.value))}
+                  className={`w-full rounded-lg border ${agentConfigErrors.auto_fast_threshold ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                />
+                {agentConfigErrors.auto_fast_threshold && (
+                  <p className="mt-1 text-xs text-red-500">{agentConfigErrors.auto_fast_threshold}</p>
+                )}
+              </div>
+
+              {/* Skip Evaluation */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  Skip Evaluation Phase
+                </label>
+                <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                  Skip result evaluation for faster responses
+                </p>
+                <label className="relative inline-flex items-center cursor-pointer mt-2">
+                  <input
+                    type="checkbox"
+                    checked={agentConfig.skip_evaluation}
+                    onChange={(e) => setAgentConfig(prev => ({ ...prev, skip_evaluation: e.target.checked }))}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary rounded-full peer dark:bg-gray-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                  <span className="ml-3 text-sm text-secondary dark:text-gray-400">
+                    {agentConfig.skip_evaluation ? 'Enabled (Faster)' : 'Disabled (More thorough)'}
+                  </span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {/* Save Button */}
+          <div className="flex justify-end gap-3">
+            <button
+              onClick={handleSaveAgentConfig}
+              disabled={isSavingAgentConfig || Object.values(agentConfigErrors).some(e => e)}
+              className="flex items-center gap-2 rounded-xl bg-primary px-6 py-2 font-medium text-white transition-all hover:bg-primary-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+            >
+              {isSavingAgentConfig && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
+              Save Agent Configuration
+            </button>
+          </div>
+
+          {/* Info Card */}
+          <div className="rounded-2xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-6">
+            <h4 className="text-sm font-medium text-blue-900 dark:text-blue-200 mb-2">Performance Tips</h4>
+            <ul className="text-sm text-blue-800 dark:text-blue-300 space-y-1">
+              <li>• <strong>Fast mode</strong> skips orchestration for simple queries (~3-5x faster)</li>
+              <li>• <strong>Increase parallel workers</strong> if you have many data sources to search</li>
+              <li>• <strong>Skip evaluation</strong> trades quality for speed on straightforward queries</li>
+              <li>• <strong>Lower timeouts</strong> prevent stuck requests but may cut off complex queries</li>
+              <li>• <strong>Global limits</strong> protect your server when many users are active</li>
             </ul>
           </div>
         </div>

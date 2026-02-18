@@ -401,7 +401,8 @@ class Orchestrator:
         
         result = await self._call_llm(prompt, OrchestratorPhase.SYNTHESIZE, expect_json=False)
         
-        return result.get("response", "I was unable to generate a response.")
+        response_text = result.get("response") or "I was unable to generate a response."
+        return response_text
     
     def _format_results_for_prompt(self, results: List[WorkerResult]) -> str:
         """Format worker results for inclusion in prompts.

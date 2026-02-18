@@ -164,7 +164,7 @@ export default function Layout() {
       const dashboard = await indexesApi.getDashboard()
       const warnings: SidebarWarning[] = []
       
-      const vectorIndex = dashboard.indexes?.find(idx => idx.type === 'vectorSearch')
+      const vectorIndex = dashboard.indexes?.find(idx => idx.type === 'vector' || idx.type === 'vectorSearch')
       const textIndex = dashboard.indexes?.find(idx => idx.type === 'search')
       
       const vectorMissing = !vectorIndex || vectorIndex.status !== 'READY'

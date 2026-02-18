@@ -1,0 +1,107 @@
+# RecallHub Backend - Pre-built Base Image
+# ==========================================
+# Contains all heavy dependencies that rarely change:
+# - PyTorch, Transformers, Whisper, Docling (~8GB)
+# - Playwright + Chromium browser (~400MB)
+# - API dependencies (FastAPI, etc.)
+#
+# Build this image ONCE and reuse it:
+#   docker build -f backend/Dockerfile.base -t recallhub-backend-base:latest .
+#
+# Then use Dockerfile.fast for quick code-only rebuilds
+#
+# VERSION: Update this when changing dependencies
+ARG BASE_VERSION=1.0.0
+
+FROM python:3.11-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Create virtual environment
+RUN python -m venv /app/.venv
+ENV PATH="/app/.venv/bin:$PATH" \
+    VIRTUAL_ENV="/app/.venv"
+
+RUN pip install --upgrade pip
+
+# ============================================
+# Install ALL Python dependencies at once
+# ============================================
+COPY backend/requirements-ml-heavy.txt ./
+COPY backend/requirements-api.txt ./
+
+# Install ML dependencies (slowest)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements-ml-heavy.txt
+
+# Install API dependencies
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements-api.txt
+
+# Install Playwright and browser
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install playwright && \
+    python -m playwright install chromium --with-deps
+
+# ============================================
+# Runtime Image
+# ============================================
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/app/.venv/bin:$PATH" \
+    VIRTUAL_ENV="/app/.venv"
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ffmpeg \
+    # Playwright runtime dependencies
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libdbus-1-3 \
+    libatspi2.0-0 \
+    libx11-xcb1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+WORKDIR /app
+
+# Copy virtual environment and playwright from builder
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /root/.cache/ms-playwright /root/.cache/ms-playwright
+
+# Create app directories
+RUN mkdir -p /app/projects /app/data /app/documents /app/src /app/backend
+
+# Label for version tracking
+ARG BASE_VERSION=1.0.0
+LABEL recallhub.base.version="${BASE_VERSION}" \
+      recallhub.base.description="Pre-built base image with ML deps + Playwright"
+
+# Default command (will be overridden)
+CMD ["python", "--version"]

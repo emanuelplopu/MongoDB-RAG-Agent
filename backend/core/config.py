@@ -97,7 +97,45 @@ class BackendSettings(BaseSettings):
     )
     agent_parallel_workers: int = Field(
         default=4,
-        description="Maximum parallel worker tasks"
+        description="Maximum parallel worker tasks per chat session"
+    )
+    
+    # Agent Performance & Pool Settings
+    agent_global_max_orchestrators: int = Field(
+        default=10,
+        description="Maximum concurrent orchestrators across all users"
+    )
+    agent_global_max_workers: int = Field(
+        default=20,
+        description="Maximum concurrent workers across all users"
+    )
+    agent_worker_timeout: int = Field(
+        default=60,
+        description="Timeout in seconds for individual worker tasks"
+    )
+    agent_orchestrator_timeout: int = Field(
+        default=120,
+        description="Timeout in seconds for orchestrator phases"
+    )
+    agent_total_timeout: int = Field(
+        default=300,
+        description="Maximum total time in seconds for a complete agent request"
+    )
+    agent_default_mode: str = Field(
+        default="auto",
+        description="Default agent mode: auto, thinking, or fast"
+    )
+    agent_auto_fast_threshold: int = Field(
+        default=50,
+        description="Query character length below which auto mode uses fast processing"
+    )
+    agent_skip_evaluation: bool = Field(
+        default=False,
+        description="Skip evaluation phase for faster processing (less refined results)"
+    )
+    agent_max_sources_per_search: int = Field(
+        default=10,
+        description="Maximum number of data sources to search in parallel"
     )
     
     # Profile Settings

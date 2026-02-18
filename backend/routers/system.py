@@ -6,7 +6,7 @@ import httpx
 from datetime import datetime
 from typing import Optional, List
 from fastapi import APIRouter, Request, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.models.schemas import (
     HealthResponse, SystemStatsResponse, ConfigResponse
@@ -1060,6 +1060,165 @@ async def load_config_from_db(db) -> bool:
         return False
     except Exception as e:
         logger.warning(f"Failed to load config from database: {e}")
+        return False
+
+
+# ==================== Agent Performance Configuration ====================
+
+AGENT_CONFIG_COLLECTION = "agent_config"
+AGENT_CONFIG_DOC_ID = "performance_config"
+
+
+class AgentPerformanceConfig(BaseModel):
+    """Agent performance configuration settings."""
+    # Per-session settings
+    parallel_workers: int = Field(default=4, ge=1, le=20, description="Max parallel workers per chat session")
+    max_iterations: int = Field(default=3, ge=1, le=10, description="Max orchestrator-worker iterations")
+    
+    # Global pool settings
+    global_max_orchestrators: int = Field(default=10, ge=1, le=50, description="Max concurrent orchestrators (all users)")
+    global_max_workers: int = Field(default=20, ge=1, le=100, description="Max concurrent workers (all users)")
+    
+    # Timeout settings
+    worker_timeout: int = Field(default=60, ge=10, le=300, description="Worker task timeout (seconds)")
+    orchestrator_timeout: int = Field(default=120, ge=30, le=600, description="Orchestrator phase timeout (seconds)")
+    total_timeout: int = Field(default=300, ge=60, le=3600, description="Total request timeout (seconds)")
+    
+    # Mode settings
+    default_mode: str = Field(default="auto", description="Default agent mode: auto, thinking, fast")
+    auto_fast_threshold: int = Field(default=50, ge=10, le=500, description="Query length for fast mode in auto")
+    skip_evaluation: bool = Field(default=False, description="Skip evaluation phase for speed")
+    
+    # Search settings
+    max_sources_per_search: int = Field(default=10, ge=1, le=50, description="Max data sources to search in parallel")
+
+
+@router.get("/agent-performance")
+async def get_agent_performance_config(request: Request):
+    """
+    Get current agent performance configuration.
+    
+    Returns settings for parallel workers, timeouts, and pool sizes.
+    """
+    db = request.app.state.db
+    
+    # Get from database if exists
+    try:
+        collection = db.db[AGENT_CONFIG_COLLECTION]
+        doc = await collection.find_one({"_id": AGENT_CONFIG_DOC_ID})
+        
+        if doc:
+            return {
+                "parallel_workers": doc.get("parallel_workers", settings.agent_parallel_workers),
+                "max_iterations": doc.get("max_iterations", settings.agent_max_iterations),
+                "global_max_orchestrators": doc.get("global_max_orchestrators", settings.agent_global_max_orchestrators),
+                "global_max_workers": doc.get("global_max_workers", settings.agent_global_max_workers),
+                "worker_timeout": doc.get("worker_timeout", settings.agent_worker_timeout),
+                "orchestrator_timeout": doc.get("orchestrator_timeout", settings.agent_orchestrator_timeout),
+                "total_timeout": doc.get("total_timeout", settings.agent_total_timeout),
+                "default_mode": doc.get("default_mode", settings.agent_default_mode),
+                "auto_fast_threshold": doc.get("auto_fast_threshold", settings.agent_auto_fast_threshold),
+                "skip_evaluation": doc.get("skip_evaluation", settings.agent_skip_evaluation),
+                "max_sources_per_search": doc.get("max_sources_per_search", settings.agent_max_sources_per_search),
+            }
+    except Exception as e:
+        logger.warning(f"Failed to load agent config from database: {e}")
+    
+    # Return defaults from settings
+    return {
+        "parallel_workers": settings.agent_parallel_workers,
+        "max_iterations": settings.agent_max_iterations,
+        "global_max_orchestrators": settings.agent_global_max_orchestrators,
+        "global_max_workers": settings.agent_global_max_workers,
+        "worker_timeout": settings.agent_worker_timeout,
+        "orchestrator_timeout": settings.agent_orchestrator_timeout,
+        "total_timeout": settings.agent_total_timeout,
+        "default_mode": settings.agent_default_mode,
+        "auto_fast_threshold": settings.agent_auto_fast_threshold,
+        "skip_evaluation": settings.agent_skip_evaluation,
+        "max_sources_per_search": settings.agent_max_sources_per_search,
+    }
+
+
+@router.post("/agent-performance")
+async def save_agent_performance_config(request: Request, config: AgentPerformanceConfig):
+    """
+    Save agent performance configuration to database.
+    
+    Updates settings for parallel workers, timeouts, pool sizes, and mode.
+    """
+    db = request.app.state.db
+    
+    try:
+        collection = db.db[AGENT_CONFIG_COLLECTION]
+        
+        update_doc = {
+            "_id": AGENT_CONFIG_DOC_ID,
+            "parallel_workers": config.parallel_workers,
+            "max_iterations": config.max_iterations,
+            "global_max_orchestrators": config.global_max_orchestrators,
+            "global_max_workers": config.global_max_workers,
+            "worker_timeout": config.worker_timeout,
+            "orchestrator_timeout": config.orchestrator_timeout,
+            "total_timeout": config.total_timeout,
+            "default_mode": config.default_mode,
+            "auto_fast_threshold": config.auto_fast_threshold,
+            "skip_evaluation": config.skip_evaluation,
+            "max_sources_per_search": config.max_sources_per_search,
+            "updated_at": datetime.now().isoformat(),
+        }
+        
+        await collection.replace_one(
+            {"_id": AGENT_CONFIG_DOC_ID},
+            update_doc,
+            upsert=True
+        )
+        
+        # Update runtime settings
+        settings.agent_parallel_workers = config.parallel_workers
+        settings.agent_max_iterations = config.max_iterations
+        settings.agent_global_max_orchestrators = config.global_max_orchestrators
+        settings.agent_global_max_workers = config.global_max_workers
+        settings.agent_worker_timeout = config.worker_timeout
+        settings.agent_orchestrator_timeout = config.orchestrator_timeout
+        settings.agent_total_timeout = config.total_timeout
+        settings.agent_default_mode = config.default_mode
+        settings.agent_auto_fast_threshold = config.auto_fast_threshold
+        settings.agent_skip_evaluation = config.skip_evaluation
+        settings.agent_max_sources_per_search = config.max_sources_per_search
+        
+        logger.info(f"Saved agent performance config: workers={config.parallel_workers}, orchestrators={config.global_max_orchestrators}")
+        
+        return {"success": True, "message": "Agent performance configuration saved"}
+    except Exception as e:
+        logger.error(f"Failed to save agent config: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save configuration: {str(e)}")
+
+
+async def load_agent_config_from_db(db) -> bool:
+    """Load agent performance config from database on startup."""
+    try:
+        collection = db.db[AGENT_CONFIG_COLLECTION]
+        doc = await collection.find_one({"_id": AGENT_CONFIG_DOC_ID})
+        
+        if doc:
+            settings.agent_parallel_workers = doc.get("parallel_workers", settings.agent_parallel_workers)
+            settings.agent_max_iterations = doc.get("max_iterations", settings.agent_max_iterations)
+            settings.agent_global_max_orchestrators = doc.get("global_max_orchestrators", settings.agent_global_max_orchestrators)
+            settings.agent_global_max_workers = doc.get("global_max_workers", settings.agent_global_max_workers)
+            settings.agent_worker_timeout = doc.get("worker_timeout", settings.agent_worker_timeout)
+            settings.agent_orchestrator_timeout = doc.get("orchestrator_timeout", settings.agent_orchestrator_timeout)
+            settings.agent_total_timeout = doc.get("total_timeout", settings.agent_total_timeout)
+            settings.agent_default_mode = doc.get("default_mode", settings.agent_default_mode)
+            settings.agent_auto_fast_threshold = doc.get("auto_fast_threshold", settings.agent_auto_fast_threshold)
+            settings.agent_skip_evaluation = doc.get("skip_evaluation", settings.agent_skip_evaluation)
+            settings.agent_max_sources_per_search = doc.get("max_sources_per_search", settings.agent_max_sources_per_search)
+            
+            logger.info(f"Loaded agent performance config: workers={settings.agent_parallel_workers}, mode={settings.agent_default_mode}")
+            return True
+        return False
+    except Exception as e:
+        logger.warning(f"Failed to load agent config from database: {e}")
         return False
 
 

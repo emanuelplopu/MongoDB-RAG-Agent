@@ -10,7 +10,10 @@ The FederatedAgent coordinates the Orchestrator and WorkerPool to:
 import logging
 import time
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Callable, Awaitable
+
+# Type alias for event callback: async function that takes event_type and event_data
+EventCallback = Callable[[str, Dict[str, Any]], Awaitable[None]]
 
 from backend.agent.schemas import (
     AgentModeConfig, AgentMode, AgentTrace, AgentPlan,
@@ -89,7 +92,8 @@ class FederatedAgent:
         conversation_history: Optional[List[Dict[str, Any]]] = None,
         active_profile_key: Optional[str] = None,
         active_profile_database: Optional[str] = None,
-        accessible_profile_keys: Optional[List[str]] = None
+        accessible_profile_keys: Optional[List[str]] = None,
+        on_event: Optional[EventCallback] = None
     ) -> Tuple[str, AgentTrace]:
         """Process a user message through the orchestrator-worker pipeline.
         
@@ -102,6 +106,7 @@ class FederatedAgent:
             active_profile_key: Currently active profile key
             active_profile_database: Database of the active profile
             accessible_profile_keys: List of profile keys user has access to
+            on_event: Optional callback for streaming events
         
         Returns:
             Tuple of (response text, AgentTrace)
@@ -124,7 +129,8 @@ class FederatedAgent:
                 conversation_history=conversation_history or [],
                 active_profile_key=active_profile_key,
                 active_profile_database=active_profile_database,
-                accessible_profile_keys=accessible_profile_keys
+                accessible_profile_keys=accessible_profile_keys,
+                on_event=on_event
             )
         else:
             response = await self._process_fast(
@@ -133,7 +139,8 @@ class FederatedAgent:
                 user_email=user_email,
                 active_profile_key=active_profile_key,
                 active_profile_database=active_profile_database,
-                accessible_profile_keys=accessible_profile_keys
+                accessible_profile_keys=accessible_profile_keys,
+                on_event=on_event
             )
         
         # Finalize trace - use add methods to properly accumulate timing and token stats
@@ -153,7 +160,8 @@ class FederatedAgent:
         conversation_history: List[Dict[str, Any]],
         active_profile_key: Optional[str],
         active_profile_database: Optional[str],
-        accessible_profile_keys: Optional[List[str]]
+        accessible_profile_keys: Optional[List[str]],
+        on_event: Optional[EventCallback] = None
     ) -> str:
         """Process with full orchestrator-worker flow.
         
@@ -165,15 +173,35 @@ class FederatedAgent:
             active_profile_key: Active profile key
             active_profile_database: Active profile database
             accessible_profile_keys: Accessible profile keys
+            on_event: Optional callback for streaming events
         
         Returns:
             Response text
         """
         logger.info(f"Processing with orchestrator: '{user_message[:50]}...'")
         
+        async def emit_event(event_type: str, data: Dict[str, Any]):
+            """Helper to emit events safely."""
+            if on_event:
+                try:
+                    await on_event(event_type, data)
+                except Exception as e:
+                    logger.error(f"Error emitting event {event_type}: {e}")
+        
         # Phase 1: Analyze
+        await emit_event('phase', {'phase': 'analyze', 'status': 'started'})
+        analysis_start = time.time()
         analysis = await self.orchestrator.analyze(user_message, conversation_history)
         logger.info(f"Analysis: {analysis.get('intent_summary', 'unknown')}")
+        # Get tokens from the last orchestrator step
+        analyze_tokens = self.orchestrator.steps[-1].tokens_used if self.orchestrator.steps else 0
+        await emit_event('orchestrator_step', {
+            'phase': 'analyze',
+            'reasoning': analysis.get('intent_summary', '')[:300],
+            'duration_ms': int((time.time() - analysis_start) * 1000),
+            'output': f"Complexity: {analysis.get('complexity', 'unknown')}",
+            'tokens': analyze_tokens
+        })
         
         # Get available sources
         available_sources = self.federated_search.get_accessible_sources(
@@ -185,6 +213,8 @@ class FederatedAgent:
         )
         
         # Phase 2: Plan
+        await emit_event('phase', {'phase': 'plan', 'status': 'started'})
+        plan_start = time.time()
         plan = await self.orchestrator.plan(
             analysis=analysis,
             available_sources=[{
@@ -196,6 +226,15 @@ class FederatedAgent:
         )
         self.trace.initial_plan = plan
         logger.info(f"Plan: {len(plan.tasks)} tasks, strategy: {plan.strategy}")
+        plan_tokens = self.orchestrator.steps[-1].tokens_used if self.orchestrator.steps else 0
+        await emit_event('orchestrator_step', {
+            'phase': 'plan',
+            'reasoning': plan.strategy[:300] if plan.strategy else '',
+            'duration_ms': int((time.time() - plan_start) * 1000),
+            'output': f"{len(plan.tasks)} tasks planned",
+            'tasks': [{'id': t.id, 'type': t.type.value if hasattr(t.type, 'value') else str(t.type), 'query': t.query[:100]} for t in plan.tasks],
+            'tokens': plan_tokens
+        })
         
         # Execution loop
         all_results: List[WorkerResult] = []
@@ -205,6 +244,7 @@ class FederatedAgent:
         while iteration < plan.max_iterations:
             iteration += 1
             self.trace.iterations = iteration
+            await emit_event('phase', {'phase': 'execute', 'iteration': iteration, 'status': 'started'})
             
             # Get tasks for this iteration
             if iteration == 1:
@@ -215,14 +255,32 @@ class FederatedAgent:
             if not tasks:
                 break
             
-            # Execute tasks
+            # Execute tasks with per-task callback
+            async def on_task_complete(task_id: str, result: WorkerResult, step: 'WorkerStep'):
+                """Called when each task completes."""
+                await emit_event('worker_step', {
+                    'task_id': task_id,
+                    'task_type': result.task_type.value if hasattr(result.task_type, 'value') else str(result.task_type),
+                    'tool': step.tool_name if step else 'unknown',
+                    'input': result.query[:200] if result.query else '',
+                    'documents_count': len(result.documents_found),
+                    'links_count': len(result.web_links_found),
+                    'duration_ms': step.duration_ms if step else 0,
+                    'success': result.success,
+                    'documents': [
+                        {'title': d.title, 'score': d.similarity_score, 'excerpt': d.excerpt[:150] if d.excerpt else ''}
+                        for d in result.documents_found[:3]
+                    ]
+                })
+            
             results = await self.worker_pool.execute_tasks(
                 tasks=tasks,
                 user_id=user_id,
                 user_email=user_email,
                 active_profile_key=active_profile_key,
                 active_profile_database=active_profile_database,
-                accessible_profile_keys=accessible_profile_keys
+                accessible_profile_keys=accessible_profile_keys,
+                on_task_complete=on_task_complete if on_event else None
             )
             all_results.extend(results)
             
@@ -252,10 +310,22 @@ class FederatedAgent:
                         self.trace.all_web_links.append(link)
             
             # Phase 3: Evaluate
+            await emit_event('phase', {'phase': 'evaluate', 'iteration': iteration, 'status': 'started'})
+            eval_start = time.time()
             evaluation = await self.orchestrator.evaluate(plan, all_results, iteration)
             self.trace.evaluation_history.append(evaluation)
             
             logger.info(f"Iteration {iteration}: {evaluation.decision}, confidence: {evaluation.confidence}")
+            eval_tokens = self.orchestrator.steps[-1].tokens_used if self.orchestrator.steps else 0
+            await emit_event('orchestrator_step', {
+                'phase': 'evaluate',
+                'reasoning': evaluation.reasoning[:300] if evaluation.reasoning else '',
+                'duration_ms': int((time.time() - eval_start) * 1000),
+                'output': f"Decision: {evaluation.decision}, Confidence: {evaluation.confidence}",
+                'decision': evaluation.decision,
+                'confidence': evaluation.confidence,
+                'tokens': eval_tokens
+            })
             
             if evaluation.decision in ["sufficient", "cannot_answer"]:
                 break
@@ -264,7 +334,23 @@ class FederatedAgent:
                 break
         
         # Phase 4: Synthesize
+        await emit_event('phase', {'phase': 'synthesize', 'status': 'started'})
+        synth_start = time.time()
         response = await self.orchestrator.synthesize(user_message, all_results)
+        
+        # Log synthesis result for debugging
+        logger.info(f"Synthesize completed, response length: {len(response) if response else 0}")
+        if not response:
+            logger.error("Orchestrator synthesize returned empty response!")
+        
+        synth_tokens = self.orchestrator.steps[-1].tokens_used if self.orchestrator.steps else 0
+        await emit_event('orchestrator_step', {
+            'phase': 'synthesize',
+            'reasoning': 'Generating final response from gathered information',
+            'duration_ms': int((time.time() - synth_start) * 1000),
+            'output': response[:200] + '...' if len(response) > 200 else response,
+            'tokens': synth_tokens
+        })
         
         return response
     
@@ -275,7 +361,8 @@ class FederatedAgent:
         user_email: str,
         active_profile_key: Optional[str],
         active_profile_database: Optional[str],
-        accessible_profile_keys: Optional[List[str]]
+        accessible_profile_keys: Optional[List[str]],
+        on_event: Optional[EventCallback] = None
     ) -> str:
         """Process with fast single-model approach.
         
@@ -288,11 +375,22 @@ class FederatedAgent:
             active_profile_key: Active profile key
             active_profile_database: Active profile database
             accessible_profile_keys: Accessible profile keys
+            on_event: Optional callback for streaming events
         
         Returns:
             Response text
         """
         logger.info(f"Processing fast: '{user_message[:50]}...'")
+        
+        async def emit_event(event_type: str, data: Dict[str, Any]):
+            """Helper to emit events safely."""
+            if on_event:
+                try:
+                    await on_event(event_type, data)
+                except Exception as e:
+                    logger.error(f"Error emitting event {event_type}: {e}")
+        
+        await emit_event('phase', {'phase': 'fast_search', 'status': 'started'})
         
         # Create simple search tasks
         tasks = [
@@ -314,14 +412,32 @@ class FederatedAgent:
                 max_results=5
             ))
         
-        # Execute tasks
+        # Execute tasks with callback
+        async def on_task_complete(task_id: str, result: WorkerResult, step: 'WorkerStep'):
+            """Called when each task completes."""
+            await emit_event('worker_step', {
+                'task_id': task_id,
+                'task_type': result.task_type.value if hasattr(result.task_type, 'value') else str(result.task_type),
+                'tool': step.tool_name if step else 'unknown',
+                'input': result.query[:200] if result.query else '',
+                'documents_count': len(result.documents_found),
+                'links_count': len(result.web_links_found),
+                'duration_ms': step.duration_ms if step else 0,
+                'success': result.success,
+                'documents': [
+                    {'title': d.title, 'score': d.similarity_score, 'excerpt': d.excerpt[:150] if d.excerpt else ''}
+                    for d in result.documents_found[:3]
+                ]
+            })
+        
         results = await self.worker_pool.execute_tasks(
             tasks=tasks,
             user_id=user_id,
             user_email=user_email,
             active_profile_key=active_profile_key,
             active_profile_database=active_profile_database,
-            accessible_profile_keys=accessible_profile_keys
+            accessible_profile_keys=accessible_profile_keys,
+            on_task_complete=on_task_complete if on_event else None
         )
         
         # Collect sources for trace
@@ -336,7 +452,15 @@ class FederatedAgent:
         self.trace.iterations = 1
         
         # Generate response using fast model
+        await emit_event('phase', {'phase': 'synthesize', 'status': 'started'})
+        synth_start = time.time()
         response = await self._generate_fast_response(user_message, results)
+        await emit_event('orchestrator_step', {
+            'phase': 'synthesize',
+            'reasoning': 'Fast response generation from search results',
+            'duration_ms': int((time.time() - synth_start) * 1000),
+            'output': response[:200] + '...' if len(response) > 200 else response
+        })
         
         return response
     
