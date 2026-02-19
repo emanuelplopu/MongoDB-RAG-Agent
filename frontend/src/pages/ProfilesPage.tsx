@@ -220,9 +220,9 @@ export default function ProfilesPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-200">Profiles</h2>
+          <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-200">{t('profiles.title')}</h2>
           <p className="text-sm text-secondary dark:text-gray-400">
-            Manage knowledge base profiles for different projects
+            {t('profiles.subtitle')}
           </p>
         </div>
         <div className="flex gap-2">
@@ -236,7 +236,7 @@ export default function ProfilesPage() {
               }`}
             >
               <ShieldCheckIcon className="h-4 w-4" />
-              Access Rights
+              {t('profiles.accessRights')}
             </button>
           )}
           <button
@@ -245,7 +245,7 @@ export default function ProfilesPage() {
             className="flex items-center gap-2 rounded-xl bg-surface-variant dark:bg-gray-700 px-4 py-2 text-sm font-medium text-primary-700 dark:text-primary-300 transition-all hover:bg-primary-100 dark:hover:bg-gray-600"
           >
             <ArrowPathIcon className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-            Refresh
+            {t('common.refresh')}
           </button>
           {user?.is_admin && (
             <button
@@ -253,7 +253,7 @@ export default function ProfilesPage() {
               className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white transition-all hover:bg-primary-700"
             >
               <PlusIcon className="h-4 w-4" />
-              New Profile
+              {t('profiles.newProfile')}
             </button>
           )}
         </div>
@@ -275,12 +275,12 @@ export default function ProfilesPage() {
       {/* Create form */}
       {showCreateForm && user?.is_admin && (
         <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
-          <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200 mb-4">Create New Profile</h3>
+          <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200 mb-4">{t('profiles.createNew')}</h3>
           <form onSubmit={handleCreate} className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2">
               <div>
                 <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-1">
-                  Profile Key *
+                  {t('profiles.profileKey')} *
                 </label>
                 <input
                   type="text"
@@ -293,7 +293,7 @@ export default function ProfilesPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-1">
-                  Display Name *
+                  {t('profiles.displayName')} *
                 </label>
                 <input
                   type="text"

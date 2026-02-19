@@ -24,6 +24,7 @@ import {
   BeakerIcon,
 } from '@heroicons/react/24/outline'
 import { FederatedAgentTrace } from '../api/client'
+import { CopyIconButton } from './CopyButton'
 
 interface FederatedAgentPanelProps {
   trace: FederatedAgentTrace
@@ -139,9 +140,12 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
                         </span>
                       </div>
                       {step.reasoning && (
-                        <p className="text-[10px] text-gray-600 dark:text-gray-400 line-clamp-2">
-                          {step.reasoning.length > 200 ? step.reasoning.slice(0, 200) + '...' : step.reasoning}
-                        </p>
+                        <div className="flex items-start gap-1">
+                          <p className="text-[10px] text-gray-600 dark:text-gray-400 line-clamp-2 flex-1">
+                            {step.reasoning.length > 200 ? step.reasoning.slice(0, 200) + '...' : step.reasoning}
+                          </p>
+                          <CopyIconButton text={step.reasoning} size="xs" className="flex-shrink-0" />
+                        </div>
                       )}
                     </div>
                   )
@@ -197,14 +201,17 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
 
                       {/* Input */}
                       {step.input && Object.keys(step.input).length > 0 && (
-                        <div className="bg-gray-100 dark:bg-gray-700/50 rounded px-2 py-1">
-                          <span className="text-[10px] text-secondary dark:text-gray-500 font-medium">Input: </span>
-                          <span className="text-primary-900 dark:text-gray-200 text-[10px]">
-                            {(() => {
-                              const inputStr = JSON.stringify(step.input)
-                              return inputStr.length > 150 ? inputStr.substring(0, 150) + '...' : inputStr
-                            })()}
-                          </span>
+                        <div className="bg-gray-100 dark:bg-gray-700/50 rounded px-2 py-1 flex items-start gap-1">
+                          <div className="flex-1">
+                            <span className="text-[10px] text-secondary dark:text-gray-500 font-medium">Input: </span>
+                            <span className="text-primary-900 dark:text-gray-200 text-[10px]">
+                              {(() => {
+                                const inputStr = JSON.stringify(step.input)
+                                return inputStr.length > 150 ? inputStr.substring(0, 150) + '...' : inputStr
+                              })()}
+                            </span>
+                          </div>
+                          <CopyIconButton text={JSON.stringify(step.input, null, 2)} size="xs" className="flex-shrink-0" />
                         </div>
                       )}
 
@@ -229,9 +236,12 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
                                 <span className="text-[10px] font-medium text-primary-700 dark:text-primary-300 truncate max-w-[180px]">
                                   {doc.title}
                                 </span>
-                                <span className="text-[9px] text-secondary dark:text-gray-500">
-                                  {((doc.score ?? 0) * 100).toFixed(0)}%
-                                </span>
+                                <div className="flex items-center gap-1">
+                                  <CopyIconButton text={doc.excerpt} size="xs" />
+                                  <span className="text-[9px] text-secondary dark:text-gray-500">
+                                    {((doc.score ?? 0) * 100).toFixed(0)}%
+                                  </span>
+                                </div>
                               </div>
                               <p className="text-[10px] text-gray-600 dark:text-gray-400 line-clamp-1">
                                 {doc.excerpt}
@@ -279,9 +289,12 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
                           <span className="font-medium text-primary-700 dark:text-primary-300 truncate max-w-[200px]">
                             {doc.title}
                           </span>
-                          <span className="text-[9px] px-1 py-0.5 rounded bg-primary-100 dark:bg-primary-900 text-primary-600 dark:text-primary-400">
-                            {doc.source_type}
-                          </span>
+                          <div className="flex items-center gap-1">
+                            <CopyIconButton text={doc.excerpt} size="xs" />
+                            <span className="text-[9px] px-1 py-0.5 rounded bg-primary-100 dark:bg-primary-900 text-primary-600 dark:text-primary-400">
+                              {doc.source_type}
+                            </span>
+                          </div>
                         </div>
                         <p className="text-[10px] text-gray-600 dark:text-gray-400 line-clamp-2 mt-1">
                           {doc.excerpt}
@@ -310,14 +323,17 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
                         key={idx}
                         className="p-2 rounded bg-gray-50 dark:bg-gray-800 text-xs"
                       >
-                        <a
-                          href={link.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-600 dark:text-blue-400 hover:underline truncate block"
-                        >
-                          {link.title || link.url}
-                        </a>
+                        <div className="flex items-center gap-1">
+                          <a
+                            href={link.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 dark:text-blue-400 hover:underline truncate flex-1"
+                          >
+                            {link.title || link.url}
+                          </a>
+                          <CopyIconButton text={link.url} size="xs" />
+                        </div>
                         {link.excerpt && (
                           <p className="text-[10px] text-gray-600 dark:text-gray-400 line-clamp-1 mt-0.5">
                             {link.excerpt}
@@ -343,6 +359,10 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
             <span>
               🧠 {orchestratorTokens.toLocaleString()} | ⚡ {workerTokens.toLocaleString()}
             </span>
+            <div className="ml-auto flex items-center gap-1 text-[9px] text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+              <CopyIconButton text={JSON.stringify(trace, null, 2)} size="xs" />
+              <span>Copy trace</span>
+            </div>
           </div>
         </div>
       )}

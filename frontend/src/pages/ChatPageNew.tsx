@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import ReactMarkdown from 'react-markdown'
 import {
   PaperAirplaneIcon,
   PlusIcon,
@@ -22,6 +21,10 @@ import {
   XCircleIcon,
   InformationCircleIcon,
   Cog6ToothIcon,
+  ClipboardIcon,
+  ClipboardDocumentCheckIcon,
+  StopIcon,
+  ArrowPathIcon,
 } from '@heroicons/react/24/outline'
 import {
   sessionsApi,
@@ -32,12 +35,11 @@ import {
 } from '../api/client'
 import { useChatSidebar } from '../contexts/ChatSidebarContext'
 import { useAuth } from '../contexts/AuthContext'
+import { useToast } from '../contexts/ToastContext'
+import { useLocalStorage, STORAGE_KEYS } from '../hooks/useLocalStorage'
+import { useKeyboardShortcuts, useEscapeKey } from '../hooks/useKeyboardShortcuts'
 import FederatedAgentPanel from '../components/FederatedAgentPanel'
-
-// Local storage keys
-const STORAGE_KEYS = {
-  DRAFT: 'chat_draft_',
-}
+import MarkdownRenderer from '../components/MarkdownRenderer'
 
 // Format cost for display
 const formatCost = (cost: number): string => {
@@ -96,11 +98,15 @@ export default function ChatPage() {
   const [error, setError] = useState<string | null>(null)
   const [showModelSelector, setShowModelSelector] = useState(false)
   const [showAgentModeSelector, setShowAgentModeSelector] = useState(false)
-  const [agentMode, setAgentMode] = useState<'auto' | 'thinking' | 'fast'>('auto')
+  
+  // Persist agent mode selection
+  const [agentMode, setAgentMode] = useLocalStorage<'auto' | 'thinking' | 'fast'>(STORAGE_KEYS.CHAT_AGENT_MODE, 'auto')
+  
   const [showSettingsInfo, setShowSettingsInfo] = useState(false)
   const [attachments, setAttachments] = useState<AttachmentInfo[]>([])
   const [attachmentTokens, setAttachmentTokens] = useState<number>(0)
   const [useStreaming] = useState(true)  // Enable streaming by default
+  const [lastFailedMessage, setLastFailedMessage] = useState<string | null>(null)  // Track last failed message for retry
   const [liveTrace, setLiveTrace] = useState<{
     orchestrator_steps: Array<{ phase: string; reasoning: string; output: string; duration_ms: number; tokens: number }>
     worker_steps: Array<{ task_id: string; task_type: string; tool: string; duration_ms: number; success: boolean; documents: Array<{ title: string; score: number; excerpt: string }> }>
@@ -118,7 +124,7 @@ export default function ChatPage() {
   // Load draft from localStorage when session changes
   useEffect(() => {
     if (currentSession) {
-      const draft = localStorage.getItem(STORAGE_KEYS.DRAFT + currentSession.id)
+      const draft = localStorage.getItem(STORAGE_KEYS.CHAT_DRAFT + currentSession.id)
       if (draft) {
         setInput(draft)
       } else {
@@ -130,9 +136,9 @@ export default function ChatPage() {
   // Save draft to localStorage on input change
   useEffect(() => {
     if (currentSession && input) {
-      localStorage.setItem(STORAGE_KEYS.DRAFT + currentSession.id, input)
+      localStorage.setItem(STORAGE_KEYS.CHAT_DRAFT + currentSession.id, input)
     } else if (currentSession) {
-      localStorage.removeItem(STORAGE_KEYS.DRAFT + currentSession.id)
+      localStorage.removeItem(STORAGE_KEYS.CHAT_DRAFT + currentSession.id)
     }
   }, [input, currentSession?.id])
 
@@ -151,6 +157,39 @@ export default function ChatPage() {
       inputRef.current?.focus()
     }
   }, [currentSession?.id])
+
+  // Close dropdowns with Escape key
+  const closeAllDropdowns = useCallback(() => {
+    setShowModelSelector(false)
+    setShowAgentModeSelector(false)
+    setShowSettingsInfo(false)
+  }, [])
+  
+  // Use escape key to close dropdowns
+  const anyDropdownOpen = showModelSelector || showAgentModeSelector || showSettingsInfo
+  useEscapeKey(closeAllDropdowns, anyDropdownOpen)
+  
+  // Global keyboard shortcuts
+  useKeyboardShortcuts({
+    shortcuts: [
+      // Focus input with /
+      {
+        key: '/',
+        handler: () => inputRef.current?.focus(),
+        ignoreInputs: true,
+        description: 'Focus chat input',
+      },
+      // New chat with Ctrl+N
+      {
+        key: 'n',
+        ctrl: true,
+        handler: handleNewChat,
+        ignoreInputs: true,
+        description: 'New chat',
+      },
+      // Close dropdowns with Escape (handled separately)
+    ],
+  })
 
   // Track elapsed time during streaming
   useEffect(() => {
@@ -274,7 +313,7 @@ export default function ChatPage() {
     setAttachments([])
     setAttachmentTokens(0)
     setError(null)
-    localStorage.removeItem(STORAGE_KEYS.DRAFT + session.id)
+    localStorage.removeItem(STORAGE_KEYS.CHAT_DRAFT + session.id)
     setIsLoading(true)
     setLiveTrace(null)  // Reset live trace
 
@@ -369,9 +408,11 @@ export default function ChatPage() {
             })
             
             setLiveTrace(null)
+            setLastFailedMessage(null)  // Clear on success
           },
           onError: (error) => {
             setError(`Error: ${error}`)
+            setLastFailedMessage(messageContent)  // Save for retry
             setCurrentSession(prev => prev ? {
               ...prev,
               messages: prev.messages.filter(m => !m.id.startsWith('temp-'))
@@ -403,6 +444,8 @@ export default function ChatPage() {
             title: response.title || prev.title,
           }
         })
+        
+        setLastFailedMessage(null)  // Clear on success
 
         // Update sessions list with title if changed
         setSessions(prev => prev.map(s => 
@@ -430,6 +473,7 @@ export default function ChatPage() {
         }
         
         setError(errorMessage)
+        setLastFailedMessage(messageContent)  // Save for retry
         setCurrentSession(prev => prev ? {
           ...prev,
           messages: prev.messages.filter(m => !m.id.startsWith('temp-'))
@@ -454,6 +498,76 @@ export default function ChatPage() {
       handleSubmit(e)
     }
   }
+
+  // Stop generation
+  const handleStopGeneration = useCallback(() => {
+    if (streamAbortRef.current) {
+      streamAbortRef.current.abort()
+      streamAbortRef.current = null
+      setIsLoading(false)
+      setLiveTrace(null)
+      // Remove temp messages
+      setCurrentSession(prev => prev ? {
+        ...prev,
+        messages: prev.messages.filter(m => !m.id.startsWith('temp-'))
+      } : null)
+    }
+  }, [setCurrentSession])
+
+  // Retry last failed message
+  const handleRetry = useCallback(() => {
+    if (!lastFailedMessage || isLoading) return
+    setError(null)
+    setInput(lastFailedMessage)
+    setLastFailedMessage(null)
+    // Trigger submit after state update
+    setTimeout(() => {
+      const form = document.querySelector('form')
+      form?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }))
+    }, 100)
+  }, [lastFailedMessage, isLoading])
+
+  // Regenerate last assistant response
+  const handleRegenerate = useCallback(async () => {
+    if (!currentSession || isLoading) return
+    
+    // Find the last user message
+    const messages = currentSession.messages
+    let lastUserMessageIndex = -1
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') {
+        lastUserMessageIndex = i
+        break
+      }
+    }
+    
+    if (lastUserMessageIndex === -1) return
+    
+    const lastUserMessage = messages[lastUserMessageIndex]
+    
+    // Remove messages after last user message
+    setCurrentSession(prev => {
+      if (!prev) return null
+      return {
+        ...prev,
+        messages: prev.messages.slice(0, lastUserMessageIndex + 1)
+      }
+    })
+    
+    // Resend the last user message
+    setInput(lastUserMessage.content)
+    // Small delay to allow state update, then submit
+    setTimeout(() => {
+      const form = document.querySelector('form')
+      form?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }))
+    }, 100)
+  }, [currentSession, isLoading, setCurrentSession])
+
+  // Check if last message was from assistant (for showing regenerate button)
+  const canRegenerate = currentSession?.messages && 
+    currentSession.messages.length > 0 && 
+    currentSession.messages[currentSession.messages.length - 1].role === 'assistant' &&
+    !isLoading
 
   return (
     <div className="flex h-[calc(100vh-0px)] lg:h-screen flex-col bg-white dark:bg-gray-800">
@@ -738,17 +852,35 @@ export default function ChatPage() {
                         )}
                         
                         {/* Live Stats */}
-                        <div className="flex items-center gap-3 text-[10px] text-secondary dark:text-gray-500 pt-1 border-t border-gray-200 dark:border-gray-600">
-                          <span>{liveTrace.stats.total_tokens.toLocaleString()} tokens</span>
-                          <span>🧠 {liveTrace.stats.orchestrator_tokens.toLocaleString()}</span>
-                          <span>⚡ {liveTrace.stats.worker_tokens.toLocaleString()}</span>
+                        <div className="flex items-center justify-between gap-3 text-[10px] text-secondary dark:text-gray-500 pt-1 border-t border-gray-200 dark:border-gray-600">
+                          <div className="flex items-center gap-3">
+                            <span>{liveTrace.stats.total_tokens.toLocaleString()} tokens</span>
+                            <span>🧠 {liveTrace.stats.orchestrator_tokens.toLocaleString()}</span>
+                            <span>⚡ {liveTrace.stats.worker_tokens.toLocaleString()}</span>
+                          </div>
+                          <button
+                            onClick={handleStopGeneration}
+                            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors"
+                          >
+                            <StopIcon className="h-3 w-3" />
+                            <span>Stop</span>
+                          </button>
                         </div>
                       </div>
                     ) : (
-                      <div className="flex space-x-2 py-4">
-                        <div className="h-2 w-2 animate-bounce rounded-full bg-primary" style={{ animationDelay: '0ms' }} />
-                        <div className="h-2 w-2 animate-bounce rounded-full bg-primary" style={{ animationDelay: '150ms' }} />
-                        <div className="h-2 w-2 animate-bounce rounded-full bg-primary" style={{ animationDelay: '300ms' }} />
+                      <div className="flex items-center justify-between py-4">
+                        <div className="flex space-x-2">
+                          <div className="h-2 w-2 animate-bounce rounded-full bg-primary" style={{ animationDelay: '0ms' }} />
+                          <div className="h-2 w-2 animate-bounce rounded-full bg-primary" style={{ animationDelay: '150ms' }} />
+                          <div className="h-2 w-2 animate-bounce rounded-full bg-primary" style={{ animationDelay: '300ms' }} />
+                        </div>
+                        <button
+                          onClick={handleStopGeneration}
+                          className="flex items-center gap-1 px-2 py-1 rounded-lg bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors text-xs"
+                        >
+                          <StopIcon className="h-3 w-3" />
+                          <span>Stop</span>
+                        </button>
                       </div>
                     )}
                   </div>
@@ -758,6 +890,21 @@ export default function ChatPage() {
             </div>
           </div>
 
+          {/* Regenerate button - shown after last assistant message */}
+          {canRegenerate && (
+            <div className="border-t border-surface-variant dark:border-gray-700 px-6 py-2 flex-shrink-0">
+              <div className="max-w-3xl mx-auto flex justify-center">
+                <button
+                  onClick={handleRegenerate}
+                  className="flex items-center gap-2 px-4 py-2 text-sm text-secondary dark:text-gray-400 hover:text-primary dark:hover:text-primary-300 hover:bg-surface-variant dark:hover:bg-gray-700 rounded-lg transition-colors"
+                >
+                  <ArrowPathIcon className="h-4 w-4" />
+                  Regenerate response
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Input */}
           <div className="border-t border-surface-variant dark:border-gray-700 px-6 py-4 flex-shrink-0">
             {/* Error Message */}
@@ -765,10 +912,19 @@ export default function ChatPage() {
               <div className="max-w-3xl mx-auto mb-3">
                 <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 text-sm">
                   <ExclamationCircleIcon className="h-5 w-5 flex-shrink-0" />
-                  <span>{error}</span>
+                  <span className="flex-1">{error}</span>
+                  {lastFailedMessage && (
+                    <button
+                      onClick={handleRetry}
+                      className="flex items-center gap-1 px-3 py-1 rounded-lg bg-red-100 dark:bg-red-800/30 hover:bg-red-200 dark:hover:bg-red-800/50 transition-colors"
+                    >
+                      <ArrowPathIcon className="h-4 w-4" />
+                      Retry
+                    </button>
+                  )}
                   <button
-                    onClick={() => setError(null)}
-                    className="ml-auto text-red-500 hover:text-red-700 dark:hover:text-red-300"
+                    onClick={() => { setError(null); setLastFailedMessage(null); }}
+                    className="text-red-500 hover:text-red-700 dark:hover:text-red-300"
                   >
                     Dismiss
                   </button>
@@ -893,6 +1049,31 @@ function MessageBubble({ message }: { message: SessionMessage }) {
   const [documentIds, setDocumentIds] = useState<Record<string, string>>({})
   const [loadingDocs, setLoadingDocs] = useState(false)
   const [showThinking, setShowThinking] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const toast = useToast()
+
+  // Copy message content to clipboard
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(message.content)
+      setCopied(true)
+      toast.success('Copied to clipboard')
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Fallback
+      const textArea = document.createElement('textarea')
+      textArea.value = message.content
+      textArea.style.position = 'fixed'
+      textArea.style.left = '-9999px'
+      document.body.appendChild(textArea)
+      textArea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textArea)
+      setCopied(true)
+      toast.success('Copied to clipboard')
+      setTimeout(() => setCopied(false), 2000)
+    }
+  }, [message.content, toast])
 
   // Lookup document IDs for sources - load all at once
   useEffect(() => {
@@ -920,7 +1101,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
   }, [message.sources])
 
   return (
-    <div className={`flex gap-4 ${isUser ? 'flex-row-reverse' : ''}`}>
+    <div className={`flex gap-4 ${isUser ? 'flex-row-reverse' : ''} group`}>
       <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
         isUser 
           ? 'bg-primary text-white' 
@@ -933,11 +1114,32 @@ function MessageBubble({ message }: { message: SessionMessage }) {
         )}
       </div>
       <div className={`flex-1 max-w-[85%] ${isUser ? 'text-right' : ''}`}>
-        <div className={`inline-block rounded-2xl px-4 py-3 ${
+        <div className={`relative inline-block rounded-2xl px-4 py-3 ${
           isUser
             ? 'bg-primary text-white'
             : 'bg-surface-variant dark:bg-gray-700 text-primary-900 dark:text-gray-100'
         }`}>
+          {/* Copy button - positioned at top right */}
+          <button
+            onClick={handleCopy}
+            className={`
+              absolute -top-2 ${isUser ? '-left-2' : '-right-2'}
+              p-1.5 rounded-lg shadow-md transition-all duration-150
+              ${copied 
+                ? 'bg-green-500 text-white' 
+                : 'bg-white dark:bg-gray-600 text-gray-500 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-500'
+              }
+              opacity-0 group-hover:opacity-100 focus:opacity-100
+            `}
+            title={copied ? 'Copied!' : 'Copy message'}
+          >
+            {copied ? (
+              <ClipboardDocumentCheckIcon className="h-4 w-4" />
+            ) : (
+              <ClipboardIcon className="h-4 w-4" />
+            )}
+          </button>
+          
           {/* Attachments */}
           {message.attachments && message.attachments.length > 0 && (
             <div className={`flex flex-wrap gap-2 mb-2 ${isUser ? 'justify-end' : ''}`}>
@@ -964,7 +1166,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
           ) : (
             <div className="prose prose-sm max-w-none dark:prose-invert">
               {message.content ? (
-                <ReactMarkdown>{message.content}</ReactMarkdown>
+                <MarkdownRenderer content={message.content} />
               ) : (
                 <p className="text-gray-500 italic">Loading response...</p>
               )}

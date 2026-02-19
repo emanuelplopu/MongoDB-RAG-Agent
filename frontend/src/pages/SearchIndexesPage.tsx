@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import {
   CpuChipIcon,
   ArrowPathIcon,
@@ -17,6 +18,7 @@ import { useAuth } from '../contexts/AuthContext'
 export default function SearchIndexesPage() {
   const navigate = useNavigate()
   const { user, isLoading: authLoading } = useAuth()
+  const { t } = useTranslation()
   
   const [dashboard, setDashboard] = useState<IndexDashboard | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -32,11 +34,11 @@ export default function SearchIndexesPage() {
       setDashboard(data)
     } catch (err) {
       console.error('Error fetching indexes:', err)
-      setError('Failed to load index dashboard')
+      setError(t('indexes.loadFailed'))
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [t])
   
   useEffect(() => {
     if (!authLoading && (!user || !user.is_admin)) {
@@ -91,8 +93,8 @@ export default function SearchIndexesPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-200">Search Indexes</h2>
-          <p className="text-sm text-secondary dark:text-gray-400">Performance metrics and optimization</p>
+          <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-200">{t('indexes.title')}</h2>
+          <p className="text-sm text-secondary dark:text-gray-400">{t('indexes.subtitle')}</p>
         </div>
         <div className="flex gap-2">
           <button
@@ -100,7 +102,7 @@ export default function SearchIndexesPage() {
             className="flex items-center gap-2 rounded-xl bg-surface-variant dark:bg-gray-700 px-4 py-2 text-sm font-medium text-primary-700 dark:text-primary-300 transition-all hover:bg-primary-100 dark:hover:bg-gray-600"
           >
             <ArrowPathIcon className="h-4 w-4" />
-            Refresh
+            {t('common.refresh')}
           </button>
           <button
             onClick={handleCreateIndexes}
@@ -108,7 +110,7 @@ export default function SearchIndexesPage() {
             className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white transition-all hover:bg-primary-700 disabled:opacity-50"
           >
             {isCreating ? <ArrowPathIcon className="h-4 w-4 animate-spin" /> : <CpuChipIcon className="h-4 w-4" />}
-            {isCreating ? 'Creating...' : 'Create Indexes'}
+            {isCreating ? t('indexes.creating') : t('indexes.createIndexes')}
           </button>
         </div>
       </div>
@@ -130,7 +132,7 @@ export default function SearchIndexesPage() {
                 <div className="rounded-xl bg-blue-100 dark:bg-blue-900/50 p-2">
                   <ClockIcon className="h-5 w-5 text-blue-600" />
                 </div>
-                <span className="text-sm font-medium text-secondary dark:text-gray-400">Avg Response</span>
+                <span className="text-sm font-medium text-secondary dark:text-gray-400">{t('indexes.avgResponse')}</span>
               </div>
               <p className="text-2xl font-semibold text-primary-900 dark:text-gray-200">
                 {dashboard.performance.avg_response_time_ms.toFixed(0)} ms
@@ -142,7 +144,7 @@ export default function SearchIndexesPage() {
                 <div className="rounded-xl bg-green-100 dark:bg-green-900/50 p-2">
                   <BoltIcon className="h-5 w-5 text-green-600" />
                 </div>
-                <span className="text-sm font-medium text-secondary dark:text-gray-400">P95 Latency</span>
+                <span className="text-sm font-medium text-secondary dark:text-gray-400">{t('indexes.p95Latency')}</span>
               </div>
               <p className="text-2xl font-semibold text-primary-900 dark:text-gray-200">
                 {dashboard.performance.p95_response_time_ms.toFixed(0)} ms
@@ -154,7 +156,7 @@ export default function SearchIndexesPage() {
                 <div className="rounded-xl bg-purple-100 dark:bg-purple-900/50 p-2">
                   <ChartBarIcon className="h-5 w-5 text-purple-600" />
                 </div>
-                <span className="text-sm font-medium text-secondary dark:text-gray-400">Searches (24h)</span>
+                <span className="text-sm font-medium text-secondary dark:text-gray-400">{t('indexes.searches24h')}</span>
               </div>
               <p className="text-2xl font-semibold text-primary-900 dark:text-gray-200">
                 {dashboard.performance.searches_last_24h.toLocaleString()}
@@ -166,7 +168,7 @@ export default function SearchIndexesPage() {
                 <div className="rounded-xl bg-amber-100 dark:bg-amber-900/50 p-2">
                   <ServerIcon className="h-5 w-5 text-amber-600" />
                 </div>
-                <span className="text-sm font-medium text-secondary dark:text-gray-400">Total Searches</span>
+                <span className="text-sm font-medium text-secondary dark:text-gray-400">{t('indexes.totalSearches')}</span>
               </div>
               <p className="text-2xl font-semibold text-primary-900 dark:text-gray-200">
                 {dashboard.performance.total_searches.toLocaleString()}
@@ -176,7 +178,7 @@ export default function SearchIndexesPage() {
 
           {/* Index Status */}
           <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
-            <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200 mb-4">Index Status</h3>
+            <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200 mb-4">{t('indexes.indexStatus')}</h3>
             {dashboard.indexes.length > 0 ? (
               <div className="grid gap-4 md:grid-cols-2">
                 {dashboard.indexes.map((index, i) => (
@@ -184,14 +186,14 @@ export default function SearchIndexesPage() {
                     <div>
                       <p className="font-medium text-primary-900 dark:text-gray-200">{index.name}</p>
                       <p className="text-sm text-secondary dark:text-gray-400">
-                        {index.type} • {index.documents_indexed.toLocaleString()} docs • {formatBytes(index.size_bytes)}
+                        {index.type} • {index.documents_indexed.toLocaleString()} {t('indexes.docs')} • {formatBytes(index.size_bytes)}
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
                       {index.status === 'READY' ? (
                         <>
                           <CheckCircleIcon className="h-5 w-5 text-green-500" />
-                          <span className="text-sm font-medium text-green-700 dark:text-green-400">Ready</span>
+                          <span className="text-sm font-medium text-green-700 dark:text-green-400">{t('indexes.ready')}</span>
                         </>
                       ) : (
                         <>
@@ -206,8 +208,8 @@ export default function SearchIndexesPage() {
             ) : (
               <div className="text-center py-8">
                 <CpuChipIcon className="h-12 w-12 text-gray-400 mx-auto mb-3" />
-                <p className="text-secondary dark:text-gray-400 mb-2">No indexes found</p>
-                <p className="text-sm text-secondary dark:text-gray-500">Click "Create Indexes" to build search indexes.</p>
+                <p className="text-secondary dark:text-gray-400 mb-2">{t('indexes.noIndexesFound')}</p>
+                <p className="text-sm text-secondary dark:text-gray-500">{t('indexes.createIndexesHint')}</p>
               </div>
             )}
           </div>
@@ -215,33 +217,33 @@ export default function SearchIndexesPage() {
           {/* Resource Allocation */}
           {dashboard.resource_allocation && (
             <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
-              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200 mb-4">Resource Allocation</h3>
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200 mb-4">{t('indexes.resourceAllocation')}</h3>
               <div className="grid gap-4 md:grid-cols-3">
                 <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
-                  <p className="text-sm text-secondary dark:text-gray-400 mb-2">CPU</p>
+                  <p className="text-sm text-secondary dark:text-gray-400 mb-2">{t('indexes.cpu')}</p>
                   <p className="font-medium text-primary-900 dark:text-gray-200">
-                    {(dashboard.resource_allocation.cpu as any)?.cores || 0} cores
+                    {(dashboard.resource_allocation.cpu as any)?.cores || 0} {t('indexes.cores')}
                   </p>
                   <p className="text-xs text-secondary dark:text-gray-500">
-                    Usage: {(dashboard.resource_allocation.cpu as any)?.usage_percent?.toFixed(1) || 0}%
+                    {t('indexes.usage')}: {(dashboard.resource_allocation.cpu as any)?.usage_percent?.toFixed(1) || 0}%
                   </p>
                 </div>
                 <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
-                  <p className="text-sm text-secondary dark:text-gray-400 mb-2">Memory</p>
+                  <p className="text-sm text-secondary dark:text-gray-400 mb-2">{t('indexes.memory')}</p>
                   <p className="font-medium text-primary-900 dark:text-gray-200">
-                    {(dashboard.resource_allocation.memory as any)?.total_gb || 0} GB total
+                    {(dashboard.resource_allocation.memory as any)?.total_gb || 0} GB {t('indexes.total')}
                   </p>
                   <p className="text-xs text-secondary dark:text-gray-500">
-                    Available: {(dashboard.resource_allocation.memory as any)?.available_gb?.toFixed(1) || 0} GB
+                    {t('indexes.available')}: {(dashboard.resource_allocation.memory as any)?.available_gb?.toFixed(1) || 0} GB
                   </p>
                 </div>
                 <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
-                  <p className="text-sm text-secondary dark:text-gray-400 mb-2">MongoDB</p>
+                  <p className="text-sm text-secondary dark:text-gray-400 mb-2">{t('indexes.mongodb')}</p>
                   <p className="font-medium text-primary-900 dark:text-gray-200">
-                    Pool: {(dashboard.resource_allocation.mongodb as any)?.connection_pool_size || 10}
+                    {t('indexes.pool')}: {(dashboard.resource_allocation.mongodb as any)?.connection_pool_size || 10}
                   </p>
                   <p className="text-xs text-secondary dark:text-gray-500">
-                    Recommended: {(dashboard.resource_allocation.mongodb as any)?.recommended_pool_size || 50}
+                    {t('indexes.recommended')}: {(dashboard.resource_allocation.mongodb as any)?.recommended_pool_size || 50}
                   </p>
                 </div>
               </div>
@@ -253,7 +255,7 @@ export default function SearchIndexesPage() {
             <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
               <div className="flex items-center gap-2 mb-4">
                 <LightBulbIcon className="h-5 w-5 text-primary" />
-                <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Optimization Suggestions</h3>
+                <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">{t('indexes.optimizationSuggestions')}</h3>
               </div>
               <div className="space-y-4">
                 {dashboard.suggestions.map((suggestion, i) => (

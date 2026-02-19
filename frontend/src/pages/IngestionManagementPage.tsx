@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import {
   PlayIcon,
   PauseIcon,
@@ -40,6 +41,7 @@ const FREQUENCY_OPTIONS = [
 export default function IngestionManagementPage() {
   const navigate = useNavigate()
   const { user, isLoading: authLoading } = useAuth()
+  const { t } = useTranslation()
   
   const [queueStatus, setQueueStatus] = useState<QueueStatus | null>(null)
   const [schedules, setSchedules] = useState<ScheduledIngestionJob[]>([])
@@ -263,15 +265,15 @@ export default function IngestionManagementPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-200">Ingestion Management</h2>
-          <p className="text-sm text-secondary dark:text-gray-400">Queue, scheduling, and progress</p>
+          <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-200">{t('ingestion.title')}</h2>
+          <p className="text-sm text-secondary dark:text-gray-400">{t('ingestion.subtitle')}</p>
         </div>
         <button
           onClick={fetchData}
           className="flex items-center gap-2 rounded-xl bg-surface-variant dark:bg-gray-700 px-4 py-2 text-sm font-medium text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-gray-600"
         >
           <ArrowPathIcon className="h-4 w-4" />
-          Refresh
+          {t('common.refresh')}
         </button>
       </div>
 
@@ -279,11 +281,11 @@ export default function IngestionManagementPage() {
       {ingestionStatus && (ingestionStatus.status === 'running' || ingestionStatus.status === 'paused') && (
         <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Current Ingestion</h3>
+            <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">{t('ingestion.currentIngestion')}</h3>
             <div className="flex gap-2">
               {ingestionStatus.status === 'paused' ? (
                 <button onClick={handleResume} className="flex items-center gap-2 rounded-xl bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700">
-                  <PlayIcon className="h-4 w-4" /> Resume
+                  <PlayIcon className="h-4 w-4" /> {t('ingestion.resume')}
                 </button>
               ) : (
                 <button onClick={handlePause} className="flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600">
@@ -317,19 +319,19 @@ export default function IngestionManagementPage() {
             
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
               <div>
-                <p className="text-secondary dark:text-gray-400">Progress</p>
+                <p className="text-secondary dark:text-gray-400">{t('ingestion.progress')}</p>
                 <p className="font-medium text-primary-900 dark:text-gray-200">{ingestionStatus.processed_files} / {ingestionStatus.total_files}</p>
               </div>
               <div>
-                <p className="text-secondary dark:text-gray-400">Chunks Created</p>
+                <p className="text-secondary dark:text-gray-400">{t('ingestion.chunksCreated')}</p>
                 <p className="font-medium text-primary-900 dark:text-gray-200">{ingestionStatus.chunks_created}</p>
               </div>
               <div>
-                <p className="text-secondary dark:text-gray-400">Failed</p>
+                <p className="text-secondary dark:text-gray-400">{t('ingestion.failed')}</p>
                 <p className="font-medium text-red-500">{ingestionStatus.failed_files}</p>
               </div>
               <div>
-                <p className="text-secondary dark:text-gray-400">Current File</p>
+                <p className="text-secondary dark:text-gray-400">{t('ingestion.currentFile')}</p>
                 <p className="font-medium text-primary-900 dark:text-gray-200 truncate">{ingestionStatus.current_file?.split(/[\\/]/).pop() || 'N/A'}</p>
               </div>
             </div>
@@ -343,24 +345,24 @@ export default function IngestionManagementPage() {
           <div className="flex items-center gap-3">
             <QueueListIcon className="h-5 w-5 text-primary" />
             <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">
-              Ingestion Queue ({queueStatus?.total_queued || 0})
+              {t('ingestion.queue')} ({queueStatus?.total_queued || 0})
             </h3>
           </div>
           <button
             onClick={() => setShowAddToQueue(true)}
             className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
           >
-            <PlusIcon className="h-4 w-4" /> Add to Queue
+            <PlusIcon className="h-4 w-4" /> {t('ingestion.addToQueue')}
           </button>
         </div>
 
         {/* Add to Queue Form */}
         {showAddToQueue && (
           <div className="mb-4 p-4 rounded-xl bg-surface-variant dark:bg-gray-700">
-            <h4 className="font-medium text-primary-900 dark:text-gray-200 mb-3">Add Profiles to Queue</h4>
+            <h4 className="font-medium text-primary-900 dark:text-gray-200 mb-3">{t('ingestion.addProfilesToQueue')}</h4>
             <div className="space-y-3">
               <div>
-                <label className="block text-sm text-secondary dark:text-gray-400 mb-1">Select Profiles</label>
+                <label className="block text-sm text-secondary dark:text-gray-400 mb-1">{t('ingestion.selectProfiles')}</label>
                 <div className="flex flex-wrap gap-2">
                   {Object.entries(profiles).map(([key, profile]) => (
                     <button
@@ -379,7 +381,7 @@ export default function IngestionManagementPage() {
               </div>
               
               <div>
-                <label className="block text-sm text-secondary dark:text-gray-400 mb-1">File Types</label>
+                <label className="block text-sm text-secondary dark:text-gray-400 mb-1">{t('ingestion.fileTypes')}</label>
                 <div className="flex flex-wrap gap-2">
                   {FILE_TYPE_OPTIONS.map(opt => (
                     <button
@@ -409,15 +411,15 @@ export default function IngestionManagementPage() {
               
               <label className="flex items-center gap-2">
                 <input type="checkbox" checked={incremental} onChange={e => setIncremental(e.target.checked)} className="rounded" />
-                <span className="text-sm text-primary-900 dark:text-gray-200">Incremental (skip existing)</span>
+                <span className="text-sm text-primary-900 dark:text-gray-200">{t('ingestion.incremental')}</span>
               </label>
               
               <div className="flex gap-2">
                 <button onClick={handleAddToQueue} disabled={selectedProfiles.length === 0} className="px-4 py-2 rounded-xl bg-primary text-white text-sm font-medium disabled:opacity-50">
-                  Add {selectedProfiles.length} Profile(s)
+                  {t('ingestion.addProfile', { count: selectedProfiles.length })}
                 </button>
                 <button onClick={() => { setShowAddToQueue(false); setSelectedProfiles([]) }} className="px-4 py-2 rounded-xl bg-gray-200 dark:bg-gray-600 text-primary-900 dark:text-gray-200 text-sm font-medium">
-                  Cancel
+                  {t('common.cancel')}
                 </button>
               </div>
             </div>
@@ -434,7 +436,7 @@ export default function IngestionManagementPage() {
                   <div>
                     <p className="font-medium text-primary-900 dark:text-gray-200">{job.profile_name}</p>
                     <p className="text-xs text-secondary dark:text-gray-500">
-                      {job.file_types.join(', ')} • {job.incremental ? 'Incremental' : 'Full'}
+                      {job.file_types.join(', ')} • {job.incremental ? t('ingestion.incremental') : t('ingestion.fullMode')}
                     </p>
                   </div>
                 </div>
@@ -445,7 +447,7 @@ export default function IngestionManagementPage() {
             ))}
           </div>
         ) : (
-          <p className="text-secondary dark:text-gray-400 text-sm">No jobs in queue</p>
+          <p className="text-secondary dark:text-gray-400 text-sm">{t('ingestion.noJobsInQueue')}</p>
         )}
       </div>
 
@@ -455,24 +457,24 @@ export default function IngestionManagementPage() {
           <div className="flex items-center gap-3">
             <CalendarIcon className="h-5 w-5 text-primary" />
             <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">
-              Scheduled Jobs ({schedules.length})
+              {t('ingestion.scheduledJobs')} ({schedules.length})
             </h3>
           </div>
           <button
             onClick={() => setShowAddSchedule(true)}
             className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
           >
-            <PlusIcon className="h-4 w-4" /> New Schedule
+            <PlusIcon className="h-4 w-4" /> {t('ingestion.newSchedule')}
           </button>
         </div>
 
         {/* Add Schedule Form */}
         {showAddSchedule && (
           <div className="mb-4 p-4 rounded-xl bg-surface-variant dark:bg-gray-700">
-            <h4 className="font-medium text-primary-900 dark:text-gray-200 mb-3">Create Schedule</h4>
+            <h4 className="font-medium text-primary-900 dark:text-gray-200 mb-3">{t('ingestion.createSchedule')}</h4>
             <div className="space-y-3">
               <div>
-                <label className="block text-sm text-secondary dark:text-gray-400 mb-1">Select Profiles</label>
+                <label className="block text-sm text-secondary dark:text-gray-400 mb-1">{t('ingestion.selectProfiles')}</label>
                 <div className="flex flex-wrap gap-2">
                   {Object.entries(profiles).map(([key, profile]) => (
                     <button
@@ -488,23 +490,23 @@ export default function IngestionManagementPage() {
               
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm text-secondary dark:text-gray-400 mb-1">Frequency</label>
+                  <label className="block text-sm text-secondary dark:text-gray-400 mb-1">{t('ingestion.frequency')}</label>
                   <select value={scheduleFrequency} onChange={e => setScheduleFrequency(e.target.value)} className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm">
                     {FREQUENCY_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm text-secondary dark:text-gray-400 mb-1">Hour (0-23)</label>
+                  <label className="block text-sm text-secondary dark:text-gray-400 mb-1">{t('ingestion.hour')}</label>
                   <input type="number" min={0} max={23} value={scheduleHour} onChange={e => setScheduleHour(parseInt(e.target.value))} className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm" />
                 </div>
               </div>
               
               <div className="flex gap-2">
                 <button onClick={handleCreateSchedule} disabled={selectedProfiles.length === 0} className="px-4 py-2 rounded-xl bg-primary text-white text-sm font-medium disabled:opacity-50">
-                  Create Schedule
+                  {t('ingestion.createSchedule')}
                 </button>
                 <button onClick={() => { setShowAddSchedule(false); setSelectedProfiles([]) }} className="px-4 py-2 rounded-xl bg-gray-200 dark:bg-gray-600 text-primary-900 dark:text-gray-200 text-sm font-medium">
-                  Cancel
+                  {t('common.cancel')}
                 </button>
               </div>
             </div>
@@ -525,19 +527,19 @@ export default function IngestionManagementPage() {
                     </p>
                     {schedule.next_run && (
                       <p className="text-xs text-secondary dark:text-gray-500">
-                        Next: {new Date(schedule.next_run).toLocaleString()}
+                        {t('ingestion.nextRun')}: {new Date(schedule.next_run).toLocaleString()}
                       </p>
                     )}
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button onClick={() => handleRunScheduleNow(schedule.id)} className="p-2 text-primary hover:bg-primary-100 dark:hover:bg-primary-900/30 rounded-lg" title="Run Now">
+                  <button onClick={() => handleRunScheduleNow(schedule.id)} className="p-2 text-primary hover:bg-primary-100 dark:hover:bg-primary-900/30 rounded-lg" title={t('ingestion.runNow')}>
                     <PlayIcon className="h-4 w-4" />
                   </button>
-                  <button onClick={() => handleToggleSchedule(schedule.id)} className="p-2 text-amber-500 hover:bg-amber-100 dark:hover:bg-amber-900/30 rounded-lg" title="Toggle">
+                  <button onClick={() => handleToggleSchedule(schedule.id)} className="p-2 text-amber-500 hover:bg-amber-100 dark:hover:bg-amber-900/30 rounded-lg" title={t('ingestion.toggle')}>
                     {schedule.enabled ? <PauseIcon className="h-4 w-4" /> : <PlayIcon className="h-4 w-4" />}
                   </button>
-                  <button onClick={() => handleDeleteSchedule(schedule.id)} className="p-2 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg" title="Delete">
+                  <button onClick={() => handleDeleteSchedule(schedule.id)} className="p-2 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg" title={t('common.delete')}>
                     <TrashIcon className="h-4 w-4" />
                   </button>
                 </div>
@@ -545,33 +547,33 @@ export default function IngestionManagementPage() {
             ))}
           </div>
         ) : (
-          <p className="text-secondary dark:text-gray-400 text-sm">No scheduled jobs</p>
+          <p className="text-secondary dark:text-gray-400 text-sm">{t('ingestion.noScheduledJobs')}</p>
         )}
       </div>
 
       {/* Logs */}
       <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Logs ({logs.length})</h3>
+          <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">{t('ingestion.logs')} ({logs.length})</h3>
           <div className="flex gap-2">
             {!isStreaming ? (
               <button onClick={startLogStreaming} className="flex items-center gap-1 rounded-xl bg-green-100 dark:bg-green-900/30 px-3 py-1.5 text-sm font-medium text-green-700 dark:text-green-400">
-                <SignalIcon className="h-4 w-4" /> Stream
+                <SignalIcon className="h-4 w-4" /> {t('ingestion.streamLogs')}
               </button>
             ) : (
               <button onClick={stopLogStreaming} className="flex items-center gap-1 rounded-xl bg-red-100 dark:bg-red-900/30 px-3 py-1.5 text-sm font-medium text-red-600 dark:text-red-400">
-                <StopIcon className="h-4 w-4" /> Stop
+                <StopIcon className="h-4 w-4" /> {t('ingestion.stopStream')}
               </button>
             )}
             <button onClick={() => setShowLogs(!showLogs)} className="rounded-xl bg-surface-variant dark:bg-gray-700 px-3 py-1.5 text-sm font-medium">
-              {showLogs ? 'Collapse' : 'Expand'}
+              {showLogs ? t('ingestion.collapse') : t('ingestion.expand')}
             </button>
           </div>
         </div>
         {showLogs && (
           <div className="bg-gray-900 rounded-xl p-4 font-mono text-xs max-h-64 overflow-auto">
             {logs.length === 0 ? (
-              <p className="text-gray-500">No logs. Start streaming to see live logs.</p>
+              <p className="text-gray-500">{t('ingestion.noLogs')}</p>
             ) : (
               logs.slice(-100).map((log, i) => (
                 <div key={i} className="flex gap-2">

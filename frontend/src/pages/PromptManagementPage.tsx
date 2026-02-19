@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { 
   promptsApi, 
   PromptTemplate, 
@@ -6,6 +7,9 @@ import {
   PromptTestResult,
   PromptComparison 
 } from '../api/client'
+import CopyButton, { CopyIconButton } from '../components/CopyButton'
+import { useUnsavedChangesWarning } from '../hooks/useLocalStorage'
+import { useEscapeKey, useFocusTrap } from '../hooks/useKeyboardShortcuts'
 
 // ============== Version Comparison Modal ==============
 interface CompareModalProps {
@@ -14,10 +18,18 @@ interface CompareModalProps {
 }
 
 const CompareModal: React.FC<CompareModalProps> = ({ template, onClose }) => {
+  const { t } = useTranslation()
   const [versionA, setVersionA] = useState<number>(1)
   const [versionB, setVersionB] = useState<number>(template.active_version)
   const [comparison, setComparison] = useState<PromptComparison | null>(null)
   const [loading, setLoading] = useState(false)
+  const modalRef = useRef<HTMLDivElement>(null)
+  
+  // Close on Escape key
+  useEscapeKey(onClose)
+  
+  // Trap focus within modal
+  useFocusTrap(modalRef)
 
   const handleCompare = async () => {
     if (!template.id || versionA === versionB) return
@@ -38,10 +50,10 @@ const CompareModal: React.FC<CompareModalProps> = ({ template, onClose }) => {
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
+      <div ref={modalRef} className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
         <div className="p-6 border-b dark:border-gray-700">
           <div className="flex justify-between items-center">
-            <h3 className="text-xl font-semibold dark:text-white">Compare Versions</h3>
+            <h3 className="text-xl font-semibold dark:text-white">{t('prompts.compareVersions')}</h3>
             <button onClick={onClose} className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -53,7 +65,7 @@ const CompareModal: React.FC<CompareModalProps> = ({ template, onClose }) => {
         <div className="p-6 space-y-4">
           <div className="flex gap-4 items-center">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Version A</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('prompts.versionA')}</label>
               <select 
                 value={versionA} 
                 onChange={(e) => setVersionA(Number(e.target.value))}
@@ -66,7 +78,7 @@ const CompareModal: React.FC<CompareModalProps> = ({ template, onClose }) => {
             </div>
             <span className="text-gray-500 mt-6">vs</span>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Version B</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('prompts.versionB')}</label>
               <select 
                 value={versionB} 
                 onChange={(e) => setVersionB(Number(e.target.value))}
@@ -82,34 +94,41 @@ const CompareModal: React.FC<CompareModalProps> = ({ template, onClose }) => {
               disabled={loading || versionA === versionB}
               className="mt-6 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
             >
-              {loading ? 'Comparing...' : 'Compare'}
+              {loading ? t('prompts.comparing') : t('prompts.compare')}
             </button>
           </div>
 
           {comparison && (
             <div className="space-y-4 overflow-auto max-h-[60vh]">
               <div>
-                <h4 className="font-medium text-gray-900 dark:text-white mb-2">Tool Changes</h4>
+                <h4 className="font-medium text-gray-900 dark:text-white mb-2">{t('prompts.toolChanges')}</h4>
                 <div className="flex gap-4 text-sm">
                   {comparison.tools_added.length > 0 && (
-                    <span className="text-green-600">+ Added: {comparison.tools_added.join(', ')}</span>
+                    <span className="text-green-600">+ {t('prompts.added')}: {comparison.tools_added.join(', ')}</span>
                   )}
                   {comparison.tools_removed.length > 0 && (
-                    <span className="text-red-600">- Removed: {comparison.tools_removed.join(', ')}</span>
+                    <span className="text-red-600">- {t('prompts.removed')}: {comparison.tools_removed.join(', ')}</span>
                   )}
                   {comparison.tools_modified.length > 0 && (
-                    <span className="text-yellow-600">~ Modified: {comparison.tools_modified.join(', ')}</span>
+                    <span className="text-yellow-600">~ {t('prompts.modified')}: {comparison.tools_modified.join(', ')}</span>
                   )}
                   {comparison.tools_added.length === 0 && comparison.tools_removed.length === 0 && comparison.tools_modified.length === 0 && (
-                    <span className="text-gray-500">No tool changes</span>
+                    <span className="text-gray-500">{t('prompts.noToolChanges')}</span>
                   )}
                 </div>
               </div>
 
               <div>
-                <h4 className="font-medium text-gray-900 dark:text-white mb-2">Prompt Diff</h4>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="font-medium text-gray-900 dark:text-white">{t('prompts.promptDiff')}</h4>
+                  <CopyButton 
+                    text={comparison.prompt_diff || ''} 
+                    size="xs" 
+                    successMessage={t('prompts.diffCopied')}
+                  />
+                </div>
                 <pre className="bg-gray-100 dark:bg-gray-900 p-4 rounded text-sm overflow-x-auto font-mono whitespace-pre-wrap">
-                  {comparison.prompt_diff || 'No changes'}
+                  {comparison.prompt_diff || t('prompts.noChanges')}
                 </pre>
               </div>
             </div>
@@ -127,10 +146,18 @@ interface TestModalProps {
 }
 
 const TestModal: React.FC<TestModalProps> = ({ template, onClose }) => {
+  const { t } = useTranslation()
   const [testMessage, setTestMessage] = useState('')
   const [selectedVersion, setSelectedVersion] = useState<number | undefined>(undefined)
   const [result, setResult] = useState<PromptTestResult | null>(null)
   const [loading, setLoading] = useState(false)
+  const modalRef = useRef<HTMLDivElement>(null)
+  
+  // Close on Escape key
+  useEscapeKey(onClose)
+  
+  // Trap focus within modal
+  useFocusTrap(modalRef)
 
   const handleTest = async () => {
     if (!template.id || !testMessage.trim()) return
@@ -160,10 +187,10 @@ const TestModal: React.FC<TestModalProps> = ({ template, onClose }) => {
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-hidden">
+      <div ref={modalRef} className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-hidden">
         <div className="p-6 border-b dark:border-gray-700">
           <div className="flex justify-between items-center">
-            <h3 className="text-xl font-semibold dark:text-white">Test Prompt</h3>
+            <h3 className="text-xl font-semibold dark:text-white">{t('prompts.testPrompt')}</h3>
             <button onClick={onClose} className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -174,7 +201,7 @@ const TestModal: React.FC<TestModalProps> = ({ template, onClose }) => {
         
         <div className="p-6 space-y-4 overflow-auto max-h-[calc(90vh-100px)]">
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Version</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('prompts.version')}</label>
             <select 
               value={selectedVersion ?? template.active_version}
               onChange={(e) => setSelectedVersion(Number(e.target.value))}
@@ -182,20 +209,20 @@ const TestModal: React.FC<TestModalProps> = ({ template, onClose }) => {
             >
               {template.versions.map(v => (
                 <option key={v.version} value={v.version}>
-                  v{v.version} {v.is_active ? '(active)' : ''}
+                  v{v.version} {v.is_active ? `(${t('prompts.activeVersion')})` : ''}
                 </option>
               ))}
             </select>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Test Message</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('prompts.testMessage')}</label>
             <textarea
               value={testMessage}
               onChange={(e) => setTestMessage(e.target.value)}
               rows={4}
               className="w-full border rounded px-3 py-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-              placeholder="Enter a test message to send to the agent..."
+              placeholder={t('prompts.testMessagePlaceholder')}
             />
           </div>
 
@@ -204,23 +231,26 @@ const TestModal: React.FC<TestModalProps> = ({ template, onClose }) => {
             disabled={loading || !testMessage.trim()}
             className="w-full px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
           >
-            {loading ? 'Testing...' : 'Run Test'}
+            {loading ? t('prompts.testing') : t('prompts.runTest')}
           </button>
 
           {result && (
             <div className="space-y-3 mt-4">
               <div className={`p-3 rounded ${result.success ? 'bg-green-100 dark:bg-green-900' : 'bg-red-100 dark:bg-red-900'}`}>
-                <span className="font-medium">{result.success ? '✓ Success' : '✗ Failed'}</span>
+                <span className="font-medium">{result.success ? `✓ ${t('prompts.testSuccess')}` : `✗ ${t('prompts.testFailed')}`}</span>
                 {result.error && <span className="ml-2 text-red-600">{result.error}</span>}
               </div>
 
               {result.tool_calls.length > 0 && (
                 <div>
-                  <h4 className="font-medium text-gray-900 dark:text-white mb-2">Tool Calls</h4>
+                  <h4 className="font-medium text-gray-900 dark:text-white mb-2">{t('prompts.toolCalls')}</h4>
                   <div className="space-y-2">
                     {result.tool_calls.map((tc, i) => (
                       <div key={i} className="bg-blue-50 dark:bg-blue-900 p-3 rounded">
-                        <span className="font-mono font-medium">{tc.name}</span>
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono font-medium">{tc.name}</span>
+                          <CopyIconButton text={tc.arguments} size="xs" />
+                        </div>
                         <pre className="text-sm mt-1 text-gray-600 dark:text-gray-300">{tc.arguments}</pre>
                       </div>
                     ))}
@@ -230,7 +260,14 @@ const TestModal: React.FC<TestModalProps> = ({ template, onClose }) => {
 
               {result.response && (
                 <div>
-                  <h4 className="font-medium text-gray-900 dark:text-white mb-2">Response</h4>
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="font-medium text-gray-900 dark:text-white">{t('prompts.response')}</h4>
+                    <CopyButton 
+                      text={result.response} 
+                      size="xs" 
+                      successMessage={t('prompts.responseCopied')}
+                    />
+                  </div>
                   <div className="bg-gray-100 dark:bg-gray-900 p-3 rounded">
                     <p className="text-gray-800 dark:text-gray-200 whitespace-pre-wrap">{result.response}</p>
                   </div>
@@ -238,8 +275,8 @@ const TestModal: React.FC<TestModalProps> = ({ template, onClose }) => {
               )}
 
               <div className="text-sm text-gray-500 flex gap-4">
-                <span>Tokens: {result.tokens_used}</span>
-                <span>Duration: {result.duration_ms.toFixed(0)}ms</span>
+                <span>{t('prompts.tokens')}: {result.tokens_used}</span>
+                <span>{t('prompts.duration')}: {result.duration_ms.toFixed(0)}ms</span>
               </div>
             </div>
           )}
@@ -258,6 +295,7 @@ interface EditorPanelProps {
 }
 
 const EditorPanel: React.FC<EditorPanelProps> = ({ template, onSave, onActivate, onRefresh }) => {
+  const { t } = useTranslation()
   const [systemPrompt, setSystemPrompt] = useState('')
   const [tools, setTools] = useState<ToolSchema[]>([])
   const [notes, setNotes] = useState('')
@@ -265,6 +303,15 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ template, onSave, onActivate,
   const [saving, setSaving] = useState(false)
   const [showCompare, setShowCompare] = useState(false)
   const [showTest, setShowTest] = useState(false)
+  const [originalPrompt, setOriginalPrompt] = useState('')
+  const [originalTools, setOriginalTools] = useState<ToolSchema[]>([])
+  
+  // Track if form has unsaved changes
+  const hasUnsavedChanges = systemPrompt !== originalPrompt || 
+    JSON.stringify(tools) !== JSON.stringify(originalTools)
+  
+  // Warn user before leaving with unsaved changes
+  useUnsavedChangesWarning(hasUnsavedChanges, 'You have unsaved prompt changes. Are you sure you want to leave?')
 
   useEffect(() => {
     if (template) {
@@ -273,6 +320,8 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ template, onSave, onActivate,
         setSystemPrompt(activeVersion.system_prompt)
         setTools(activeVersion.tools)
         setSelectedVersion(activeVersion.version)
+        setOriginalPrompt(activeVersion.system_prompt)
+        setOriginalTools(activeVersion.tools)
       }
     }
   }, [template])
@@ -283,6 +332,8 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ template, onSave, onActivate,
       setSystemPrompt(v.system_prompt)
       setTools(v.tools)
       setSelectedVersion(version)
+      setOriginalPrompt(v.system_prompt)
+      setOriginalTools(v.tools)
     }
   }
 
@@ -291,6 +342,9 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ template, onSave, onActivate,
     try {
       await onSave({ system_prompt: systemPrompt, tools, notes })
       setNotes('')
+      // Reset dirty tracking after successful save
+      setOriginalPrompt(systemPrompt)
+      setOriginalTools(tools)
       onRefresh()
     } finally {
       setSaving(false)
@@ -307,7 +361,7 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ template, onSave, onActivate,
   if (!template) {
     return (
       <div className="flex-1 flex items-center justify-center text-gray-500 dark:text-gray-400">
-        Select a template to edit
+        {t('prompts.selectTemplate')}
       </div>
     )
   }
@@ -329,7 +383,7 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ template, onSave, onActivate,
           >
             {template.versions.map(v => (
               <option key={v.version} value={v.version}>
-                v{v.version} {v.is_active ? '(active)' : ''}
+                v{v.version} {v.is_active ? `(${t('prompts.activeVersion')})` : ''}
               </option>
             ))}
           </select>
@@ -337,22 +391,30 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ template, onSave, onActivate,
             onClick={() => setShowCompare(true)}
             className="px-3 py-2 border rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:border-gray-600 dark:text-white"
           >
-            Compare
+            {t('prompts.compare')}
           </button>
           <button
             onClick={() => setShowTest(true)}
             className="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700"
           >
-            Test
+            {t('common.test')}
           </button>
         </div>
       </div>
 
       <div className="flex-1 overflow-auto p-4 space-y-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            System Prompt
-          </label>
+          <div className="flex items-center justify-between mb-2">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              {t('prompts.systemPrompt')}
+            </label>
+            <CopyButton 
+              text={systemPrompt} 
+              size="xs" 
+              successMessage={t('prompts.systemPromptCopied')}
+              label={t('prompts.copySystemPrompt')}
+            />
+          </div>
           <textarea
             value={systemPrompt}
             onChange={(e) => setSystemPrompt(e.target.value)}
@@ -364,7 +426,7 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ template, onSave, onActivate,
         <div>
           <div className="flex items-center justify-between mb-2">
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Tools ({tools.length})
+              {t('prompts.tools')} ({tools.length})
             </label>
           </div>
           <div className="space-y-2">
@@ -372,19 +434,25 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ template, onSave, onActivate,
               <div key={idx} className="border rounded p-3 dark:border-gray-600">
                 <div className="flex items-center justify-between">
                   <span className="font-mono font-medium dark:text-white">{tool.name}</span>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={tool.enabled}
-                      onChange={(e) => {
-                        const newTools = [...tools]
-                        newTools[idx] = { ...tool, enabled: e.target.checked }
-                        setTools(newTools)
-                      }}
-                      className="rounded"
+                  <div className="flex items-center gap-2">
+                    <CopyIconButton 
+                      text={JSON.stringify(tool, null, 2)} 
+                      size="xs"
                     />
-                    <span className="dark:text-gray-300">Enabled</span>
-                  </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={tool.enabled}
+                        onChange={(e) => {
+                          const newTools = [...tools]
+                          newTools[idx] = { ...tool, enabled: e.target.checked }
+                          setTools(newTools)
+                        }}
+                        className="rounded"
+                      />
+                      <span className="dark:text-gray-300">{t('common.enabled')}</span>
+                    </label>
+                  </div>
                 </div>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{tool.description}</p>
               </div>
@@ -394,37 +462,49 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ template, onSave, onActivate,
 
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            Version Notes (for new version)
+            {t('prompts.versionNotes')}
           </label>
           <input
             type="text"
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             className="w-full border rounded px-3 py-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-            placeholder="Describe your changes..."
+            placeholder={t('prompts.describeChanges')}
           />
         </div>
       </div>
 
       <div className="p-4 border-t dark:border-gray-700 flex items-center justify-between bg-white dark:bg-gray-800">
-        <div className="text-sm text-gray-500">
+        <div className="text-sm text-gray-500 flex items-center gap-3">
           {isActiveVersion ? (
-            <span className="text-green-600 font-medium">✓ This is the active version</span>
+            <span className="text-green-600 font-medium">✓ {t('prompts.thisIsActiveVersion')}</span>
           ) : (
             <button
               onClick={handleActivate}
               className="text-blue-600 hover:underline"
             >
-              Activate v{selectedVersion}
+              {t('prompts.activateVersion', { version: selectedVersion })}
             </button>
+          )}
+          {hasUnsavedChanges && (
+            <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1">
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+              </svg>
+              {t('prompts.unsavedChanges')}
+            </span>
           )}
         </div>
         <button
           onClick={handleSave}
           disabled={saving}
-          className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+          className={`px-6 py-2 text-white rounded transition-colors disabled:opacity-50 ${
+            hasUnsavedChanges 
+              ? 'bg-amber-600 hover:bg-amber-700' 
+              : 'bg-blue-600 hover:bg-blue-700'
+          }`}
         >
-          {saving ? 'Saving...' : 'Save as New Version'}
+          {saving ? t('prompts.saving') : hasUnsavedChanges ? t('prompts.saveChanges') : t('prompts.saveAsNewVersion')}
         </button>
       </div>
 
@@ -436,6 +516,7 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ template, onSave, onActivate,
 
 // ============== Main Page ==============
 const PromptManagementPage: React.FC = () => {
+  const { t } = useTranslation()
   const [templates, setTemplates] = useState<PromptTemplate[]>([])
   const [selectedTemplate, setSelectedTemplate] = useState<PromptTemplate | null>(null)
   const [loading, setLoading] = useState(true)
@@ -452,11 +533,11 @@ const PromptManagementPage: React.FC = () => {
         if (updated) setSelectedTemplate(updated)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load templates')
+      setError(err instanceof Error ? err.message : t('prompts.loadFailed'))
     } finally {
       setLoading(false)
     }
-  }, [selectedTemplate])
+  }, [selectedTemplate, t])
 
   useEffect(() => {
     loadTemplates()
@@ -495,7 +576,7 @@ const PromptManagementPage: React.FC = () => {
       {/* Sidebar */}
       <div className="w-64 border-r dark:border-gray-700 bg-gray-50 dark:bg-gray-900 flex flex-col">
         <div className="p-4 border-b dark:border-gray-700">
-          <h1 className="text-lg font-semibold dark:text-white">Prompt Templates</h1>
+          <h1 className="text-lg font-semibold dark:text-white">{t('prompts.promptTemplates')}</h1>
         </div>
         <div className="flex-1 overflow-auto">
           {templates.map(template => (
@@ -508,7 +589,7 @@ const PromptManagementPage: React.FC = () => {
             >
               <div className="font-medium dark:text-white">{template.name}</div>
               <div className="text-sm text-gray-500 dark:text-gray-400">
-                {template.versions.length} versions • v{template.active_version} active
+                {template.versions.length} {t('prompts.versions')} • v{template.active_version} {t('prompts.activeVersion')}
               </div>
               <div className="text-xs text-gray-400 mt-1">{template.category}</div>
             </button>

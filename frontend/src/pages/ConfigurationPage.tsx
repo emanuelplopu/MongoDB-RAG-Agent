@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import ModelVersionSelector from '../components/ModelVersionSelector'
 import {
   Cog6ToothIcon,
@@ -20,6 +21,7 @@ import {
   MagnifyingGlassIcon,
   WrenchScrewdriverIcon,
   InformationCircleIcon,
+  DocumentArrowUpIcon,
 } from '@heroicons/react/24/outline'
 import {
   localLlmApi, systemApi, profilesApi,
@@ -27,7 +29,7 @@ import {
   Profile, SystemStats, CustomEndpoint, NetworkScanResult, ConfigOptions,
   LLMModel, EmbeddingModel, LLMProviderConfigResponse, LLMProviderConfigRequest,
   ProviderModelInfo, FetchModelsResponse, ProviderTestResponse,
-  AgentTool, ToolTestResponse
+  AgentTool, ToolTestResponse, IngestionPerformanceConfig
 } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -50,6 +52,7 @@ const NETWORK_PRESETS = [
 export default function ConfigurationPage() {
   const navigate = useNavigate()
   const { user, isLoading: authLoading } = useAuth()
+  const { t } = useTranslation()
   
   const [discovery, setDiscovery] = useState<DiscoveryResult | null>(null)
   const [offlineConfig, setOfflineConfig] = useState<OfflineModeConfig>({ enabled: false })
@@ -60,7 +63,7 @@ export default function ConfigurationPage() {
   const [isSaving, setIsSaving] = useState(false)
   const [isPulling, setIsPulling] = useState<string | null>(null)
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
-  const [activeTab, setActiveTab] = useState<'offline' | 'network' | 'models' | 'profiles' | 'search' | 'llm' | 'tools' | 'agent'>('llm')
+  const [activeTab, setActiveTab] = useState<'offline' | 'network' | 'models' | 'profiles' | 'search' | 'llm' | 'tools' | 'agent' | 'ingestion'>('llm')
     
     // Search settings state
     const [configOptions, setConfigOptions] = useState<ConfigOptions | null>(null)
@@ -120,6 +123,58 @@ export default function ConfigurationPage() {
     })
     const [isSavingAgentConfig, setIsSavingAgentConfig] = useState(false)
     const [agentConfigErrors, setAgentConfigErrors] = useState<Record<string, string>>({})
+
+    // Ingestion Performance state
+    const [ingestionConfig, setIngestionConfig] = useState<IngestionPerformanceConfig>({
+      process_isolation_enabled: true,
+      max_concurrent_files: 2,
+      embedding_batch_size: 100,
+      thread_pool_workers: 4,
+      embedding_requests_per_minute: 3000,
+      file_processing_timeout: 300,
+      job_poll_interval_seconds: 1.0
+    })
+    const [isSavingIngestionConfig, setIsSavingIngestionConfig] = useState(false)
+    const [ingestionConfigErrors, setIngestionConfigErrors] = useState<Record<string, string>>({})
+
+    // Validation rules for ingestion config fields
+    const ingestionConfigValidation: Record<string, { min: number; max: number; label: string }> = {
+      max_concurrent_files: { min: 1, max: 10, label: 'Concurrent Files' },
+      embedding_batch_size: { min: 10, max: 500, label: 'Embedding Batch Size' },
+      thread_pool_workers: { min: 1, max: 16, label: 'Thread Pool Workers' },
+      embedding_requests_per_minute: { min: 100, max: 10000, label: 'Requests/Minute' },
+      file_processing_timeout: { min: 60, max: 1800, label: 'File Timeout' },
+      job_poll_interval_seconds: { min: 0.5, max: 10, label: 'Poll Interval' }
+    }
+
+    // Validate a single ingestion field
+    const validateIngestionField = (field: string, value: number): string => {
+      const rules = ingestionConfigValidation[field]
+      if (!rules) return ''
+      if (isNaN(value)) return `${rules.label} must be a number`
+      if (value < rules.min) return `${rules.label} must be at least ${rules.min}`
+      if (value > rules.max) return `${rules.label} must be at most ${rules.max}`
+      return ''
+    }
+
+    // Handle ingestion config change with validation
+    const handleIngestionConfigChange = (field: string, value: number) => {
+      setIngestionConfig(prev => ({ ...prev, [field]: value }))
+      const error = validateIngestionField(field, value)
+      setIngestionConfigErrors(prev => ({ ...prev, [field]: error }))
+    }
+
+    // Check if there are any ingestion validation errors
+    const hasIngestionConfigErrors = (): boolean => {
+      const errors: Record<string, string> = {}
+      for (const field of Object.keys(ingestionConfigValidation)) {
+        const value = ingestionConfig[field as keyof typeof ingestionConfig] as number
+        const error = validateIngestionField(field, value)
+        if (error) errors[field] = error
+      }
+      setIngestionConfigErrors(errors)
+      return Object.keys(errors).length > 0
+    }
 
     // Validation rules for agent config fields
     const agentConfigValidation: Record<string, { min: number; max: number; label: string }> = {
@@ -216,6 +271,13 @@ export default function ConfigurationPage() {
       } catch (agentErr) {
         console.error('Error fetching agent config:', agentErr)
       }
+      // Fetch ingestion performance config
+      try {
+        const ingestionConfigRes = await systemApi.getIngestionPerformanceConfig()
+        setIngestionConfig(ingestionConfigRes)
+      } catch (ingestionErr) {
+        console.error('Error fetching ingestion config:', ingestionErr)
+      }
     } catch (err) {
       console.error('Error fetching data:', err)
     } finally {
@@ -288,6 +350,25 @@ export default function ConfigurationPage() {
       setMessage({ type: 'error', text: 'Failed to save agent configuration' })
     } finally {
       setIsSavingAgentConfig(false)
+    }
+  }
+
+  const handleSaveIngestionConfig = async () => {
+    // Validate all fields before saving
+    if (hasIngestionConfigErrors()) {
+      setMessage({ type: 'error', text: 'Please fix validation errors before saving' })
+      return
+    }
+    
+    setIsSavingIngestionConfig(true)
+    setMessage(null)
+    try {
+      await systemApi.saveIngestionPerformanceConfig(ingestionConfig)
+      setMessage({ type: 'success', text: 'Ingestion performance configuration saved. Changes apply on next job start.' })
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Failed to save ingestion configuration' })
+    } finally {
+      setIsSavingIngestionConfig(false)
     }
   }
 
@@ -639,8 +720,8 @@ export default function ConfigurationPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-200">Configuration</h2>
-          <p className="text-sm text-secondary dark:text-gray-400">Offline mode and local LLM settings</p>
+          <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-200">{t('config.title')}</h2>
+          <p className="text-sm text-secondary dark:text-gray-400">{t('config.subtitle')}</p>
         </div>
         <button
           onClick={handleDiscover}
@@ -648,7 +729,7 @@ export default function ConfigurationPage() {
           className="flex items-center gap-2 rounded-xl bg-surface-variant dark:bg-gray-700 px-4 py-2 text-sm font-medium text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-gray-600 disabled:opacity-50"
         >
           {isDiscovering ? <ArrowPathIcon className="h-4 w-4 animate-spin" /> : <SignalIcon className="h-4 w-4" />}
-          Discover LLMs
+          {t('config.discoverLLMs')}
         </button>
       </div>
 
@@ -661,14 +742,15 @@ export default function ConfigurationPage() {
       {/* Tabs */}
       <div className="flex gap-2 border-b border-gray-200 dark:border-gray-700 overflow-x-auto">
         {[
-          { id: 'llm', label: 'LLM Providers', icon: BoltIcon },
-          { id: 'tools', label: 'Agent Tools', icon: WrenchScrewdriverIcon },
-          { id: 'agent', label: 'Agent Performance', icon: CpuChipIcon },
-          { id: 'offline', label: 'Offline Mode', icon: WifiIcon },
-          { id: 'network', label: 'Network Scan', icon: GlobeAltIcon },
-          { id: 'models', label: 'Local Models', icon: CpuChipIcon },
-          { id: 'profiles', label: 'Profile Settings', icon: Cog6ToothIcon },
-                    { id: 'search', label: 'Search Settings', icon: MagnifyingGlassIcon },
+          { id: 'llm', label: t('config.tabs.llm'), icon: BoltIcon },
+          { id: 'tools', label: t('config.tabs.tools'), icon: WrenchScrewdriverIcon },
+          { id: 'agent', label: t('config.tabs.agent'), icon: CpuChipIcon },
+          { id: 'ingestion', label: t('config.tabs.ingestion'), icon: DocumentArrowUpIcon },
+          { id: 'offline', label: t('config.tabs.offline'), icon: WifiIcon },
+          { id: 'network', label: t('config.tabs.network'), icon: GlobeAltIcon },
+          { id: 'models', label: t('config.tabs.models'), icon: CpuChipIcon },
+          { id: 'profiles', label: t('config.tabs.profiles'), icon: Cog6ToothIcon },
+                    { id: 'search', label: t('config.tabs.search'), icon: MagnifyingGlassIcon },
         ].map(tab => (
           <button
             key={tab.id}
@@ -692,15 +774,15 @@ export default function ConfigurationPage() {
           <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
             <div className="flex items-center gap-3 mb-4">
               <BoltIcon className="h-5 w-5 text-primary" />
-              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Orchestrator LLM (Thinking Model)</h3>
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">{t('config.llm.orchestrator')}</h3>
             </div>
             <p className="text-sm text-secondary dark:text-gray-400 mb-4">
-              The orchestrator handles complex reasoning, planning, and synthesis. Choose a powerful model for best results.
+              {t('config.llm.orchestratorDesc')}
             </p>
             
             <div className="grid gap-4 md:grid-cols-2">
               <div>
-                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">Provider</label>
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">{t('config.llm.provider')}</label>
                 <select
                   value={orchestratorProvider}
                   onChange={(e) => {
@@ -719,7 +801,7 @@ export default function ConfigurationPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">Model</label>
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">{t('config.llm.model')}</label>
                 <select
                   value={orchestratorModel}
                   onChange={(e) => setOrchestratorModel(e.target.value)}
@@ -740,15 +822,15 @@ export default function ConfigurationPage() {
           <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
             <div className="flex items-center gap-3 mb-4">
               <BoltIcon className="h-5 w-5 text-green-500" />
-              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Worker LLM (Fast Model)</h3>
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">{t('config.llm.worker')}</h3>
             </div>
             <p className="text-sm text-secondary dark:text-gray-400 mb-4">
-              The worker handles parallel tasks like search summarization and quick responses. Choose a fast, cost-effective model.
+              {t('config.llm.workerDesc')}
             </p>
             
             <div className="grid gap-4 md:grid-cols-2">
               <div>
-                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">Provider</label>
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">{t('config.llm.provider')}</label>
                 <select
                   value={workerProvider}
                   onChange={(e) => {
@@ -767,7 +849,7 @@ export default function ConfigurationPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">Model</label>
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">{t('config.llm.model')}</label>
                 <select
                   value={workerModel}
                   onChange={(e) => setWorkerModel(e.target.value)}
@@ -788,10 +870,10 @@ export default function ConfigurationPage() {
           <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
             <div className="flex items-center gap-3 mb-4">
               <Cog6ToothIcon className="h-5 w-5 text-amber-500" />
-              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">API Keys</h3>
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">{t('config.llm.apiKeys')}</h3>
             </div>
             <p className="text-sm text-secondary dark:text-gray-400 mb-4">
-              Configure API keys for each provider. Keys are stored securely and only masked values are displayed.
+              {t('config.llm.apiKeysDesc')}
             </p>
             
             <div className="space-y-4">
@@ -799,9 +881,9 @@ export default function ConfigurationPage() {
               <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
                 <div className="flex items-center justify-between mb-2">
                   <label className="block text-sm font-medium text-primary-900 dark:text-gray-200">
-                    OpenAI API Key
+                    {t('config.llm.openaiKey')}
                     {llmProviderConfig?.openai_api_key_set && (
-                      <span className="ml-2 text-xs text-green-500">✓ Set ({llmProviderConfig.openai_api_key_masked})</span>
+                      <span className="ml-2 text-xs text-green-500">✓ {t('config.llm.keySet')} ({llmProviderConfig.openai_api_key_masked})</span>
                     )}
                   </label>
                   <button
@@ -810,7 +892,7 @@ export default function ConfigurationPage() {
                     className="flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-lg bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-800/40 disabled:opacity-50"
                   >
                     {isFetchingModels === 'openai' ? <ArrowPathIcon className="h-3 w-3 animate-spin" /> : <ArrowDownTrayIcon className="h-3 w-3" />}
-                    Fetch Models
+                    {t('config.llm.fetchModels')}
                   </button>
                 </div>
                 <input
@@ -820,16 +902,16 @@ export default function ConfigurationPage() {
                   placeholder={llmProviderConfig?.openai_api_key_set ? '••••••••••••' : 'sk-...'}
                   className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200"
                 />
-                <p className="text-xs text-secondary dark:text-gray-500 mt-1">Required for OpenAI models (GPT-5, GPT-4, etc.)</p>
+                <p className="text-xs text-secondary dark:text-gray-500 mt-1">{t('config.llm.openaiKeyDesc')}</p>
               </div>
 
               {/* Google API Key */}
               <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
                 <div className="flex items-center justify-between mb-2">
                   <label className="block text-sm font-medium text-primary-900 dark:text-gray-200">
-                    Google API Key (Gemini)
+                    {t('config.llm.googleKey')}
                     {llmProviderConfig?.google_api_key_set && (
-                      <span className="ml-2 text-xs text-green-500">✓ Set ({llmProviderConfig.google_api_key_masked})</span>
+                      <span className="ml-2 text-xs text-green-500">✓ {t('config.llm.keySet')} ({llmProviderConfig.google_api_key_masked})</span>
                     )}
                   </label>
                   <button
@@ -838,7 +920,7 @@ export default function ConfigurationPage() {
                     className="flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-lg bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-800/40 disabled:opacity-50"
                   >
                     {isFetchingModels === 'google' ? <ArrowPathIcon className="h-3 w-3 animate-spin" /> : <ArrowDownTrayIcon className="h-3 w-3" />}
-                    Fetch Models
+                    {t('config.llm.fetchModels')}
                   </button>
                 </div>
                 <input
@@ -848,16 +930,16 @@ export default function ConfigurationPage() {
                   placeholder={llmProviderConfig?.google_api_key_set ? '••••••••••••' : 'AIza...'}
                   className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200"
                 />
-                <p className="text-xs text-secondary dark:text-gray-500 mt-1">Required for Google Gemini models</p>
+                <p className="text-xs text-secondary dark:text-gray-500 mt-1">{t('config.llm.googleKeyDesc')}</p>
               </div>
 
               {/* Anthropic API Key */}
               <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
                 <div className="flex items-center justify-between mb-2">
                   <label className="block text-sm font-medium text-primary-900 dark:text-gray-200">
-                    Anthropic API Key (Claude)
+                    {t('config.llm.anthropicKey')}
                     {llmProviderConfig?.anthropic_api_key_set && (
-                      <span className="ml-2 text-xs text-green-500">✓ Set ({llmProviderConfig.anthropic_api_key_masked})</span>
+                      <span className="ml-2 text-xs text-green-500">✓ {t('config.llm.keySet')} ({llmProviderConfig.anthropic_api_key_masked})</span>
                     )}
                   </label>
                   <button
@@ -866,7 +948,7 @@ export default function ConfigurationPage() {
                     className="flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-lg bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-800/40 disabled:opacity-50"
                   >
                     {isFetchingModels === 'anthropic' ? <ArrowPathIcon className="h-3 w-3 animate-spin" /> : <ArrowDownTrayIcon className="h-3 w-3" />}
-                    Fetch Models
+                    {t('config.llm.fetchModels')}
                   </button>
                 </div>
                 <input
@@ -876,14 +958,14 @@ export default function ConfigurationPage() {
                   placeholder={llmProviderConfig?.anthropic_api_key_set ? '••••••••••••' : 'sk-ant-...'}
                   className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200"
                 />
-                <p className="text-xs text-secondary dark:text-gray-500 mt-1">Required for Anthropic Claude models</p>
+                <p className="text-xs text-secondary dark:text-gray-500 mt-1">{t('config.llm.anthropicKeyDesc')}</p>
               </div>
 
               {/* Ollama (Local) - Fetch Only */}
               <div className="rounded-xl bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 p-4">
                 <div className="flex items-center justify-between mb-2">
                   <label className="block text-sm font-medium text-purple-900 dark:text-purple-200">
-                    Ollama (Local LLMs)
+                    {t('config.llm.ollamaLocal')}
                   </label>
                   <button
                     onClick={() => handleFetchModels('ollama')}
@@ -891,31 +973,31 @@ export default function ConfigurationPage() {
                     className="flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-lg bg-purple-100 dark:bg-purple-800/30 text-purple-700 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-700/40 disabled:opacity-50"
                   >
                     {isFetchingModels === 'ollama' ? <ArrowPathIcon className="h-3 w-3 animate-spin" /> : <ArrowDownTrayIcon className="h-3 w-3" />}
-                    Discover Models
+                    {t('config.llm.discoverModels')}
                   </button>
                 </div>
                 <p className="text-xs text-purple-600 dark:text-purple-400">
-                  No API key needed. Click "Discover Models" to find locally installed Ollama models.
+                  {t('config.llm.ollamaDesc')}
                 </p>
               </div>
 
               {/* Fast LLM API Key (optional separate key) */}
               <div className="rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-4">
                 <label className="block text-sm font-medium text-blue-900 dark:text-blue-200 mb-2">
-                  Fast LLM API Key (Optional)
+                  {t('config.llm.fastLlmKey')}
                   {llmProviderConfig?.fast_llm_api_key_set && (
-                    <span className="ml-2 text-xs text-green-500">✓ Set</span>
+                    <span className="ml-2 text-xs text-green-500">✓ {t('config.llm.keySet')}</span>
                   )}
                 </label>
                 <input
                   type="password"
                   value={fastLlmApiKey}
                   onChange={(e) => setFastLlmApiKey(e.target.value)}
-                  placeholder="Optional separate API key for worker LLM"
+                  placeholder={t('config.llm.fastLlmKey')}
                   className="w-full rounded-lg border border-blue-300 dark:border-blue-700 bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200"
                 />
                 <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
-                  If set, the worker LLM will use this key instead of the provider's main key. Useful for using different billing accounts.
+                  {t('config.llm.fastLlmKeyDesc')}
                 </p>
               </div>
             </div>
@@ -941,7 +1023,7 @@ export default function ConfigurationPage() {
                   if (fastLlmApiKey) config.fast_llm_api_key = fastLlmApiKey
                   
                   await systemApi.saveLLMProviderConfig(config)
-                  setMessage({ type: 'success', text: 'LLM provider configuration saved! Changes take effect immediately.' })
+                  setMessage({ type: 'success', text: t('config.llm.configSaved') })
                   // Clear API key inputs after saving
                   setOpenaiApiKey('')
                   setGoogleApiKey('')
@@ -951,7 +1033,7 @@ export default function ConfigurationPage() {
                   const newConfig = await systemApi.getLLMProviderConfig()
                   setLlmProviderConfig(newConfig)
                 } catch (err) {
-                  setMessage({ type: 'error', text: 'Failed to save LLM configuration' })
+                  setMessage({ type: 'error', text: t('config.llm.configFailed') })
                 } finally {
                   setIsSavingLlmConfig(false)
                 }
@@ -960,7 +1042,7 @@ export default function ConfigurationPage() {
               className="flex items-center gap-2 rounded-xl bg-primary px-6 py-2 font-medium text-white transition-all hover:bg-primary-700 disabled:opacity-50"
             >
               {isSavingLlmConfig && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
-              Save LLM Configuration
+              {t('config.llm.saveLLMConfig')}
             </button>
           </div>
 
@@ -968,15 +1050,15 @@ export default function ConfigurationPage() {
           <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
             <div className="flex items-center gap-3 mb-4">
               <PlayIcon className="h-5 w-5 text-green-500" />
-              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Test Provider Connection</h3>
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">{t('config.llm.testProviderConnection')}</h3>
             </div>
             <p className="text-sm text-secondary dark:text-gray-400 mb-4">
-              Test your API configuration by sending a simple prompt to verify the connection is working.
+              {t('config.llm.testDesc')}
             </p>
             
             <div className="grid gap-4 md:grid-cols-3 mb-4">
               <div>
-                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">Provider</label>
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">{t('config.llm.provider')}</label>
                 <select
                   value={selectedTestProvider}
                   onChange={(e) => {
@@ -997,13 +1079,13 @@ export default function ConfigurationPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">Model</label>
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">{t('config.llm.model')}</label>
                 <select
                   value={selectedTestModel}
                   onChange={(e) => setSelectedTestModel(e.target.value)}
                   className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-primary-900 dark:text-gray-200"
                 >
-                  <option value="">Select a model...</option>
+                  <option value="">{t('config.llm.selectModel')}</option>
                   {(llmProviderConfig?.providers.find(p => p.id === selectedTestProvider)?.models || []).map((m) => (
                     <option key={m} value={m}>{m}</option>
                   ))}
@@ -1016,18 +1098,18 @@ export default function ConfigurationPage() {
                   className="flex items-center gap-2 rounded-xl bg-green-600 px-6 py-2 font-medium text-white transition-all hover:bg-green-700 disabled:opacity-50 w-full justify-center"
                 >
                   {isTestingProvider ? <ArrowPathIcon className="h-4 w-4 animate-spin" /> : <PlayIcon className="h-4 w-4" />}
-                  Test Connection
+                  {t('config.llm.testConnection')}
                 </button>
               </div>
             </div>
             
             <div className="mb-4">
-              <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">Test Prompt</label>
+              <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">{t('config.llm.testPrompt')}</label>
               <input
                 type="text"
                 value={testPrompt}
                 onChange={(e) => setTestPrompt(e.target.value)}
-                placeholder="Enter a test prompt..."
+                placeholder={t('config.llm.enterTestPrompt')}
                 className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-primary-900 dark:text-gray-200"
               />
             </div>
@@ -1042,12 +1124,12 @@ export default function ConfigurationPage() {
                     <ExclamationTriangleIcon className="h-5 w-5 text-red-600 dark:text-red-400" />
                   )}
                   <span className={`font-medium ${testResult.success ? 'text-green-900 dark:text-green-200' : 'text-red-900 dark:text-red-200'}`}>
-                    {testResult.success ? `Success - ${testResult.latency_ms.toFixed(0)}ms` : 'Failed'}
+                    {testResult.success ? `${t('config.llm.success')} - ${testResult.latency_ms.toFixed(0)}ms` : t('config.llm.failed')}
                   </span>
                 </div>
                 {testResult.response && (
                   <div className="bg-white dark:bg-gray-800 rounded-lg p-3 text-sm text-primary-900 dark:text-gray-200 mt-2">
-                    <strong>Response:</strong> {testResult.response}
+                    <strong>{t('config.llm.response')}:</strong> {testResult.response}
                   </div>
                 )}
                 {testResult.error && (
@@ -1059,32 +1141,32 @@ export default function ConfigurationPage() {
             {/* Logs Textarea */}
             <div>
               <div className="flex items-center justify-between mb-2">
-                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200">Logs</label>
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200">{t('config.llm.logs')}</label>
                 <button
                   onClick={() => setTestLogs([])}
                   className="text-xs text-secondary hover:text-primary-700 dark:text-gray-400 dark:hover:text-gray-200"
                 >
-                  Clear Logs
+                  {t('config.llm.clearLogs')}
                 </button>
               </div>
               <textarea
                 readOnly
                 value={testLogs.join('\n')}
                 className="w-full h-48 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 px-3 py-2 text-xs font-mono text-primary-900 dark:text-gray-200 resize-none"
-                placeholder="Logs will appear here..."
+                placeholder={t('config.llm.logsPlaceholder')}
               />
             </div>
           </div>
 
           {/* Info Card */}
           <div className="rounded-2xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-6">
-            <h4 className="text-sm font-medium text-blue-900 dark:text-blue-200 mb-2">How it works</h4>
+            <h4 className="text-sm font-medium text-blue-900 dark:text-blue-200 mb-2">{t('config.llm.howItWorks')}</h4>
             <ul className="text-sm text-blue-800 dark:text-blue-300 space-y-1">
-              <li>• <strong>Orchestrator LLM:</strong> Handles complex reasoning, planning search strategies, and synthesizing final answers</li>
-              <li>• <strong>Worker LLM:</strong> Performs fast parallel tasks like summarizing search results and generating quick responses</li>
-              <li>• You can mix providers (e.g., GPT-5 for thinking + Gemini Flash for fast tasks)</li>
-              <li>• API keys are stored securely and loaded at startup</li>
-              <li>• Ollama (local) doesn't require an API key</li>
+              <li>• <strong>Orchestrator LLM:</strong> {t('config.llm.howItWorksItems.orchestrator')}</li>
+              <li>• <strong>Worker LLM:</strong> {t('config.llm.howItWorksItems.worker')}</li>
+              <li>• {t('config.llm.howItWorksItems.mixProviders')}</li>
+              <li>• {t('config.llm.howItWorksItems.secureKeys')}</li>
+              <li>• {t('config.llm.howItWorksItems.ollamaNoKey')}</li>
             </ul>
           </div>
         </div>
@@ -1096,10 +1178,10 @@ export default function ConfigurationPage() {
           <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
             <div className="flex items-center gap-3 mb-4">
               <WrenchScrewdriverIcon className="h-5 w-5 text-purple-500" />
-              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Advanced Model Version Management</h3>
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">{t('config.llm.advancedModelManagement')}</h3>
             </div>
             <p className="text-sm text-secondary dark:text-gray-400 mb-4">
-              Browse and switch between all available model versions with detailed information about capabilities, pricing, and compatibility.
+              {t('config.llm.advancedModelDesc')}
             </p>
             
             <ModelVersionSelector 
@@ -1122,14 +1204,14 @@ export default function ConfigurationPage() {
             <div className="flex items-start gap-3">
               <InformationCircleIcon className="h-6 w-6 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
               <div>
-                <h3 className="text-lg font-medium text-blue-900 dark:text-blue-100 mb-2">About Agent Tools</h3>
+                <h3 className="text-lg font-medium text-blue-900 dark:text-blue-100 mb-2">{t('config.tools.aboutTitle')}</h3>
                 <p className="text-sm text-blue-800 dark:text-blue-200 mb-3">
-                  Tools are capabilities that the AI agent can use to help answer your questions. The agent automatically decides which tools to use based on your query.
+                  {t('config.tools.aboutDesc')}
                 </p>
                 <ul className="text-sm text-blue-700 dark:text-blue-300 space-y-1 list-disc list-inside">
-                  <li>The agent can call multiple tools in sequence to gather information</li>
-                  <li>Tool calls are shown in the chat interface as "thinking" steps</li>
-                  <li>You can test each tool below to verify it's working correctly</li>
+                  <li>{t('config.tools.aboutItems.multipleTools')}</li>
+                  <li>{t('config.tools.aboutItems.toolCalls')}</li>
+                  <li>{t('config.tools.aboutItems.testTools')}</li>
                 </ul>
               </div>
             </div>
@@ -1162,7 +1244,7 @@ export default function ConfigurationPage() {
                         : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
                     }`}
                   >
-                    {selectedTool?.id === tool.id ? 'Selected' : 'Select to Test'}
+                    {selectedTool?.id === tool.id ? t('config.tools.selected') : t('config.tools.selectToTest')}
                   </button>
                 </div>
 
@@ -2328,6 +2410,234 @@ export default function ConfigurationPage() {
               <li>• <strong>Lower timeouts</strong> prevent stuck requests but may cut off complex queries</li>
               <li>• <strong>Global limits</strong> protect your server when many users are active</li>
             </ul>
+          </div>
+        </div>
+      )}
+
+      {/* Ingestion Performance Tab */}
+      {activeTab === 'ingestion' && (
+        <div className="space-y-6">
+          {/* Process Isolation Settings */}
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+            <div className="flex items-center gap-3 mb-4">
+              <DocumentArrowUpIcon className="h-5 w-5 text-primary" />
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Process Isolation</h3>
+            </div>
+            <p className="text-sm text-secondary dark:text-gray-400 mb-6">
+              Run ingestion in a separate worker process for guaranteed API responsiveness.
+            </p>
+
+            <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+              <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                Enable Process Isolation
+              </label>
+              <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                When enabled, ingestion runs in a dedicated worker process
+              </p>
+              <label className="relative inline-flex items-center cursor-pointer mt-2">
+                <input
+                  type="checkbox"
+                  checked={ingestionConfig.process_isolation_enabled}
+                  onChange={(e) => setIngestionConfig(prev => ({ ...prev, process_isolation_enabled: e.target.checked }))}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary rounded-full peer dark:bg-gray-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                <span className="ml-3 text-sm text-secondary dark:text-gray-400">
+                  {ingestionConfig.process_isolation_enabled ? 'Enabled (Recommended)' : 'Disabled'}
+                </span>
+              </label>
+            </div>
+          </div>
+
+          {/* Concurrency Settings */}
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+            <div className="flex items-center gap-3 mb-4">
+              <BoltIcon className="h-5 w-5 text-primary" />
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Concurrency Settings</h3>
+            </div>
+            <p className="text-sm text-secondary dark:text-gray-400 mb-6">
+              Configure parallel processing for faster document ingestion.
+            </p>
+
+            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+              {/* Max Concurrent Files */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  Concurrent Files
+                </label>
+                <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                  Files to process in parallel (1-10)
+                </p>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={ingestionConfig.max_concurrent_files}
+                  onChange={(e) => handleIngestionConfigChange('max_concurrent_files', Number(e.target.value))}
+                  className={`w-full rounded-lg border ${ingestionConfigErrors.max_concurrent_files ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                />
+                {ingestionConfigErrors.max_concurrent_files && (
+                  <p className="mt-1 text-xs text-red-500">{ingestionConfigErrors.max_concurrent_files}</p>
+                )}
+              </div>
+
+              {/* Thread Pool Workers */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  Thread Pool Workers
+                </label>
+                <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                  Workers for CPU-bound tasks (1-16)
+                </p>
+                <input
+                  type="number"
+                  min={1}
+                  max={16}
+                  value={ingestionConfig.thread_pool_workers}
+                  onChange={(e) => handleIngestionConfigChange('thread_pool_workers', Number(e.target.value))}
+                  className={`w-full rounded-lg border ${ingestionConfigErrors.thread_pool_workers ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                />
+                {ingestionConfigErrors.thread_pool_workers && (
+                  <p className="mt-1 text-xs text-red-500">{ingestionConfigErrors.thread_pool_workers}</p>
+                )}
+              </div>
+
+              {/* Job Poll Interval */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  Job Poll Interval
+                </label>
+                <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                  Seconds between job checks (0.5-10)
+                </p>
+                <input
+                  type="number"
+                  min={0.5}
+                  max={10}
+                  step={0.5}
+                  value={ingestionConfig.job_poll_interval_seconds}
+                  onChange={(e) => handleIngestionConfigChange('job_poll_interval_seconds', Number(e.target.value))}
+                  className={`w-full rounded-lg border ${ingestionConfigErrors.job_poll_interval_seconds ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                />
+                {ingestionConfigErrors.job_poll_interval_seconds && (
+                  <p className="mt-1 text-xs text-red-500">{ingestionConfigErrors.job_poll_interval_seconds}</p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Embedding Settings */}
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+            <div className="flex items-center gap-3 mb-4">
+              <CpuChipIcon className="h-5 w-5 text-primary" />
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Embedding Settings</h3>
+            </div>
+            <p className="text-sm text-secondary dark:text-gray-400 mb-6">
+              Configure embedding API batching and rate limits.
+            </p>
+
+            <div className="grid gap-6 md:grid-cols-2">
+              {/* Embedding Batch Size */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  Embedding Batch Size
+                </label>
+                <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                  Chunks per embedding API call (10-500)
+                </p>
+                <input
+                  type="number"
+                  min={10}
+                  max={500}
+                  value={ingestionConfig.embedding_batch_size}
+                  onChange={(e) => handleIngestionConfigChange('embedding_batch_size', Number(e.target.value))}
+                  className={`w-full rounded-lg border ${ingestionConfigErrors.embedding_batch_size ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                />
+                {ingestionConfigErrors.embedding_batch_size && (
+                  <p className="mt-1 text-xs text-red-500">{ingestionConfigErrors.embedding_batch_size}</p>
+                )}
+              </div>
+
+              {/* Rate Limit */}
+              <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                  Requests per Minute
+                </label>
+                <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                  Embedding API rate limit (100-10000)
+                </p>
+                <input
+                  type="number"
+                  min={100}
+                  max={10000}
+                  step={100}
+                  value={ingestionConfig.embedding_requests_per_minute}
+                  onChange={(e) => handleIngestionConfigChange('embedding_requests_per_minute', Number(e.target.value))}
+                  className={`w-full rounded-lg border ${ingestionConfigErrors.embedding_requests_per_minute ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                />
+                {ingestionConfigErrors.embedding_requests_per_minute && (
+                  <p className="mt-1 text-xs text-red-500">{ingestionConfigErrors.embedding_requests_per_minute}</p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Timeout Settings */}
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+            <div className="flex items-center gap-3 mb-4">
+              <Cog6ToothIcon className="h-5 w-5 text-primary" />
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Timeout Settings</h3>
+            </div>
+
+            <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
+              <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                File Processing Timeout
+              </label>
+              <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                Max seconds per file (60-1800)
+              </p>
+              <input
+                type="number"
+                min={60}
+                max={1800}
+                step={30}
+                value={ingestionConfig.file_processing_timeout}
+                onChange={(e) => handleIngestionConfigChange('file_processing_timeout', Number(e.target.value))}
+                className={`w-full max-w-xs rounded-lg border ${ingestionConfigErrors.file_processing_timeout ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+              />
+              {ingestionConfigErrors.file_processing_timeout && (
+                <p className="mt-1 text-xs text-red-500">{ingestionConfigErrors.file_processing_timeout}</p>
+              )}
+            </div>
+          </div>
+
+          {/* Save Button */}
+          <div className="flex justify-end gap-3">
+            <button
+              onClick={handleSaveIngestionConfig}
+              disabled={isSavingIngestionConfig || Object.values(ingestionConfigErrors).some(e => e)}
+              className="flex items-center gap-2 rounded-xl bg-primary px-6 py-2 font-medium text-white transition-all hover:bg-primary-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+            >
+              {isSavingIngestionConfig && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
+              Save Ingestion Configuration
+            </button>
+          </div>
+
+          {/* Info Card */}
+          <div className="rounded-2xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-6">
+            <div className="flex items-start gap-3">
+              <InformationCircleIcon className="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <h4 className="text-sm font-medium text-blue-900 dark:text-blue-200 mb-2">Configuration Notes</h4>
+                <ul className="text-sm text-blue-800 dark:text-blue-300 space-y-1">
+                  <li>• Configuration changes are applied when the <strong>next ingestion job starts</strong></li>
+                  <li>• <strong>Concurrent files</strong>: Higher values speed up ingestion but use more memory</li>
+                  <li>• <strong>Batch size</strong>: Larger batches reduce API calls but may hit token limits</li>
+                  <li>• <strong>Process isolation</strong>: Keeps API responsive during heavy ingestion workloads</li>
+                  <li>• Worker restarts automatically pick up new configuration</li>
+                </ul>
+              </div>
+            </div>
           </div>
         </div>
       )}

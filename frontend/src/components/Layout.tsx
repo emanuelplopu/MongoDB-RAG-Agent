@@ -36,6 +36,8 @@ import {
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid'
 import ThemeSwitcher from './ThemeSwitcher'
 import LanguageSwitcher from './LanguageSwitcher'
+import ConnectionStatus from './ConnectionStatus'
+import CommandPalette, { useCommandPalette } from './CommandPalette'
 import { LocalizedLink, useLocalizedNavigate } from './LocalizedLink'
 import { useChatSidebar } from '../contexts/ChatSidebarContext'
 import { useAuth } from '../contexts/AuthContext'
@@ -75,6 +77,7 @@ export default function Layout() {
   const navigate = useLocalizedNavigate()
   const { t } = useTranslation()
   const { user, isAuthenticated, isLoading: isAuthLoading, logout } = useAuth()
+  const commandPalette = useCommandPalette()
   const {
     sessions,
     folders,
@@ -570,6 +573,12 @@ export default function Layout() {
               <LanguageSwitcher compact={false} />
             </div>
             
+            {/* Connection Status */}
+            <div className="px-4 py-2 border-t border-surface-variant dark:border-gray-700 flex items-center justify-between">
+              <span className="text-sm text-secondary dark:text-gray-400">API Status</span>
+              <ConnectionStatus healthCheckUrl="/api/health" showText size="sm" />
+            </div>
+            
             {/* Auth Actions */}
             <div className="border-t border-surface-variant dark:border-gray-700 py-1">
               {isAuthenticated ? (
@@ -634,6 +643,9 @@ export default function Layout() {
           </div>
         </div>
       )}
+
+      {/* Command Palette - Ctrl+K */}
+      <CommandPalette isOpen={commandPalette.isOpen} onClose={commandPalette.close} />
 
       {/* Mobile sidebar backdrop */}
       {sidebarOpen && (

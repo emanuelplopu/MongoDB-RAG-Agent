@@ -145,9 +145,15 @@ export default function DocumentPreviewPage() {
     setExplorerMessage(null)
     try {
       const result = await documentsApi.openInExplorer(documentId)
-      setExplorerMessage(result.message)
-      if (!result.success && result.file_path) {
+      if (result.success) {
+        setExplorerMessage(result.message)
+      } else if ((result as any).is_docker && result.file_path) {
+        // Running in Docker - show path with copy functionality
+        setExplorerMessage(`📋 ${result.message}\n\n${result.file_path}`)
+      } else if (result.file_path) {
         setExplorerMessage(`${result.message}\nPath: ${result.file_path}`)
+      } else {
+        setExplorerMessage(result.message)
       }
     } catch (err) {
       setExplorerMessage('Failed to open file explorer')
@@ -265,8 +271,28 @@ export default function DocumentPreviewPage() {
       </div>
 
       {explorerMessage && (
-        <div className={`p-3 rounded-xl text-sm ${explorerMessage.includes('Failed') || explorerMessage.includes('not') ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400' : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'}`}>
+        <div className={`p-3 rounded-xl text-sm ${explorerMessage.includes('Failed') || (explorerMessage.includes('not') && !explorerMessage.includes('Docker')) ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400' : explorerMessage.includes('Docker') ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400' : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'}`}>
           <pre className="whitespace-pre-wrap">{explorerMessage}</pre>
+          {explorerMessage.includes('Docker') && explorerMessage.includes('/app/mounts') && (
+            <button
+              onClick={() => {
+                const path = explorerMessage.split('\n\n')[1]
+                if (path) {
+                  navigator.clipboard.writeText(path)
+                  // Briefly change button text
+                  const btn = document.activeElement as HTMLButtonElement
+                  if (btn) {
+                    const original = btn.innerText
+                    btn.innerText = 'Copied!'
+                    setTimeout(() => { btn.innerText = original }, 1500)
+                  }
+                }
+              }}
+              className="mt-2 px-3 py-1 bg-amber-200 dark:bg-amber-800 hover:bg-amber-300 dark:hover:bg-amber-700 rounded-lg text-xs font-medium transition-colors"
+            >
+              Copy Path
+            </button>
+          )}
         </div>
       )}
 

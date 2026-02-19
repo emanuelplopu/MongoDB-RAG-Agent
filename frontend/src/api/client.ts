@@ -530,6 +530,16 @@ export interface AgentPerformanceConfig {
   max_sources_per_search: number
 }
 
+export interface IngestionPerformanceConfig {
+  process_isolation_enabled: boolean
+  max_concurrent_files: number
+  embedding_batch_size: number
+  thread_pool_workers: number
+  embedding_requests_per_minute: number
+  file_processing_timeout: number
+  job_poll_interval_seconds: number
+}
+
 export interface LLMProviderConfigResponse {
   orchestrator_provider: string
   orchestrator_model: string
@@ -1260,6 +1270,17 @@ export const systemApi = {
 
   saveAgentPerformanceConfig: async (config: AgentPerformanceConfig): Promise<{ success: boolean; message: string }> => {
     const response = await api.post('/system/agent-performance', config)
+    return response.data
+  },
+
+  // Ingestion Performance Configuration
+  getIngestionPerformanceConfig: async (): Promise<IngestionPerformanceConfig> => {
+    const response = await api.get('/system/ingestion-performance')
+    return response.data
+  },
+
+  saveIngestionPerformanceConfig: async (config: IngestionPerformanceConfig): Promise<{ success: boolean; message: string }> => {
+    const response = await api.post('/system/ingestion-performance', config)
     return response.data
   }
 }
