@@ -260,6 +260,7 @@ class IngestionStatusResponse(BaseModel):
     total_files: int = 0
     processed_files: int = 0
     failed_files: int = 0
+    duplicates_skipped: int = 0
     excluded_files: int = 0
     document_count: int = 0
     image_count: int = 0

@@ -1,0 +1,36 @@
+# RecallHub Ingestion Worker - FAST Build (Code Only)
+# ====================================================
+# Uses pre-built base image with all dependencies
+# Build time: ~10-30 seconds (code copy only!)
+#
+# PREREQUISITE: Build the base image first (one-time):
+#   docker build -f backend/Dockerfile.base -t recallhub-backend-base:latest .
+#
+# Then for daily development:
+#   docker build -f backend/Dockerfile.worker -t mongodb-rag-agent-ingestion-worker:latest .
+
+# Use the pre-built base image (same as backend)
+FROM recallhub-backend-base:latest
+
+# ============================================
+# APPLICATION CODE ONLY - Ultra Fast Layer
+# This is the ONLY thing that rebuilds
+# ============================================
+COPY src/ ./src/
+COPY backend/ ./backend/
+COPY profiles.yaml ./
+
+# Set environment variables
+ENV MONGODB_URI=mongodb://mongodb:27017/?directConnection=true \
+    MONGODB_DATABASE=rag_db \
+    PROFILES_PATH=/app/profiles.yaml
+
+# Worker doesn't need to expose a port, but we keep 8000 for potential health checks
+EXPOSE 8000
+
+# Health check - check if process is running
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD pgrep -f "backend.workers.ingestion_worker" || exit 1
+
+# Run the ingestion worker
+CMD ["python", "-m", "backend.workers.ingestion_worker"]

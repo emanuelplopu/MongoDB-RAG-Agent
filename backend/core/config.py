@@ -138,6 +138,42 @@ class BackendSettings(BaseSettings):
         description="Maximum number of data sources to search in parallel"
     )
     
+    # Ingestion Worker Settings
+    ingestion_process_isolation: bool = Field(
+        default=True,
+        description="Run ingestion in a separate worker process for API responsiveness"
+    )
+    ingestion_max_concurrent_files: int = Field(
+        default=2,
+        ge=1, le=10,
+        description="Maximum number of files to process concurrently"
+    )
+    ingestion_embedding_batch_size: int = Field(
+        default=100,
+        ge=10, le=500,
+        description="Number of chunks to embed in a single API call"
+    )
+    ingestion_thread_pool_workers: int = Field(
+        default=4,
+        ge=1, le=16,
+        description="Number of thread pool workers for CPU-bound tasks"
+    )
+    ingestion_embedding_requests_per_minute: int = Field(
+        default=3000,
+        ge=100, le=10000,
+        description="Rate limit for embedding API requests"
+    )
+    ingestion_file_processing_timeout: int = Field(
+        default=300,
+        ge=60, le=1800,
+        description="Timeout in seconds for processing a single file"
+    )
+    ingestion_job_poll_interval: float = Field(
+        default=1.0,
+        ge=0.5, le=10.0,
+        description="Interval in seconds for worker to poll for new jobs"
+    )
+    
     # Profile Settings
     profiles_path: str = Field(default="profiles.yaml")
     

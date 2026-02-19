@@ -205,6 +205,7 @@ async def perform_search(db, query: str, search_type: SearchType, match_count: i
                     excerpt += "..."
                 top_vector_results.append({
                     "title": r["document_title"],
+                    "source": r["document_source"],  # Include source path for document linking
                     "excerpt": excerpt,
                     "score": round(r["similarity"], 3) if r["similarity"] else None
                 })
@@ -277,6 +278,7 @@ async def perform_search(db, query: str, search_type: SearchType, match_count: i
                     excerpt += "..."
                 top_text_results.append({
                     "title": r["document_title"],
+                    "source": r["document_source"],  # Include source path for document linking
                     "excerpt": excerpt,
                     "score": round(r["similarity"], 3) if r["similarity"] else None
                 })
@@ -680,7 +682,7 @@ async def chat(request: Request, chat_request: ChatRequest):
                 for r in op.top_results:
                     sources.append({
                         "title": r.get("title", "Unknown"),
-                        "source": op.index_name,
+                        "source": r.get("source", ""),  # Use actual document source path
                         "relevance": r.get("score", 0.0),
                         "excerpt": r.get("excerpt", "")
                     })

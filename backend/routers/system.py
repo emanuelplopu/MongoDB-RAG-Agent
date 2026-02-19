@@ -1222,6 +1222,207 @@ async def load_agent_config_from_db(db) -> bool:
         return False
 
 
+# ==================== Ingestion Performance Configuration ====================
+
+INGESTION_CONFIG_COLLECTION = "ingestion_config"
+INGESTION_CONFIG_DOC_ID = "performance_config"
+
+
+class IngestionPerformanceConfig(BaseModel):
+    """Ingestion worker performance configuration settings."""
+    # Process isolation
+    process_isolation_enabled: bool = Field(default=True, description="Run ingestion in separate worker process")
+    
+    # Concurrency settings
+    max_concurrent_files: int = Field(default=2, ge=1, le=10, description="Max files to process concurrently")
+    embedding_batch_size: int = Field(default=100, ge=10, le=500, description="Chunks to embed per API call")
+    
+    # Worker pool settings
+    thread_pool_workers: int = Field(default=4, ge=1, le=16, description="Thread pool workers for CPU tasks")
+    
+    # Rate limiting
+    embedding_requests_per_minute: int = Field(default=3000, ge=100, le=10000, description="Embedding API rate limit")
+    
+    # Timeout settings
+    file_processing_timeout: int = Field(default=300, ge=60, le=1800, description="Single file timeout (seconds)")
+    
+    # Polling settings
+    job_poll_interval_seconds: float = Field(default=1.0, ge=0.5, le=10.0, description="Worker job poll interval")
+
+
+@router.get("/ingestion-performance")
+async def get_ingestion_performance_config(request: Request):
+    """
+    Get current ingestion performance configuration.
+    
+    Returns settings for process isolation, concurrency, and timeouts.
+    """
+    db = request.app.state.db
+    
+    # Get from database if exists
+    try:
+        collection = db.db[INGESTION_CONFIG_COLLECTION]
+        doc = await collection.find_one({"_id": INGESTION_CONFIG_DOC_ID})
+        
+        if doc:
+            return {
+                "process_isolation_enabled": doc.get("process_isolation_enabled", settings.ingestion_process_isolation),
+                "max_concurrent_files": doc.get("max_concurrent_files", settings.ingestion_max_concurrent_files),
+                "embedding_batch_size": doc.get("embedding_batch_size", settings.ingestion_embedding_batch_size),
+                "thread_pool_workers": doc.get("thread_pool_workers", settings.ingestion_thread_pool_workers),
+                "embedding_requests_per_minute": doc.get("embedding_requests_per_minute", settings.ingestion_embedding_requests_per_minute),
+                "file_processing_timeout": doc.get("file_processing_timeout", settings.ingestion_file_processing_timeout),
+                "job_poll_interval_seconds": doc.get("job_poll_interval_seconds", settings.ingestion_job_poll_interval),
+            }
+    except Exception as e:
+        logger.warning(f"Failed to load ingestion config from database: {e}")
+    
+    # Return defaults from settings
+    return {
+        "process_isolation_enabled": settings.ingestion_process_isolation,
+        "max_concurrent_files": settings.ingestion_max_concurrent_files,
+        "embedding_batch_size": settings.ingestion_embedding_batch_size,
+        "thread_pool_workers": settings.ingestion_thread_pool_workers,
+        "embedding_requests_per_minute": settings.ingestion_embedding_requests_per_minute,
+        "file_processing_timeout": settings.ingestion_file_processing_timeout,
+        "job_poll_interval_seconds": settings.ingestion_job_poll_interval,
+    }
+
+
+@router.post("/ingestion-performance")
+async def save_ingestion_performance_config(request: Request, config: IngestionPerformanceConfig):
+    """
+    Save ingestion performance configuration to database.
+    
+    Updates settings for process isolation, concurrency, and timeouts.
+    Configuration changes are applied when the next ingestion job starts.
+    """
+    db = request.app.state.db
+    
+    try:
+        collection = db.db[INGESTION_CONFIG_COLLECTION]
+        
+        update_doc = {
+            "_id": INGESTION_CONFIG_DOC_ID,
+            "process_isolation_enabled": config.process_isolation_enabled,
+            "max_concurrent_files": config.max_concurrent_files,
+            "embedding_batch_size": config.embedding_batch_size,
+            "thread_pool_workers": config.thread_pool_workers,
+            "embedding_requests_per_minute": config.embedding_requests_per_minute,
+            "file_processing_timeout": config.file_processing_timeout,
+            "job_poll_interval_seconds": config.job_poll_interval_seconds,
+            "updated_at": datetime.now().isoformat(),
+        }
+        
+        await collection.replace_one(
+            {"_id": INGESTION_CONFIG_DOC_ID},
+            update_doc,
+            upsert=True
+        )
+        
+        # Update runtime settings
+        settings.ingestion_process_isolation = config.process_isolation_enabled
+        settings.ingestion_max_concurrent_files = config.max_concurrent_files
+        settings.ingestion_embedding_batch_size = config.embedding_batch_size
+        settings.ingestion_thread_pool_workers = config.thread_pool_workers
+        settings.ingestion_embedding_requests_per_minute = config.embedding_requests_per_minute
+        settings.ingestion_file_processing_timeout = config.file_processing_timeout
+        settings.ingestion_job_poll_interval = config.job_poll_interval_seconds
+        
+        logger.info(f"Saved ingestion performance config: concurrent_files={config.max_concurrent_files}, isolation={config.process_isolation_enabled}")
+        
+        return {"success": True, "message": "Ingestion performance configuration saved"}
+    except Exception as e:
+        logger.error(f"Failed to save ingestion config: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save configuration: {str(e)}")
+
+
+async def load_ingestion_config_from_db(db) -> bool:
+    """Load ingestion performance config from database on startup."""
+    try:
+        collection = db.db[INGESTION_CONFIG_COLLECTION]
+        doc = await collection.find_one({"_id": INGESTION_CONFIG_DOC_ID})
+        
+        if doc:
+            settings.ingestion_process_isolation = doc.get("process_isolation_enabled", settings.ingestion_process_isolation)
+            settings.ingestion_max_concurrent_files = doc.get("max_concurrent_files", settings.ingestion_max_concurrent_files)
+            settings.ingestion_embedding_batch_size = doc.get("embedding_batch_size", settings.ingestion_embedding_batch_size)
+            settings.ingestion_thread_pool_workers = doc.get("thread_pool_workers", settings.ingestion_thread_pool_workers)
+            settings.ingestion_embedding_requests_per_minute = doc.get("embedding_requests_per_minute", settings.ingestion_embedding_requests_per_minute)
+            settings.ingestion_file_processing_timeout = doc.get("file_processing_timeout", settings.ingestion_file_processing_timeout)
+            settings.ingestion_job_poll_interval = doc.get("job_poll_interval_seconds", settings.ingestion_job_poll_interval)
+            
+            logger.info(f"Loaded ingestion performance config: concurrent_files={settings.ingestion_max_concurrent_files}, isolation={settings.ingestion_process_isolation}")
+            return True
+        return False
+    except Exception as e:
+        logger.warning(f"Failed to load ingestion config from database: {e}")
+        return False
+
+
+# ==================== Ingestion Worker Health ====================
+
+@router.get("/worker-health")
+async def get_worker_health(request: Request):
+    """
+    Check ingestion worker health status.
+    
+    Returns information about the worker process including:
+    - Whether the worker is running (has a job)
+    - Worker health based on recent heartbeat
+    - Worker PID and last heartbeat time
+    """
+    db = request.app.state.db
+    
+    try:
+        # Check for any running job with recent heartbeat
+        job = await db.db["ingestion_jobs"].find_one(
+            {"status": "RUNNING"},
+            {"worker_heartbeat": 1, "worker_pid": 1, "started_at": 1}
+        )
+        
+        if job:
+            last_heartbeat = job.get("worker_heartbeat")
+            worker_pid = job.get("worker_pid")
+            
+            # Consider healthy if heartbeat within last 30 seconds
+            is_healthy = False
+            if last_heartbeat:
+                elapsed = (datetime.now() - last_heartbeat).total_seconds()
+                is_healthy = elapsed < 30
+            
+            return {
+                "worker_running": True,
+                "worker_healthy": is_healthy,
+                "worker_pid": worker_pid,
+                "last_heartbeat": last_heartbeat.isoformat() if last_heartbeat else None,
+                "job_started_at": job.get("started_at").isoformat() if job.get("started_at") else None
+            }
+        
+        # No running job - check if worker picked up any job recently
+        recent_job = await db.db["ingestion_jobs"].find_one(
+            {"status": {"$in": ["COMPLETED", "FAILED", "STOPPED"]}},
+            sort=[("completed_at", -1)],
+            projection={"completed_at": 1, "worker_pid": 1}
+        )
+        
+        return {
+            "worker_running": False,
+            "worker_healthy": None,
+            "worker_pid": recent_job.get("worker_pid") if recent_job else None,
+            "last_heartbeat": None,
+            "last_job_completed": recent_job.get("completed_at").isoformat() if recent_job and recent_job.get("completed_at") else None
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to check worker health: {e}")
+        return {
+            "worker_running": False,
+            "worker_healthy": None,
+            "error": str(e)
+        }
+
+
 # LLM Provider configuration collection
 LLM_CONFIG_COLLECTION = "llm_config"
 LLM_CONFIG_DOC_ID = "provider_config"

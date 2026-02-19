@@ -1,16 +1,19 @@
 # RecallHub Backend Build Helper
 # ===============================
-# Manages base image and fast builds
+# Manages base image and fast builds for backend and ingestion-worker
 #
 # Usage:
 #   .\build-backend.ps1 -Base       # Build base image (one-time, ~15 min)
-#   .\build-backend.ps1 -Fast       # Fast build using base image (~10 sec)
-#   .\build-backend.ps1 -Full       # Full rebuild (default, ~15 min)
+#   .\build-backend.ps1 -Fast       # Fast build backend using base image (~30 sec)
+#   .\build-backend.ps1 -Worker     # Fast build ingestion-worker using base image (~30 sec)
+#   .\build-backend.ps1 -All        # Fast build both backend and worker (~30 sec)
 #   .\build-backend.ps1 -Check      # Check if base image exists
 
 param(
     [switch]$Base,
     [switch]$Fast,
+    [switch]$Worker,
+    [switch]$All,
     [switch]$Full,
     [switch]$Check,
     [switch]$Help
@@ -19,6 +22,7 @@ param(
 $ErrorActionPreference = "Stop"
 $BaseImageName = "recallhub-backend-base"
 $AppImageName = "mongodb-rag-agent-backend"
+$WorkerImageName = "mongodb-rag-agent-ingestion-worker"
 
 function Write-Header { param([string]$Msg) Write-Host "`n=== $Msg ===" -ForegroundColor Cyan }
 function Write-Success { param([string]$Msg) Write-Host "[OK] $Msg" -ForegroundColor Green }
@@ -58,21 +62,21 @@ This script manages a two-tier Docker build system for fast development:
     - Build time: ~15 minutes
     - Rebuild when: Dependencies change (rare)
 
-  APP IMAGE (${AppImageName}:latest)  
-    - Contains: Application code only
-    - Build time: ~10-30 seconds
-    - Rebuild when: Code changes (frequent)
+  APP IMAGES (built on top of base, ~30 seconds each)
+    - ${AppImageName}:latest       (Backend API)
+    - ${WorkerImageName}:latest    (Ingestion Worker)
 
 Commands:
   .\build-backend.ps1 -Base     Build the base image (one-time setup)
-  .\build-backend.ps1 -Fast     Fast build using cached base (~10 sec)
-  .\build-backend.ps1 -Full     Full rebuild from scratch (~15 min)
+  .\build-backend.ps1 -Fast     Fast build backend (~30 sec)
+  .\build-backend.ps1 -Worker   Fast build ingestion-worker (~30 sec)
+  .\build-backend.ps1 -All      Fast build both backend and worker
   .\build-backend.ps1 -Check    Check base image status
 
 Workflow:
-  1. First time:  .\build-backend.ps1 -Base    # Wait ~15 min
-  2. Daily dev:   .\build-backend.ps1 -Fast    # ~10 seconds!
-  3. Dep change:  .\build-backend.ps1 -Base    # Rebuild base
+  1. First time:  .\build-backend.ps1 -Base     # Wait ~15 min
+  2. Daily dev:   .\build-backend.ps1 -All      # ~30 seconds!
+  3. Dep change:  .\build-backend.ps1 -Base     # Rebuild base
 
 "@
 }
@@ -106,7 +110,7 @@ function Build-BaseImage {
 }
 
 function Build-FastImage {
-    Write-Header "Fast Build (code only)"
+    Write-Header "Fast Build - Backend (code only)"
     
     if (-not (Test-BaseImageExists)) {
         Write-Host "[ERROR] Base image not found!" -ForegroundColor Red
@@ -123,16 +127,79 @@ function Build-FastImage {
     
     if ($LASTEXITCODE -eq 0) {
         $elapsed = (Get-Date) - $startTime
-        Write-Success "Fast build completed in $($elapsed.TotalSeconds.ToString('0.0')) seconds"
+        Write-Success "Backend build completed in $($elapsed.TotalSeconds.ToString('0.0')) seconds"
         
         Write-Host ""
-        Write-Host "Restarting container..." -ForegroundColor Yellow
+        Write-Host "Restarting backend container..." -ForegroundColor Yellow
         docker compose up -d backend
         Write-Success "Backend updated and running!"
     } else {
-        Write-Host "[ERROR] Fast build failed" -ForegroundColor Red
+        Write-Host "[ERROR] Backend build failed" -ForegroundColor Red
         exit 1
     }
+}
+
+function Build-WorkerImage {
+    Write-Header "Fast Build - Ingestion Worker (code only)"
+    
+    if (-not (Test-BaseImageExists)) {
+        Write-Host "[ERROR] Base image not found!" -ForegroundColor Red
+        Write-Host "Run '.\build-backend.ps1 -Base' first to create the base image" -ForegroundColor Yellow
+        exit 1
+    }
+    
+    $startTime = Get-Date
+    
+    docker build `
+        -f backend/Dockerfile.worker `
+        -t ${WorkerImageName}:latest `
+        .
+    
+    if ($LASTEXITCODE -eq 0) {
+        $elapsed = (Get-Date) - $startTime
+        Write-Success "Worker build completed in $($elapsed.TotalSeconds.ToString('0.0')) seconds"
+        
+        Write-Host ""
+        Write-Host "Restarting worker container..." -ForegroundColor Yellow
+        docker compose up -d ingestion-worker
+        Write-Success "Ingestion worker updated and running!"
+    } else {
+        Write-Host "[ERROR] Worker build failed" -ForegroundColor Red
+        exit 1
+    }
+}
+
+function Build-AllImages {
+    Write-Header "Fast Build - Backend + Worker (code only)"
+    
+    if (-not (Test-BaseImageExists)) {
+        Write-Host "[ERROR] Base image not found!" -ForegroundColor Red
+        Write-Host "Run '.\build-backend.ps1 -Base' first to create the base image" -ForegroundColor Yellow
+        exit 1
+    }
+    
+    $startTime = Get-Date
+    
+    # Build both images
+    docker build -f backend/Dockerfile.fast -t ${AppImageName}:latest .
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[ERROR] Backend build failed" -ForegroundColor Red
+        exit 1
+    }
+    
+    docker build -f backend/Dockerfile.worker -t ${WorkerImageName}:latest .
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[ERROR] Worker build failed" -ForegroundColor Red
+        exit 1
+    }
+    
+    $elapsed = (Get-Date) - $startTime
+    Write-Success "Both images built in $($elapsed.TotalSeconds.ToString('0.0')) seconds"
+    
+    Write-Host ""
+    Write-Host "Restarting containers..." -ForegroundColor Yellow
+    docker compose up -d backend ingestion-worker
+    Write-Success "Backend and worker updated and running!"
 }
 
 function Build-FullImage {
@@ -171,6 +238,10 @@ if ($Help) {
     Build-BaseImage
 } elseif ($Fast) {
     Build-FastImage
+} elseif ($Worker) {
+    Build-WorkerImage
+} elseif ($All) {
+    Build-AllImages
 } elseif ($Full) {
     Build-FullImage
 } elseif ($Check) {

@@ -198,16 +198,33 @@ async def graceful_shutdown_handler(db):
 
 
 def _find_files_sync(folders: List[str], patterns: List[str]) -> List[str]:
-    """Synchronous helper to find files - runs in thread pool."""
-    import glob
+    """
+    Synchronous helper to find files - runs in thread pool.
+    
+    Uses os.walk() for single-pass directory traversal instead of multiple
+    glob calls, which is much faster on network filesystems.
+    """
+    # Convert glob patterns to extensions set for O(1) lookup
+    extensions = set()
+    for pattern in patterns:
+        # Extract extension from pattern like "*.pdf" -> ".pdf"
+        if pattern.startswith("*."):
+            extensions.add(pattern[1:].lower())  # ".pdf"
+        elif pattern.startswith("*"):
+            extensions.add(pattern[1:].lower())
+    
     all_files = []
     for folder in folders:
         if not os.path.exists(folder):
             continue
-        for pattern in patterns:
-            all_files.extend(
-                glob.glob(os.path.join(folder, "**", pattern), recursive=True)
-            )
+        
+        # Single-pass directory traversal
+        for root, dirs, files in os.walk(folder):
+            for filename in files:
+                ext = os.path.splitext(filename)[1].lower()
+                if ext in extensions:
+                    all_files.append(os.path.join(root, filename))
+    
     return all_files
 
 
@@ -436,6 +453,7 @@ async def run_ingestion(job_id: str, config: dict, db):
         "total_files": 0,
         "processed_files": 0,
         "failed_files": 0,
+        "duplicates_skipped": 0,
         "excluded_files": 0,
         "document_count": 0,
         "image_count": 0,
@@ -600,14 +618,25 @@ async def run_ingestion(job_id: str, config: dict, db):
             incremental=config.get("incremental", True)
         )
         
+        # Calculate stats - distinguish between real errors and duplicates
+        duplicates_skipped = sum(
+            1 for r in results 
+            if r.errors and len(r.errors) > 0 and "Duplicate of:" in r.errors[0]
+        )
+        actual_failures = sum(
+            1 for r in results 
+            if r.errors and len(r.errors) > 0 and "Duplicate of:" not in r.errors[0]
+        )
+        
         # Update job status to completed
         await update_job_state(
             status=IngestionStatus.COMPLETED,
             completed_at=datetime.now().isoformat(),
             processed_files=len(results),
             chunks_created=sum(r.chunks_created for r in results),
-            failed_files=sum(1 for r in results if r.errors),
-            errors=[err for r in results for err in r.errors][:20],
+            failed_files=actual_failures,
+            duplicates_skipped=duplicates_skipped,
+            errors=[err for r in results for err in r.errors if "Duplicate of:" not in err][:20],
             progress_percent=100.0
         )
         
@@ -684,6 +713,7 @@ async def start_ingestion(
         "total_files": 0,
         "processed_files": 0,
         "failed_files": 0,
+        "duplicates_skipped": 0,
         "chunks_created": 0,
         "current_file": None,
         "errors": [],
@@ -1729,8 +1759,8 @@ async def open_in_explorer(request: Request, document_id: str):
     """
     Open the document's folder in OS file explorer.
     
-    This only works when the backend is running locally (not in Docker).
-    For Docker, it returns the file path for the user to navigate manually.
+    For local execution: Opens the file in the OS file explorer.
+    For Docker: Returns the container path (cannot open explorer from container).
     """
     import subprocess
     import platform
@@ -1757,7 +1787,20 @@ async def open_in_explorer(request: Request, document_id: str):
             "source": source
         }
     
-    # Check if file exists
+    # Check if we're running in Docker (container path or .dockerenv exists)
+    is_docker = file_path.startswith("/app/mounts/") or os.path.exists("/.dockerenv")
+    
+    if is_docker:
+        # Running in Docker - cannot open file explorer, return path for manual navigation
+        # The file exists in the container but we can't open explorer from there
+        return {
+            "success": False,
+            "message": "Cannot open explorer from Docker container. Copy the path below to navigate manually.",
+            "file_path": file_path,
+            "is_docker": True
+        }
+    
+    # Check if file exists (only for non-Docker, where paths are local)
     if not os.path.exists(file_path):
         return {
             "success": False,
@@ -1774,7 +1817,7 @@ async def open_in_explorer(request: Request, document_id: str):
             subprocess.Popen(['explorer', '/select,', file_path])
         elif system == "Darwin":  # macOS
             subprocess.Popen(['open', '-R', file_path])
-        else:  # Linux
+        else:  # Linux (with GUI - non-Docker Linux)
             subprocess.Popen(['xdg-open', folder_path])
         
         return {

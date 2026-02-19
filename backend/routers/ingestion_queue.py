@@ -3,6 +3,8 @@
 import logging
 import asyncio
 import uuid
+import os
+from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from enum import Enum
@@ -44,6 +46,7 @@ class QueuedIngestionJob(BaseModel):
     id: str
     profile_key: str
     profile_name: str
+    documents_folder: Optional[str] = None
     file_types: List[str] = Field(default_factory=lambda: ["all"])
     incremental: bool = True
     priority: int = 0  # Higher = more priority
@@ -104,6 +107,34 @@ def get_profile_manager():
     return get_pm(settings.profiles_path)
 
 
+def validate_profile_folder(profile) -> tuple[str, bool, str]:
+    """
+    Validate that the profile's documents folder exists and is accessible.
+    Returns: (folder_path, is_accessible, error_message)
+    """
+    folders = profile.documents_folders
+    if not folders:
+        return "", False, "No documents folders configured"
+    
+    primary_folder = folders[0]  # Use first folder as primary
+    folder_path = Path(primary_folder)
+    
+    if not folder_path.exists():
+        return primary_folder, False, f"Folder does not exist: {primary_folder}"
+    
+    if not folder_path.is_dir():
+        return primary_folder, False, f"Path is not a directory: {primary_folder}"
+    
+    # Check if readable
+    try:
+        list(folder_path.iterdir())
+        return primary_folder, True, ""
+    except PermissionError:
+        return primary_folder, False, f"Permission denied: {primary_folder}"
+    except Exception as e:
+        return primary_folder, False, f"Error accessing folder: {str(e)}"
+
+
 # Track if queue processor is running
 _queue_processor_running = False
 
@@ -150,10 +181,19 @@ async def add_to_queue(
     
     profile = profiles[queue_request.profile_key]
     
+    # Validate documents folder is accessible
+    folder_path, is_accessible, error_msg = validate_profile_folder(profile)
+    if not is_accessible:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Cannot queue ingestion: {error_msg}. Please ensure the documents folder is mounted and accessible."
+        )
+    
     job = {
         "id": str(uuid.uuid4()),
         "profile_key": queue_request.profile_key,
         "profile_name": profile.name,
+        "documents_folder": folder_path,
         "file_types": queue_request.file_types,
         "incremental": queue_request.incremental,
         "priority": queue_request.priority,
@@ -187,18 +227,27 @@ async def add_multiple_to_queue(
     profiles = pm.list_profiles()
     
     added_jobs = []
+    skipped = []
     
     async with _queue_lock:
         for queue_request in jobs:
             if queue_request.profile_key not in profiles:
+                skipped.append({"profile": queue_request.profile_key, "reason": "Profile not found"})
                 continue
             
             profile = profiles[queue_request.profile_key]
+            
+            # Validate documents folder is accessible
+            folder_path, is_accessible, error_msg = validate_profile_folder(profile)
+            if not is_accessible:
+                skipped.append({"profile": queue_request.profile_key, "reason": error_msg})
+                continue
             
             job = {
                 "id": str(uuid.uuid4()),
                 "profile_key": queue_request.profile_key,
                 "profile_name": profile.name,
+                "documents_folder": folder_path,
                 "file_types": queue_request.file_types,
                 "incremental": queue_request.incremental,
                 "priority": queue_request.priority,
@@ -214,7 +263,7 @@ async def add_multiple_to_queue(
     if not _queue_processor_running and added_jobs:
         background_tasks.add_task(_process_queue, request.app.state.db)
     
-    return {"success": True, "added": len(added_jobs), "jobs": added_jobs}
+    return {"success": True, "added": len(added_jobs), "jobs": added_jobs, "skipped": skipped}
 
 
 @router.delete("/queue/{job_id}")

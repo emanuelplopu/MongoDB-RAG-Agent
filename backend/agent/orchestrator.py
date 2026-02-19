@@ -388,9 +388,29 @@ class Orchestrator:
         # Sort by relevance
         all_info.sort(key=lambda x: x.get("score", 0), reverse=True)
         
+        # Format for prompt - limit total content size to avoid context overflow
+        # Estimate ~4 chars per token, aim for max ~10k tokens for results
+        max_content_chars = 40000
+        current_chars = 0
+        limited_info = []
+        
+        for info in all_info:
+            content = info.get("content", "")
+            # Truncate individual content if needed
+            if len(content) > 2000:
+                content = content[:2000] + "..."
+                info = {**info, "content": content}
+            
+            entry_chars = len(json.dumps(info))
+            if current_chars + entry_chars > max_content_chars:
+                logger.info(f"Truncating synthesis context: {len(limited_info)} of {len(all_info)} items used")
+                break
+            limited_info.append(info)
+            current_chars += entry_chars
+        
         # Format for prompt
-        if all_info:
-            results_str = json.dumps(all_info[:20], indent=2)  # Top 20 results
+        if limited_info:
+            results_str = json.dumps(limited_info, indent=2)
         else:
             results_str = "No relevant information was found in the searches."
         
@@ -399,10 +419,30 @@ class Orchestrator:
             all_results=results_str
         )
         
-        result = await self._call_llm(prompt, OrchestratorPhase.SYNTHESIZE, expect_json=False)
+        try:
+            result = await self._call_llm(prompt, OrchestratorPhase.SYNTHESIZE, expect_json=False)
+            response_text = result.get("response")
+            
+            # Check for empty or whitespace-only response
+            if response_text and response_text.strip():
+                return response_text
+            
+            logger.warning("LLM returned empty response during synthesis, using fallback")
+            
+        except Exception as e:
+            logger.error(f"Synthesis LLM call failed: {e}")
         
-        response_text = result.get("response") or "I was unable to generate a response."
-        return response_text
+        # Fallback: Generate a basic response from the found documents
+        if limited_info:
+            fallback_parts = ["Based on the search results, here's what I found:\n"]
+            for i, info in enumerate(limited_info[:5], 1):
+                title = info.get("title", "Untitled")
+                content = info.get("content", "")[:500]
+                source = info.get("source", info.get("type", "unknown"))
+                fallback_parts.append(f"**{i}. {title}** (Source: {source})\n{content}\n")
+            return "\n".join(fallback_parts)
+        
+        return "I was unable to generate a response. The search found relevant documents but synthesis failed. Please try again."
     
     def _format_results_for_prompt(self, results: List[WorkerResult]) -> str:
         """Format worker results for inclusion in prompts.
