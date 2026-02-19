@@ -1,5 +1,31 @@
 # RecallHub Development Instructions
 
+## CRITICAL: Docker Build Commands
+
+**For code-only changes (ALWAYS use this):**
+```powershell
+# Build and deploy both backend and ingestion-worker (~5 seconds total)
+.\build-backend.ps1 -All
+
+# Or build individually:
+.\build-backend.ps1 -Fast     # Backend only (~3 sec)
+.\build-backend.ps1 -Worker   # Ingestion worker only (~1 sec)
+```
+
+**Only rebuild base image when dependencies change (requirements*.txt):**
+```powershell
+.\build-backend.ps1 -Base     # ~15 min (one-time)
+```
+
+**Check base image status:**
+```powershell
+.\build-backend.ps1 -Check
+```
+
+**NEVER use `docker-compose build --no-cache backend` for code changes** - it takes 14+ minutes and rebuilds all ML dependencies unnecessarily.
+
+---
+
 ## Project Overview
 
 RecallHub - Intelligent Knowledge Base Search combining MongoDB Atlas Vector Search with Pydantic AI for intelligent document retrieval. Uses Docling for multi-format ingestion, Motor for async MongoDB operations, and hybrid search via `$rankFusion`. Built with UV, type-safe Pydantic models, and conversational CLI.

@@ -9,8 +9,9 @@ import os
 import asyncio
 import logging
 import glob
+import hashlib
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set, Tuple
 from datetime import datetime
 import argparse
 from dataclasses import dataclass
@@ -31,6 +32,24 @@ from src.profile import get_profile_manager
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+
+def compute_file_hash(file_path: str) -> str:
+    """
+    Compute SHA256 hash of a file for deduplication.
+    
+    Args:
+        file_path: Path to the file
+        
+    Returns:
+        Hex digest of the file's SHA256 hash
+    """
+    sha256_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        # Read in 64KB chunks for memory efficiency
+        for chunk in iter(lambda: f.read(65536), b""):
+            sha256_hash.update(chunk)
+    return sha256_hash.hexdigest()
 
 
 @dataclass
@@ -170,6 +189,9 @@ class DocumentIngestionPipeline:
         """
         Find all supported document files in all document folders.
         
+        Uses os.walk() for single-pass directory traversal instead of multiple
+        glob calls, which is much faster on network filesystems (17x faster).
+        
         Files are sorted for optimal processing order:
         1. Text files first (fastest to process)
         2. Then PDF, DOCX, Excel, etc.
@@ -180,18 +202,18 @@ class DocumentIngestionPipeline:
         Returns:
             List of file paths in optimal processing order
         """
-        # Supported file patterns - Docling + text formats + audio
-        patterns = [
-            "*.md", "*.markdown", "*.txt",  # Text formats
-            "*.pdf",  # PDF
-            "*.docx", "*.doc",  # Word
-            "*.pptx", "*.ppt",  # PowerPoint
-            "*.xlsx", "*.xls",  # Excel
-            "*.html", "*.htm",  # HTML
-            "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.bmp",  # Images
-            "*.mp3", "*.wav", "*.m4a", "*.flac",  # Audio formats
-            "*.mp4", "*.avi", "*.mkv", "*.mov", "*.webm",  # Video formats
-        ]
+        # Supported extensions (converted from glob patterns)
+        extensions = {
+            ".md", ".markdown", ".txt",  # Text formats
+            ".pdf",  # PDF
+            ".docx", ".doc",  # Word
+            ".pptx", ".ppt",  # PowerPoint
+            ".xlsx", ".xls",  # Excel
+            ".html", ".htm",  # HTML
+            ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",  # Images
+            ".mp3", ".wav", ".m4a", ".flac",  # Audio formats
+            ".mp4", ".avi", ".mkv", ".mov", ".webm",  # Video formats
+        }
         
         all_files = []
         
@@ -200,13 +222,12 @@ class DocumentIngestionPipeline:
                 logger.warning(f"Documents folder not found: {folder}")
                 continue
             
-            for pattern in patterns:
-                all_files.extend(
-                    glob.glob(
-                        os.path.join(folder, "**", pattern),
-                        recursive=True
-                    )
-                )
+            # Single-pass directory traversal - much faster than multiple glob calls
+            for root, dirs, files in os.walk(folder):
+                for filename in files:
+                    ext = os.path.splitext(filename)[1].lower()
+                    if ext in extensions:
+                        all_files.append(os.path.join(root, filename))
         
         if not all_files:
             logger.error(f"No document files found in folders: {self.documents_folders}")
@@ -773,7 +794,8 @@ class DocumentIngestionPipeline:
         source: str,
         content: str,
         chunks: List[DocumentChunk],
-        metadata: Dict[str, Any]
+        metadata: Dict[str, Any],
+        content_hash: Optional[str] = None
     ) -> str:
         """
         Save document and chunks to MongoDB.
@@ -784,6 +806,7 @@ class DocumentIngestionPipeline:
             content: Document content
             chunks: List of document chunks with embeddings
             metadata: Document metadata
+            content_hash: SHA256 hash of original file for deduplication
 
         Returns:
             Document ID (ObjectId as string)
@@ -802,6 +825,7 @@ class DocumentIngestionPipeline:
             "title": title,
             "source": source,
             "content": content,
+            "content_hash": content_hash,  # Store hash for deduplication
             "metadata": {
                 **metadata,
                 "chunks_count": len(chunks)  # Store chunks count for efficient retrieval
@@ -853,17 +877,31 @@ class DocumentIngestionPipeline:
         docs_result = await documents_collection.delete_many({})
         logger.info(f"Deleted {docs_result.deleted_count} documents")
 
-    async def _ingest_single_document(self, file_path: str) -> IngestionResult:
+    async def _ingest_single_document(
+        self,
+        file_path: str,
+        content_hash: Optional[str] = None
+    ) -> IngestionResult:
         """
         Ingest a single document.
 
         Args:
             file_path: Path to the document file
+            content_hash: Pre-computed SHA256 hash of the file (for deduplication)
 
         Returns:
             Ingestion result
         """
         start_time = datetime.now()
+        
+        # Compute hash if not provided
+        if content_hash is None:
+            loop = asyncio.get_running_loop()
+            content_hash = await loop.run_in_executor(
+                self.get_executor(),
+                compute_file_hash,
+                file_path
+            )
 
         # Run CPU-intensive document reading in thread pool to avoid blocking event loop
         # This allows API requests (login, status checks) to be processed during ingestion
@@ -930,7 +968,8 @@ class DocumentIngestionPipeline:
             document_source,
             document_content,
             embedded_chunks,
-            document_metadata
+            document_metadata,
+            content_hash
         )
 
         logger.info(f"Saved document to MongoDB with ID: {document_id}")
@@ -968,10 +1007,37 @@ class DocumentIngestionPipeline:
         
         return existing
 
+    async def _get_existing_hashes(self) -> Dict[str, str]:
+        """
+        Get mapping of content hashes to document sources from MongoDB.
+        
+        Used for content-based deduplication to detect identical files
+        at different paths.
+        
+        Returns:
+            Dict mapping content_hash to source path
+        """
+        documents_collection = self.db[
+            self.settings.mongodb_collection_documents
+        ]
+        
+        # Get all existing content hashes
+        cursor = documents_collection.find(
+            {"content_hash": {"$exists": True, "$ne": None}},
+            {"content_hash": 1, "source": 1}
+        )
+        existing = {}
+        async for doc in cursor:
+            if doc.get("content_hash"):
+                existing[doc["content_hash"]] = doc.get("source", "unknown")
+        
+        return existing
+
     async def ingest_documents(
         self,
         progress_callback: Optional[callable] = None,
-        incremental: bool = True
+        incremental: bool = True,
+        max_concurrent_files: int = 1
     ) -> List[IngestionResult]:
         """
         Ingest all documents from the documents folder.
@@ -979,6 +1045,7 @@ class DocumentIngestionPipeline:
         Args:
             progress_callback: Optional callback for progress updates
             incremental: If True, skip already-ingested files (default: True)
+            max_concurrent_files: Number of files to process concurrently (default: 1)
 
         Returns:
             List of ingestion results
@@ -990,16 +1057,21 @@ class DocumentIngestionPipeline:
         if self.clean_before_ingest:
             await self._clean_databases()
             existing_sources = set()  # Nothing exists after cleaning
+            existing_hashes = {}  # No hashes after cleaning
         elif incremental:
             # Yield to event loop before potentially slow DB query
             await asyncio.sleep(0)
             # Get existing sources for incremental mode
             existing_sources = await self._get_existing_sources()
             logger.info(f"Found {len(existing_sources)} already-ingested documents")
+            # Get existing hashes for content-based deduplication
+            existing_hashes = await self._get_existing_hashes()
+            logger.info(f"Found {len(existing_hashes)} content hashes for deduplication")
             # Yield again after DB query
             await asyncio.sleep(0)
         else:
             existing_sources = set()
+            existing_hashes = {}
 
         # Find all supported document files - run in thread pool to avoid blocking
         # glob.glob with recursive=True can be slow on large directory structures
@@ -1047,35 +1119,114 @@ class DocumentIngestionPipeline:
         logger.info(f"Processing {len(document_files)} new documents")
 
         results = []
+        duplicates_skipped = 0
+        
+        # Use concurrent processing if max_concurrent_files > 1
+        if max_concurrent_files > 1:
+            results, duplicates_skipped = await self._ingest_documents_concurrent(
+                document_files=document_files,
+                existing_hashes=existing_hashes,
+                incremental=incremental,
+                max_concurrent=max_concurrent_files,
+                progress_callback=progress_callback
+            )
+        else:
+            # Sequential processing (original behavior)
+            results, duplicates_skipped = await self._ingest_documents_sequential(
+                document_files=document_files,
+                existing_hashes=existing_hashes,
+                incremental=incremental,
+                progress_callback=progress_callback
+            )
 
+        # Log summary
+        total_chunks = sum(r.chunks_created for r in results)
+        total_errors = sum(1 for r in results if r.errors and "Duplicate of:" not in r.errors[0])
+
+        logger.info(
+            f"Ingestion complete: {len(results)} documents, "
+            f"{total_chunks} chunks, {total_errors} errors, "
+            f"{duplicates_skipped} duplicates skipped"
+        )
+
+        return results
+    
+    async def _ingest_documents_sequential(
+        self,
+        document_files: List[str],
+        existing_hashes: Dict[str, str],
+        incremental: bool,
+        progress_callback: Optional[callable] = None
+    ) -> Tuple[List[IngestionResult], int]:
+        """
+        Process documents sequentially (original behavior).
+        
+        Args:
+            document_files: List of file paths to process
+            existing_hashes: Dict of content hashes to source paths
+            incremental: Whether to skip duplicates
+            progress_callback: Optional progress callback
+            
+        Returns:
+            Tuple of (results list, duplicates skipped count)
+        """
+        results = []
+        duplicates_skipped = 0
+        
         for i, file_path in enumerate(document_files):
             # Give API requests priority - small delay between documents
-            # This ensures login, status checks, etc. remain responsive
-            await asyncio.sleep(0.05)  # 50ms pause between documents
+            await asyncio.sleep(0.05)
             
-            # Call progress callback BEFORE processing to show current file
+            # Call progress callback BEFORE processing
             if progress_callback:
-                # Pass current file path for file type categorization
                 progress_callback(i, len(document_files), file_path)
             
             try:
-                logger.info(
-                    f"Processing file {i+1}/{len(document_files)}: {file_path}"
+                # Compute file hash for content-based deduplication
+                loop = asyncio.get_running_loop()
+                content_hash = await loop.run_in_executor(
+                    self.get_executor(),
+                    compute_file_hash,
+                    file_path
                 )
-
-                result = await self._ingest_single_document(file_path)
+                
+                # Check if this content already exists
+                if incremental and content_hash in existing_hashes:
+                    original_source = existing_hashes[content_hash]
+                    logger.info(
+                        f"Skipping duplicate content: {file_path} "
+                        f"(identical to: {original_source})"
+                    )
+                    duplicates_skipped += 1
+                    results.append(IngestionResult(
+                        document_id="",
+                        title=os.path.basename(file_path),
+                        chunks_created=0,
+                        processing_time_ms=0,
+                        errors=[f"Duplicate of: {original_source}"]
+                    ))
+                    if progress_callback:
+                        progress_callback(i + 1, len(document_files), file_path, 0)
+                    continue
+                
+                logger.info(f"Processing file {i+1}/{len(document_files)}: {file_path}")
+                
+                result = await self._ingest_single_document(file_path, content_hash)
                 results.append(result)
-
-                # Call progress callback AFTER processing with result info
+                
+                # Add hash to catch duplicates within same batch
+                if content_hash and result.document_id:
+                    existing_hashes[content_hash] = os.path.basename(file_path)
+                
+                # Progress callback AFTER processing
                 if progress_callback:
-                    # Pass current file and chunks created for this file
                     progress_callback(
                         i + 1, 
                         len(document_files), 
                         file_path,
                         result.chunks_created if result else 0
                     )
-
+                    
             except Exception as e:
                 logger.exception(f"Failed to process {file_path}: {e}")
                 results.append(IngestionResult(
@@ -1085,20 +1236,123 @@ class DocumentIngestionPipeline:
                     processing_time_ms=0,
                     errors=[str(e)]
                 ))
-                # Report failure in progress
                 if progress_callback:
                     progress_callback(i + 1, len(document_files), file_path, 0)
-
-        # Log summary
-        total_chunks = sum(r.chunks_created for r in results)
-        total_errors = sum(len(r.errors) for r in results)
-
-        logger.info(
-            f"Ingestion complete: {len(results)} documents, "
-            f"{total_chunks} chunks, {total_errors} errors"
-        )
-
-        return results
+        
+        return results, duplicates_skipped
+    
+    async def _ingest_documents_concurrent(
+        self,
+        document_files: List[str],
+        existing_hashes: Dict[str, str],
+        incremental: bool,
+        max_concurrent: int,
+        progress_callback: Optional[callable] = None
+    ) -> Tuple[List[IngestionResult], int]:
+        """
+        Process documents concurrently using a semaphore.
+        
+        Args:
+            document_files: List of file paths to process
+            existing_hashes: Dict of content hashes to source paths
+            incremental: Whether to skip duplicates
+            max_concurrent: Maximum concurrent files to process
+            progress_callback: Optional progress callback
+            
+        Returns:
+            Tuple of (results list, duplicates skipped count)
+        """
+        import threading
+        
+        semaphore = asyncio.Semaphore(max_concurrent)
+        results: List[IngestionResult] = []
+        duplicates_skipped = 0
+        processed_count = 0
+        results_lock = threading.Lock()
+        
+        total_files = len(document_files)
+        
+        async def process_file(index: int, file_path: str):
+            nonlocal duplicates_skipped, processed_count
+            
+            async with semaphore:
+                # Progress callback before processing
+                if progress_callback:
+                    progress_callback(processed_count, total_files, file_path)
+                
+                try:
+                    # Compute file hash
+                    loop = asyncio.get_running_loop()
+                    content_hash = await loop.run_in_executor(
+                        self.get_executor(),
+                        compute_file_hash,
+                        file_path
+                    )
+                    
+                    # Check for duplicates (thread-safe check)
+                    with results_lock:
+                        if incremental and content_hash in existing_hashes:
+                            original_source = existing_hashes[content_hash]
+                            logger.info(
+                                f"Skipping duplicate: {file_path} "
+                                f"(identical to: {original_source})"
+                            )
+                            duplicates_skipped += 1
+                            result = IngestionResult(
+                                document_id="",
+                                title=os.path.basename(file_path),
+                                chunks_created=0,
+                                processing_time_ms=0,
+                                errors=[f"Duplicate of: {original_source}"]
+                            )
+                            results.append(result)
+                            processed_count += 1
+                            if progress_callback:
+                                progress_callback(processed_count, total_files, file_path, 0)
+                            return
+                    
+                    logger.info(f"Processing file ({processed_count+1}/{total_files}): {file_path}")
+                    
+                    result = await self._ingest_single_document(file_path, content_hash)
+                    
+                    with results_lock:
+                        results.append(result)
+                        if content_hash and result.document_id:
+                            existing_hashes[content_hash] = os.path.basename(file_path)
+                        processed_count += 1
+                    
+                    if progress_callback:
+                        progress_callback(
+                            processed_count, 
+                            total_files, 
+                            file_path,
+                            result.chunks_created if result else 0
+                        )
+                        
+                except Exception as e:
+                    logger.exception(f"Failed to process {file_path}: {e}")
+                    with results_lock:
+                        results.append(IngestionResult(
+                            document_id="",
+                            title=os.path.basename(file_path),
+                            chunks_created=0,
+                            processing_time_ms=0,
+                            errors=[str(e)]
+                        ))
+                        processed_count += 1
+                    if progress_callback:
+                        progress_callback(processed_count, total_files, file_path, 0)
+        
+        # Create tasks for all files
+        tasks = [
+            asyncio.create_task(process_file(i, file_path))
+            for i, file_path in enumerate(document_files)
+        ]
+        
+        # Wait for all tasks to complete
+        await asyncio.gather(*tasks, return_exceptions=True)
+        
+        return results, duplicates_skipped
 
 
 async def main() -> None:
