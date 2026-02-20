@@ -7,13 +7,14 @@ The Orchestrator is responsible for:
 4. Synthesizing final responses
 
 It uses a "thinking" model (like GPT-5.1 or o1) for complex reasoning.
-Prompts are loaded from the database for easy customization.
+Prompts are loaded from the database for easy customization,
+or from the active strategy if one is provided.
 """
 
 import json
 import logging
 import time
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, TYPE_CHECKING
 
 from backend.agent.schemas import (
     TaskDefinition, TaskType, AgentPlan, EvaluationDecision,
@@ -21,6 +22,9 @@ from backend.agent.schemas import (
 )
 from backend.core.config import settings
 from backend.routers.prompts import get_agent_prompt_sync, DEFAULT_AGENT_PROMPTS
+
+if TYPE_CHECKING:
+    from backend.agent.strategies.base import BaseStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -35,15 +39,22 @@ def _get_default_prompt(key: str) -> str:
 class Orchestrator:
     """High-level thinking model that plans and coordinates searches."""
     
-    def __init__(self, model: str = None, provider: str = None):
+    def __init__(
+        self,
+        model: str = None,
+        provider: str = None,
+        strategy: "BaseStrategy" = None
+    ):
         """Initialize orchestrator.
         
         Args:
             model: LLM model to use for orchestration
             provider: LLM provider (openai, google, anthropic)
+            strategy: Strategy instance to use for prompts and processing
         """
         self.model = model or settings.orchestrator_model
         self.provider = provider or settings.orchestrator_provider
+        self.strategy = strategy
         self.steps: List[OrchestratorStep] = []
         self._client = None
     
@@ -71,6 +82,35 @@ class Orchestrator:
     def reset(self):
         """Reset steps for a new session."""
         self.steps = []
+    
+    def _get_prompt(self, phase: str) -> str:
+        """Get prompt for a phase, using strategy if available.
+        
+        Args:
+            phase: One of 'analyze', 'plan', 'evaluate', 'synthesize'
+        
+        Returns:
+            Prompt template string
+        """
+        if self.strategy:
+            prompt_methods = {
+                'analyze': self.strategy.get_analyze_prompt,
+                'plan': self.strategy.get_plan_prompt,
+                'evaluate': self.strategy.get_evaluate_prompt,
+                'synthesize': self.strategy.get_synthesize_prompt,
+            }
+            method = prompt_methods.get(phase)
+            if method:
+                return method()
+        
+        # Fallback to default prompts
+        prompt_keys = {
+            'analyze': 'agent_analyze',
+            'plan': 'agent_plan',
+            'evaluate': 'agent_evaluate',
+            'synthesize': 'agent_synthesize',
+        }
+        return _get_default_prompt(prompt_keys.get(phase, f'agent_{phase}'))
     
     async def _call_llm(
         self,
@@ -171,7 +211,7 @@ class Orchestrator:
         user_message: str,
         conversation_history: List[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Phase 1: Analyze user intent.
+        """Phase 1: Analyze user intent with enhanced context extraction.
         
         Args:
             user_message: The user's message
@@ -180,37 +220,117 @@ class Orchestrator:
         Returns:
             Analysis dict with intent, entities, sources needed
         """
-        history_str = ""
-        if conversation_history:
-            history_str = "\n".join([
-                f"{m.get('role', 'user')}: {m.get('content', '')[:200]}"
-                for m in conversation_history[-5:]  # Last 5 messages
-            ])
-        else:
-            history_str = "(No previous messages)"
+        history_str = self._extract_relevant_context(user_message, conversation_history)
         
-        prompt = _get_default_prompt("agent_analyze").format(
+        prompt = self._get_prompt("analyze").format(
             user_message=user_message,
             conversation_history=history_str
         )
         
         result = await self._call_llm(prompt, OrchestratorPhase.ANALYZE)
         
-        # Set defaults for missing fields
-        result.setdefault("intent_summary", user_message[:100])
-        result.setdefault("key_entities", [])
-        result.setdefault("sources_needed", ["profile", "personal"])
-        result.setdefault("is_complex", False)
-        result.setdefault("requires_multiple_searches", True)
+        # Use strategy's process_analysis if available
+        if self.strategy:
+            result = self.strategy.process_analysis(result)
+        else:
+            # Set defaults for missing fields with new schema compatibility
+            result.setdefault("intent_summary", user_message[:100])
+            result.setdefault("query_type", "FACTUAL")
+            result.setdefault("named_entities", {"people": [], "organizations": [], "documents": [], "dates": [], "technical_terms": []})
+            result.setdefault("search_queries", {"primary": user_message, "alternatives": []})
+            result.setdefault("sources_needed", ["profile", "personal"])
+            result.setdefault("source_priority", "profile")
+            result.setdefault("must_find", [])
+            result.setdefault("nice_to_have", [])
+            result.setdefault("complexity", 2)
+            result.setdefault("requires_multi_hop", False)
+            
+            # Legacy field compatibility
+            result.setdefault("key_entities", self._flatten_entities(result.get("named_entities", {})))
+            result.setdefault("is_complex", result.get("complexity", 2) >= 3)
+            result.setdefault("requires_multiple_searches", result.get("complexity", 2) >= 2)
         
         return result
+    
+    def _extract_relevant_context(self, current_query: str, history: List[Dict]) -> str:
+        """Extract relevant context from conversation history.
+        
+        Uses smarter selection to include:
+        - Recent messages (last 3)
+        - Earlier messages with entity overlap
+        - Messages that seem to be part of the same topic
+        
+        Args:
+            current_query: The current user message
+            history: Full conversation history
+        
+        Returns:
+            Formatted context string
+        """
+        if not history:
+            return "(No previous messages)"
+        
+        relevant_parts = []
+        
+        # Extract terms from current query for relevance matching
+        query_terms = set(word.lower() for word in current_query.split() if len(word) > 3)
+        
+        # Always include last 3 messages for immediate context
+        recent_count = min(3, len(history))
+        recent = history[-recent_count:]
+        for msg in recent:
+            role = msg.get('role', 'user')
+            content = msg.get('content', '')[:400]
+            relevant_parts.append(f"{role}: {content}")
+        
+        # Look for earlier messages with entity/term overlap
+        earlier_relevant = []
+        for msg in history[:-recent_count]:
+            content = msg.get('content', '').lower()
+            content_terms = set(word for word in content.split() if len(word) > 3)
+            
+            # Calculate overlap score
+            overlap = len(query_terms & content_terms)
+            
+            # Include if significant overlap
+            if overlap >= 2:
+                earlier_relevant.append({
+                    'role': msg.get('role', 'user'),
+                    'content': msg.get('content', '')[:250],
+                    'overlap': overlap
+                })
+        
+        # Sort by relevance and take top 3
+        earlier_relevant.sort(key=lambda x: x['overlap'], reverse=True)
+        for msg in earlier_relevant[:3]:
+            relevant_parts.insert(0, f"[Earlier relevant] {msg['role']}: {msg['content']}")
+        
+        return "\n".join(relevant_parts[:10])  # Max 10 context entries
+    
+    def _flatten_entities(self, named_entities: Dict[str, List[str]]) -> List[str]:
+        """Flatten named entities dict into a simple list for legacy compatibility.
+        
+        Args:
+            named_entities: Dict with entity categories as keys
+        
+        Returns:
+            Flat list of all entities
+        """
+        all_entities = []
+        for category, entities in named_entities.items():
+            if isinstance(entities, list):
+                all_entities.extend(entities)
+        return list(set(all_entities))  # Deduplicate
     
     async def plan(
         self,
         analysis: Dict[str, Any],
         available_sources: List[Dict[str, Any]]
     ) -> AgentPlan:
-        """Phase 2: Create execution plan.
+        """Phase 2: Create execution plan with optimized queries.
+        
+        Uses the enhanced analysis to create targeted search tasks
+        with entity-optimized queries.
         
         Args:
             analysis: Result from analyze phase
@@ -224,7 +344,7 @@ class Orchestrator:
             for s in available_sources
         ])
         
-        prompt = _get_default_prompt("agent_plan").format(
+        prompt = self._get_prompt("plan").format(
             analysis=json.dumps(analysis, indent=2),
             available_sources=sources_str
         )
@@ -235,10 +355,20 @@ class Orchestrator:
         tasks = []
         for task_data in result.get("tasks", []):
             try:
+                # Get query - prefer optimized queries from analysis if task query is generic
+                query = task_data.get("query", "")
+                if not query or query == analysis.get("intent_summary", ""):
+                    # Use the primary search query from analysis if available
+                    search_queries = analysis.get("search_queries", {})
+                    if search_queries.get("primary"):
+                        query = search_queries["primary"]
+                    else:
+                        query = analysis.get("intent_summary", "")
+                
                 task = TaskDefinition(
                     id=task_data.get("id", f"task_{len(tasks)}"),
                     type=TaskType(task_data.get("type", "search_all")),
-                    query=task_data.get("query", analysis.get("intent_summary", "")),
+                    query=query,
                     sources=task_data.get("sources", []),
                     priority=task_data.get("priority", 1),
                     depends_on=task_data.get("depends_on", []),
@@ -249,16 +379,9 @@ class Orchestrator:
             except Exception as e:
                 logger.warning(f"Failed to parse task: {e}")
         
-        # If no tasks were created, create a default search task
+        # If no tasks were created, create smart default tasks based on analysis
         if not tasks:
-            tasks = [
-                TaskDefinition(
-                    id="default_search",
-                    type=TaskType.SEARCH_ALL,
-                    query=analysis.get("intent_summary", ""),
-                    max_results=10
-                )
-            ]
+            tasks = self._create_default_tasks(analysis)
         
         return AgentPlan(
             intent_summary=result.get("intent_summary", analysis.get("intent_summary", "")),
@@ -266,8 +389,63 @@ class Orchestrator:
             strategy=result.get("strategy", "parallel"),
             tasks=tasks,
             success_criteria=result.get("success_criteria", "Find relevant information"),
-            max_iterations=result.get("max_iterations", 3)
+            max_iterations=result.get("max_iterations", 2)
         )
+    
+    def _create_default_tasks(self, analysis: Dict[str, Any]) -> List[TaskDefinition]:
+        """Create default search tasks based on analysis when planning fails.
+        
+        Args:
+            analysis: The analysis result
+        
+        Returns:
+            List of default TaskDefinition objects
+        """
+        tasks = []
+        search_queries = analysis.get("search_queries", {})
+        primary_query = search_queries.get("primary", analysis.get("intent_summary", ""))
+        alternatives = search_queries.get("alternatives", [])
+        source_priority = analysis.get("source_priority", "profile")
+        
+        # Primary search based on priority source
+        source_type_map = {
+            "profile": TaskType.SEARCH_PROFILE,
+            "personal": TaskType.SEARCH_PERSONAL,
+            "cloud": TaskType.SEARCH_CLOUD,
+            "web": TaskType.WEB_SEARCH
+        }
+        
+        primary_type = source_type_map.get(source_priority, TaskType.SEARCH_ALL)
+        
+        tasks.append(TaskDefinition(
+            id="default_primary",
+            type=primary_type,
+            query=primary_query,
+            priority=1,
+            max_results=10
+        ))
+        
+        # Add alternative query search if available
+        if alternatives and len(alternatives) > 0:
+            tasks.append(TaskDefinition(
+                id="default_alternative",
+                type=TaskType.SEARCH_ALL,
+                query=alternatives[0],
+                priority=2,
+                max_results=5
+            ))
+        
+        # Add web search for complex queries or external entities
+        if analysis.get("requires_multi_hop") or source_priority == "web":
+            tasks.append(TaskDefinition(
+                id="default_web",
+                type=TaskType.WEB_SEARCH,
+                query=primary_query,
+                priority=3,
+                max_results=5
+            ))
+        
+        return tasks
     
     async def evaluate(
         self,
@@ -310,7 +488,7 @@ class Orchestrator:
                 ]
             results_summary.append(summary)
         
-        prompt = _get_default_prompt("agent_evaluate").format(
+        prompt = self._get_prompt("evaluate").format(
             intent=plan.intent_summary,
             success_criteria=plan.success_criteria,
             results_summary=json.dumps(results_summary, indent=2)
@@ -414,7 +592,7 @@ class Orchestrator:
         else:
             results_str = "No relevant information was found in the searches."
         
-        prompt = _get_default_prompt("agent_synthesize").format(
+        prompt = self._get_prompt("synthesize").format(
             user_message=user_message,
             all_results=results_str
         )

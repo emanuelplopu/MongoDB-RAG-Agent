@@ -18,11 +18,13 @@ EventCallback = Callable[[str, Dict[str, Any]], Awaitable[None]]
 from backend.agent.schemas import (
     AgentModeConfig, AgentMode, AgentTrace, AgentPlan,
     TaskDefinition, TaskType, WorkerResult, DocumentReference,
-    DataSource, EvaluationDecision
+    DataSource, EvaluationDecision, ResultQuality, StrategySelection
 )
 from backend.agent.orchestrator import Orchestrator
 from backend.agent.worker_pool import WorkerPool
 from backend.agent.federated_search import FederatedSearch, get_federated_search
+from backend.agent.strategies.base import BaseStrategy
+from backend.agent.strategies.registry import StrategyRegistry
 from backend.core.config import settings
 from backend.routers.prompts import get_agent_prompt_sync
 
@@ -35,21 +37,30 @@ class FederatedAgent:
     def __init__(
         self,
         config: Optional[AgentModeConfig] = None,
-        federated_search: Optional[FederatedSearch] = None
+        federated_search: Optional[FederatedSearch] = None,
+        strategy: Optional[BaseStrategy] = None,
+        strategy_id: Optional[str] = None
     ):
         """Initialize the federated agent.
         
         Args:
             config: Agent configuration (mode, models, etc.)
             federated_search: FederatedSearch instance
+            strategy: Direct strategy instance to use
+            strategy_id: Strategy ID to load from registry
         """
         self.config = config or AgentModeConfig()
         self.federated_search = federated_search or get_federated_search()
         
+        # Resolve strategy: explicit > config override > config selection > default
+        self.strategy = self._resolve_strategy(strategy, strategy_id)
+        logger.info(f"Using strategy: {self.strategy.metadata.id} ({self.strategy.metadata.name})")
+        
         # Initialize components with provider configuration
         self.orchestrator = Orchestrator(
             model=self.config.orchestrator_model,
-            provider=settings.orchestrator_provider
+            provider=settings.orchestrator_provider,
+            strategy=self.strategy
         )
         self.worker_pool = WorkerPool(
             model=self.config.worker_model,
@@ -60,6 +71,93 @@ class FederatedAgent:
         
         # Current trace
         self.trace: Optional[AgentTrace] = None
+    
+    def _resolve_strategy(
+        self,
+        strategy: Optional[BaseStrategy],
+        strategy_id: Optional[str]
+    ) -> BaseStrategy:
+        """Resolve which strategy to use based on various inputs.
+        
+        Priority order:
+        1. Explicit strategy instance
+        2. Explicit strategy_id parameter
+        3. Config strategy_override (direct ID)
+        4. Config strategy selection (enum)
+        5. Default strategy from registry
+        
+        Args:
+            strategy: Direct strategy instance
+            strategy_id: Strategy ID to load
+            
+        Returns:
+            Resolved BaseStrategy instance
+            
+        Raises:
+            RuntimeError: If no strategy can be resolved
+        """
+        errors = []
+        
+        # 1. Direct strategy instance
+        if strategy is not None:
+            logger.debug(f"Using provided strategy instance: {strategy.metadata.id}")
+            return strategy
+        
+        # 2. Explicit strategy_id parameter
+        if strategy_id:
+            try:
+                resolved = StrategyRegistry.get(strategy_id)
+                logger.debug(f"Resolved strategy from strategy_id: {strategy_id}")
+                return resolved
+            except (KeyError, RuntimeError) as e:
+                errors.append(f"strategy_id '{strategy_id}': {e}")
+                logger.warning(f"Failed to load strategy '{strategy_id}': {e}")
+        
+        # 3. Config strategy_override (direct ID)
+        if self.config.strategy_override:
+            try:
+                resolved = StrategyRegistry.get(self.config.strategy_override)
+                logger.debug(f"Resolved strategy from config override: {self.config.strategy_override}")
+                return resolved
+            except (KeyError, RuntimeError) as e:
+                errors.append(f"strategy_override '{self.config.strategy_override}': {e}")
+                logger.warning(f"Failed to load strategy override '{self.config.strategy_override}': {e}")
+        
+        # 4. Config strategy selection (enum) - map to strategy ID
+        strategy_map = {
+            StrategySelection.LEGACY: "legacy",
+            StrategySelection.ENHANCED: "enhanced",
+            StrategySelection.SOFTWARE_DEV: "software_dev",
+            StrategySelection.LEGAL: "legal",
+            StrategySelection.HR: "hr",
+        }
+        
+        if self.config.strategy != StrategySelection.AUTO:
+            mapped_id = strategy_map.get(self.config.strategy)
+            if mapped_id:
+                try:
+                    resolved = StrategyRegistry.get(mapped_id)
+                    logger.debug(f"Resolved strategy from config enum: {mapped_id}")
+                    return resolved
+                except (KeyError, RuntimeError) as e:
+                    errors.append(f"config strategy '{mapped_id}': {e}")
+                    logger.warning(f"Strategy '{mapped_id}' not found, falling back to default")
+        
+        # 5. Default strategy from registry
+        try:
+            resolved = StrategyRegistry.get_default()
+            logger.debug(f"Using default strategy: {resolved.metadata.id}")
+            return resolved
+        except (ValueError, RuntimeError) as e:
+            errors.append(f"default strategy: {e}")
+            logger.error(f"Failed to get default strategy: {e}")
+        
+        # All resolution attempts failed
+        error_summary = "; ".join(errors) if errors else "Unknown error"
+        raise RuntimeError(
+            f"Could not resolve any strategy. Errors: {error_summary}. "
+            "Ensure strategy modules are imported and at least one strategy is registered."
+        )
     
     def _create_trace(
         self,
@@ -288,6 +386,12 @@ class FederatedAgent:
             iteration_docs = sum(len(r.documents_found) for r in results)
             iteration_links = sum(len(r.web_links_found) for r in results)
             
+            # Calculate average quality score for this iteration
+            avg_score = 0.0
+            if iteration_docs > 0:
+                all_scores = [d.similarity_score for r in results for d in r.documents_found]
+                avg_score = sum(all_scores) / len(all_scores) if all_scores else 0.0
+            
             if iteration_docs == 0 and iteration_links == 0:
                 empty_result_iterations += 1
                 logger.warning(f"Iteration {iteration} found no results ({empty_result_iterations} consecutive empty iterations)")
@@ -299,6 +403,17 @@ class FederatedAgent:
                     break
             else:
                 empty_result_iterations = 0  # Reset counter if we found something
+                
+                # Early exit if we found excellent quality results
+                excellent_results = [r for r in results if r.result_quality == ResultQuality.EXCELLENT]
+                good_results = [r for r in results if r.result_quality in [ResultQuality.EXCELLENT, ResultQuality.GOOD]]
+                
+                if len(excellent_results) >= 2 or (len(good_results) >= 3 and avg_score > 0.75):
+                    logger.info(f"High-quality results found (avg_score={avg_score:.2f}), considering early synthesis")
+                    # Skip to synthesis if we have great results on first iteration
+                    if iteration == 1 and len(good_results) >= 2:
+                        logger.info("Excellent first-iteration results, skipping to synthesis")
+                        break
             
             # Collect sources for trace
             for r in results:
@@ -326,6 +441,11 @@ class FederatedAgent:
                 'confidence': evaluation.confidence,
                 'tokens': eval_tokens
             })
+            
+            # High-confidence early exit
+            if evaluation.decision == "sufficient" and evaluation.confidence >= 0.80:
+                logger.info(f"High-confidence early exit (confidence={evaluation.confidence})")
+                break
             
             if evaluation.decision in ["sufficient", "cannot_answer"]:
                 break
@@ -554,7 +674,9 @@ def create_federated_agent(
     mode: AgentMode = AgentMode.AUTO,
     orchestrator_model: Optional[str] = None,
     worker_model: Optional[str] = None,
-    max_iterations: int = 3
+    max_iterations: int = 3,
+    strategy: Optional[StrategySelection] = None,
+    strategy_id: Optional[str] = None
 ) -> FederatedAgent:
     """Create a FederatedAgent with the specified configuration.
     
@@ -563,6 +685,8 @@ def create_federated_agent(
         orchestrator_model: Model for orchestration
         worker_model: Model for worker tasks
         max_iterations: Maximum iterations
+        strategy: Strategy selection enum
+        strategy_id: Direct strategy ID override
     
     Returns:
         Configured FederatedAgent
@@ -571,7 +695,9 @@ def create_federated_agent(
         mode=mode,
         orchestrator_model=orchestrator_model or settings.orchestrator_model,
         worker_model=worker_model or settings.worker_model,
-        max_iterations=max_iterations
+        max_iterations=max_iterations,
+        strategy=strategy or StrategySelection.AUTO,
+        strategy_override=strategy_id
     )
     
     return FederatedAgent(config=config)

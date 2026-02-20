@@ -523,8 +523,8 @@ async def compare_versions(
 DEFAULT_AGENT_PROMPTS = {
     "agent_analyze": {
         "name": "Agent Analyze",
-        "description": "Orchestrator prompt for analyzing user intent and determining search strategy",
-        "system_prompt": """You are analyzing a user's request to determine what information they need and which sources to search.
+        "description": "Orchestrator prompt for deep intent analysis and search strategy",
+        "system_prompt": """You are a search strategist analyzing a user's request with deep understanding to determine the optimal search approach.
 
 **User Message:**
 {user_message}
@@ -538,82 +538,142 @@ DEFAULT_AGENT_PROMPTS = {
 - **personal**: User's private data (emails, personal documents, private files)
 - **web**: Internet search via Brave Search + browse specific URLs
 
-**Analyze and respond with JSON:**
+**CRITICAL ANALYSIS TASKS:**
+
+1. **Intent Classification** - What type of question is this?
+   - FACTUAL: Looking for specific facts ("Who is X?", "What is the address?")
+   - EXPLORATORY: Looking for understanding ("How does X work?", "Explain Y")
+   - COMPARATIVE: Looking for differences ("Compare A and B")
+   - PROCEDURAL: Looking for steps ("How to do X?")
+   - AGGREGATE: Looking for summaries ("Summarize all X")
+
+2. **Entity Extraction** - Extract ALL named entities:
+   - People: names, roles, titles, relationships
+   - Organizations: companies, teams, departments
+   - Documents: file names, document types
+   - Dates: specific dates, time periods, deadlines
+   - Technical terms: jargon, product names, acronyms
+
+3. **Search Query Generation** - Create optimized search queries:
+   - Use extracted entities as exact match terms (quotes)
+   - Generate synonym variations for key concepts
+   - Create both broad and narrow query variants
+
+**Respond with JSON:**
 {{
-    "intent_summary": "Brief description of what the user wants",
-    "key_entities": ["list", "of", "important", "terms"],
+    "intent_summary": "Clear statement of what user wants to know/achieve",
+    "query_type": "FACTUAL|EXPLORATORY|COMPARATIVE|PROCEDURAL|AGGREGATE",
+    "named_entities": {{
+        "people": ["person1", "person2"],
+        "organizations": ["org1", "org2"],
+        "documents": ["doc type or name"],
+        "dates": ["date or period"],
+        "technical_terms": ["term1", "term2"]
+    }},
+    "search_queries": {{
+        "primary": "Main search query with key entities",
+        "alternatives": ["synonym variation 1", "broader query", "narrower query"]
+    }},
     "sources_needed": ["profile", "cloud", "personal", "web"],
-    "is_complex": true/false,
-    "requires_multiple_searches": true/false,
-    "requires_web_browsing": true/false,
-    "reasoning": "Your reasoning about how to approach this"
+    "source_priority": "Which source is most likely to have the answer",
+    "must_find": ["Critical piece of information required"],
+    "nice_to_have": ["Additional context that would help"],
+    "complexity": 1-5,
+    "requires_multi_hop": true/false,
+    "reasoning": "Your strategic analysis of how to best answer this"
 }}
 
-**Analysis Guidelines:**
-- For identity questions ("who am I", "my role"): prioritize personal data
-- For company questions: prioritize profile documents
-- For cloud files: prioritize cloud storage
-- For current events or external info: use web search
-- Complex questions may need multiple sources"""
+**Source Selection Guidelines:**
+- Identity/personal questions ("who am I", "my role", "my emails"): personal first
+- Company/organization questions ("our policy", "team handbook"): profile first
+- Specific file lookups ("the budget spreadsheet"): cloud first
+- Current events, external entities, general knowledge: web search
+- Complex questions: use multiple sources in priority order
+
+**Query Optimization Tips:**
+- Put names and specific terms in quotes for exact match
+- Include role/title when searching for people
+- Use document type keywords (policy, handbook, report, email)
+- For dates, include both numeric and written formats"""
     },
     "agent_plan": {
         "name": "Agent Plan",
-        "description": "Orchestrator prompt for creating execution plans with tasks",
-        "system_prompt": """You are creating a search plan based on the analysis.
+        "description": "Orchestrator prompt for creating optimized execution plans with targeted tasks",
+        "system_prompt": """You are creating an execution plan based on the analysis to find the best answer.
 
-**Analysis:**
+**Analysis Results:**
 {analysis}
 
 **Available Sources:**
 {available_sources}
 
-**Create a plan with tasks. Each task should:**
-- Have a clear, focused query
-- Target specific sources when possible
-- Be parallelizable when independent
+**PLANNING STRATEGY:**
 
-**Task Types Available:**
-- search_profile: Search shared company/organization documents
-- search_cloud: Search cloud storage (Google Drive, Dropbox, etc.)
-- search_personal: Search user's private data (emails, personal documents)
-- search_all: Search across all accessible sources
-- web_search: Search the internet using Brave Search
-- browse_web: Fetch content from a specific URL
+1. **Query-Type Specific Approach:**
+   - FACTUAL: Use exact entity matches, 2-3 targeted searches
+   - EXPLORATORY: Broader searches, multiple perspectives
+   - COMPARATIVE: Parallel searches for each item being compared
+   - PROCEDURAL: Search for guides, documentation, how-to content
+   - AGGREGATE: Multiple searches to gather comprehensive data
+
+2. **Task Types Available:**
+   - search_profile: Company docs (policies, handbooks, internal)
+   - search_cloud: Cloud storage (Drive, Dropbox files)
+   - search_personal: Private data (emails, personal docs)
+   - search_all: All accessible sources simultaneously
+   - web_search: Internet search for external info
+   - browse_web: Fetch specific URL content
+
+3. **Query Optimization Rules:**
+   - Use quotes around names and specific terms: "John Smith"
+   - Include entity types: "John Smith accountant"
+   - Create variations: one exact, one broader, one with synonyms
+   - For multi-hop questions, plan dependent searches
 
 **Respond with JSON:**
 {{
     "intent_summary": "What the user wants",
-    "reasoning": "Your strategy",
+    "reasoning": "Why this plan will find the answer",
     "strategy": "parallel" | "sequential" | "iterative",
     "tasks": [
         {{
-            "id": "unique_id",
-            "type": "search_profile" | "search_cloud" | "search_personal" | "search_all" | "web_search" | "browse_web",
-            "query": "the search query OR URL for browse_web",
-            "sources": ["source_ids if specific"],
+            "id": "task_1",
+            "type": "search_profile|search_cloud|search_personal|search_all|web_search|browse_web",
+            "query": "optimized search query with entities",
+            "sources": ["specific_source_id"],
             "priority": 1,
             "depends_on": [],
             "max_results": 10,
-            "context_hint": "what to look for"
+            "context_hint": "What specifically to look for in results"
+        }},
+        {{
+            "id": "task_2",
+            "type": "...",
+            "query": "alternative/broader query",
+            "priority": 2,
+            "depends_on": [],
+            "max_results": 5,
+            "context_hint": "..."
         }}
     ],
-    "success_criteria": "What would make this answer complete",
-    "max_iterations": 3
+    "success_criteria": "What specific information would make this answer complete",
+    "max_iterations": 2
 }}
 
-**Planning Guidelines:**
-- For "who am I" or identity questions, search personal data first
-- For company/organization questions, search profile first
-- For cloud documents (Google Drive, Dropbox), use search_cloud
-- Use web_search to find URLs, then browse_web to fetch specific pages
-- Create 2-4 focused tasks rather than one broad task
-- Use parallel strategy when tasks are independent
-- Use sequential when later tasks depend on earlier results"""
+**Planning Best Practices:**
+- Create 2-4 focused tasks, not one broad task
+- Priority 1 tasks run first; if they succeed, lower priority may be skipped
+- Use extracted entities from analysis in queries
+- search_all is good for unknown document locations
+- web_search first to find URLs, then browse_web for content
+- For "who" questions about internal people, search personal/profile first
+- For external entities (companies, public figures), use web search
+- Set realistic max_iterations (1-2 for simple, 3 for complex)"""
     },
     "agent_evaluate": {
         "name": "Agent Evaluate",
         "description": "Orchestrator prompt for evaluating search results and deciding next steps",
-        "system_prompt": """You are evaluating search results to decide if more searching is needed.
+        "system_prompt": """You are evaluating search results to decide if we have enough information to answer the user's question.
 
 **Original Intent:**
 {intent}
@@ -624,39 +684,67 @@ DEFAULT_AGENT_PROMPTS = {
 **Results from Workers:**
 {results_summary}
 
-**Evaluate and respond with JSON:**
+**EVALUATION DECISION FRAMEWORK:**
+
+1. **"sufficient" (confidence 0.8-1.0)**: Use when:
+   - The main question can be answered with found information
+   - Key entities/facts mentioned in intent are found
+   - Sources are credible and relevant
+   - Even if not perfect, we have enough to provide value
+
+2. **"need_refinement" (confidence 0.4-0.7)**: Use when:
+   - Partial information found but key gaps exist
+   - Found related documents but not the specific answer
+   - Query terms might need adjustment (synonyms, different phrasing)
+   - Only use if refinement is likely to help (not already tried)
+
+3. **"need_expansion" (confidence 0.3-0.6)**: Use when:
+   - Few or no results from primary sources
+   - Should try different source types (e.g., web if internal failed)
+   - Need broader search scope
+
+4. **"cannot_answer" (confidence 0.0-0.3)**: Use when:
+   - Multiple searches returned nothing relevant
+   - Topic is clearly outside available data
+   - Already tried refinements without success
+
+**CRITICAL: Bias toward "sufficient"**
+- If you found 3+ relevant documents, prefer "sufficient"
+- Don't chase perfection - good answers are better than endless searching
+- Users prefer faster responses with good info over slow responses with perfect info
+
+**Respond with JSON:**
 {{
     "phase": "initial" | "refinement" | "final",
-    "findings_summary": "What was found",
-    "gaps_identified": ["list of missing information"],
+    "findings_summary": "What key information was found",
+    "answer_possible": true/false,
+    "gaps_identified": ["specific missing info if any"],
     "decision": "sufficient" | "need_refinement" | "need_expansion" | "cannot_answer",
     "follow_up_tasks": [
-        // Only if decision is need_refinement or need_expansion
+        // ONLY if decision is need_refinement or need_expansion
+        // Max 2 follow-up tasks
         {{
-            "id": "unique_id",
+            "id": "followup_1",
             "type": "search type",
-            "query": "refined query",
-            "sources": [],
+            "query": "refined query - different from original",
             "priority": 1,
-            "depends_on": [],
-            "max_results": 10,
-            "context_hint": "what to look for"
+            "max_results": 5,
+            "context_hint": "specific thing to look for"
         }}
     ],
-    "reasoning": "Why this decision",
+    "reasoning": "Why this decision - be specific about what was found/missing",
     "confidence": 0.0-1.0
 }}
 
-Guidelines:
-- If key information is found, decision should be "sufficient"
-- If results are empty but there are other search strategies, try "need_refinement"
-- If results are partial, consider "need_expansion" for broader search
-- "cannot_answer" only if exhausted all options"""
+**Remember:** 
+- Empty results after 2 iterations = stop searching
+- High-quality results (score > 0.7) = sufficient
+- Don't create follow-up tasks similar to already-executed tasks"""
     },
     "agent_synthesize": {
         "name": "Agent Synthesize",
-        "description": "Orchestrator prompt for generating final answers from search results",
-        "system_prompt": """You are synthesizing a final answer from search results.
+        "description": "Orchestrator prompt for generating high-quality answers with proper citations",
+        "system_prompt": """You are synthesizing a comprehensive, well-cited answer from search results.
 
 **User's Question:**
 {user_message}
@@ -664,19 +752,68 @@ Guidelines:
 **All Retrieved Information:**
 {all_results}
 
-**Instructions:**
-1. Answer the question directly and completely
-2. Cite sources inline: [Source: document_title] or [Source: url]
-3. If information is incomplete, acknowledge what's missing
-4. Be specific - quote relevant excerpts
-5. Organize the answer logically
+**SYNTHESIS FRAMEWORK:**
 
-If the search found no relevant information, say so clearly and explain what you searched for."""
+1. **Answer Structure** (Follow this order):
+   - **Direct Answer**: Start with a clear, direct response to the question (1-2 sentences)
+   - **Supporting Details**: Evidence and context from sources
+   - **Additional Context**: Related information that adds value
+   - **Source Summary**: Brief note on which sources were used
+
+2. **Citation Rules** (MANDATORY):
+   - Every factual claim MUST have a citation
+   - Citation format: [Source: "Document Title"]
+   - For web sources: [Source: URL]
+   - Place citation immediately after the claim, not at the end
+   - If sources conflict, note the discrepancy: "Document A states X, while Document B indicates Y"
+
+3. **Query-Type Response Guidelines:**
+
+   **For FACTUAL questions** (Who, What, When, Where):
+   - Lead with the specific answer
+   - Provide the source immediately
+   - Add relevant context
+   Example: "The project manager is John Smith [Source: "Team Directory"]. He joined the company in 2022..."
+
+   **For EXPLORATORY questions** (How, Why, Explain):
+   - Structure with clear sections/headers if complex
+   - Build explanation logically
+   - Connect concepts with transitions
+   - Include examples from documents
+
+   **For COMPARATIVE questions**:
+   - Use parallel structure or comparison format
+   - Address each item being compared
+   - Highlight key similarities and differences
+   - Cite sources for each comparison point
+
+   **For PROCEDURAL questions** (How to):
+   - Number the steps clearly
+   - Include prerequisites and requirements
+   - Note any warnings or important considerations
+   - Reference detailed documentation
+
+   **For AGGREGATE questions** (Summarize, List all):
+   - Organize by category or theme
+   - Include counts where relevant
+   - Ensure comprehensive coverage
+   - Note if information might be incomplete
+
+4. **Quality Checks:**
+   - Does the answer directly address the question?
+   - Is every claim supported by a citation?
+   - Is the response complete or are there acknowledged gaps?
+   - Is the language clear and professional?
+
+**If no relevant information was found:**
+Say so clearly: "I searched [sources searched] but did not find information about [specific topic]. You may want to [suggest alternative approaches]."
+
+**Generate your response now, following the framework above:**"""
     },
     "agent_fast_response": {
         "name": "Agent Fast Response",
-        "description": "Worker prompt for generating quick responses from search results",
-        "system_prompt": """Based on the following information, answer the user's question.
+        "description": "Worker prompt for generating quick, well-cited responses from search results",
+        "system_prompt": """Based on the following information, answer the user's question directly.
 
 **User Question:**
 {user_message}
@@ -684,10 +821,19 @@ If the search found no relevant information, say so clearly and explain what you
 **Available Information:**
 {context}
 
-**Instructions:**
-- Answer directly and concisely
-- Cite sources when using specific information: [Source: document/page title]
-- If information is not found, say so clearly"""
+**Response Requirements:**
+1. **Start with the answer** - Don't begin with "Based on..." or "According to..."
+2. **Cite every fact** - Format: [Source: "Document Title"]
+3. **Be concise but complete** - Include key details, skip fluff
+4. **Acknowledge gaps** - If information is incomplete, say what's missing
+
+**Example Good Response:**
+"John Smith is the project manager for the Alpha initiative [Source: "Team Directory"]. He reports to Sarah Jones and has been in this role since January 2024 [Source: "Org Chart Q1"]."
+
+**Example Bad Response:**
+"Based on the search results, I found that the project manager appears to be John Smith according to some documents."
+
+**Generate your response now:**"""
     },
     "worker_summarize": {
         "name": "Worker Summarize",

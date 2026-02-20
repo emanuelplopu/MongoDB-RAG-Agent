@@ -27,6 +27,7 @@ from fastapi.exceptions import RequestValidationError
 
 from backend.routers import chat, search, profiles, ingestion, system, sessions, auth
 from backend.routers import status, indexes, ingestion_queue, local_llm, prompts, model_versions
+from backend.routers import strategies
 from backend.routers.cloud_sources import (
     connections_router as cloud_connections,
     oauth_router as cloud_oauth,
@@ -514,6 +515,12 @@ app.include_router(
     model_versions.router,
     prefix="/api/v1/model-versions",
     tags=["Model Versions"]
+)
+
+app.include_router(
+    strategies.router,
+    prefix="/api/v1/strategies",
+    tags=["Agent Strategies"]
 )
 
 

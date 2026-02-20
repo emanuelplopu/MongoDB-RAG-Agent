@@ -60,6 +60,16 @@ class AgentMode(str, Enum):
     FAST = "fast"  # Single fast model, no orchestration
 
 
+class StrategySelection(str, Enum):
+    """Strategy selection options for agent behavior."""
+    AUTO = "auto"               # Auto-detect best strategy based on query
+    LEGACY = "legacy"           # Original behavior (baseline)
+    ENHANCED = "enhanced"       # New improvements (query classification, etc.)
+    SOFTWARE_DEV = "software_dev"   # Optimized for software development queries
+    LEGAL = "legal"             # Optimized for legal analysis
+    HR = "hr"                   # Optimized for HR processes
+
+
 # ============== Data Source Models ==============
 
 class DataSource(BaseModel):
@@ -405,6 +415,9 @@ class AgentModeConfig(BaseModel):
     show_full_trace: bool = True
     # Thresholds for auto mode
     auto_thinking_threshold: int = 20  # Query length to trigger thinking mode
+    # Strategy selection
+    strategy: StrategySelection = StrategySelection.AUTO
+    strategy_override: Optional[str] = None  # Direct strategy ID override
     
     class Config:
         use_enum_values = True

@@ -6,12 +6,13 @@ This module provides unified search across multiple data sources:
 - Personal data (user's emails, etc.)
 
 Access control is enforced based on user permissions.
+Supports strategy-specific scoring through the strategy pattern.
 """
 
 import asyncio
 import logging
 import time
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from backend.agent.schemas import (
@@ -19,6 +20,9 @@ from backend.agent.schemas import (
     DocumentReference, ResultQuality
 )
 from backend.core.config import settings
+
+if TYPE_CHECKING:
+    from backend.agent.strategies.base import BaseStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +150,8 @@ class FederatedSearch:
         query: str,
         query_embedding: List[float],
         match_count: int = 10,
-        search_type: str = "hybrid"
+        search_type: str = "hybrid",
+        strategy: "BaseStrategy" = None
     ) -> List[Dict[str, Any]]:
         """Search a single database.
         
@@ -158,6 +163,7 @@ class FederatedSearch:
             query_embedding: Query embedding vector
             match_count: Maximum results to return
             search_type: "vector", "text", or "hybrid"
+            strategy: Optional strategy for custom RRF scoring
         
         Returns:
             List of search result dicts
@@ -262,7 +268,7 @@ class FederatedSearch:
             
             # For hybrid, apply RRF
             if search_type == "hybrid" and results:
-                results = self._apply_rrf(results, match_count)
+                results = self._apply_rrf(results, match_count, strategy=strategy)
             
             return results[:match_count]
             
@@ -270,20 +276,46 @@ class FederatedSearch:
             logger.error(f"Search failed for database {database_name}: {e}")
             return []
     
-    def _apply_rrf(self, results: List[Dict], limit: int, k: int = 60) -> List[Dict]:
+    def _apply_rrf(
+        self,
+        results: List[Dict],
+        limit: int,
+        k: int = 60,
+        strategy: "BaseStrategy" = None
+    ) -> List[Dict]:
         """Apply Reciprocal Rank Fusion to combine vector and text results.
+        
+        If a strategy is provided, delegates to the strategy's calculate_rrf_scores
+        method for custom scoring logic. Otherwise, uses the default enhanced RRF.
+        
+        Enhanced with:
+        - Cross-search boosting (documents found by both searches get higher scores)
+        - Content quality penalties (very short content penalized)
+        - Original vector similarity preservation for reference
         
         Args:
             results: Combined results from vector and text search
             limit: Maximum results to return
             k: RRF constant (default 60)
+            strategy: Optional strategy for custom scoring
         
         Returns:
             Deduplicated and ranked results with normalized scores (0-1 scale)
         """
+        # If a strategy is provided, use its custom RRF scoring
+        if strategy is not None:
+            try:
+                return strategy.calculate_rrf_scores(results, limit)
+            except Exception as e:
+                logger.warning(f"Strategy RRF scoring failed, falling back to default: {e}")
         # Separate by search type
         vector_results = [r for r in results if r.get("search_type") == "vector"]
         text_results = [r for r in results if r.get("search_type") == "text"]
+        
+        # Create ID sets for cross-search detection
+        vector_ids = {str(r["chunk_id"]) for r in vector_results}
+        text_ids = {str(r["chunk_id"]) for r in text_results}
+        cross_match_ids = vector_ids & text_ids  # Documents found in both searches
         
         rrf_scores = {}
         result_map = {}
@@ -302,6 +334,28 @@ class FederatedSearch:
             rrf_scores[chunk_id] = rrf_scores.get(chunk_id, 0) + 1.0 / (k + rank)
             if chunk_id not in result_map:
                 result_map[chunk_id] = doc
+        
+        # Apply quality adjustments before normalization
+        for chunk_id in rrf_scores:
+            doc = result_map[chunk_id]
+            content = doc.get("content", "")
+            
+            # Cross-search boost: 15% increase for documents found in both vector and text search
+            if chunk_id in cross_match_ids:
+                rrf_scores[chunk_id] *= 1.15
+            
+            # Content length penalty: penalize very short chunks (likely incomplete)
+            content_len = len(content)
+            if content_len < 50:
+                rrf_scores[chunk_id] *= 0.5  # Heavy penalty for very short
+            elif content_len < 100:
+                rrf_scores[chunk_id] *= 0.7  # Moderate penalty
+            elif content_len < 200:
+                rrf_scores[chunk_id] *= 0.85  # Light penalty
+            
+            # Bonus for substantial content
+            if content_len > 500:
+                rrf_scores[chunk_id] *= 1.05  # Small bonus for rich content
         
         # Normalize RRF scores to 0-1 range
         # Max possible raw RRF: 2/k (when doc is rank 0 in both searches)
@@ -331,7 +385,13 @@ class FederatedSearch:
             # Also preserve original similarity for reference
             if chunk_id in original_similarity:
                 doc["vector_similarity"] = original_similarity[chunk_id]
+            # Mark cross-matches for debugging
+            doc["cross_match"] = chunk_id in cross_match_ids
             merged.append(doc)
+        
+        # Log cross-match stats for debugging
+        cross_match_count = sum(1 for doc in merged if doc.get("cross_match"))
+        logger.debug(f"RRF merged {len(merged)} results, {cross_match_count} cross-matches")
         
         return merged
     
@@ -345,7 +405,8 @@ class FederatedSearch:
         active_profile_database: Optional[str] = None,
         accessible_profile_keys: Optional[List[str]] = None,
         match_count: int = 10,
-        search_type: str = "hybrid"
+        search_type: str = "hybrid",
+        strategy: "BaseStrategy" = None
     ) -> Tuple[List[DocumentReference], Dict[str, Any]]:
         """Perform federated search across all accessible sources.
         
@@ -359,6 +420,7 @@ class FederatedSearch:
             accessible_profile_keys: List of profile keys user has access to
             match_count: Maximum results per source
             search_type: "vector", "text", or "hybrid"
+            strategy: Optional strategy for custom RRF scoring
         
         Returns:
             Tuple of (list of DocumentReference, search metadata dict)
@@ -425,7 +487,8 @@ class FederatedSearch:
                 query=query,
                 query_embedding=query_embedding,
                 match_count=match_count,
-                search_type=search_type
+                search_type=search_type,
+                strategy=strategy
             )
             search_tasks.append(task)
             source_info.append(source)
