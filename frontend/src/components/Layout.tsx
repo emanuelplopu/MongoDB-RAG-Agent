@@ -32,6 +32,7 @@ import {
   CodeBracketIcon,
   KeyIcon,
   ArchiveBoxIcon,
+  BeakerIcon,
 } from '@heroicons/react/24/outline'
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid'
 import ThemeSwitcher from './ThemeSwitcher'
@@ -65,6 +66,7 @@ const systemMenuItems = [
   { nameKey: 'nav.users', href: '/system/users', icon: UsersIcon },
   { nameKey: 'nav.prompts', href: '/system/prompts', icon: CommandLineIcon },
   { nameKey: 'nav.apiKeys', href: '/system/api-keys', icon: KeyIcon },
+  { nameKey: 'nav.strategies', href: '/system/strategies', icon: BeakerIcon },
 ]
 
 export default function Layout() {

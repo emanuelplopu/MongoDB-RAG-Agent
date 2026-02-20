@@ -1325,6 +1325,7 @@ export const sessionsApi = {
       include_sources?: boolean
       attachments?: AttachmentInfo[]
       agent_mode?: 'auto' | 'thinking' | 'fast'
+      strategy_id?: string  // Strategy for A/B testing
     }
   ): Promise<SendMessageResponse> => {
     const response = await api.post(`/sessions/${sessionId}/messages`, {
@@ -1334,6 +1335,7 @@ export const sessionsApi = {
       include_sources: options?.include_sources ?? true,
       attachments: options?.attachments || null,
       agent_mode: options?.agent_mode || null,
+      strategy_id: options?.strategy_id || null,
     })
     return response.data
   },
@@ -1345,6 +1347,7 @@ export const sessionsApi = {
     options?: {
       attachments?: AttachmentInfo[]
       agent_mode?: 'auto' | 'thinking' | 'fast'
+      strategy_id?: string  // Strategy for A/B testing
     },
     callbacks?: {
       onStart?: (data: { mode: string; models: { orchestrator: string; worker: string } }) => void
@@ -1406,6 +1409,7 @@ export const sessionsApi = {
             include_sources: true,
             attachments: options?.attachments || null,
             agent_mode: options?.agent_mode || null,
+            strategy_id: options?.strategy_id || null,
           }),
           signal: abortController.signal,
         })
@@ -2706,6 +2710,156 @@ export const promptsApi = {
     version_b: number
   }): Promise<PromptComparison> => {
     const response = await api.post('/prompts/compare', data)
+    return response.data
+  },
+}
+
+
+// ============== Strategies API ==============
+
+export interface StrategyInfo {
+  id: string
+  name: string
+  version: string
+  description: string
+  domains: string[]
+  tags: string[]
+  is_default: boolean
+  is_legacy: boolean
+  author: string
+}
+
+export interface StrategyDetail extends StrategyInfo {
+  config: {
+    max_iterations: number
+    confidence_threshold: number
+    early_exit_enabled: boolean
+    cross_search_boost: number
+    content_length_penalty: number
+    custom_params: Record<string, unknown>
+  }
+  prompts_preview: {
+    analyze: string
+    plan: string
+    evaluate: string
+    synthesize: string
+  }
+}
+
+export interface StrategyStats {
+  strategy_id: string
+  execution_count: number
+  avg_latency_ms: number
+  median_latency_ms: number
+  avg_iterations: number
+  avg_confidence: number
+  quality_score: number
+  quality_distribution: Record<string, number>
+  avg_user_feedback: number | null
+  feedback_count: number
+}
+
+export interface ResponseScore {
+  quality: number
+  hallucination: number
+  readability: number
+  factuality: number
+  relevance: number
+  overall: number
+}
+
+export interface ABCompareResult {
+  query: string
+  strategy_a: string
+  strategy_b: string
+  scores_a: ResponseScore
+  scores_b: ResponseScore
+  speed_winner: string
+  quality_winner: string
+  overall_winner: string
+  analysis: string
+  recommendation: string
+}
+
+export const strategiesApi = {
+  list: async (domain?: string): Promise<StrategyInfo[]> => {
+    const params = domain ? { domain } : {}
+    const response = await api.get('/strategies', { params })
+    return response.data
+  },
+
+  getDefault: async (): Promise<StrategyInfo> => {
+    const response = await api.get('/strategies/default')
+    return response.data
+  },
+
+  get: async (strategyId: string): Promise<StrategyDetail> => {
+    const response = await api.get(`/strategies/${strategyId}`)
+    return response.data
+  },
+
+  getMetrics: async (strategyId: string, hours?: number, domain?: string): Promise<StrategyStats> => {
+    const params: Record<string, unknown> = {}
+    if (hours) params.hours = hours
+    if (domain) params.domain = domain
+    const response = await api.get(`/strategies/${strategyId}/metrics`, { params })
+    return response.data
+  },
+
+  getAllMetrics: async (hours?: number, domain?: string): Promise<StrategyStats[]> => {
+    const params: Record<string, unknown> = {}
+    if (hours) params.hours = hours
+    if (domain) params.domain = domain
+    const response = await api.get('/strategies/metrics/all', { params })
+    return response.data
+  },
+
+  getForDomain: async (domain: string): Promise<StrategyInfo> => {
+    const response = await api.get(`/strategies/for-domain/${domain}`)
+    return response.data
+  },
+
+  autoDetect: async (query: string): Promise<StrategyInfo> => {
+    const response = await api.post('/strategies/auto-detect', { query })
+    return response.data
+  },
+
+  compare: async (strategyA: string, strategyB: string, hours?: number, domain?: string): Promise<{
+    strategy_a: string
+    strategy_b: string
+    filters: Record<string, unknown>
+    comparison: Record<string, unknown>
+    winner: string | null
+    confidence_in_winner: string | null
+  }> => {
+    const response = await api.post('/strategies/compare', {
+      strategy_a: strategyA,
+      strategy_b: strategyB,
+      hours,
+      domain,
+    })
+    return response.data
+  },
+
+  recordFeedback: async (strategyId: string, sessionId: string, score: number, text?: string): Promise<void> => {
+    await api.post('/strategies/feedback', {
+      strategy_id: strategyId,
+      session_id: sessionId,
+      score,
+      text,
+    })
+  },
+
+  abCompareResponses: async (data: {
+    query: string
+    response_a: string
+    response_b: string
+    strategy_a: string
+    strategy_b: string
+    latency_a_ms: number
+    latency_b_ms: number
+  }): Promise<ABCompareResult> => {
+    const response = await api.post('/strategies/ab-compare-responses', data)
     return response.data
   },
 }

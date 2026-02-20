@@ -29,6 +29,8 @@ import APIKeysPage from './pages/APIKeysPage'
 import ArchivedChatsPage from './pages/ArchivedChatsPage'
 import LoginPage from './pages/LoginPage'
 import NotFoundPage from './pages/NotFoundPage'
+import StrategiesPage from './pages/StrategiesPage'
+import StrategyABTestPage from './pages/StrategyABTestPage'
 
 // Component to handle language redirect
 function LanguageRedirect() {
@@ -102,6 +104,8 @@ function AppRoutes() {
                     <Route path="system/users" element={<UserManagementPage />} />
                     <Route path="system/prompts" element={<PromptManagementPage />} />
                     <Route path="system/api-keys" element={<APIKeysPage />} />
+                    <Route path="system/strategies" element={<StrategiesPage />} />
+                    <Route path="system/strategies/ab-test" element={<StrategyABTestPage />} />
                     <Route path="archived-chats" element={<ArchivedChatsPage />} />
                     <Route path="cloud-sources" element={<CloudSourcesPage />} />
                     <Route path="cloud-sources/connections" element={<CloudSourceConnectionsPage />} />

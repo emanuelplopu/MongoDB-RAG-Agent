@@ -300,6 +300,7 @@ class SendMessageRequest(BaseModel):
     include_sources: bool = True
     attachments: Optional[List[AttachmentInfo]] = None  # File attachments for multimodal
     agent_mode: Optional[str] = None  # "auto", "thinking", "fast" - overrides session default
+    strategy_id: Optional[str] = None  # Strategy to use for this message (A/B testing)
 
 
 class CreateFolderRequest(BaseModel):
@@ -864,7 +865,7 @@ async def send_message(
     )
     
     # Create and run federated agent
-    agent = FederatedAgent(config=config)
+    agent = FederatedAgent(config=config, strategy_id=msg_request.strategy_id)
     generation_start = time.time()
     
     try:
@@ -1142,7 +1143,7 @@ async def send_message_stream(
                 parallel_workers=settings.agent_parallel_workers
             )
             
-            agent = FederatedAgent(config=config)
+            agent = FederatedAgent(config=config, strategy_id=msg_request.strategy_id)
             
             # Send initial event
             yield f"data: {json.dumps({'type': 'start', 'mode': agent_mode_str, 'models': {'orchestrator': settings.orchestrator_model, 'worker': settings.worker_model}})}\n\n"

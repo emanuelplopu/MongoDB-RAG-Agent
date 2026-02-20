@@ -23,6 +23,17 @@ services:
       # - E:/another-drive:/app/mounts/another-drive:ro
       # - //server/share:/app/mounts/network-share:ro
 
+  ingestion-worker:
+    volumes:
+      # Default volumes (must be repeated as override replaces the list)
+      - ./documents:/app/documents:ro
+      - ./projects:/app/projects:ro
+      - ./profiles.yaml:/app/profiles.yaml:ro
+      
+      # External document folders - same as backend
+      - D:/parhelion.energy:/app/mounts/parhelion-energy:ro
+      - "G:/My Drive/root:/app/mounts/gdrive-root:ro"
+
   cli:
     volumes:
       # Default volumes (must be repeated as override replaces the list)
