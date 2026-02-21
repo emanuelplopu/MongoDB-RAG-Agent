@@ -251,6 +251,16 @@ class IngestionStartRequest(BaseModel):
     max_tokens: int = Field(default=512, ge=128, le=2048)
 
 
+class DiscoveryProgress(BaseModel):
+    """Progress tracking for file discovery phase."""
+    folders_scanned: int = 0
+    total_folders: int = 0
+    files_found: int = 0
+    files_to_process: int = 0
+    files_skipped: int = 0
+    current_folder: Optional[str] = None
+
+
 class IngestionStatusResponse(BaseModel):
     """Ingestion status response."""
     status: IngestionStatus
@@ -275,6 +285,11 @@ class IngestionStatusResponse(BaseModel):
     is_paused: bool = False
     can_pause: bool = True
     can_stop: bool = True
+    # Phase tracking for transparency
+    phase: Optional[str] = None
+    phase_message: Optional[str] = None
+    discovery_progress: Optional[DiscoveryProgress] = None
+    processing_rate: float = 0.0  # files per minute
 
 
 class IngestionRunSummary(BaseModel):

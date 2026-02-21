@@ -453,10 +453,57 @@ class FederatedAgent:
             if not evaluation.follow_up_tasks:
                 break
         
-        # Phase 4: Synthesize
+        # Phase 4: Synthesize (or return "no results" message)
         await emit_event('phase', {'phase': 'synthesize', 'status': 'started'})
         synth_start = time.time()
-        response = await self.orchestrator.synthesize(user_message, all_results)
+        
+        # Check if we should return a "no relevant results" response
+        final_evaluation = self.trace.evaluation_history[-1] if self.trace.evaluation_history else None
+        
+        # Filter results by relevance - only keep results with reasonable scores
+        MIN_RELEVANCE_SCORE = 0.3
+        filtered_results = []
+        for r in all_results:
+            # Filter documents within each result
+            relevant_docs = [
+                doc for doc in r.documents_found 
+                if getattr(doc, 'similarity_score', 0.5) >= MIN_RELEVANCE_SCORE
+            ]
+            if relevant_docs or r.web_links_found:
+                # Create a copy with filtered documents
+                filtered_result = WorkerResult(
+                    task_id=r.task_id,
+                    documents_found=relevant_docs,
+                    web_links_found=r.web_links_found,
+                    sources_searched=r.sources_searched,
+                    error=r.error
+                )
+                filtered_results.append(filtered_result)
+        
+        # If no relevant results after filtering, or cannot_answer with low confidence
+        has_no_relevant_results = (
+            not filtered_results or 
+            all(not r.documents_found and not r.web_links_found for r in filtered_results)
+        )
+        
+        if has_no_relevant_results and final_evaluation and final_evaluation.decision == "cannot_answer":
+            # Return a clear "no results" message instead of synthesizing garbage
+            sources_searched = set()
+            for r in all_results:
+                sources_searched.update(r.sources_searched)
+            
+            response = (
+                f"I searched through the available sources ({', '.join(sources_searched) or 'profile, cloud, personal'}) "
+                f"but did not find relevant information about your query.\n\n"
+                f"**What I searched for:** {plan.intent_summary if plan else user_message[:100]}\n\n"
+                f"**Suggestions:**\n"
+                f"- Check if documents about this topic have been ingested\n"
+                f"- Try rephrasing your question with different keywords\n"
+                f"- If searching for external information, web search may be rate-limited"
+            )
+            logger.info("Returning 'no relevant results' response instead of synthesizing from irrelevant data")
+        else:
+            response = await self.orchestrator.synthesize(user_message, filtered_results if filtered_results else all_results)
         
         # Log synthesis result for debugging
         logger.info(f"Synthesize completed, response length: {len(response) if response else 0}")

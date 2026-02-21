@@ -15,13 +15,43 @@ import {
   MusicalNoteIcon,
   VideoCameraIcon,
   SignalIcon,
+  CogIcon,
+  MagnifyingGlassIcon,
+  FunnelIcon,
+  CheckCircleIcon,
+  ExclamationCircleIcon,
+  ClipboardIcon,
+  XMarkIcon,
+  DocumentPlusIcon,
+  InformationCircleIcon,
 } from '@heroicons/react/24/outline'
 import { 
   ingestionApi, ingestionQueueApi, profilesApi,
   QueueStatus, ScheduledIngestionJob, IngestionStatus, LogEntry,
-  Profile
+  Profile, IngestionStreamEvent
 } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
+
+// Phase configuration
+const PHASES = [
+  { key: 'initializing', label: 'Initializing', icon: CogIcon },
+  { key: 'cleaning', label: 'Cleaning', icon: TrashIcon },
+  { key: 'discovering', label: 'Discovering', icon: MagnifyingGlassIcon },
+  { key: 'filtering', label: 'Filtering', icon: FunnelIcon },
+  { key: 'processing', label: 'Processing', icon: DocumentTextIcon },
+  { key: 'finalizing', label: 'Finalizing', icon: ArrowPathIcon },
+  { key: 'completed', label: 'Complete', icon: CheckCircleIcon },
+]
+
+// Status explanations for novice users
+const STATUS_HELP: Record<string, string> = {
+  running: 'Documents are being processed. You can pause or stop anytime.',
+  paused: 'Processing is paused. Resume to continue where you left off.',
+  completed: 'All documents have been processed successfully.',
+  failed: 'Processing encountered an error. Check the logs for details.',
+  stopped: 'Processing was stopped by user.',
+  pending: 'Waiting to start processing.',
+}
 
 const FILE_TYPE_OPTIONS = [
   { value: 'all', label: 'All Files', icon: DocumentTextIcon },
@@ -56,6 +86,7 @@ export default function IngestionManagementPage() {
   
   const eventSourceRef = useRef<EventSource | null>(null)
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const eventsSourceRef = useRef<EventSource | null>(null)
   
   // Form states
   const [selectedProfiles, setSelectedProfiles] = useState<string[]>([])
@@ -63,6 +94,24 @@ export default function IngestionManagementPage() {
   const [incremental, setIncremental] = useState(true)
   const [scheduleFrequency, setScheduleFrequency] = useState('daily')
   const [scheduleHour, setScheduleHour] = useState(0)
+  
+  // Safeguards - operation locking and cooldown
+  const [isOperationPending, setIsOperationPending] = useState(false)
+  const [actionCooldown, setActionCooldown] = useState(false)
+  const COOLDOWN_MS = 2000
+  
+  // Streaming state
+  const [streamEvent, setStreamEvent] = useState<IngestionStreamEvent | null>(null)
+  const [isEventsStreaming, setIsEventsStreaming] = useState(false)
+  
+  // Confirmation modal state
+  const [confirmModal, setConfirmModal] = useState<{
+    open: boolean
+    title: string
+    message: string
+    onConfirm: () => void
+    destructive?: boolean
+  }>({ open: false, title: '', message: '', onConfirm: () => {} })
   
   const fetchData = useCallback(async () => {
     try {
@@ -124,8 +173,28 @@ export default function IngestionManagementPage() {
   useEffect(() => {
     return () => {
       if (eventSourceRef.current) eventSourceRef.current.close()
+      if (eventsSourceRef.current) eventsSourceRef.current.close()
     }
   }, [])
+  
+  // Auto-expand logs and start streaming when ingestion starts running
+  useEffect(() => {
+    if (ingestionStatus?.status === 'running' && !showLogs) {
+      setShowLogs(true)
+      if (!isStreaming) {
+        startLogStreaming()
+      }
+    }
+  }, [ingestionStatus?.status])
+  
+  // Start events streaming when ingestion is running
+  useEffect(() => {
+    if ((ingestionStatus?.status === 'running' || ingestionStatus?.status === 'paused') && !isEventsStreaming) {
+      startEventsStreaming()
+    } else if (ingestionStatus?.status !== 'running' && ingestionStatus?.status !== 'paused' && isEventsStreaming) {
+      stopEventsStreaming()
+    }
+  }, [ingestionStatus?.status])
   
   if (authLoading || isLoading) {
     return (
@@ -160,8 +229,55 @@ export default function IngestionManagementPage() {
     setIsStreaming(false)
   }
 
+  const startEventsStreaming = () => {
+    if (eventsSourceRef.current) eventsSourceRef.current.close()
+    const url = ingestionApi.getEventsStreamUrl()
+    const token = localStorage.getItem('auth_token')
+    const eventSource = new EventSource(`${url}${token ? `?token=${token}` : ''}`)
+    eventsSourceRef.current = eventSource
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data) as IngestionStreamEvent
+        setStreamEvent(data)
+      } catch {}
+    }
+    eventSource.onerror = () => { eventSource.close(); setIsEventsStreaming(false) }
+    setIsEventsStreaming(true)
+  }
+
+  const stopEventsStreaming = () => {
+    if (eventsSourceRef.current) eventsSourceRef.current.close()
+    setIsEventsStreaming(false)
+    setStreamEvent(null)
+  }
+
   const handleAddToQueue = async () => {
-    if (selectedProfiles.length === 0) return
+    if (selectedProfiles.length === 0 || isOperationPending || actionCooldown) return
+    
+    // Check for duplicates in queue
+    const existingProfiles = queueStatus?.queue.map(j => j.profile_key) || []
+    const duplicates = selectedProfiles.filter(p => existingProfiles.includes(p))
+    
+    if (duplicates.length > 0) {
+      const profileNames = duplicates.map(k => profiles[k]?.name || k).join(', ')
+      setConfirmModal({
+        open: true,
+        title: 'Duplicate Jobs',
+        message: `${profileNames} ${duplicates.length === 1 ? 'is' : 'are'} already in the queue. Add anyway?`,
+        onConfirm: async () => {
+          setConfirmModal(prev => ({ ...prev, open: false }))
+          await addToQueueInternal()
+        }
+      })
+      return
+    }
+    
+    await addToQueueInternal()
+  }
+  
+  const addToQueueInternal = async () => {
+    setIsOperationPending(true)
+    setActionCooldown(true)
     
     try {
       const jobs = selectedProfiles.map(profile_key => ({
@@ -176,20 +292,30 @@ export default function IngestionManagementPage() {
       fetchData()
     } catch (err) {
       console.error('Error adding to queue:', err)
+    } finally {
+      setIsOperationPending(false)
+      setTimeout(() => setActionCooldown(false), COOLDOWN_MS)
     }
   }
 
   const handleRemoveFromQueue = async (jobId: string) => {
+    if (isOperationPending) return
+    setIsOperationPending(true)
     try {
       await ingestionQueueApi.removeFromQueue(jobId)
       fetchData()
     } catch (err) {
       console.error('Error removing from queue:', err)
+    } finally {
+      setIsOperationPending(false)
     }
   }
 
   const handleCreateSchedule = async () => {
-    if (selectedProfiles.length === 0) return
+    if (selectedProfiles.length === 0 || isOperationPending || actionCooldown) return
+    
+    setIsOperationPending(true)
+    setActionCooldown(true)
     
     try {
       for (const profile_key of selectedProfiles) {
@@ -206,51 +332,108 @@ export default function IngestionManagementPage() {
       fetchData()
     } catch (err) {
       console.error('Error creating schedule:', err)
+    } finally {
+      setIsOperationPending(false)
+      setTimeout(() => setActionCooldown(false), COOLDOWN_MS)
     }
   }
 
   const handleDeleteSchedule = async (scheduleId: string) => {
-    if (!confirm('Delete this schedule?')) return
-    try {
-      await ingestionQueueApi.deleteSchedule(scheduleId)
-      fetchData()
-    } catch (err) {
-      console.error('Error deleting schedule:', err)
-    }
+    setConfirmModal({
+      open: true,
+      title: 'Delete Schedule?',
+      message: 'This will permanently delete this scheduled ingestion job.',
+      destructive: true,
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, open: false }))
+        if (isOperationPending) return
+        setIsOperationPending(true)
+        try {
+          await ingestionQueueApi.deleteSchedule(scheduleId)
+          fetchData()
+        } catch (err) {
+          console.error('Error deleting schedule:', err)
+        } finally {
+          setIsOperationPending(false)
+        }
+      }
+    })
   }
 
   const handleToggleSchedule = async (scheduleId: string) => {
+    if (isOperationPending) return
+    setIsOperationPending(true)
     try {
       await ingestionQueueApi.toggleSchedule(scheduleId)
       fetchData()
     } catch (err) {
       console.error('Error toggling schedule:', err)
+    } finally {
+      setIsOperationPending(false)
     }
   }
 
   const handleRunScheduleNow = async (scheduleId: string) => {
+    if (isOperationPending || actionCooldown) return
+    setIsOperationPending(true)
+    setActionCooldown(true)
     try {
       await ingestionQueueApi.runScheduleNow(scheduleId)
       fetchData()
     } catch (err) {
       console.error('Error running schedule:', err)
+    } finally {
+      setIsOperationPending(false)
+      setTimeout(() => setActionCooldown(false), COOLDOWN_MS)
     }
   }
 
   const handlePause = async () => {
-    await ingestionApi.pause()
-    fetchData()
+    if (isOperationPending) return
+    setIsOperationPending(true)
+    try {
+      await ingestionApi.pause()
+      fetchData()
+    } catch (err) {
+      console.error('Error pausing:', err)
+    } finally {
+      setIsOperationPending(false)
+    }
   }
 
   const handleResume = async () => {
-    await ingestionApi.resume()
-    fetchData()
+    if (isOperationPending) return
+    setIsOperationPending(true)
+    try {
+      await ingestionApi.resume()
+      fetchData()
+    } catch (err) {
+      console.error('Error resuming:', err)
+    } finally {
+      setIsOperationPending(false)
+    }
   }
 
   const handleStop = async () => {
-    if (!confirm('Stop ingestion?')) return
-    await ingestionApi.stop()
-    fetchData()
+    setConfirmModal({
+      open: true,
+      title: 'Stop Ingestion?',
+      message: 'This will stop the current ingestion job. Progress is saved and you can resume later with a new incremental ingestion.',
+      destructive: true,
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, open: false }))
+        if (isOperationPending) return
+        setIsOperationPending(true)
+        try {
+          await ingestionApi.stop()
+          fetchData()
+        } catch (err) {
+          console.error('Error stopping:', err)
+        } finally {
+          setIsOperationPending(false)
+        }
+      }
+    })
   }
 
   const formatTime = (seconds: number) => {
@@ -258,6 +441,31 @@ export default function IngestionManagementPage() {
     const mins = Math.floor(seconds / 60)
     const secs = Math.round(seconds % 60)
     return `${mins}m ${secs}s`
+  }
+
+  const formatRate = (rate: number) => {
+    if (rate < 1) return `${(rate * 60).toFixed(1)}/hour`
+    return `${rate.toFixed(1)}/min`
+  }
+
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch (err) {
+      console.error('Failed to copy:', err)
+    }
+  }
+
+  const copyAllLogs = async () => {
+    const logText = logs.map(l => `[${l.timestamp}] [${l.level}] ${l.message}`).join('\n')
+    await copyToClipboard(logText)
+  }
+
+  // Get current phase index for stepper
+  const getCurrentPhaseIndex = () => {
+    const phase = streamEvent?.phase || ingestionStatus?.phase || 'initializing'
+    const idx = PHASES.findIndex(p => p.key === phase)
+    return idx >= 0 ? idx : 0
   }
 
   return (
@@ -281,24 +489,113 @@ export default function IngestionManagementPage() {
       {ingestionStatus && (ingestionStatus.status === 'running' || ingestionStatus.status === 'paused') && (
         <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">{t('ingestion.currentIngestion')}</h3>
+            <div className="flex items-center gap-3">
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">{t('ingestion.currentIngestion')}</h3>
+              <div className="group relative">
+                <InformationCircleIcon className="h-4 w-4 text-gray-400 cursor-help" />
+                <div className="absolute left-0 top-6 z-10 hidden group-hover:block w-64 p-2 text-xs bg-gray-900 text-white rounded-lg shadow-lg">
+                  {STATUS_HELP[ingestionStatus.status] || 'Processing documents...'}
+                </div>
+              </div>
+            </div>
             <div className="flex gap-2">
               {ingestionStatus.status === 'paused' ? (
-                <button onClick={handleResume} className="flex items-center gap-2 rounded-xl bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700">
+                <button 
+                  onClick={handleResume} 
+                  disabled={isOperationPending || !ingestionStatus.can_pause}
+                  className="flex items-center gap-2 rounded-xl bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
                   <PlayIcon className="h-4 w-4" /> {t('ingestion.resume')}
                 </button>
               ) : (
-                <button onClick={handlePause} className="flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600">
+                <button 
+                  onClick={handlePause} 
+                  disabled={isOperationPending || !ingestionStatus.can_pause}
+                  className="flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
                   <PauseIcon className="h-4 w-4" /> Pause
                 </button>
               )}
-              <button onClick={handleStop} className="flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700">
+              <button 
+                onClick={handleStop} 
+                disabled={isOperationPending || !ingestionStatus.can_stop}
+                className="flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
                 <StopIcon className="h-4 w-4" /> Stop
               </button>
             </div>
           </div>
           
-          {/* Progress */}
+          {/* Phase Stepper */}
+          <div className="mb-6">
+            <div className="flex items-center justify-between">
+              {PHASES.slice(0, -1).map((phase, idx) => {
+                const currentIdx = getCurrentPhaseIndex()
+                const isActive = idx === currentIdx
+                const isComplete = idx < currentIdx
+                const Icon = phase.icon
+                
+                return (
+                  <div key={phase.key} className="flex-1 flex items-center">
+                    <div className={`flex flex-col items-center ${idx > 0 ? 'flex-1' : ''}`}>
+                      {idx > 0 && (
+                        <div className={`h-0.5 w-full mb-2 ${isComplete || isActive ? 'bg-primary' : 'bg-gray-300 dark:bg-gray-600'}`} />
+                      )}
+                      <div className={`flex items-center justify-center w-8 h-8 rounded-full ${
+                        isActive ? 'bg-primary text-white ring-4 ring-primary/20' :
+                        isComplete ? 'bg-green-500 text-white' :
+                        'bg-gray-200 dark:bg-gray-600 text-gray-500 dark:text-gray-400'
+                      }`}>
+                        {isActive && ingestionStatus.status === 'running' ? (
+                          <ArrowPathIcon className="h-4 w-4 animate-spin" />
+                        ) : isComplete ? (
+                          <CheckCircleIcon className="h-4 w-4" />
+                        ) : (
+                          <Icon className="h-4 w-4" />
+                        )}
+                      </div>
+                      <span className={`text-xs mt-1 ${
+                        isActive ? 'text-primary font-medium' : 
+                        isComplete ? 'text-green-600 dark:text-green-400' :
+                        'text-gray-500 dark:text-gray-400'
+                      }`}>
+                        {phase.label}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            {/* Phase message */}
+            <div className="text-center mt-2">
+              <span className="text-sm text-secondary dark:text-gray-400">
+                {streamEvent?.phase_message || ingestionStatus.phase_message || 'Processing...'}
+              </span>
+            </div>
+          </div>
+          
+          {/* Discovery Progress (shown during discovering/filtering phases) */}
+          {(streamEvent?.phase === 'discovering' || streamEvent?.phase === 'filtering' || 
+            ingestionStatus.phase === 'discovering' || ingestionStatus.phase === 'filtering') && (
+            <div className="mb-4 p-3 bg-primary-50 dark:bg-primary-900/20 rounded-xl">
+              <div className="flex items-center gap-3">
+                <MagnifyingGlassIcon className="h-5 w-5 text-primary animate-pulse" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-primary-900 dark:text-gray-200">
+                    {streamEvent?.discovery_progress?.current_folder?.split(/[\\/]/).pop() || 
+                     ingestionStatus.discovery_progress?.current_folder?.split(/[\\/]/).pop() || 'Scanning...'}
+                  </p>
+                  <p className="text-xs text-secondary dark:text-gray-400">
+                    Found {streamEvent?.discovery_progress?.files_found || ingestionStatus.discovery_progress?.files_found || 0} files
+                    {(streamEvent?.discovery_progress?.files_skipped || ingestionStatus.discovery_progress?.files_skipped) ? 
+                      ` • ${streamEvent?.discovery_progress?.files_skipped || ingestionStatus.discovery_progress?.files_skipped} already processed` : ''}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* Progress Bar */}
           <div className="space-y-3">
             <div className="flex items-center justify-between text-sm">
               <span className={`px-3 py-1 rounded-lg font-medium ${
@@ -308,31 +605,47 @@ export default function IngestionManagementPage() {
                 {ingestionStatus.status.charAt(0).toUpperCase() + ingestionStatus.status.slice(1)}
               </span>
               <span className="text-secondary dark:text-gray-400">
-                Elapsed: {formatTime(ingestionStatus.elapsed_seconds)}
-                {ingestionStatus.estimated_remaining_seconds && ` • ETA: ${formatTime(ingestionStatus.estimated_remaining_seconds)}`}
+                Elapsed: {formatTime(streamEvent?.metrics?.elapsed_seconds || ingestionStatus.elapsed_seconds)}
+                {(streamEvent?.metrics?.estimated_remaining_seconds || ingestionStatus.estimated_remaining_seconds) && 
+                  ` • ETA: ${formatTime(streamEvent?.metrics?.estimated_remaining_seconds || ingestionStatus.estimated_remaining_seconds || 0)}`}
               </span>
             </div>
             
-            <div className="w-full h-3 bg-surface-variant dark:bg-gray-700 rounded-full">
-              <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${Math.max(ingestionStatus.progress_percent, 2)}%` }} />
+            <div className="w-full h-3 bg-surface-variant dark:bg-gray-700 rounded-full overflow-hidden">
+              <div className="h-full bg-primary rounded-full transition-all duration-300" style={{ width: `${Math.max(ingestionStatus.progress_percent, 2)}%` }} />
             </div>
             
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            {/* Enhanced Stats Grid */}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
               <div>
                 <p className="text-secondary dark:text-gray-400">{t('ingestion.progress')}</p>
-                <p className="font-medium text-primary-900 dark:text-gray-200">{ingestionStatus.processed_files} / {ingestionStatus.total_files}</p>
+                <p className="font-medium text-primary-900 dark:text-gray-200">
+                  {streamEvent?.progress?.processed_files || ingestionStatus.processed_files} / {streamEvent?.progress?.total_files || ingestionStatus.total_files}
+                </p>
               </div>
               <div>
                 <p className="text-secondary dark:text-gray-400">{t('ingestion.chunksCreated')}</p>
-                <p className="font-medium text-primary-900 dark:text-gray-200">{ingestionStatus.chunks_created}</p>
+                <p className="font-medium text-primary-900 dark:text-gray-200">
+                  {streamEvent?.progress?.chunks_created || ingestionStatus.chunks_created}
+                </p>
               </div>
               <div>
                 <p className="text-secondary dark:text-gray-400">{t('ingestion.failed')}</p>
-                <p className="font-medium text-red-500">{ingestionStatus.failed_files}</p>
+                <p className="font-medium text-red-500">
+                  {streamEvent?.progress?.failed_files || ingestionStatus.failed_files}
+                </p>
+              </div>
+              <div>
+                <p className="text-secondary dark:text-gray-400">Rate</p>
+                <p className="font-medium text-primary-900 dark:text-gray-200">
+                  {formatRate(streamEvent?.metrics?.processing_rate || ingestionStatus.processing_rate || 0)}
+                </p>
               </div>
               <div>
                 <p className="text-secondary dark:text-gray-400">{t('ingestion.currentFile')}</p>
-                <p className="font-medium text-primary-900 dark:text-gray-200 truncate">{ingestionStatus.current_file?.split(/[\\/]/).pop() || 'N/A'}</p>
+                <p className="font-medium text-primary-900 dark:text-gray-200 truncate" title={ingestionStatus.current_file || ''}>
+                  {(streamEvent?.progress?.current_file || ingestionStatus.current_file)?.split(/[\\/]/).pop() || 'N/A'}
+                </p>
               </div>
             </div>
           </div>
@@ -415,8 +728,13 @@ export default function IngestionManagementPage() {
               </label>
               
               <div className="flex gap-2">
-                <button onClick={handleAddToQueue} disabled={selectedProfiles.length === 0} className="px-4 py-2 rounded-xl bg-primary text-white text-sm font-medium disabled:opacity-50">
-                  {t('ingestion.addProfile', { count: selectedProfiles.length })}
+                <button 
+                  onClick={handleAddToQueue} 
+                  disabled={selectedProfiles.length === 0 || isOperationPending || actionCooldown} 
+                  className="px-4 py-2 rounded-xl bg-primary text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {(isOperationPending || actionCooldown) && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
+                  {actionCooldown ? 'Adding...' : t('ingestion.addProfile', { count: selectedProfiles.length })}
                 </button>
                 <button onClick={() => { setShowAddToQueue(false); setSelectedProfiles([]) }} className="px-4 py-2 rounded-xl bg-gray-200 dark:bg-gray-600 text-primary-900 dark:text-gray-200 text-sm font-medium">
                   {t('common.cancel')}
@@ -440,14 +758,30 @@ export default function IngestionManagementPage() {
                     </p>
                   </div>
                 </div>
-                <button onClick={() => handleRemoveFromQueue(job.id)} className="p-2 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg">
+                <button 
+                  onClick={() => handleRemoveFromQueue(job.id)} 
+                  disabled={isOperationPending}
+                  className="p-2 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                >
                   <TrashIcon className="h-4 w-4" />
                 </button>
               </div>
             ))}
           </div>
-        ) : (
-          <p className="text-secondary dark:text-gray-400 text-sm">{t('ingestion.noJobsInQueue')}</p>
+        ) : !showAddToQueue && (
+          <div className="text-center py-8">
+            <DocumentPlusIcon className="h-12 w-12 text-gray-400 mx-auto mb-3" />
+            <h4 className="font-medium text-primary-900 dark:text-gray-200">{t('ingestion.noJobsInQueue')}</h4>
+            <p className="text-sm text-secondary dark:text-gray-400 mt-1 max-w-md mx-auto">
+              Add documents to your knowledge base by selecting a profile and starting an ingestion job.
+            </p>
+            <button 
+              onClick={() => setShowAddToQueue(true)} 
+              className="mt-4 flex items-center gap-2 mx-auto rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
+            >
+              <PlusIcon className="h-4 w-4" /> Add First Job
+            </button>
+          </div>
         )}
       </div>
 
@@ -533,13 +867,28 @@ export default function IngestionManagementPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button onClick={() => handleRunScheduleNow(schedule.id)} className="p-2 text-primary hover:bg-primary-100 dark:hover:bg-primary-900/30 rounded-lg" title={t('ingestion.runNow')}>
+                  <button 
+                    onClick={() => handleRunScheduleNow(schedule.id)} 
+                    disabled={isOperationPending || actionCooldown}
+                    className="p-2 text-primary hover:bg-primary-100 dark:hover:bg-primary-900/30 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed" 
+                    title={t('ingestion.runNow')}
+                  >
                     <PlayIcon className="h-4 w-4" />
                   </button>
-                  <button onClick={() => handleToggleSchedule(schedule.id)} className="p-2 text-amber-500 hover:bg-amber-100 dark:hover:bg-amber-900/30 rounded-lg" title={t('ingestion.toggle')}>
+                  <button 
+                    onClick={() => handleToggleSchedule(schedule.id)} 
+                    disabled={isOperationPending}
+                    className="p-2 text-amber-500 hover:bg-amber-100 dark:hover:bg-amber-900/30 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed" 
+                    title={t('ingestion.toggle')}
+                  >
                     {schedule.enabled ? <PauseIcon className="h-4 w-4" /> : <PlayIcon className="h-4 w-4" />}
                   </button>
-                  <button onClick={() => handleDeleteSchedule(schedule.id)} className="p-2 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg" title={t('common.delete')}>
+                  <button 
+                    onClick={() => handleDeleteSchedule(schedule.id)} 
+                    disabled={isOperationPending}
+                    className="p-2 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed" 
+                    title={t('common.delete')}
+                  >
                     <TrashIcon className="h-4 w-4" />
                   </button>
                 </div>
@@ -556,6 +905,15 @@ export default function IngestionManagementPage() {
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">{t('ingestion.logs')} ({logs.length})</h3>
           <div className="flex gap-2">
+            {logs.length > 0 && (
+              <button 
+                onClick={copyAllLogs} 
+                className="flex items-center gap-1 rounded-xl bg-surface-variant dark:bg-gray-700 px-3 py-1.5 text-sm font-medium text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-gray-600"
+                title="Copy all logs"
+              >
+                <ClipboardIcon className="h-4 w-4" /> Copy All
+              </button>
+            )}
             {!isStreaming ? (
               <button onClick={startLogStreaming} className="flex items-center gap-1 rounded-xl bg-green-100 dark:bg-green-900/30 px-3 py-1.5 text-sm font-medium text-green-700 dark:text-green-400">
                 <SignalIcon className="h-4 w-4" /> {t('ingestion.streamLogs')}
@@ -576,18 +934,72 @@ export default function IngestionManagementPage() {
               <p className="text-gray-500">{t('ingestion.noLogs')}</p>
             ) : (
               logs.slice(-100).map((log, i) => (
-                <div key={i} className="flex gap-2">
-                  <span className="text-gray-500">{new Date(log.timestamp).toLocaleTimeString()}</span>
-                  <span className={log.level === 'ERROR' ? 'text-red-400' : log.level === 'WARNING' ? 'text-yellow-400' : 'text-blue-400'}>
+                <div key={i} className="group flex gap-2 hover:bg-gray-800 px-1 rounded">
+                  <span className="text-gray-500 shrink-0">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                  <span className={`shrink-0 ${log.level === 'ERROR' ? 'text-red-400' : log.level === 'WARNING' ? 'text-yellow-400' : 'text-blue-400'}`}>
                     [{log.level}]
                   </span>
-                  <span className="text-gray-300">{log.message}</span>
+                  <span className="text-gray-300 flex-1">{log.message}</span>
+                  <button 
+                    onClick={() => copyToClipboard(log.message)}
+                    className="opacity-0 group-hover:opacity-100 p-0.5 text-gray-400 hover:text-white rounded shrink-0"
+                    title="Copy log entry"
+                  >
+                    <ClipboardIcon className="h-3 w-3" />
+                  </button>
                 </div>
               ))
             )}
           </div>
         )}
       </div>
+
+      {/* Confirmation Modal */}
+      {confirmModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 max-w-md w-full mx-4 shadow-xl">
+            <div className="flex items-start gap-4">
+              {confirmModal.destructive ? (
+                <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+                  <ExclamationCircleIcon className="h-6 w-6 text-red-600 dark:text-red-400" />
+                </div>
+              ) : (
+                <div className="flex-shrink-0 w-10 h-10 rounded-full bg-primary-100 dark:bg-primary-900/30 flex items-center justify-center">
+                  <InformationCircleIcon className="h-6 w-6 text-primary dark:text-primary-400" />
+                </div>
+              )}
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-primary-900 dark:text-gray-200">{confirmModal.title}</h3>
+                <p className="mt-2 text-sm text-secondary dark:text-gray-400">{confirmModal.message}</p>
+              </div>
+              <button 
+                onClick={() => setConfirmModal(prev => ({ ...prev, open: false }))}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              >
+                <XMarkIcon className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => setConfirmModal(prev => ({ ...prev, open: false }))}
+                className="px-4 py-2 rounded-xl bg-gray-100 dark:bg-gray-700 text-sm font-medium text-primary-900 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmModal.onConfirm}
+                className={`px-4 py-2 rounded-xl text-sm font-medium text-white ${
+                  confirmModal.destructive 
+                    ? 'bg-red-600 hover:bg-red-700' 
+                    : 'bg-primary hover:bg-primary-700'
+                }`}
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

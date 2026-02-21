@@ -372,52 +372,185 @@ async def _process_queue(db):
 
 
 async def _run_ingestion_job(job: Dict[str, Any], db):
-    """Run a single ingestion job."""
+    """Run a single ingestion job with proper tracking."""
     from src.ingestion.ingest import DocumentIngestionPipeline, IngestionConfig
     from src.profile import get_profile_manager
+    from backend.routers.ingestion import (
+        save_job_to_db, _ingestion_logs, _log_handler,
+        IngestionStatus
+    )
+    import backend.routers.ingestion as ingestion_router
     
     pm = get_profile_manager()
     pm.switch_profile(job["profile_key"])
     
-    # Create config based on file types
-    file_types = job.get("file_types", ["all"])
+    # Create a tracked job in the database
+    job_id = job["id"]
+    job_state = {
+        "job_id": job_id,
+        "status": IngestionStatus.RUNNING,
+        "started_at": datetime.now().isoformat(),
+        "completed_at": None,
+        "total_files": 0,
+        "processed_files": 0,
+        "failed_files": 0,
+        "duplicates_skipped": 0,
+        "excluded_files": 0,
+        "document_count": 0,
+        "image_count": 0,
+        "audio_count": 0,
+        "video_count": 0,
+        "chunks_created": 0,
+        "current_file": None,
+        "errors": [],
+        "progress_percent": 0.0,
+        "config": {
+            "profile": job["profile_key"],
+            "incremental": job.get("incremental", True),
+            "file_types": job.get("file_types", ["all"])
+        },
+        "profile": job["profile_key"],
+        # Phase tracking
+        "phase": "initializing",
+        "phase_message": "Starting ingestion...",
+        "discovery_progress": {
+            "folders_scanned": 0,
+            "total_folders": 0,
+            "files_found": 0,
+            "files_to_process": 0,
+            "files_skipped": 0,
+            "current_folder": None
+        },
+        "first_file_time": None,
+        "processing_rate": 0.0,
+    }
     
-    # Build file type filters
-    include_documents = "all" in file_types or "documents" in file_types
-    include_images = "all" in file_types or "images" in file_types
-    include_audio = "all" in file_types or "audio" in file_types
-    include_video = "all" in file_types or "video" in file_types
+    # Save to DB and set global state for real-time status
+    await save_job_to_db(db, job_state)
+    ingestion_router._current_job_id = job_id
+    ingestion_router._current_job_state = job_state
     
-    # Build patterns based on file types
-    patterns = []
-    if include_documents:
-        patterns.extend(["*.md", "*.txt", "*.pdf", "*.docx", "*.doc", "*.html", "*.htm", "*.xlsx", "*.xls", "*.pptx", "*.ppt"])
-    if include_images:
-        patterns.extend(["*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.bmp"])
-    if include_audio:
-        patterns.extend(["*.mp3", "*.wav", "*.m4a", "*.flac"])
-    if include_video:
-        patterns.extend(["*.mp4", "*.avi", "*.mkv", "*.mov", "*.webm"])
+    # Clear logs and add handler
+    _ingestion_logs.clear()
+    root_logger = logging.getLogger()
+    src_logger = logging.getLogger("src")
+    root_logger.addHandler(_log_handler)
+    src_logger.addHandler(_log_handler)
     
-    config = IngestionConfig()
-    
-    # Create pipeline
-    loop = asyncio.get_running_loop()
-    pipeline = await loop.run_in_executor(
-        None,
-        lambda: DocumentIngestionPipeline(config=config, use_profile=True)
-    )
-    
-    # Set custom patterns if not "all"
-    if "all" not in file_types:
-        pipeline._custom_patterns = patterns
-    
-    # Run ingestion
-    results = await pipeline.ingest_documents(
-        incremental=job.get("incremental", True)
-    )
-    
-    logger.info(f"Ingestion job completed: {len(results)} files processed")
+    try:
+        # Create config based on file types
+        file_types = job.get("file_types", ["all"])
+        
+        # Build file type filters
+        include_documents = "all" in file_types or "documents" in file_types
+        include_images = "all" in file_types or "images" in file_types
+        include_audio = "all" in file_types or "audio" in file_types
+        include_video = "all" in file_types or "video" in file_types
+        
+        # Build patterns based on file types
+        patterns = []
+        if include_documents:
+            patterns.extend(["*.md", "*.txt", "*.pdf", "*.docx", "*.doc", "*.html", "*.htm", "*.xlsx", "*.xls", "*.pptx", "*.ppt"])
+        if include_images:
+            patterns.extend(["*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.bmp"])
+        if include_audio:
+            patterns.extend(["*.mp3", "*.wav", "*.m4a", "*.flac"])
+        if include_video:
+            patterns.extend(["*.mp4", "*.avi", "*.mkv", "*.mov", "*.webm"])
+        
+        config = IngestionConfig()
+        
+        # Check if we need to clean (non-incremental mode)
+        is_incremental = job.get("incremental", True)
+        
+        if not is_incremental:
+            # Update phase: cleaning
+            job_state["phase"] = "cleaning"
+            job_state["phase_message"] = "Removing existing data..."
+            await save_job_to_db(db, job_state)
+        
+        # Update phase: discovering
+        job_state["phase"] = "discovering"
+        job_state["phase_message"] = "Scanning folders for documents..."
+        await save_job_to_db(db, job_state)
+        
+        # Create pipeline
+        loop = asyncio.get_running_loop()
+        pipeline = await loop.run_in_executor(
+            None,
+            lambda: DocumentIngestionPipeline(config=config, use_profile=True)
+        )
+        
+        # Set custom patterns if not "all"
+        if "all" not in file_types:
+            pipeline._custom_patterns = patterns
+        
+        # Progress callback for tracking
+        async def progress_callback_async(current: int, total: int, current_file: str = None, chunks_in_file: int = 0):
+            nonlocal job_state
+            
+            # Transition to processing phase on first file
+            if current == 1 and job_state["phase"] != "processing":
+                job_state["phase"] = "processing"
+                job_state["first_file_time"] = datetime.now().isoformat()
+                job_state["discovery_progress"]["files_to_process"] = total
+            
+            job_state["processed_files"] = current
+            job_state["total_files"] = total
+            job_state["progress_percent"] = (current / total * 100) if total > 0 else 0
+            job_state["phase_message"] = f"Processing files ({current}/{total})..."
+            
+            # Calculate processing rate
+            if job_state.get("first_file_time") and current > 0:
+                first_time = datetime.fromisoformat(job_state["first_file_time"])
+                elapsed_minutes = (datetime.now() - first_time).total_seconds() / 60
+                if elapsed_minutes > 0:
+                    job_state["processing_rate"] = round(current / elapsed_minutes, 2)
+            
+            if chunks_in_file > 0:
+                job_state["chunks_created"] += chunks_in_file
+            
+            if current_file:
+                job_state["current_file"] = current_file
+            
+            await save_job_to_db(db, job_state)
+        
+        def sync_progress_callback(current: int, total: int, current_file: str = None, chunks_in_file: int = 0):
+            asyncio.create_task(progress_callback_async(current, total, current_file, chunks_in_file))
+        
+        # Run ingestion
+        results = await pipeline.ingest_documents(
+            progress_callback=sync_progress_callback,
+            incremental=job.get("incremental", True)
+        )
+        
+        # Update final status
+        job_state["phase"] = "completed"
+        job_state["phase_message"] = f"Completed: {len(results)} files processed"
+        job_state["status"] = IngestionStatus.COMPLETED
+        job_state["completed_at"] = datetime.now().isoformat()
+        job_state["processed_files"] = len(results)
+        job_state["chunks_created"] = sum(r.chunks_created for r in results)
+        job_state["progress_percent"] = 100.0
+        await save_job_to_db(db, job_state)
+        
+        logger.info(f"Ingestion job completed: {len(results)} files processed")
+        
+    except Exception as e:
+        job_state["status"] = IngestionStatus.FAILED
+        job_state["phase"] = "failed"
+        job_state["phase_message"] = f"Failed: {str(e)}"
+        job_state["completed_at"] = datetime.now().isoformat()
+        job_state["errors"] = [str(e)]
+        await save_job_to_db(db, job_state)
+        raise
+        
+    finally:
+        # Clean up global state
+        ingestion_router._current_job_id = None
+        ingestion_router._current_job_state = None
+        root_logger.removeHandler(_log_handler)
+        src_logger.removeHandler(_log_handler)
 
 
 # ============== Scheduled Jobs ==============

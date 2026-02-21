@@ -256,7 +256,7 @@ class IngestionWorker:
         # Reload config at job start
         await self._load_config()
         
-        # Initialize job state
+        # Initialize job state with phase tracking
         job_state = {
             "total_files": 0,
             "processed_files": 0,
@@ -270,6 +270,21 @@ class IngestionWorker:
             "current_file": None,
             "progress_percent": 0.0,
             "errors": [],
+            # Phase tracking
+            "phase": "initializing",
+            "phase_message": "Starting ingestion...",
+            # Discovery progress
+            "discovery_progress": {
+                "folders_scanned": 0,
+                "total_folders": 0,
+                "files_found": 0,
+                "files_to_process": 0,
+                "files_skipped": 0,
+                "current_folder": None
+            },
+            # Processing rate tracking
+            "first_file_time": None,
+            "processing_rate": 0.0,
         }
         
         await self._write_log("INFO", f"Starting ingestion job {job_id}")
@@ -277,6 +292,11 @@ class IngestionWorker:
         try:
             # Apply offline mode config
             await self._apply_offline_mode_config()
+            
+            # Update phase: initializing
+            job_state["phase"] = "initializing"
+            job_state["phase_message"] = "Loading configuration..."
+            await self._update_job_progress(job_id, job_state)
             
             # Import ingestion components
             from src.ingestion.ingest import DocumentIngestionPipeline, IngestionConfig
@@ -296,6 +316,8 @@ class IngestionWorker:
                 max_tokens=config.get("max_tokens", 512)
             )
             
+            job_state["phase_message"] = "Initializing pipeline..."
+            await self._update_job_progress(job_id, job_state)
             await self._write_log("INFO", "Initializing pipeline...")
             
             # Create pipeline
@@ -306,7 +328,15 @@ class IngestionWorker:
                 use_profile=True
             )
             
-            # Define progress callback
+            # Update phase: discovering
+            job_state["phase"] = "discovering"
+            job_state["phase_message"] = "Scanning folders for documents..."
+            folders = pipeline.documents_folders
+            job_state["discovery_progress"]["total_folders"] = len(folders)
+            await self._update_job_progress(job_id, job_state)
+            await self._write_log("INFO", f"Discovering files in {len(folders)} folders...")
+            
+            # Define progress callback with phase updates
             async def progress_callback(current: int, total: int, current_file: str = None, chunks_in_file: int = 0):
                 nonlocal job_state
                 
@@ -319,10 +349,25 @@ class IngestionWorker:
                 if control_cmd == "PAUSE":
                     await self._handle_pause(job_id)
                 
+                # Transition to processing phase on first file
+                if current == 1 and job_state["phase"] != "processing":
+                    job_state["phase"] = "processing"
+                    job_state["phase_message"] = f"Processing files (0/{total})..."
+                    job_state["first_file_time"] = datetime.now().isoformat()
+                    job_state["discovery_progress"]["files_to_process"] = total
+                
                 # Update state
                 job_state["processed_files"] = current
                 job_state["total_files"] = total
                 job_state["progress_percent"] = (current / total * 100) if total > 0 else 0
+                job_state["phase_message"] = f"Processing files ({current}/{total})..."
+                
+                # Calculate processing rate (files per minute)
+                if job_state.get("first_file_time") and current > 0:
+                    first_time = datetime.fromisoformat(job_state["first_file_time"])
+                    elapsed_minutes = (datetime.now() - first_time).total_seconds() / 60
+                    if elapsed_minutes > 0:
+                        job_state["processing_rate"] = round(current / elapsed_minutes, 2)
                 
                 if chunks_in_file > 0:
                     job_state["chunks_created"] += chunks_in_file
@@ -361,6 +406,11 @@ class IngestionWorker:
                 max_concurrent_files=self.config.get("max_concurrent_files", 1)
             )
             
+            # Update phase: finalizing
+            job_state["phase"] = "finalizing"
+            job_state["phase_message"] = "Computing final statistics..."
+            await self._update_job_progress(job_id, job_state)
+            
             # Calculate final stats
             duplicates_skipped = sum(
                 1 for r in results
@@ -380,6 +430,8 @@ class IngestionWorker:
                 "progress.failed_files": actual_failures,
                 "progress.duplicates_skipped": duplicates_skipped,
                 "progress.progress_percent": 100.0,
+                "phase": "completed",
+                "phase_message": f"Completed: {len(results)} files processed",
                 "errors": [err for r in results for err in r.errors if "Duplicate of:" not in err][:20],
             }
             
@@ -496,6 +548,12 @@ class IngestionWorker:
                     "progress.image_count": state.get("image_count", 0),
                     "progress.audio_count": state.get("audio_count", 0),
                     "progress.video_count": state.get("video_count", 0),
+                    # Phase tracking fields
+                    "phase": state.get("phase"),
+                    "phase_message": state.get("phase_message"),
+                    "discovery_progress": state.get("discovery_progress"),
+                    "first_file_time": state.get("first_file_time"),
+                    "processing_rate": state.get("processing_rate", 0.0),
                     "worker_heartbeat": datetime.now(),
                 }
             }

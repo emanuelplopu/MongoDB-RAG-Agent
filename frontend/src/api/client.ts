@@ -570,6 +570,15 @@ export interface LLMProviderConfigRequest {
   embedding_api_key?: string
 }
 
+export interface DiscoveryProgress {
+  folders_scanned: number
+  total_folders: number
+  files_found: number
+  files_to_process: number
+  files_skipped: number
+  current_folder?: string
+}
+
 export interface IngestionStatus {
   status: string
   job_id?: string
@@ -592,6 +601,41 @@ export interface IngestionStatus {
   is_paused: boolean
   can_pause: boolean
   can_stop: boolean
+  // Phase tracking for transparency
+  phase?: string
+  phase_message?: string
+  discovery_progress?: DiscoveryProgress
+  processing_rate?: number  // files per minute
+}
+
+export interface IngestionStreamEvent {
+  type: 'state'
+  is_running: boolean
+  is_paused: boolean
+  job_id?: string
+  phase?: string
+  phase_message?: string
+  status?: string
+  discovery_progress?: DiscoveryProgress
+  progress?: {
+    processed_files: number
+    total_files: number
+    progress_percent: number
+    chunks_created: number
+    failed_files: number
+    current_file?: string
+  }
+  metrics?: {
+    processing_rate: number
+    elapsed_seconds: number
+    estimated_remaining_seconds?: number
+  }
+  counts?: {
+    document_count: number
+    image_count: number
+    audio_count: number
+    video_count: number
+  }
 }
 
 export interface IngestionRunSummary {
@@ -1102,6 +1146,10 @@ export const ingestionApi = {
 
   getLogsStreamUrl: (): string => {
     return `${API_BASE}/ingestion/logs/stream`
+  },
+
+  getEventsStreamUrl: (): string => {
+    return `${API_BASE}/ingestion/events/stream`
   },
 
   getPendingFiles: async (limit: number = 500): Promise<PendingFilesResponse> => {

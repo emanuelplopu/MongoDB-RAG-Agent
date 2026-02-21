@@ -182,8 +182,8 @@ ENHANCED_PROMPTS = {
 
 1. **"sufficient" (confidence 0.8-1.0)**: Use when:
    - The main question can be answered with found information
-   - Key entities/facts mentioned in intent are found
-   - Sources are credible and relevant
+   - Key entities/facts mentioned in intent are ACTUALLY found in results
+   - Sources are credible and DIRECTLY relevant to the question
    - Even if not perfect, we have enough to provide value
 
 2. **"need_refinement" (confidence 0.4-0.7)**: Use when:
@@ -198,14 +198,17 @@ ENHANCED_PROMPTS = {
    - Need broader search scope
 
 4. **"cannot_answer" (confidence 0.0-0.3)**: Use when:
+   - Results found are UNRELATED to the question (different topics/entities)
    - Multiple searches returned nothing relevant
    - Topic is clearly outside available data
    - Already tried refinements without success
+   - **IMPORTANT: If results are about completely different subjects than asked, use this!**
 
-**CRITICAL: Bias toward "sufficient"**
-- If you found 3+ relevant documents, prefer "sufficient"
-- Don't chase perfection - good answers are better than endless searching
-- Users prefer faster responses with good info over slow responses with perfect info
+**CRITICAL: Relevance Check**
+- Before marking "sufficient", verify results actually answer the question asked
+- If results mention entirely different entities/topics than the question, that's NOT sufficient
+- Example: User asks about "Company X" but results are about "Invoice Y" = cannot_answer
+- Don't synthesize garbage - better to say "not found" than give irrelevant info
 
 **Respond with JSON:**
 {{
@@ -232,7 +235,7 @@ ENHANCED_PROMPTS = {
 
 **Remember:** 
 - Empty results after 2 iterations = stop searching
-- High-quality results (score > 0.7) = sufficient
+- Results must be RELEVANT to the question, not just exist
 - Don't create follow-up tasks similar to already-executed tasks""",
 
     "synthesize": """You are synthesizing a comprehensive, well-cited answer from search results.

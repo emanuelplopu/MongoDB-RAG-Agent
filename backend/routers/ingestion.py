@@ -92,7 +92,8 @@ async def get_job_from_db(db, job_id: str) -> Optional[dict]:
     doc = await collection.find_one({"_id": job_id})
     if doc:
         doc["job_id"] = doc.pop("_id")
-    return doc
+        return _flatten_job_progress(doc)
+    return None
 
 
 async def get_latest_job_from_db(db) -> Optional[dict]:
@@ -101,8 +102,43 @@ async def get_latest_job_from_db(db) -> Optional[dict]:
     cursor = collection.find().sort("started_at", -1).limit(1)
     async for doc in cursor:
         doc["job_id"] = doc.pop("_id")
-        return doc
+        # Flatten nested progress object from worker
+        return _flatten_job_progress(doc)
     return None
+
+
+def _flatten_job_progress(doc: dict) -> dict:
+    """
+    Flatten nested progress fields from worker into top-level fields.
+    
+    Worker stores: {"progress": {"total_files": 10, "processed_files": 5, ...}}
+    API expects: {"total_files": 10, "processed_files": 5, ...}
+    """
+    if not doc:
+        return doc
+    
+    progress = doc.pop("progress", None)
+    if progress and isinstance(progress, dict):
+        # Map progress fields to top-level, preserving existing values
+        field_mapping = {
+            "total_files": "total_files",
+            "processed_files": "processed_files", 
+            "current_file": "current_file",
+            "chunks_created": "chunks_created",
+            "progress_percent": "progress_percent",
+            "document_count": "document_count",
+            "image_count": "image_count",
+            "audio_count": "audio_count",
+            "video_count": "video_count",
+            "failed_files": "failed_files",
+            "duplicates_skipped": "duplicates_skipped",
+        }
+        
+        for progress_key, doc_key in field_mapping.items():
+            if progress_key in progress and doc_key not in doc:
+                doc[doc_key] = progress[progress_key]
+    
+    return doc
 
 
 async def get_running_job_from_db(db) -> Optional[dict]:
@@ -114,7 +150,8 @@ async def get_running_job_from_db(db) -> Optional[dict]:
     })
     if doc:
         doc["job_id"] = doc.pop("_id")
-    return doc
+        return _flatten_job_progress(doc)
+    return None
 
 
 async def mark_job_interrupted(db, job_id: str):
@@ -255,16 +292,36 @@ def _get_files_metadata_batch_sync(file_paths: List[str], folders: List[str]) ->
     return results
 
 
-async def _build_pending_files_queue(pipeline, incremental: bool = True):
+async def _build_pending_files_queue(pipeline, incremental: bool = True, job_state: dict = None):
     """
     Build the pending files queue from the ingestion pipeline.
     
     Called at the start of ingestion to populate the queue.
     Uses thread pool for blocking file system operations.
+    Updates job_state with discovery progress if provided.
     """
     global _pending_files_queue
     
     logger.info("Starting _build_pending_files_queue...")
+    
+    # Helper to update discovery progress
+    def update_discovery(folders_scanned=None, total_folders=None, files_found=None, 
+                         files_to_process=None, files_skipped=None, current_folder=None):
+        if job_state is not None:
+            dp = job_state.get("discovery_progress", {})
+            if folders_scanned is not None:
+                dp["folders_scanned"] = folders_scanned
+            if total_folders is not None:
+                dp["total_folders"] = total_folders
+            if files_found is not None:
+                dp["files_found"] = files_found
+            if files_to_process is not None:
+                dp["files_to_process"] = files_to_process
+            if files_skipped is not None:
+                dp["files_skipped"] = files_skipped
+            if current_folder is not None:
+                dp["current_folder"] = current_folder
+            job_state["discovery_progress"] = dp
     
     try:
         patterns = [
@@ -277,6 +334,19 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True):
             "*.mp4", "*.avi", "*.mkv", "*.mov", "*.webm",
         ]
         
+        # Update phase to discovering
+        if job_state is not None:
+            job_state["phase"] = "discovering"
+            job_state["phase_message"] = "Scanning folders for files..."
+            update_discovery(total_folders=len(pipeline.documents_folders))
+        
+        _ingestion_logs.append({
+            "timestamp": datetime.now().isoformat(),
+            "level": "INFO",
+            "message": f"Scanning {len(pipeline.documents_folders)} folder(s) for documents...",
+            "logger": "ingestion"
+        })
+        
         # Run glob in thread pool to avoid blocking event loop
         loop = asyncio.get_running_loop()
         all_files = await loop.run_in_executor(
@@ -286,14 +356,34 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True):
             patterns
         )
         
+        # Update discovery progress
+        update_discovery(
+            folders_scanned=len(pipeline.documents_folders),
+            files_found=len(all_files)
+        )
+        
         # Yield control back to event loop
         await asyncio.sleep(0)
         
         if not all_files:
             _pending_files_queue = []
+            if job_state is not None:
+                job_state["phase_message"] = "No files found"
             return
         
         logger.info(f"Found {len(all_files)} total files, building queue...")
+        
+        _ingestion_logs.append({
+            "timestamp": datetime.now().isoformat(),
+            "level": "INFO",
+            "message": f"Found {len(all_files)} total files, filtering...",
+            "logger": "ingestion"
+        })
+        
+        # Update phase to filtering
+        if job_state is not None:
+            job_state["phase"] = "filtering"
+            job_state["phase_message"] = f"Filtering {len(all_files)} files..."
         
         # Get existing sources if incremental
         existing_sources = set()
@@ -308,6 +398,7 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True):
         
         # Filter files that need processing
         files_to_process = []
+        skipped_count = 0
         for file_path in all_files:
             document_source = os.path.basename(file_path)
             for folder in pipeline.documents_folders:
@@ -316,9 +407,16 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True):
                     break
             
             if incremental and document_source in existing_sources:
+                skipped_count += 1
                 continue
             
             files_to_process.append(file_path)
+        
+        # Update discovery with filter results
+        update_discovery(
+            files_to_process=len(files_to_process),
+            files_skipped=skipped_count
+        )
         
         # Yield control
         await asyncio.sleep(0)
@@ -326,9 +424,21 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True):
         if not files_to_process:
             _pending_files_queue = []
             logger.info("No new files to process")
+            if job_state is not None:
+                job_state["phase_message"] = f"No new files (skipped {skipped_count} existing)"
             return
         
+        _ingestion_logs.append({
+            "timestamp": datetime.now().isoformat(),
+            "level": "INFO",
+            "message": f"Processing {len(files_to_process)} new files (skipped {skipped_count} existing)",
+            "logger": "ingestion"
+        })
+        
         # Get metadata for all files in a single batch in thread pool
+        if job_state is not None:
+            job_state["phase_message"] = f"Building queue for {len(files_to_process)} files..."
+        
         pending_files = await loop.run_in_executor(
             None,
             _get_files_metadata_batch_sync,
@@ -464,7 +574,21 @@ async def run_ingestion(job_id: str, config: dict, db):
         "errors": [],
         "progress_percent": 0.0,
         "config": config,  # Store config for resume capability
-        "profile": config.get("profile")
+        "profile": config.get("profile"),
+        # Phase tracking for transparency
+        "phase": "initializing",
+        "phase_message": "Starting ingestion...",
+        "discovery_progress": {
+            "folders_scanned": 0,
+            "total_folders": 0,
+            "files_found": 0,
+            "files_to_process": 0,
+            "files_skipped": 0,
+            "current_folder": None
+        },
+        # Processing metrics
+        "first_file_time": None,
+        "processing_rate": 0.0,  # files per minute
     }
     
     # Store in global for real-time status access
@@ -521,6 +645,7 @@ async def run_ingestion(job_id: str, config: dict, db):
         
         # Create pipeline in thread pool to avoid blocking event loop
         # The pipeline __init__ loads tokenizers which can be slow
+        job_state["phase_message"] = "Loading tokenizers..."
         _ingestion_logs.append({
             "timestamp": datetime.now().isoformat(),
             "level": "INFO",
@@ -534,8 +659,25 @@ async def run_ingestion(job_id: str, config: dict, db):
         # Yield control after heavy initialization
         await asyncio.sleep(0)
         
+        # If not incremental, show cleaning phase
+        if config.get("clean_before_ingest", False):
+            job_state["phase"] = "cleaning"
+            job_state["phase_message"] = "Removing existing data..."
+            await save_job_to_db(db, job_state)
+            _ingestion_logs.append({
+                "timestamp": datetime.now().isoformat(),
+                "level": "INFO",
+                "message": "Cleaning existing data from database...",
+                "logger": "ingestion"
+            })
+        
         # Build initial pending files queue
-        await _build_pending_files_queue(pipeline, config.get("incremental", True))
+        await _build_pending_files_queue(pipeline, config.get("incremental", True), job_state)
+        
+        # Update phase to processing
+        job_state["phase"] = "processing"
+        total_to_process = job_state["discovery_progress"].get("files_to_process", 0)
+        job_state["phase_message"] = f"Processing {total_to_process} files..."
         
         # Track progress - save to DB periodically
         last_db_update = datetime.now()
@@ -569,6 +711,19 @@ async def run_ingestion(job_id: str, config: dict, db):
             job_state["processed_files"] = current
             job_state["total_files"] = total
             job_state["progress_percent"] = (current / total * 100) if total > 0 else 0
+            
+            # Track first file time and calculate processing rate
+            if current == 1 and job_state.get("first_file_time") is None:
+                job_state["first_file_time"] = datetime.now().isoformat()
+            
+            if job_state.get("first_file_time") and current > 0:
+                first_time = datetime.fromisoformat(job_state["first_file_time"])
+                elapsed_minutes = (datetime.now() - first_time).total_seconds() / 60
+                if elapsed_minutes > 0:
+                    job_state["processing_rate"] = round(current / elapsed_minutes, 2)
+            
+            # Update phase message with current progress
+            job_state["phase_message"] = f"Processing file {current} of {total}..."
             
             # Accumulate chunks incrementally
             if chunks_in_file > 0:
@@ -618,6 +773,10 @@ async def run_ingestion(job_id: str, config: dict, db):
             incremental=config.get("incremental", True)
         )
         
+        # Update phase to finalizing
+        job_state["phase"] = "finalizing"
+        job_state["phase_message"] = "Saving results..."
+        
         # Calculate stats - distinguish between real errors and duplicates
         duplicates_skipped = sum(
             1 for r in results 
@@ -637,7 +796,9 @@ async def run_ingestion(job_id: str, config: dict, db):
             failed_files=actual_failures,
             duplicates_skipped=duplicates_skipped,
             errors=[err for r in results for err in r.errors if "Duplicate of:" not in err][:20],
-            progress_percent=100.0
+            progress_percent=100.0,
+            phase="completed",
+            phase_message="Ingestion complete"
         )
         
         _ingestion_logs.append({
@@ -651,7 +812,9 @@ async def run_ingestion(job_id: str, config: dict, db):
         logger.warning(f"Ingestion job {job_id} was cancelled/interrupted")
         await update_job_state(
             status="INTERRUPTED",
-            interrupted_at=datetime.now().isoformat()
+            interrupted_at=datetime.now().isoformat(),
+            phase="stopped",
+            phase_message="Ingestion interrupted"
         )
         _ingestion_logs.append({
             "timestamp": datetime.now().isoformat(),
@@ -665,7 +828,9 @@ async def run_ingestion(job_id: str, config: dict, db):
         await update_job_state(
             status=IngestionStatus.FAILED,
             completed_at=datetime.now().isoformat(),
-            errors=[str(e)]
+            errors=[str(e)],
+            phase="failed",
+            phase_message=f"Error: {str(e)[:100]}"
         )
         _ingestion_logs.append({
             "timestamp": datetime.now().isoformat(),
@@ -795,7 +960,7 @@ async def get_ingestion_status(request: Request):
     response_fields = {
         k: v for k, v in job_data.items() 
         if k not in ["elapsed_seconds", "estimated_remaining_seconds", "config", "interrupted_at", 
-                     "is_paused", "can_pause", "can_stop"]
+                     "is_paused", "can_pause", "can_stop", "_last_counted_file_idx", "first_file_time"]
     }
     
     return IngestionStatusResponse(
@@ -1400,6 +1565,92 @@ async def stream_logs():
             import json
             yield f"data: {json.dumps(status_data)}\n\n"
             
+            await asyncio.sleep(0.5)  # Poll every 500ms
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"  # Disable nginx buffering
+        }
+    )
+
+
+@router.get("/events/stream")
+async def stream_events():
+    """
+    Stream structured ingestion events via Server-Sent Events (SSE).
+    
+    Returns real-time state updates including:
+    - Phase information (initializing, discovering, filtering, processing, etc.)
+    - Discovery progress (files found, folders scanned)
+    - Processing metrics (rate, ETA)
+    - Current job status
+    """
+    async def event_generator():
+        import json
+        
+        while True:
+            # Build state snapshot
+            if _current_job_state is not None and _current_job_id is not None:
+                # Calculate elapsed and ETA
+                started_at = _current_job_state.get("started_at")
+                elapsed_seconds = 0.0
+                estimated_remaining = None
+                
+                if started_at:
+                    if isinstance(started_at, str):
+                        started_at = datetime.fromisoformat(started_at)
+                    elapsed_seconds = (datetime.now() - started_at).total_seconds()
+                    
+                    # Calculate ETA based on progress
+                    progress = _current_job_state.get("progress_percent", 0)
+                    if progress > 0:
+                        total_estimated = elapsed_seconds / (progress / 100)
+                        estimated_remaining = max(0, total_estimated - elapsed_seconds)
+                
+                state = {
+                    "type": "state",
+                    "is_running": True,
+                    "is_paused": _is_paused,
+                    "job_id": _current_job_id,
+                    "phase": _current_job_state.get("phase"),
+                    "phase_message": _current_job_state.get("phase_message"),
+                    "status": str(_current_job_state.get("status", "")),
+                    "discovery_progress": _current_job_state.get("discovery_progress"),
+                    "progress": {
+                        "processed_files": _current_job_state.get("processed_files", 0),
+                        "total_files": _current_job_state.get("total_files", 0),
+                        "progress_percent": _current_job_state.get("progress_percent", 0),
+                        "chunks_created": _current_job_state.get("chunks_created", 0),
+                        "failed_files": _current_job_state.get("failed_files", 0),
+                        "current_file": _current_job_state.get("current_file"),
+                    },
+                    "metrics": {
+                        "processing_rate": _current_job_state.get("processing_rate", 0),
+                        "elapsed_seconds": elapsed_seconds,
+                        "estimated_remaining_seconds": estimated_remaining
+                    },
+                    "counts": {
+                        "document_count": _current_job_state.get("document_count", 0),
+                        "image_count": _current_job_state.get("image_count", 0),
+                        "audio_count": _current_job_state.get("audio_count", 0),
+                        "video_count": _current_job_state.get("video_count", 0),
+                    }
+                }
+            else:
+                state = {
+                    "type": "state",
+                    "is_running": False,
+                    "is_paused": False,
+                    "job_id": None,
+                    "phase": None,
+                    "phase_message": None
+                }
+            
+            yield f"data: {json.dumps(state)}\n\n"
             await asyncio.sleep(0.5)  # Poll every 500ms
     
     return StreamingResponse(
