@@ -31,6 +31,10 @@ import LoginPage from './pages/LoginPage'
 import NotFoundPage from './pages/NotFoundPage'
 import StrategiesPage from './pages/StrategiesPage'
 import StrategyABTestPage from './pages/StrategyABTestPage'
+import FailedDocumentsPage from './pages/FailedDocumentsPage'
+import IngestionAnalyticsPage from './pages/IngestionAnalyticsPage'
+import JobHistoryPage from './pages/JobHistoryPage'
+import BackupManagementPage from './pages/BackupManagementPage'
 
 // Component to handle language redirect
 function LanguageRedirect() {
@@ -100,12 +104,16 @@ function AppRoutes() {
                     <Route path="system/status" element={<StatusPage />} />
                     <Route path="system/indexes" element={<SearchIndexesPage />} />
                     <Route path="system/ingestion" element={<IngestionManagementPage />} />
+                    <Route path="system/ingestion/failed" element={<FailedDocumentsPage />} />
+                    <Route path="system/ingestion/analytics" element={<IngestionAnalyticsPage />} />
+                    <Route path="system/ingestion/history" element={<JobHistoryPage />} />
                     <Route path="system/config" element={<ConfigurationPage />} />
                     <Route path="system/users" element={<UserManagementPage />} />
                     <Route path="system/prompts" element={<PromptManagementPage />} />
                     <Route path="system/api-keys" element={<APIKeysPage />} />
                     <Route path="system/strategies" element={<StrategiesPage />} />
                     <Route path="system/strategies/ab-test" element={<StrategyABTestPage />} />
+                    <Route path="system/backups" element={<BackupManagementPage />} />
                     <Route path="archived-chats" element={<ArchivedChatsPage />} />
                     <Route path="cloud-sources" element={<CloudSourcesPage />} />
                     <Route path="cloud-sources/connections" element={<CloudSourceConnectionsPage />} />

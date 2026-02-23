@@ -2913,3 +2913,195 @@ export const strategiesApi = {
 }
 
 export default api
+
+// ==================== Backup Types ====================
+
+export type BackupType = 'full' | 'incremental' | 'checkpoint' | 'post_ingestion'
+export type BackupStatus = 'pending' | 'in_progress' | 'completed' | 'failed'
+export type RestoreMode = 'full' | 'merge' | 'selective'
+
+export interface BackupMetadata {
+  backup_id: string
+  backup_type: BackupType
+  status: BackupStatus
+  profile_key: string
+  database_name: string
+  name?: string
+  description?: string
+  created_at: string
+  completed_at?: string
+  size_bytes: number
+  file_path: string
+  collections_included: string[]
+  document_counts: Record<string, number>
+  parent_backup_id?: string
+  checkpoint_data?: Record<string, unknown>
+  ingestion_job_id?: string
+  ingestion_stats?: Record<string, unknown>
+  error_message?: string
+}
+
+export interface BackupListResponse {
+  backups: BackupMetadata[]
+  total: number
+  profile_key?: string
+}
+
+export interface BackupConfig {
+  auto_backup_after_ingestion: boolean
+  retention_days: number
+  max_backups_per_profile: number
+  backup_location: string
+  compression_enabled: boolean
+  include_embeddings: boolean
+  backup_schedule?: string
+}
+
+export interface StorageStats {
+  total_size_bytes: number
+  total_backups: number
+  backups_by_type: Record<string, number>
+  backups_by_profile: Record<string, number>
+  oldest_backup?: string
+  newest_backup?: string
+  available_space_bytes?: number
+}
+
+export interface RestoreResult {
+  success: boolean
+  backup_id: string
+  restore_mode: RestoreMode
+  collections_restored: string[]
+  documents_restored: Record<string, number>
+  started_at: string
+  completed_at?: string
+  duration_seconds: number
+  error_message?: string
+  warnings: string[]
+}
+
+export interface BackupProgress {
+  backup_id: string
+  status: BackupStatus
+  progress_percent: number
+  current_collection?: string
+  collections_completed: number
+  total_collections: number
+  documents_processed: number
+  bytes_written: number
+  started_at: string
+  estimated_completion?: string
+  message?: string
+}
+
+export interface CreateBackupRequest {
+  backup_type: BackupType
+  profile_key?: string
+  name?: string
+  include_embeddings?: boolean
+  include_system_collections?: boolean
+}
+
+export interface CreateCheckpointRequest {
+  name: string
+  profile_key?: string
+  description?: string
+}
+
+export interface RestoreBackupRequest {
+  backup_id: string
+  restore_mode: RestoreMode
+  collections?: string[]
+  skip_users?: boolean
+  skip_sessions?: boolean
+}
+
+export interface UpdateBackupConfigRequest {
+  auto_backup_after_ingestion?: boolean
+  retention_days?: number
+  max_backups_per_profile?: number
+  compression_enabled?: boolean
+  include_embeddings?: boolean
+  backup_schedule?: string
+}
+
+// ==================== Backup API ====================
+
+export const backupsApi = {
+  // Create a new backup
+  create: async (request: CreateBackupRequest): Promise<BackupMetadata> => {
+    const response = await api.post('/backups/create', request)
+    return response.data
+  },
+
+  // Create a checkpoint
+  createCheckpoint: async (request: CreateCheckpointRequest): Promise<BackupMetadata> => {
+    const response = await api.post('/backups/checkpoint', request)
+    return response.data
+  },
+
+  // List all backups
+  list: async (profileKey?: string, backupType?: BackupType, limit: number = 50, skip: number = 0): Promise<BackupListResponse> => {
+    const params: Record<string, unknown> = { limit, skip }
+    if (profileKey) params.profile_key = profileKey
+    if (backupType) params.backup_type = backupType
+    const response = await api.get('/backups/', { params })
+    return response.data
+  },
+
+  // List checkpoints only
+  listCheckpoints: async (profileKey?: string, limit: number = 50): Promise<BackupListResponse> => {
+    const params: Record<string, unknown> = { limit }
+    if (profileKey) params.profile_key = profileKey
+    const response = await api.get('/backups/checkpoints', { params })
+    return response.data
+  },
+
+  // Get backup details
+  getDetails: async (backupId: string): Promise<BackupMetadata> => {
+    const response = await api.get(`/backups/${backupId}`)
+    return response.data
+  },
+
+  // Get backup chain (for incremental backups)
+  getChain: async (backupId: string): Promise<BackupMetadata[]> => {
+    const response = await api.get(`/backups/${backupId}/chain`)
+    return response.data
+  },
+
+  // Restore from backup
+  restore: async (backupId: string, request: RestoreBackupRequest): Promise<RestoreResult> => {
+    const response = await api.post(`/backups/${backupId}/restore`, request)
+    return response.data
+  },
+
+  // Delete a backup
+  delete: async (backupId: string): Promise<{ success: boolean; message: string }> => {
+    const response = await api.delete(`/backups/${backupId}`)
+    return response.data
+  },
+
+  // Get backup configuration
+  getConfig: async (): Promise<BackupConfig> => {
+    const response = await api.get('/backups/config')
+    return response.data
+  },
+
+  // Update backup configuration
+  updateConfig: async (config: UpdateBackupConfigRequest): Promise<BackupConfig> => {
+    const response = await api.put('/backups/config', config)
+    return response.data
+  },
+
+  // Get current backup progress
+  getStatus: async (): Promise<BackupProgress | null> => {
+    const response = await api.get('/backups/status')
+    return response.data
+  },
+
+  // Get storage statistics
+  getStorageStats: async (): Promise<StorageStats> => {
+    const response = await api.get('/backups/storage')
+    return response.data
+  },
+}

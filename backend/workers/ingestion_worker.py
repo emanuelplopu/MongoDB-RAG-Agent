@@ -23,6 +23,13 @@ from pymongo import AsyncMongoClient
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 from dotenv import load_dotenv
 
+# Import backup service for post-ingestion backups
+try:
+    from backend.services.backup_service import BackupService
+    BACKUP_SERVICE_AVAILABLE = True
+except ImportError:
+    BACKUP_SERVICE_AVAILABLE = False
+
 # Load environment variables
 load_dotenv()
 
@@ -132,6 +139,7 @@ class IngestionWorker:
                 {"_id": "performance_config"}
             )
             if config_doc:
+                old_concurrent = self.config.get("max_concurrent_files", 1)
                 self.config.update({
                     "max_concurrent_files": config_doc.get("max_concurrent_files", 2),
                     "embedding_batch_size": config_doc.get("embedding_batch_size", 100),
@@ -139,7 +147,12 @@ class IngestionWorker:
                     "file_processing_timeout": config_doc.get("file_processing_timeout", 300),
                     "job_poll_interval": config_doc.get("job_poll_interval_seconds", 1.0),
                 })
-                logger.info(f"Loaded config from DB: {self.config}")
+                new_concurrent = self.config.get("max_concurrent_files", 1)
+                if old_concurrent != new_concurrent:
+                    logger.info(f"Config changed: max_concurrent_files {old_concurrent} -> {new_concurrent}")
+                logger.info(f"Using config: max_concurrent={self.config['max_concurrent_files']}, thread_pool={self.config['thread_pool_workers']}")
+            else:
+                logger.warning("No performance_config found in system_config collection, using defaults")
         except Exception as e:
             logger.warning(f"Could not load config from DB, using defaults: {e}")
     
@@ -444,6 +457,35 @@ class IngestionWorker:
                 "INFO",
                 f"Ingestion completed. Files: {len(results)}, Chunks: {final_state['progress.chunks_created']}"
             )
+            
+            # Trigger post-ingestion backup
+            if BACKUP_SERVICE_AVAILABLE:
+                try:
+                    from backend.core.database import DatabaseManager
+                    # Create a temporary DB manager for the backup service
+                    class TempDBManager:
+                        def __init__(self, client, db, db_name):
+                            self.client = client
+                            self.db = db
+                            self._current_database = db_name
+                    
+                    temp_db = TempDBManager(self.mongo_client, self.db, self.db_name)
+                    backup_service = BackupService(temp_db)
+                    
+                    profile_key = config.get("profile", "default")
+                    backup_result = await backup_service.create_post_ingestion_backup(
+                        profile_key=profile_key,
+                        job_id=job_id,
+                        documents_added=len(results),
+                        chunks_added=final_state['progress.chunks_created']
+                    )
+                    if backup_result:
+                        await self._write_log(
+                            "INFO",
+                            f"Post-ingestion backup created: {backup_result.backup_id}"
+                        )
+                except Exception as backup_error:
+                    logger.warning(f"Post-ingestion backup failed (non-critical): {backup_error}")
             
         except asyncio.CancelledError:
             logger.warning(f"Job {job_id} was cancelled/stopped")

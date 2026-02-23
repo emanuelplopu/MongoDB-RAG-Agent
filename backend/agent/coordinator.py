@@ -473,10 +473,15 @@ class FederatedAgent:
                 # Create a copy with filtered documents
                 filtered_result = WorkerResult(
                     task_id=r.task_id,
+                    task_type=r.task_type,
+                    query=r.query,
                     documents_found=relevant_docs,
                     web_links_found=r.web_links_found,
                     sources_searched=r.sources_searched,
-                    error=r.error
+                    error=r.error,
+                    success=r.success,
+                    summary=r.summary,
+                    result_quality=r.result_quality
                 )
                 filtered_results.append(filtered_result)
         

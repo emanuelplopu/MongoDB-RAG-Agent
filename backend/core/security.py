@@ -121,7 +121,7 @@ RATE_LIMITS = {
     "api_general": {"max_requests": 100, "window_seconds": 60},  # 100 per minute
     "api_search": {"max_requests": 30, "window_seconds": 60},  # 30 per minute
     "api_chat": {"max_requests": 20, "window_seconds": 60},  # 20 per minute
-    "api_ingestion": {"max_requests": 30, "window_seconds": 60},  # 30 per minute (was 10, increased for bulk operations)
+    "api_ingestion": {"max_requests": 60, "window_seconds": 60},  # 60 per minute (increased for UI polling during long ingestion)
     "api_ingestion_read": {"max_requests": 200, "window_seconds": 60},  # 200 per minute for read-only operations (lookup, list)
 }
 

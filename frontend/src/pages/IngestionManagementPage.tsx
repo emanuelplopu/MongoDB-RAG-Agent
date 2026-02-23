@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   PlayIcon,
@@ -24,6 +24,9 @@ import {
   XMarkIcon,
   DocumentPlusIcon,
   InformationCircleIcon,
+  ChartBarIcon,
+  ExclamationTriangleIcon,
+  ClockIcon,
 } from '@heroicons/react/24/outline'
 import { 
   ingestionApi, ingestionQueueApi, profilesApi,
@@ -483,6 +486,38 @@ export default function IngestionManagementPage() {
           <ArrowPathIcon className="h-4 w-4" />
           {t('common.refresh')}
         </button>
+      </div>
+
+      {/* Sub-navigation */}
+      <div className="flex gap-2 border-b border-gray-200 dark:border-gray-700 pb-2">
+        <Link
+          to={`/${localStorage.getItem('i18nextLng') || 'en'}/system/ingestion`}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-t-lg bg-primary text-white"
+        >
+          <CogIcon className="h-4 w-4" />
+          Management
+        </Link>
+        <Link
+          to={`/${localStorage.getItem('i18nextLng') || 'en'}/system/ingestion/failed`}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-t-lg text-secondary hover:bg-gray-100 dark:hover:bg-gray-700"
+        >
+          <ExclamationTriangleIcon className="h-4 w-4" />
+          Failed Documents
+        </Link>
+        <Link
+          to={`/${localStorage.getItem('i18nextLng') || 'en'}/system/ingestion/analytics`}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-t-lg text-secondary hover:bg-gray-100 dark:hover:bg-gray-700"
+        >
+          <ChartBarIcon className="h-4 w-4" />
+          Analytics
+        </Link>
+        <Link
+          to={`/${localStorage.getItem('i18nextLng') || 'en'}/system/ingestion/history`}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-t-lg text-secondary hover:bg-gray-100 dark:hover:bg-gray-700"
+        >
+          <ClockIcon className="h-4 w-4" />
+          History
+        </Link>
       </div>
 
       {/* Current Ingestion Status */}

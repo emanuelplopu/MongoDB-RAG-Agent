@@ -19,6 +19,7 @@ from backend.models.schemas import (
 )
 from backend.core.config import settings
 from backend.routers.auth import require_admin, UserResponse
+from backend.routers.backup import trigger_post_ingestion_backup
 from fastapi import Depends
 
 logger = logging.getLogger(__name__)
@@ -548,11 +549,9 @@ async def run_ingestion(job_id: str, config: dict, db):
     # Clear logs and add handler
     _ingestion_logs.clear()
     
-    # Add log handler to capture all ingestion logs
+    # Add log handler to capture all ingestion logs (root logger only - src.* logs propagate up)
     root_logger = logging.getLogger()
-    src_logger = logging.getLogger("src")
     root_logger.addHandler(_log_handler)
-    src_logger.addHandler(_log_handler)
     
     # Helper to update job in memory and DB
     job_state = {
@@ -767,10 +766,18 @@ async def run_ingestion(job_id: str, config: dict, db):
         def progress_callback(current: int, total: int, current_file: str = None, chunks_in_file: int = 0):
             asyncio.create_task(progress_callback_async(current, total, current_file, chunks_in_file))
         
-        # Run ingestion
+        # Load performance config for concurrency
+        perf_config = await db.db["ingestion_config"].find_one({"_id": "performance_config"})
+        max_concurrent = perf_config.get("max_concurrent_files", 1) if perf_config else 1
+        
+        logger.info(f"Running ingestion with max_concurrent_files={max_concurrent}")
+        
+        # Run ingestion with configured concurrency
         results = await pipeline.ingest_documents(
             progress_callback=progress_callback,
-            incremental=config.get("incremental", True)
+            incremental=config.get("incremental", True),
+            max_concurrent_files=max_concurrent,
+            job_id=job_id
         )
         
         # Update phase to finalizing
@@ -808,6 +815,26 @@ async def run_ingestion(job_id: str, config: dict, db):
             "logger": "ingestion"
         })
         
+        # Trigger post-ingestion backup
+        try:
+            profile_key = config.get("profile", "default")
+            backup_result = await trigger_post_ingestion_backup(
+                db_manager=db,
+                profile_key=profile_key,
+                job_id=job_id,
+                documents_added=len(results),
+                chunks_added=job_state.get("chunks_created", 0)
+            )
+            if backup_result:
+                _ingestion_logs.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "level": "INFO",
+                    "message": f"Post-ingestion backup created: {backup_result.backup_id}",
+                    "logger": "backup"
+                })
+        except Exception as backup_error:
+            logger.warning(f"Post-ingestion backup failed (non-critical): {backup_error}")
+        
     except asyncio.CancelledError:
         logger.warning(f"Ingestion job {job_id} was cancelled/interrupted")
         await update_job_state(
@@ -839,9 +866,22 @@ async def run_ingestion(job_id: str, config: dict, db):
             "logger": "ingestion"
         })
     finally:
+        # Save logs to job document before clearing
+        if job_id:
+            try:
+                collection = await get_jobs_collection(db)
+                # Get final logs list (convert deque to list)
+                final_logs = list(_ingestion_logs)
+                await collection.update_one(
+                    {"_id": job_id},
+                    {"$set": {"logs": final_logs}}
+                )
+                logger.info(f"Saved {len(final_logs)} log entries to job {job_id}")
+            except Exception as e:
+                logger.error(f"Failed to save logs for job {job_id}: {e}")
+        
         # Remove log handler
         root_logger.removeHandler(_log_handler)
-        src_logger.removeHandler(_log_handler)
         _current_job_id = None
         _current_job_state = None
         _pending_files_queue = []  # Clear queue
@@ -934,12 +974,21 @@ async def get_ingestion_status(request: Request):
     completed_at = job_data.get("completed_at")
     
     if started_at:
-        # Parse datetime if string
+        # Parse datetime if string and strip timezone info for consistency
         if isinstance(started_at, str):
-            started_at = datetime.fromisoformat(started_at)
+            started_at = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+            if started_at.tzinfo is not None:
+                started_at = started_at.replace(tzinfo=None)
+        elif hasattr(started_at, 'tzinfo') and started_at.tzinfo is not None:
+            started_at = started_at.replace(tzinfo=None)
+            
         if completed_at:
             if isinstance(completed_at, str):
-                completed_at = datetime.fromisoformat(completed_at)
+                completed_at = datetime.fromisoformat(completed_at.replace('Z', '+00:00'))
+                if completed_at.tzinfo is not None:
+                    completed_at = completed_at.replace(tzinfo=None)
+            elif hasattr(completed_at, 'tzinfo') and completed_at.tzinfo is not None:
+                completed_at = completed_at.replace(tzinfo=None)
             elapsed_seconds = (completed_at - started_at).total_seconds()
         else:
             elapsed_seconds = (datetime.now() - started_at).total_seconds()
@@ -963,6 +1012,10 @@ async def get_ingestion_status(request: Request):
                      "is_paused", "can_pause", "can_stop", "_last_counted_file_idx", "first_file_time"]
     }
     
+    # Normalize status to lowercase (DB may have uppercase from worker)
+    if "status" in response_fields and isinstance(response_fields["status"], str):
+        response_fields["status"] = response_fields["status"].lower()
+    
     return IngestionStatusResponse(
         **response_fields,
         elapsed_seconds=elapsed_seconds,
@@ -984,6 +1037,11 @@ async def get_job_status(request: Request, job_id: str):
     
     # Filter out config field
     response_fields = {k: v for k, v in job.items() if k not in ["config", "interrupted_at"]}
+    
+    # Normalize status to lowercase
+    if "status" in response_fields and isinstance(response_fields["status"], str):
+        response_fields["status"] = response_fields["status"].lower()
+    
     return IngestionStatusResponse(**response_fields)
 
 
@@ -2232,3 +2290,776 @@ async def setup_indexes(request: Request):
     except Exception as e:
         logger.error(f"Failed to setup indexes: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===== Failed Documents Endpoints =====
+
+@router.get("/failed-documents")
+async def get_failed_documents(
+    request: Request,
+    skip: int = 0,
+    limit: int = 50,
+    error_type: Optional[str] = None,
+    resolved: Optional[bool] = None
+):
+    """
+    Get list of failed documents from ingestion.
+    
+    Args:
+        skip: Number of documents to skip (pagination)
+        limit: Maximum documents to return
+        error_type: Filter by error type (timeout, error)
+        resolved: Filter by resolved status
+    """
+    db = request.app.state.db.db
+    
+    # Build query filter
+    query = {}
+    if error_type:
+        query["error_type"] = error_type
+    if resolved is not None:
+        query["resolved"] = resolved
+    
+    # Get total count
+    total = await db["failed_documents"].count_documents(query)
+    
+    # Get documents with pagination
+    cursor = db["failed_documents"].find(query).sort("failed_at", -1).skip(skip).limit(limit)
+    docs = await cursor.to_list(length=limit)
+    
+    # Convert ObjectId to string
+    for doc in docs:
+        doc["_id"] = str(doc["_id"])
+    
+    return {
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+        "documents": docs
+    }
+
+
+@router.get("/failed-documents/summary")
+async def get_failed_documents_summary(request: Request):
+    """Get summary statistics of failed documents."""
+    db = request.app.state.db.db
+    
+    pipeline = [
+        {
+            "$group": {
+                "_id": "$error_type",
+                "count": {"$sum": 1},
+                "total_size_bytes": {"$sum": "$file_size_bytes"},
+                "avg_processing_time_ms": {"$avg": "$processing_time_ms"}
+            }
+        }
+    ]
+    
+    results = await db["failed_documents"].aggregate(pipeline).to_list(length=100)
+    
+    # Get counts
+    total_unresolved = await db["failed_documents"].count_documents({"resolved": False})
+    total_resolved = await db["failed_documents"].count_documents({"resolved": True})
+    
+    return {
+        "by_error_type": {r["_id"]: r for r in results},
+        "total_unresolved": total_unresolved,
+        "total_resolved": total_resolved,
+        "total": total_unresolved + total_resolved
+    }
+
+
+@router.post("/failed-documents/{doc_id}/resolve")
+async def resolve_failed_document(request: Request, doc_id: str):
+    """Mark a failed document as resolved (manually handled)."""
+    db = request.app.state.db.db
+    
+    result = await db["failed_documents"].update_one(
+        {"_id": ObjectId(doc_id)},
+        {"$set": {"resolved": True, "resolved_at": datetime.now().isoformat()}}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Failed document not found")
+    
+    return {"success": True, "message": "Document marked as resolved"}
+
+
+@router.delete("/failed-documents/{doc_id}")
+async def delete_failed_document(request: Request, doc_id: str):
+    """Delete a failed document record."""
+    db = request.app.state.db.db
+    
+    result = await db["failed_documents"].delete_one({"_id": ObjectId(doc_id)})
+    
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Failed document not found")
+    
+    return {"success": True, "message": "Failed document record deleted"}
+
+
+@router.delete("/failed-documents")
+async def clear_failed_documents(
+    request: Request,
+    resolved_only: bool = True
+):
+    """Clear failed document records."""
+    db = request.app.state.db.db
+    
+    query = {"resolved": True} if resolved_only else {}
+    result = await db["failed_documents"].delete_many(query)
+    
+    return {
+        "success": True,
+        "deleted_count": result.deleted_count,
+        "message": f"Deleted {result.deleted_count} failed document records"
+    }
+
+
+# ===== Ingestion Analytics Endpoints =====
+
+@router.get("/analytics/overview")
+async def get_ingestion_analytics_overview(request: Request):
+    """Get overview analytics for ingestion."""
+    db = request.app.state.db.db
+    
+    # Get total stats
+    total_files = await db["ingestion_stats"].count_documents({})
+    successful = await db["ingestion_stats"].count_documents({"success": True})
+    failed = await db["ingestion_stats"].count_documents({"success": False})
+    
+    # Get processing time stats
+    time_pipeline = [
+        {"$match": {"success": True}},
+        {
+            "$group": {
+                "_id": None,
+                "avg_processing_time_ms": {"$avg": "$processing_time_ms"},
+                "min_processing_time_ms": {"$min": "$processing_time_ms"},
+                "max_processing_time_ms": {"$max": "$processing_time_ms"},
+                "total_processing_time_ms": {"$sum": "$processing_time_ms"},
+                "total_chunks": {"$sum": "$chunks_created"},
+                "total_size_bytes": {"$sum": "$file_size_bytes"}
+            }
+        }
+    ]
+    time_stats = await db["ingestion_stats"].aggregate(time_pipeline).to_list(length=1)
+    time_stats = time_stats[0] if time_stats else {}
+    
+    # Get error type breakdown
+    error_pipeline = [
+        {"$match": {"success": False}},
+        {
+            "$group": {
+                "_id": "$error_type",
+                "count": {"$sum": 1}
+            }
+        }
+    ]
+    error_stats = await db["ingestion_stats"].aggregate(error_pipeline).to_list(length=100)
+    
+    return {
+        "total_files_processed": total_files,
+        "successful": successful,
+        "failed": failed,
+        "success_rate": (successful / total_files * 100) if total_files > 0 else 0,
+        "avg_processing_time_ms": time_stats.get("avg_processing_time_ms", 0),
+        "min_processing_time_ms": time_stats.get("min_processing_time_ms", 0),
+        "max_processing_time_ms": time_stats.get("max_processing_time_ms", 0),
+        "total_processing_hours": (time_stats.get("total_processing_time_ms", 0) / 1000 / 3600),
+        "total_chunks_created": time_stats.get("total_chunks", 0),
+        "total_size_gb": (time_stats.get("total_size_bytes", 0) / 1024 / 1024 / 1024),
+        "errors_by_type": {e["_id"]: e["count"] for e in error_stats}
+    }
+
+
+@router.get("/analytics/outliers")
+async def get_ingestion_outliers(
+    request: Request,
+    threshold_std: float = 2.0,
+    limit: int = 50
+):
+    """
+    Get outlier files - files with unusually long processing times.
+    
+    Args:
+        threshold_std: Standard deviations from mean to consider outlier
+        limit: Maximum outliers to return
+    """
+    db = request.app.state.db.db
+    
+    # First get mean and stddev of processing times
+    stats_pipeline = [
+        {"$match": {"success": True}},
+        {
+            "$group": {
+                "_id": None,
+                "avg": {"$avg": "$processing_time_ms"},
+                "stdDev": {"$stdDevPop": "$processing_time_ms"}
+            }
+        }
+    ]
+    stats = await db["ingestion_stats"].aggregate(stats_pipeline).to_list(length=1)
+    
+    if not stats:
+        return {"outliers": [], "threshold_ms": 0, "avg_ms": 0, "std_dev_ms": 0}
+    
+    avg = stats[0].get("avg", 0)
+    std_dev = stats[0].get("stdDev", 0)
+    threshold_ms = avg + (threshold_std * std_dev)
+    
+    # Find outliers
+    outliers_cursor = db["ingestion_stats"].find({
+        "success": True,
+        "processing_time_ms": {"$gt": threshold_ms}
+    }).sort("processing_time_ms", -1).limit(limit)
+    
+    outliers = await outliers_cursor.to_list(length=limit)
+    
+    # Convert ObjectId to string
+    for doc in outliers:
+        doc["_id"] = str(doc["_id"])
+    
+    return {
+        "outliers": outliers,
+        "threshold_ms": threshold_ms,
+        "avg_ms": avg,
+        "std_dev_ms": std_dev,
+        "threshold_std": threshold_std
+    }
+
+
+@router.get("/analytics/by-extension")
+async def get_analytics_by_extension(request: Request):
+    """Get processing stats grouped by file extension."""
+    db = request.app.state.db.db
+    
+    pipeline = [
+        {
+            "$addFields": {
+                "extension": {
+                    "$toLower": {
+                        "$arrayElemAt": [
+                            {"$split": ["$file_name", "."]},
+                            -1
+                        ]
+                    }
+                }
+            }
+        },
+        {
+            "$group": {
+                "_id": "$extension",
+                "count": {"$sum": 1},
+                "successful": {"$sum": {"$cond": ["$success", 1, 0]}},
+                "failed": {"$sum": {"$cond": ["$success", 0, 1]}},
+                "avg_processing_time_ms": {"$avg": "$processing_time_ms"},
+                "max_processing_time_ms": {"$max": "$processing_time_ms"},
+                "total_chunks": {"$sum": "$chunks_created"},
+                "avg_size_bytes": {"$avg": "$file_size_bytes"},
+                "total_size_bytes": {"$sum": "$file_size_bytes"}
+            }
+        },
+        {"$sort": {"count": -1}}
+    ]
+    
+    results = await db["ingestion_stats"].aggregate(pipeline).to_list(length=100)
+    
+    return {
+        "by_extension": [
+            {
+                "extension": r["_id"],
+                "count": r["count"],
+                "successful": r["successful"],
+                "failed": r["failed"],
+                "success_rate": (r["successful"] / r["count"] * 100) if r["count"] > 0 else 0,
+                "avg_processing_time_ms": r["avg_processing_time_ms"],
+                "max_processing_time_ms": r["max_processing_time_ms"],
+                "total_chunks": r["total_chunks"],
+                "avg_size_mb": r["avg_size_bytes"] / 1024 / 1024 if r["avg_size_bytes"] else 0,
+                "total_size_mb": r["total_size_bytes"] / 1024 / 1024 if r["total_size_bytes"] else 0
+            }
+            for r in results
+        ]
+    }
+
+
+@router.get("/analytics/no-chunks")
+async def get_no_chunks_analytics(request: Request):
+    """
+    Get detailed analytics for documents that produced no chunks.
+    This helps identify content extraction issues, especially with PDFs and OCR.
+    """
+    db = request.app.state.db.db
+    
+    # Get no_chunks failures by extension
+    extension_pipeline = [
+        {"$match": {"error_type": "no_chunks"}},
+        {
+            "$addFields": {
+                "extension": {
+                    "$toLower": {
+                        "$arrayElemAt": [
+                            {"$split": ["$file_name", "."]},
+                            -1
+                        ]
+                    }
+                }
+            }
+        },
+        {
+            "$group": {
+                "_id": "$extension",
+                "count": {"$sum": 1},
+                "avg_size_bytes": {"$avg": "$file_size_bytes"},
+                "total_size_bytes": {"$sum": "$file_size_bytes"},
+                "avg_processing_time_ms": {"$avg": "$processing_time_ms"},
+                "sample_files": {"$push": {"$substr": ["$file_name", 0, 100]}}
+            }
+        },
+        {"$sort": {"count": -1}}
+    ]
+    by_extension = await db["ingestion_stats"].aggregate(extension_pipeline).to_list(length=50)
+    
+    # Get total counts
+    total_no_chunks = await db["ingestion_stats"].count_documents({"error_type": "no_chunks"})
+    total_successful = await db["ingestion_stats"].count_documents({"success": True})
+    total_processed = await db["ingestion_stats"].count_documents({})
+    
+    # Get recent no_chunks files (last 100)
+    recent_pipeline = [
+        {"$match": {"error_type": "no_chunks"}},
+        {"$sort": {"completed_at": -1}},
+        {"$limit": 100},
+        {
+            "$project": {
+                "file_name": 1,
+                "file_path": 1,
+                "file_size_bytes": 1,
+                "processing_time_ms": 1,
+                "completed_at": 1,
+                "job_id": 1
+            }
+        }
+    ]
+    recent_files = await db["ingestion_stats"].aggregate(recent_pipeline).to_list(length=100)
+    
+    return {
+        "summary": {
+            "total_no_chunks": total_no_chunks,
+            "total_successful": total_successful,
+            "total_processed": total_processed,
+            "no_chunks_rate": (total_no_chunks / total_processed * 100) if total_processed > 0 else 0
+        },
+        "by_extension": [
+            {
+                "extension": r["_id"],
+                "count": r["count"],
+                "avg_size_mb": r["avg_size_bytes"] / 1024 / 1024 if r["avg_size_bytes"] else 0,
+                "total_size_mb": r["total_size_bytes"] / 1024 / 1024 if r["total_size_bytes"] else 0,
+                "avg_processing_time_ms": r["avg_processing_time_ms"],
+                "sample_files": r["sample_files"][:5]  # First 5 samples
+            }
+            for r in by_extension
+        ],
+        "recent_files": [
+            {
+                "file_name": f.get("file_name"),
+                "file_path": f.get("file_path"),
+                "size_mb": f.get("file_size_bytes", 0) / 1024 / 1024,
+                "processing_time_ms": f.get("processing_time_ms"),
+                "completed_at": f.get("completed_at"),
+                "job_id": f.get("job_id")
+            }
+            for f in recent_files
+        ]
+    }
+
+
+@router.get("/analytics/timeline")
+async def get_analytics_timeline(
+    request: Request,
+    hours: int = 24
+):
+    """Get processing timeline for the last N hours."""
+    db = request.app.state.db.db
+    
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+    
+    pipeline = [
+        {"$match": {"started_at": {"$gte": cutoff}}},
+        {
+            "$addFields": {
+                "hour": {
+                    "$substr": ["$started_at", 0, 13]  # Extract YYYY-MM-DDTHH
+                }
+            }
+        },
+        {
+            "$group": {
+                "_id": "$hour",
+                "files_processed": {"$sum": 1},
+                "successful": {"$sum": {"$cond": ["$success", 1, 0]}},
+                "failed": {"$sum": {"$cond": ["$success", 0, 1]}},
+                "chunks_created": {"$sum": "$chunks_created"},
+                "avg_processing_time_ms": {"$avg": "$processing_time_ms"}
+            }
+        },
+        {"$sort": {"_id": 1}}
+    ]
+    
+    results = await db["ingestion_stats"].aggregate(pipeline).to_list(length=hours + 1)
+    
+    return {
+        "hours": hours,
+        "timeline": [
+            {
+                "hour": r["_id"],
+                "files_processed": r["files_processed"],
+                "successful": r["successful"],
+                "failed": r["failed"],
+                "chunks_created": r["chunks_created"],
+                "avg_processing_time_ms": r["avg_processing_time_ms"]
+            }
+            for r in results
+        ]
+    }
+
+
+@router.delete("/analytics/clear")
+async def clear_analytics_data(request: Request, older_than_days: int = 30):
+    """Clear old analytics data."""
+    db = request.app.state.db.db
+    
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(days=older_than_days)).isoformat()
+    
+    result = await db["ingestion_stats"].delete_many({"started_at": {"$lt": cutoff}})
+    
+    return {
+        "success": True,
+        "deleted_count": result.deleted_count,
+        "message": f"Deleted {result.deleted_count} stats records older than {older_than_days} days"
+    }
+
+
+# =============================================================================
+# JOB HISTORY ENDPOINTS
+# =============================================================================
+
+@router.get("/jobs")
+async def list_jobs(
+    request: Request,
+    skip: int = 0,
+    limit: int = 20,
+    profile: Optional[str] = None,
+    status: Optional[str] = None
+):
+    """
+    List all ingestion jobs with pagination and filtering.
+    
+    Returns a summary of each job with key metrics.
+    """
+    db = request.app.state.db.db
+    
+    # Build query filter
+    query = {}
+    if profile:
+        query["profile"] = profile
+    if status:
+        query["status"] = status.lower()
+    
+    # Get total count
+    total = await db[INGESTION_JOBS_COLLECTION].count_documents(query)
+    
+    # Get jobs with pagination, sorted by started_at descending
+    cursor = db[INGESTION_JOBS_COLLECTION].find(query).sort("started_at", -1).skip(skip).limit(limit)
+    jobs = await cursor.to_list(length=limit)
+    
+    # Transform for response
+    job_list = []
+    for job in jobs:
+        job_id = job.pop("_id", job.get("job_id"))
+        job["job_id"] = job_id
+        
+        # Calculate duration if completed
+        started_at = job.get("started_at")
+        completed_at = job.get("completed_at")
+        duration_seconds = None
+        if started_at and completed_at:
+            try:
+                start = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+                end = datetime.fromisoformat(completed_at.replace('Z', '+00:00'))
+                if start.tzinfo:
+                    start = start.replace(tzinfo=None)
+                if end.tzinfo:
+                    end = end.replace(tzinfo=None)
+                duration_seconds = (end - start).total_seconds()
+            except:
+                pass
+        
+        # Flatten progress if nested
+        progress = job.pop("progress", None)
+        if progress:
+            job["total_files"] = progress.get("total_files", job.get("total_files", 0))
+            job["processed_files"] = progress.get("processed_files", job.get("processed_files", 0))
+            job["failed_files"] = progress.get("failed_files", job.get("failed_files", 0))
+            job["chunks_created"] = progress.get("chunks_created", job.get("chunks_created", 0))
+            job["duplicates_skipped"] = progress.get("duplicates_skipped", job.get("duplicates_skipped", 0))
+        
+        # Count related stats and failed docs
+        stats_count = await db["ingestion_stats"].count_documents({"job_id": job_id})
+        failed_count = await db["failed_documents"].count_documents({"job_id": job_id})
+        logs_count = len(job.get("logs", []))
+        
+        job_list.append({
+            "job_id": job_id,
+            "profile": job.get("profile"),
+            "status": job.get("status", "unknown").lower() if isinstance(job.get("status"), str) else str(job.get("status", "unknown")),
+            "phase": job.get("phase"),
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "duration_seconds": duration_seconds,
+            "total_files": job.get("total_files", 0),
+            "processed_files": job.get("processed_files", 0),
+            "failed_files": job.get("failed_files", 0),
+            "chunks_created": job.get("chunks_created", 0),
+            "duplicates_skipped": job.get("duplicates_skipped", 0),
+            "stats_count": stats_count,
+            "failed_count": failed_count,
+            "logs_count": logs_count,
+            "errors": job.get("errors", [])[:3]  # First 3 errors as preview
+        })
+    
+    return {
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+        "jobs": job_list
+    }
+
+
+@router.get("/jobs/{job_id}")
+async def get_job_details(request: Request, job_id: str):
+    """
+    Get full details for a specific job including all metadata.
+    """
+    db = request.app.state.db.db
+    
+    job = await db[INGESTION_JOBS_COLLECTION].find_one({"_id": job_id})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job["job_id"] = job.pop("_id")
+    
+    # Flatten progress if nested
+    progress = job.pop("progress", None)
+    if progress:
+        for key, value in progress.items():
+            if key not in job:
+                job[key] = value
+    
+    # Get aggregated stats
+    stats_pipeline = [
+        {"$match": {"job_id": job_id}},
+        {"$group": {
+            "_id": None,
+            "total_files": {"$sum": 1},
+            "successful": {"$sum": {"$cond": ["$success", 1, 0]}},
+            "failed": {"$sum": {"$cond": ["$success", 0, 1]}},
+            "total_processing_time_ms": {"$sum": "$processing_time_ms"},
+            "total_chunks": {"$sum": "$chunks_created"},
+            "total_size_bytes": {"$sum": "$file_size_bytes"},
+            "avg_processing_time_ms": {"$avg": "$processing_time_ms"}
+        }}
+    ]
+    stats = await db["ingestion_stats"].aggregate(stats_pipeline).to_list(length=1)
+    
+    # Get failed documents count by error type
+    failed_pipeline = [
+        {"$match": {"job_id": job_id}},
+        {"$group": {
+            "_id": "$error_type",
+            "count": {"$sum": 1}
+        }}
+    ]
+    failed_by_type = await db["failed_documents"].aggregate(failed_pipeline).to_list(length=10)
+    
+    return {
+        "job": job,
+        "stats_summary": stats[0] if stats else None,
+        "failed_by_type": {r["_id"]: r["count"] for r in failed_by_type}
+    }
+
+
+@router.get("/jobs/{job_id}/stats")
+async def get_job_stats(
+    request: Request,
+    job_id: str,
+    skip: int = 0,
+    limit: int = 100,
+    success: Optional[bool] = None
+):
+    """
+    Get per-file stats for a specific job with pagination.
+    """
+    db = request.app.state.db.db
+    
+    # Build query
+    query = {"job_id": job_id}
+    if success is not None:
+        query["success"] = success
+    
+    # Get total count
+    total = await db["ingestion_stats"].count_documents(query)
+    
+    # Get stats
+    cursor = db["ingestion_stats"].find(query).sort("started_at", -1).skip(skip).limit(limit)
+    stats = await cursor.to_list(length=limit)
+    
+    # Convert ObjectIds to strings
+    for stat in stats:
+        if "_id" in stat:
+            stat["_id"] = str(stat["_id"])
+    
+    return {
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+        "stats": stats
+    }
+
+
+@router.get("/jobs/{job_id}/logs")
+async def get_job_logs(request: Request, job_id: str):
+    """
+    Get logs for a specific job.
+    """
+    db = request.app.state.db.db
+    
+    job = await db[INGESTION_JOBS_COLLECTION].find_one({"_id": job_id}, {"logs": 1})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    return {
+        "job_id": job_id,
+        "logs": job.get("logs", [])
+    }
+
+
+@router.get("/jobs/{job_id}/failed")
+async def get_job_failed_documents(
+    request: Request,
+    job_id: str,
+    skip: int = 0,
+    limit: int = 50,
+    error_type: Optional[str] = None
+):
+    """
+    Get failed documents for a specific job.
+    """
+    db = request.app.state.db.db
+    
+    # Build query
+    query = {"job_id": job_id}
+    if error_type:
+        query["error_type"] = error_type
+    
+    # Get total count
+    total = await db["failed_documents"].count_documents(query)
+    
+    # Get failed docs
+    cursor = db["failed_documents"].find(query).sort("failed_at", -1).skip(skip).limit(limit)
+    docs = await cursor.to_list(length=limit)
+    
+    # Convert ObjectIds to strings
+    for doc in docs:
+        if "_id" in doc:
+            doc["_id"] = str(doc["_id"])
+    
+    return {
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+        "failed_documents": docs
+    }
+
+
+@router.delete("/jobs/{job_id}")
+async def delete_job(request: Request, job_id: str):
+    """
+    Delete a job and all its related data (stats, failed documents, logs).
+    """
+    db = request.app.state.db.db
+    
+    # Check job exists
+    job = await db[INGESTION_JOBS_COLLECTION].find_one({"_id": job_id})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Delete related data
+    stats_result = await db["ingestion_stats"].delete_many({"job_id": job_id})
+    failed_result = await db["failed_documents"].delete_many({"job_id": job_id})
+    job_result = await db[INGESTION_JOBS_COLLECTION].delete_one({"_id": job_id})
+    
+    return {
+        "success": True,
+        "deleted": {
+            "job": job_result.deleted_count,
+            "stats": stats_result.deleted_count,
+            "failed_documents": failed_result.deleted_count
+        }
+    }
+
+
+@router.get("/jobs/stats/summary")
+async def get_jobs_summary(request: Request):
+    """
+    Get overall summary statistics for all jobs.
+    """
+    db = request.app.state.db.db
+    
+    # Get job counts by status
+    status_pipeline = [
+        {"$group": {
+            "_id": "$status",
+            "count": {"$sum": 1}
+        }}
+    ]
+    status_counts = await db[INGESTION_JOBS_COLLECTION].aggregate(status_pipeline).to_list(length=20)
+    
+    # Get totals
+    total_jobs = await db[INGESTION_JOBS_COLLECTION].count_documents({})
+    
+    # Get overall processing stats
+    stats_pipeline = [
+        {"$group": {
+            "_id": None,
+            "total_files_processed": {"$sum": 1},
+            "successful_files": {"$sum": {"$cond": ["$success", 1, 0]}},
+            "failed_files": {"$sum": {"$cond": ["$success", 0, 1]}},
+            "total_chunks": {"$sum": "$chunks_created"},
+            "total_size_bytes": {"$sum": "$file_size_bytes"},
+            "avg_processing_time_ms": {"$avg": "$processing_time_ms"}
+        }}
+    ]
+    overall_stats = await db["ingestion_stats"].aggregate(stats_pipeline).to_list(length=1)
+    
+    # Get recent jobs (last 5)
+    recent_jobs = await db[INGESTION_JOBS_COLLECTION].find().sort("started_at", -1).limit(5).to_list(length=5)
+    recent = []
+    for job in recent_jobs:
+        recent.append({
+            "job_id": job.get("_id"),
+            "profile": job.get("profile"),
+            "status": str(job.get("status", "unknown")).lower(),
+            "started_at": job.get("started_at")
+        })
+    
+    return {
+        "total_jobs": total_jobs,
+        "by_status": {str(r["_id"]).lower(): r["count"] for r in status_counts},
+        "overall_stats": overall_stats[0] if overall_stats else None,
+        "recent_jobs": recent
+    }

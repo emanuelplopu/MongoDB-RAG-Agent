@@ -44,7 +44,7 @@ function CodeBlock({
   }, [code])
 
   return (
-    <div className="relative group my-2">
+    <div className="relative group my-2 max-w-full">
       {/* Language badge and copy button */}
       <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-3 py-1.5 bg-gray-800 dark:bg-gray-900 rounded-t-lg border-b border-gray-700">
         <span className="text-xs font-mono text-gray-400">{language || 'text'}</span>
@@ -75,7 +75,7 @@ function CodeBlock({
       </div>
       
       {/* Code content */}
-      <pre className="bg-gray-900 dark:bg-gray-950 rounded-lg pt-10 pb-4 px-4 overflow-x-auto text-sm">
+      <pre className="bg-gray-900 dark:bg-gray-950 rounded-lg pt-10 pb-4 px-4 overflow-x-auto text-sm max-w-full">
         <code className="text-gray-100 font-mono whitespace-pre">
           {code}
         </code>
@@ -132,7 +132,7 @@ export default function MarkdownRenderer({
 }: MarkdownRendererProps) {
   return (
     <ReactMarkdown
-      className={`prose prose-sm max-w-none dark:prose-invert ${className}`}
+      className={`prose prose-sm max-w-none dark:prose-invert overflow-x-auto ${className}`}
       components={{
         // Code blocks with copy button
         code({ className, children }) {

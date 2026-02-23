@@ -779,8 +779,8 @@ export default function ChatPage() {
           </div>
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto px-6 py-4">
-            <div className="max-w-3xl mx-auto space-y-6">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden px-6 py-4">
+            <div className="max-w-3xl mx-auto space-y-6 min-w-0">
               {currentSession.messages.map((message) => (
                 <MessageBubble
                   key={message.id}
@@ -1101,7 +1101,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
   }, [message.sources])
 
   return (
-    <div className={`flex gap-4 ${isUser ? 'flex-row-reverse' : ''} group`}>
+    <div className={`flex gap-4 ${isUser ? 'flex-row-reverse' : ''} group min-w-0`}>
       <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
         isUser 
           ? 'bg-primary text-white' 
@@ -1113,8 +1113,8 @@ function MessageBubble({ message }: { message: SessionMessage }) {
           <SparklesIcon className="h-5 w-5 text-primary" />
         )}
       </div>
-      <div className={`flex-1 max-w-[85%] ${isUser ? 'text-right' : ''}`}>
-        <div className={`relative inline-block rounded-2xl px-4 py-3 ${
+      <div className={`flex-1 min-w-0 max-w-[85%] ${isUser ? 'text-right' : ''}`}>
+        <div className={`relative inline-block rounded-2xl px-4 py-3 max-w-full ${
           isUser
             ? 'bg-primary text-white'
             : 'bg-surface-variant dark:bg-gray-700 text-primary-900 dark:text-gray-100'
@@ -1162,9 +1162,9 @@ function MessageBubble({ message }: { message: SessionMessage }) {
             </div>
           )}
           {isUser ? (
-            <p className="whitespace-pre-wrap">{message.content}</p>
+            <p className="whitespace-pre-wrap break-words">{message.content}</p>
           ) : (
-            <div className="prose prose-sm max-w-none dark:prose-invert">
+            <div className="prose prose-sm max-w-none dark:prose-invert overflow-hidden break-words">
               {message.content ? (
                 <MarkdownRenderer content={message.content} />
               ) : (

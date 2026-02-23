@@ -474,11 +474,12 @@ async def _run_ingestion_job(job: Dict[str, Any], db):
         job_state["phase_message"] = "Scanning folders for documents..."
         await save_job_to_db(db, job_state)
         
-        # Create pipeline
+        # Create pipeline - NEVER clean here since incremental mode handles deduplication
+        # clean_before_ingest=False is critical to preserve existing data across restarts
         loop = asyncio.get_running_loop()
         pipeline = await loop.run_in_executor(
             None,
-            lambda: DocumentIngestionPipeline(config=config, use_profile=True)
+            lambda: DocumentIngestionPipeline(config=config, use_profile=True, clean_before_ingest=False)
         )
         
         # Set custom patterns if not "all"
@@ -518,10 +519,17 @@ async def _run_ingestion_job(job: Dict[str, Any], db):
         def sync_progress_callback(current: int, total: int, current_file: str = None, chunks_in_file: int = 0):
             asyncio.create_task(progress_callback_async(current, total, current_file, chunks_in_file))
         
-        # Run ingestion
+        # Load performance config for concurrency settings
+        perf_config = await db.db["ingestion_config"].find_one({"_id": "performance_config"})
+        max_concurrent = perf_config.get("max_concurrent_files", 1) if perf_config else 1
+        
+        logger.info(f"Running ingestion with max_concurrent_files={max_concurrent}")
+        
+        # Run ingestion with configured concurrency
         results = await pipeline.ingest_documents(
             progress_callback=sync_progress_callback,
-            incremental=job.get("incremental", True)
+            incremental=job.get("incremental", True),
+            max_concurrent_files=max_concurrent
         )
         
         # Update final status

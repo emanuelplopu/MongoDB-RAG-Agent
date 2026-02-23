@@ -71,6 +71,77 @@ class IngestionResult:
     errors: List[str]
 
 
+@dataclass
+class IngestionFileStats:
+    """Detailed stats for a single file ingestion."""
+    file_path: str
+    file_name: str
+    file_size_bytes: int
+    started_at: datetime
+    completed_at: Optional[datetime]
+    processing_time_ms: float
+    chunks_created: int
+    success: bool
+    error_type: Optional[str]  # timeout, error, none
+    error_message: Optional[str]
+    timeout_seconds: float
+    profile_key: str
+    job_id: Optional[str] = None  # Link to parent ingestion job
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for MongoDB storage."""
+        result = {
+            "file_path": self.file_path,
+            "file_name": self.file_name,
+            "file_size_bytes": self.file_size_bytes,
+            "started_at": self.started_at.isoformat(),
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "processing_time_ms": self.processing_time_ms,
+            "chunks_created": self.chunks_created,
+            "success": self.success,
+            "error_type": self.error_type,
+            "error_message": self.error_message,
+            "timeout_seconds": self.timeout_seconds,
+            "profile_key": self.profile_key,
+        }
+        if self.job_id:
+            result["job_id"] = self.job_id
+        return result
+
+
+def calculate_file_timeout(file_size_bytes: int, max_timeout_seconds: int = 900) -> float:
+    """
+    Calculate timeout for a file based on its size.
+    
+    Formula: base_timeout + (size_in_mb * seconds_per_mb)
+    - Base timeout: 60 seconds minimum
+    - Per MB: 10 seconds per MB
+    - Max: 900 seconds (15 minutes)
+    
+    Args:
+        file_size_bytes: Size of the file in bytes
+        max_timeout_seconds: Maximum timeout (default 15 minutes)
+        
+    Returns:
+        Timeout in seconds
+    """
+    BASE_TIMEOUT = 60  # 1 minute minimum
+    SECONDS_PER_MB = 10  # 10 seconds per megabyte
+    
+    size_mb = file_size_bytes / (1024 * 1024)
+    calculated_timeout = BASE_TIMEOUT + (size_mb * SECONDS_PER_MB)
+    
+    return min(calculated_timeout, max_timeout_seconds)
+
+
+def get_file_size_safe(file_path: str) -> int:
+    """Get file size safely, returning 0 if file not found."""
+    try:
+        return os.path.getsize(file_path)
+    except OSError:
+        return 0
+
+
 class DocumentIngestionPipeline:
     """Pipeline for ingesting documents into MongoDB vector database."""
     
@@ -1037,7 +1108,8 @@ class DocumentIngestionPipeline:
         self,
         progress_callback: Optional[callable] = None,
         incremental: bool = True,
-        max_concurrent_files: int = 1
+        max_concurrent_files: int = 1,
+        job_id: Optional[str] = None
     ) -> List[IngestionResult]:
         """
         Ingest all documents from the documents folder.
@@ -1046,6 +1118,7 @@ class DocumentIngestionPipeline:
             progress_callback: Optional callback for progress updates
             incremental: If True, skip already-ingested files (default: True)
             max_concurrent_files: Number of files to process concurrently (default: 1)
+            job_id: Optional job ID to link stats to
 
         Returns:
             List of ingestion results
@@ -1128,7 +1201,8 @@ class DocumentIngestionPipeline:
                 existing_hashes=existing_hashes,
                 incremental=incremental,
                 max_concurrent=max_concurrent_files,
-                progress_callback=progress_callback
+                progress_callback=progress_callback,
+                job_id=job_id
             )
         else:
             # Sequential processing (original behavior)
@@ -1247,10 +1321,11 @@ class DocumentIngestionPipeline:
         existing_hashes: Dict[str, str],
         incremental: bool,
         max_concurrent: int,
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[callable] = None,
+        job_id: Optional[str] = None
     ) -> Tuple[List[IngestionResult], int]:
         """
-        Process documents concurrently using a semaphore.
+        Process documents concurrently using a semaphore with timeout and failure tracking.
         
         Args:
             document_files: List of file paths to process
@@ -1258,6 +1333,7 @@ class DocumentIngestionPipeline:
             incremental: Whether to skip duplicates
             max_concurrent: Maximum concurrent files to process
             progress_callback: Optional progress callback
+            job_id: Optional job ID to link stats to
             
         Returns:
             Tuple of (results list, duplicates skipped count)
@@ -1269,24 +1345,33 @@ class DocumentIngestionPipeline:
         duplicates_skipped = 0
         processed_count = 0
         results_lock = threading.Lock()
+        file_stats: List[IngestionFileStats] = []
         
         total_files = len(document_files)
+        profile_key = os.getenv("PROFILE", "default")
         
         async def process_file(index: int, file_path: str):
             nonlocal duplicates_skipped, processed_count
             
             async with semaphore:
+                file_start_time = datetime.now()
+                file_size = get_file_size_safe(file_path)
+                timeout_seconds = calculate_file_timeout(file_size)
+                
                 # Progress callback before processing
                 if progress_callback:
                     progress_callback(processed_count, total_files, file_path)
                 
                 try:
-                    # Compute file hash
+                    # Compute file hash with timeout
                     loop = asyncio.get_running_loop()
-                    content_hash = await loop.run_in_executor(
-                        self.get_executor(),
-                        compute_file_hash,
-                        file_path
+                    content_hash = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            self.get_executor(),
+                            compute_file_hash,
+                            file_path
+                        ),
+                        timeout=60  # 1 minute timeout for hash computation
                     )
                     
                     # Check for duplicates (thread-safe check)
@@ -1307,19 +1392,62 @@ class DocumentIngestionPipeline:
                             )
                             results.append(result)
                             processed_count += 1
+                            # Track stats for duplicates too
+                            file_stats.append(IngestionFileStats(
+                                file_path=file_path,
+                                file_name=os.path.basename(file_path),
+                                file_size_bytes=file_size,
+                                started_at=file_start_time,
+                                completed_at=datetime.now(),
+                                processing_time_ms=(datetime.now() - file_start_time).total_seconds() * 1000,
+                                chunks_created=0,
+                                success=True,
+                                error_type="duplicate",
+                                error_message=f"Duplicate of: {original_source}",
+                                timeout_seconds=timeout_seconds,
+                                profile_key=profile_key,
+                                job_id=job_id
+                            ))
                             if progress_callback:
                                 progress_callback(processed_count, total_files, file_path, 0)
                             return
                     
-                    logger.info(f"Processing file ({processed_count+1}/{total_files}): {file_path}")
+                    size_mb = file_size / (1024 * 1024)
+                    logger.info(f"Processing file ({processed_count+1}/{total_files}): {file_path} ({size_mb:.1f}MB, timeout={timeout_seconds:.0f}s)")
                     
-                    result = await self._ingest_single_document(file_path, content_hash)
+                    # Process with timeout - this is the key improvement
+                    result = await asyncio.wait_for(
+                        self._ingest_single_document(file_path, content_hash),
+                        timeout=timeout_seconds
+                    )
+                    
+                    processing_time = (datetime.now() - file_start_time).total_seconds() * 1000
                     
                     with results_lock:
                         results.append(result)
                         if content_hash and result.document_id:
                             existing_hashes[content_hash] = os.path.basename(file_path)
                         processed_count += 1
+                        
+                        # Track stats - mark as failure if no chunks created
+                        chunks_created = result.chunks_created if result else 0
+                        is_no_chunks = chunks_created == 0 and result and not result.document_id
+                        
+                        file_stats.append(IngestionFileStats(
+                            file_path=file_path,
+                            file_name=os.path.basename(file_path),
+                            file_size_bytes=file_size,
+                            started_at=file_start_time,
+                            completed_at=datetime.now(),
+                            processing_time_ms=processing_time,
+                            chunks_created=chunks_created,
+                            success=not is_no_chunks,
+                            error_type="no_chunks" if is_no_chunks else None,
+                            error_message="No content extracted from document" if is_no_chunks else None,
+                            timeout_seconds=timeout_seconds,
+                            profile_key=profile_key,
+                            job_id=job_id
+                        ))
                     
                     if progress_callback:
                         progress_callback(
@@ -1329,17 +1457,74 @@ class DocumentIngestionPipeline:
                             result.chunks_created if result else 0
                         )
                         
-                except Exception as e:
-                    logger.exception(f"Failed to process {file_path}: {e}")
+                except asyncio.TimeoutError:
+                    # Timeout - file took too long, continue with others
+                    processing_time = (datetime.now() - file_start_time).total_seconds() * 1000
+                    size_mb = file_size / (1024 * 1024)
+                    error_msg = f"Timeout after {timeout_seconds:.0f}s (file size: {size_mb:.1f}MB)"
+                    logger.error(f"TIMEOUT processing {file_path}: {error_msg}")
+                    
                     with results_lock:
                         results.append(IngestionResult(
                             document_id="",
                             title=os.path.basename(file_path),
                             chunks_created=0,
-                            processing_time_ms=0,
-                            errors=[str(e)]
+                            processing_time_ms=processing_time,
+                            errors=[error_msg]
                         ))
                         processed_count += 1
+                        # Track timeout stats
+                        file_stats.append(IngestionFileStats(
+                            file_path=file_path,
+                            file_name=os.path.basename(file_path),
+                            file_size_bytes=file_size,
+                            started_at=file_start_time,
+                            completed_at=datetime.now(),
+                            processing_time_ms=processing_time,
+                            chunks_created=0,
+                            success=False,
+                            error_type="timeout",
+                            error_message=error_msg,
+                            timeout_seconds=timeout_seconds,
+                            profile_key=profile_key,
+                            job_id=job_id
+                        ))
+                    
+                    if progress_callback:
+                        progress_callback(processed_count, total_files, file_path, 0)
+                        
+                except Exception as e:
+                    # General error - log and continue with others
+                    processing_time = (datetime.now() - file_start_time).total_seconds() * 1000
+                    error_msg = str(e)
+                    logger.exception(f"Failed to process {file_path}: {error_msg}")
+                    
+                    with results_lock:
+                        results.append(IngestionResult(
+                            document_id="",
+                            title=os.path.basename(file_path),
+                            chunks_created=0,
+                            processing_time_ms=processing_time,
+                            errors=[error_msg]
+                        ))
+                        processed_count += 1
+                        # Track error stats
+                        file_stats.append(IngestionFileStats(
+                            file_path=file_path,
+                            file_name=os.path.basename(file_path),
+                            file_size_bytes=file_size,
+                            started_at=file_start_time,
+                            completed_at=datetime.now(),
+                            processing_time_ms=processing_time,
+                            chunks_created=0,
+                            success=False,
+                            error_type="error",
+                            error_message=error_msg[:500],  # Truncate long error messages
+                            timeout_seconds=timeout_seconds,
+                            profile_key=profile_key,
+                            job_id=job_id
+                        ))
+                    
                     if progress_callback:
                         progress_callback(processed_count, total_files, file_path, 0)
         
@@ -1352,7 +1537,51 @@ class DocumentIngestionPipeline:
         # Wait for all tasks to complete
         await asyncio.gather(*tasks, return_exceptions=True)
         
+        # Save stats to database
+        await self._save_ingestion_stats(file_stats)
+        
         return results, duplicates_skipped
+    
+    async def _save_ingestion_stats(self, file_stats: List[IngestionFileStats]) -> None:
+        """Save ingestion stats to database for analysis."""
+        if not self.db or not file_stats:
+            return
+            
+        try:
+            # Save all stats to ingestion_stats collection
+            stats_collection = self.db["ingestion_stats"]
+            stats_docs = [stat.to_dict() for stat in file_stats]
+            if stats_docs:
+                await stats_collection.insert_many(stats_docs)
+                logger.info(f"Saved {len(stats_docs)} file stats to database")
+            
+            # Save failed documents to failed_documents collection
+            failed_stats = [s for s in file_stats if not s.success]
+            if failed_stats:
+                failed_collection = self.db["failed_documents"]
+                failed_docs = []
+                for stat in failed_stats:
+                    doc = {
+                        "file_path": stat.file_path,
+                        "file_name": stat.file_name,
+                        "file_size_bytes": stat.file_size_bytes,
+                        "error_type": stat.error_type,
+                        "error_message": stat.error_message,
+                        "timeout_seconds": stat.timeout_seconds,
+                        "processing_time_ms": stat.processing_time_ms,
+                        "failed_at": stat.completed_at.isoformat() if stat.completed_at else datetime.now().isoformat(),
+                        "profile_key": stat.profile_key,
+                        "resolved": False,
+                        "retry_count": 0
+                    }
+                    if stat.job_id:
+                        doc["job_id"] = stat.job_id
+                    failed_docs.append(doc)
+                await failed_collection.insert_many(failed_docs)
+                logger.warning(f"Recorded {len(failed_docs)} failed documents to database")
+                
+        except Exception as e:
+            logger.error(f"Failed to save ingestion stats: {e}")
 
 
 async def main() -> None:

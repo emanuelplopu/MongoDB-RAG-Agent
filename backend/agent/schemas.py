@@ -171,6 +171,7 @@ class WorkerResult(BaseModel):
     suggested_refinements: List[str] = Field(default_factory=list)
     duration_ms: float = 0.0
     tokens_used: int = 0
+    sources_searched: List[str] = Field(default_factory=list, description="List of source IDs that were searched")
     
     class Config:
         use_enum_values = True

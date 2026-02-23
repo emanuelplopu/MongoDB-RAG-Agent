@@ -33,6 +33,7 @@ import {
   KeyIcon,
   ArchiveBoxIcon,
   BeakerIcon,
+  CloudArrowUpIcon,
 } from '@heroicons/react/24/outline'
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid'
 import ThemeSwitcher from './ThemeSwitcher'
@@ -67,6 +68,7 @@ const systemMenuItems = [
   { nameKey: 'nav.prompts', href: '/system/prompts', icon: CommandLineIcon },
   { nameKey: 'nav.apiKeys', href: '/system/api-keys', icon: KeyIcon },
   { nameKey: 'nav.strategies', href: '/system/strategies', icon: BeakerIcon },
+  { nameKey: 'nav.backups', href: '/system/backups', icon: CloudArrowUpIcon },
 ]
 
 export default function Layout() {

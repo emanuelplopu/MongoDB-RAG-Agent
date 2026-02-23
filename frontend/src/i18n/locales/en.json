@@ -113,6 +113,7 @@
     "prompts": "Prompts",
     "apiKeys": "API Keys",
     "strategies": "Strategies",
+    "backups": "Backup & Restore",
     "theme": "Theme",
     "signOut": "Log out",
     "signIn": "Sign in"
@@ -1133,5 +1134,47 @@
     "aiAnalysis": "AI Analysis",
     "recommendation": "Recommendation",
     "runAnotherTest": "Run Another Test"
+  },
+  "backup": {
+    "title": "Backup & Restore",
+    "subtitle": "Manage database backups and recovery",
+    "createBackup": "Create Backup",
+    "restoreBackup": "Restore",
+    "fullBackup": "Full Backup",
+    "incrementalBackup": "Incremental",
+    "checkpoint": "Checkpoint",
+    "postIngestion": "Post-Ingestion",
+    "status": {
+      "pending": "Pending",
+      "inProgress": "In Progress",
+      "completed": "Completed",
+      "failed": "Failed"
+    },
+    "settings": {
+      "title": "Settings",
+      "autoBackup": "Auto-backup after ingestion",
+      "retention": "Retention period (days)",
+      "maxBackups": "Maximum backups per profile",
+      "compression": "Enable compression",
+      "includeEmbeddings": "Include embeddings",
+      "schedule": "Backup schedule"
+    },
+    "restore": {
+      "warning": "This will restore data from backup. Existing data may be affected.",
+      "selectBackup": "Select backup to restore",
+      "mode": "Restore Mode",
+      "options": "Restore Options",
+      "fullRestore": "Full Restore",
+      "mergeRestore": "Merge (add missing)",
+      "selectiveRestore": "Selective (choose collections)"
+    },
+    "storage": {
+      "title": "Storage",
+      "total": "Total Storage Used",
+      "available": "Available Space",
+      "totalBackups": "Total Backups"
+    },
+    "noBackups": "No backups found",
+    "createFirst": "Create your first backup to get started"
   }
 }

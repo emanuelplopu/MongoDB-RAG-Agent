@@ -12,7 +12,7 @@ import asyncio
 import logging
 import time
 import httpx
-from typing import List, Dict, Any, Optional, Callable, Awaitable
+from typing import List, Dict, Any, Optional, Callable, Awaitable, Tuple
 
 from backend.agent.schemas import (
     TaskDefinition, TaskType, WorkerResult, WorkerStep,
@@ -154,7 +154,8 @@ class WorkerPool:
                         query=task.query,
                         success=False,
                         error=str(result),
-                        result_quality=ResultQuality.EMPTY
+                        result_quality=ResultQuality.EMPTY,
+                        sources_searched=[]  # No sources searched on failure
                     )
                 completed[task.id] = result
                 pending.remove(task)
@@ -197,6 +198,7 @@ class WorkerPool:
         start_time = time.time()
         documents = []
         web_links = []
+        sources_searched = []
         error = None
         success = True
         
@@ -204,7 +206,7 @@ class WorkerPool:
             if task.type in [TaskType.SEARCH_PROFILE, TaskType.SEARCH_CLOUD, 
                             TaskType.SEARCH_PERSONAL, TaskType.SEARCH_ALL]:
                 # Database search
-                documents = await self._execute_search(
+                documents, sources_searched = await self._execute_search(
                     task=task,
                     user_id=user_id,
                     user_email=user_email,
@@ -216,12 +218,14 @@ class WorkerPool:
             elif task.type == TaskType.WEB_SEARCH:
                 # Web search using Brave API
                 web_links = await self._execute_web_search(task.query)
+                sources_searched = ["web"]
                 
             elif task.type == TaskType.BROWSE_WEB:
                 # Browse a specific URL
                 web_link = await self._execute_browse(task.query)
                 if web_link:
                     web_links = [web_link]
+                sources_searched = ["web"]
                     
             elif task.type == TaskType.SUMMARIZE:
                 # Summarize prior results (uses LLM)
@@ -261,7 +265,8 @@ class WorkerPool:
             result_quality=quality,
             suggested_refinements=refinements,
             duration_ms=duration_ms,
-            tokens_used=0  # Updated by summary generation
+            tokens_used=0,  # Updated by summary generation
+            sources_searched=sources_searched
         )
         
         # Record step
@@ -291,7 +296,7 @@ class WorkerPool:
         active_profile_key: Optional[str],
         active_profile_database: Optional[str],
         accessible_profile_keys: Optional[List[str]]
-    ) -> List[DocumentReference]:
+    ) -> Tuple[List[DocumentReference], List[str]]:
         """Execute a database search task.
         
         Args:
@@ -303,7 +308,7 @@ class WorkerPool:
             accessible_profile_keys: Accessible profile keys
         
         Returns:
-            List of DocumentReference
+            Tuple of (List of DocumentReference, List of source IDs searched)
         """
         # Determine sources based on task type
         sources = task.sources if task.sources else None
@@ -328,12 +333,15 @@ class WorkerPool:
             search_type="hybrid"
         )
         
+        # Extract source IDs from metadata
+        sources_searched = [s.get("id", s.get("type", "unknown")) for s in metadata.get("sources", [])]
+        
         logger.info(
             f"Search task {task.id}: '{task.query[:50]}' returned {len(documents)} results "
             f"from {metadata.get('sources_with_results', 0)} sources"
         )
         
-        return documents
+        return documents, sources_searched
     
     async def _execute_web_search(self, query: str) -> List[WebReference]:
         """Execute a web search using Brave API.
