@@ -1887,6 +1887,12 @@ export interface QueuedIngestionJob {
   started_at?: string
   completed_at?: string
   error?: string
+  // Selective ingestion filters
+  retry_image_only_pdfs?: boolean
+  retry_timeouts?: boolean
+  retry_errors?: boolean
+  retry_no_chunks?: boolean
+  skip_image_only_pdfs?: boolean
 }
 
 export interface ScheduledIngestionJob {
@@ -1903,6 +1909,12 @@ export interface ScheduledIngestionJob {
   last_run?: string
   next_run?: string
   created_at: string
+  // Selective ingestion filters
+  retry_image_only_pdfs?: boolean
+  retry_timeouts?: boolean
+  retry_errors?: boolean
+  retry_no_chunks?: boolean
+  skip_image_only_pdfs?: boolean
 }
 
 export interface QueueStatus {
@@ -1917,6 +1929,12 @@ export interface QueueRequest {
   file_types?: string[]
   incremental?: boolean
   priority?: number
+  // Selective ingestion filters
+  retry_image_only_pdfs?: boolean
+  retry_timeouts?: boolean
+  retry_errors?: boolean
+  retry_no_chunks?: boolean
+  skip_image_only_pdfs?: boolean
 }
 
 export interface ScheduleRequest {
@@ -1927,6 +1945,12 @@ export interface ScheduleRequest {
   hour?: number
   day_of_week?: number
   day_of_month?: number
+  // Selective ingestion filters
+  retry_image_only_pdfs?: boolean
+  retry_timeouts?: boolean
+  retry_errors?: boolean
+  retry_no_chunks?: boolean
+  skip_image_only_pdfs?: boolean
 }
 
 // ============== Local LLM Types ==============
@@ -2117,6 +2141,84 @@ export const ingestionQueueApi = {
 
   runScheduleNow: async (scheduleId: string) => {
     const response = await api.post(`/ingestion-queue/schedules/${scheduleId}/run-now`)
+    return response.data
+  },
+}
+
+// ============== File Registry Types ==============
+
+export type FileClassification = 'normal' | 'image_only_pdf' | 'no_chunks' | 'timeout' | 'error' | 'pending'
+
+export interface FileRegistryStats {
+  total_files: number
+  by_classification: Record<FileClassification, number>
+  profile_key?: string
+}
+
+export interface FileRegistryEntry {
+  file_path: string
+  file_name: string
+  file_size_bytes: number
+  content_hash: string
+  file_modified_at: string
+  classification: FileClassification
+  last_processed_at?: string
+  last_job_id?: string
+  chunks_created: number
+  processing_time_ms: number
+  error_message?: string
+  retry_count: number
+  profile_key: string
+  created_at: string
+  updated_at: string
+}
+
+export interface FileRegistryListResponse {
+  files: FileRegistryEntry[]
+  count: number
+  limit: number
+  skip: number
+}
+
+export const fileRegistryApi = {
+  getStats: async (profileKey?: string): Promise<FileRegistryStats> => {
+    const response = await api.get('/file-registry/stats', {
+      params: profileKey ? { profile_key: profileKey } : {}
+    })
+    return response.data
+  },
+
+  listFiles: async (params: {
+    profile_key?: string
+    classification?: FileClassification
+    limit?: number
+    skip?: number
+  }): Promise<FileRegistryListResponse> => {
+    const response = await api.get('/file-registry/files', { params })
+    return response.data
+  },
+
+  reclassifyFile: async (filePath: string, newClassification: FileClassification) => {
+    const response = await api.post(
+      `/file-registry/reclassify/${encodeURIComponent(filePath)}`,
+      null,
+      { params: { new_classification: newClassification } }
+    )
+    return response.data
+  },
+
+  clearRegistry: async (params?: {
+    profile_key?: string
+    classification?: FileClassification
+  }) => {
+    const response = await api.delete('/file-registry/clear', { params })
+    return response.data
+  },
+
+  retryCategory: async (profileKey: string, classification: FileClassification) => {
+    const response = await api.post('/file-registry/retry-category', null, {
+      params: { profile_key: profileKey, classification }
+    })
     return response.data
   },
 }
@@ -3102,6 +3204,128 @@ export const backupsApi = {
   // Get storage statistics
   getStorageStats: async (): Promise<StorageStats> => {
     const response = await api.get('/backups/storage')
+    return response.data
+  },
+}
+
+// ============== Embedding Benchmark Types ==============
+
+export interface BenchmarkProviderConfig {
+  provider_type: string  // "openai", "ollama", "vllm", "custom"
+  model: string
+  base_url?: string
+  api_key?: string
+  name?: string
+}
+
+export interface ChunkConfig {
+  chunk_size: number
+  chunk_overlap: number
+  max_tokens: number
+}
+
+export interface BenchmarkRequest {
+  providers: BenchmarkProviderConfig[]
+  file_content: string  // Base64 encoded
+  file_name: string
+  chunk_config?: ChunkConfig
+}
+
+export interface BenchmarkMetrics {
+  provider: string
+  model: string
+  provider_type: string
+  total_time_ms: number
+  chunking_time_ms: number
+  embedding_time_ms: number
+  avg_latency_ms: number
+  tokens_processed: number
+  chunks_created: number
+  embedding_dimension: number
+  memory_before_mb: number
+  memory_after_mb: number
+  memory_peak_mb: number
+  cpu_percent: number
+  cost_estimate_usd?: number | null
+  success: boolean
+  error?: string | null
+}
+
+export interface BenchmarkResult {
+  id: string
+  timestamp: string
+  file_name: string
+  file_size_bytes: number
+  content_preview: string
+  chunk_config: ChunkConfig
+  results: BenchmarkMetrics[]
+  winner?: string | null
+}
+
+export interface BenchmarkModelInfo {
+  id: string
+  name: string
+  dimension: number
+}
+
+export interface ProviderAvailability {
+  name: string
+  available: boolean
+  url?: string | null
+  models: BenchmarkModelInfo[]
+}
+
+export interface AvailableProviders {
+  openai: ProviderAvailability
+  ollama: ProviderAvailability
+  vllm: ProviderAvailability
+}
+
+export interface ProviderTestResult {
+  success: boolean
+  provider: string
+  model: string
+  latency_ms: number
+  dimension: number
+  error?: string | null
+}
+
+// ============== Embedding Benchmark API ==============
+
+export const benchmarkApi = {
+  // Run benchmark with multiple providers
+  runBenchmark: async (request: BenchmarkRequest): Promise<BenchmarkResult> => {
+    const response = await api.post('/benchmark/run', request)
+    return response.data
+  },
+
+  // Get available embedding providers
+  getProviders: async (): Promise<AvailableProviders> => {
+    const response = await api.get('/benchmark/providers')
+    return response.data
+  },
+
+  // Test a single provider
+  testProvider: async (config: BenchmarkProviderConfig): Promise<ProviderTestResult> => {
+    const response = await api.post('/benchmark/test-provider', config)
+    return response.data
+  },
+
+  // Get benchmark history
+  getHistory: async (limit: number = 20): Promise<{ results: BenchmarkResult[]; total: number }> => {
+    const response = await api.get('/benchmark/results', { params: { limit } })
+    return response.data
+  },
+
+  // Get specific benchmark result
+  getResult: async (benchmarkId: string): Promise<BenchmarkResult> => {
+    const response = await api.get(`/benchmark/results/${benchmarkId}`)
+    return response.data
+  },
+
+  // Delete benchmark result
+  deleteResult: async (benchmarkId: string): Promise<{ success: boolean; message: string }> => {
+    const response = await api.delete(`/benchmark/results/${benchmarkId}`)
     return response.data
   },
 }

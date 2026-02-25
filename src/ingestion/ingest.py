@@ -23,6 +23,13 @@ from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 from bson import ObjectId
 from dotenv import load_dotenv
 
+try:
+    import pypdfium2 as pdfium
+    PDFIUM_AVAILABLE = True
+except ImportError:
+    PDFIUM_AVAILABLE = False
+    pdfium = None
+
 from src.ingestion.chunker import ChunkingConfig, create_chunker, DocumentChunk
 from src.ingestion.embedder import create_embedder
 from src.settings import load_settings
@@ -50,6 +57,61 @@ def compute_file_hash(file_path: str) -> str:
         for chunk in iter(lambda: f.read(65536), b""):
             sha256_hash.update(chunk)
     return sha256_hash.hexdigest()
+
+
+def is_image_only_pdf(file_path: str, min_text_chars: int = 50, max_pages_to_check: int = 3) -> Tuple[bool, str]:
+    """
+    Check if a PDF is image-only (no extractable text layer).
+    
+    This is a fast pre-check to skip PDFs that would produce no chunks.
+    Uses pypdfium2 to quickly extract text without OCR.
+    
+    Args:
+        file_path: Path to the PDF file
+        min_text_chars: Minimum characters to consider the PDF text-based (default 50)
+        max_pages_to_check: Number of pages to check (default 3 for speed)
+        
+    Returns:
+        Tuple of (is_image_only, reason)
+        - is_image_only: True if PDF has no extractable text
+        - reason: Human-readable explanation
+    """
+    if not PDFIUM_AVAILABLE:
+        # Can't check without pdfium - assume it has text
+        return False, "pypdfium2 not available, assuming text-based"
+    
+    if not file_path.lower().endswith('.pdf'):
+        return False, "Not a PDF file"
+    
+    try:
+        pdf = pdfium.PdfDocument(file_path)
+        total_pages = len(pdf)
+        pages_to_check = min(total_pages, max_pages_to_check)
+        
+        extracted_text = ""
+        for i in range(pages_to_check):
+            page = pdf[i]
+            textpage = page.get_textpage()
+            page_text = textpage.get_text_range()
+            extracted_text += page_text
+            
+            # Early exit if we found enough text
+            if len(extracted_text.strip()) >= min_text_chars:
+                pdf.close()
+                return False, f"Found {len(extracted_text.strip())} chars of text"
+        
+        pdf.close()
+        
+        text_len = len(extracted_text.strip())
+        if text_len < min_text_chars:
+            return True, f"Only {text_len} chars found (threshold: {min_text_chars}), likely image-only"
+        
+        return False, f"Found {text_len} chars of text"
+        
+    except Exception as e:
+        # If we can't read it, let Docling try
+        logger.debug(f"Could not pre-check PDF {file_path}: {e}")
+        return False, f"Pre-check failed: {e}"
 
 
 @dataclass
@@ -82,11 +144,14 @@ class IngestionFileStats:
     processing_time_ms: float
     chunks_created: int
     success: bool
-    error_type: Optional[str]  # timeout, error, none
+    error_type: Optional[str]  # timeout, error, none, no_chunks, image_only_pdf
     error_message: Optional[str]
     timeout_seconds: float
     profile_key: str
     job_id: Optional[str] = None  # Link to parent ingestion job
+    content_hash: Optional[str] = None  # SHA256 hash for change detection
+    file_modified_at: Optional[datetime] = None  # Filesystem modification time
+    classification: str = "pending"  # FileClassification value
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for MongoDB storage."""
@@ -103,6 +168,9 @@ class IngestionFileStats:
             "error_message": self.error_message,
             "timeout_seconds": self.timeout_seconds,
             "profile_key": self.profile_key,
+            "content_hash": self.content_hash,
+            "file_modified_at": self.file_modified_at.isoformat() if self.file_modified_at else None,
+            "classification": self.classification,
         }
         if self.job_id:
             result["job_id"] = self.job_id
@@ -140,6 +208,42 @@ def get_file_size_safe(file_path: str) -> int:
         return os.path.getsize(file_path)
     except OSError:
         return 0
+
+
+def get_file_modified_time_safe(file_path: str) -> datetime:
+    """Get file modification time safely, returning current time if not accessible."""
+    try:
+        mtime = os.path.getmtime(file_path)
+        return datetime.fromtimestamp(mtime)
+    except OSError:
+        return datetime.now()
+
+
+def map_error_type_to_classification(error_type: Optional[str], chunks_created: int) -> str:
+    """
+    Map error_type and chunks_created to FileClassification value.
+    
+    Args:
+        error_type: Error type from processing (timeout, error, no_chunks, image_only_pdf, duplicate)
+        chunks_created: Number of chunks created
+        
+    Returns:
+        FileClassification value string
+    """
+    if error_type == "timeout":
+        return "timeout"
+    elif error_type == "error":
+        return "error"
+    elif error_type == "image_only_pdf":
+        return "image_only_pdf"
+    elif error_type == "no_chunks":
+        return "no_chunks"
+    elif error_type == "duplicate":
+        return "normal"  # Duplicates are considered normal (already processed)
+    elif chunks_created > 0:
+        return "normal"
+    else:
+        return "no_chunks"
 
 
 class DocumentIngestionPipeline:
@@ -1356,6 +1460,7 @@ class DocumentIngestionPipeline:
             async with semaphore:
                 file_start_time = datetime.now()
                 file_size = get_file_size_safe(file_path)
+                file_modified_at = get_file_modified_time_safe(file_path)
                 timeout_seconds = calculate_file_timeout(file_size)
                 
                 # Progress callback before processing
@@ -1406,8 +1511,40 @@ class DocumentIngestionPipeline:
                                 error_message=f"Duplicate of: {original_source}",
                                 timeout_seconds=timeout_seconds,
                                 profile_key=profile_key,
-                                job_id=job_id
+                                job_id=job_id,
+                                content_hash=content_hash,
+                                file_modified_at=file_modified_at,
+                                classification="normal"  # Duplicates mean file was already processed
                             ))
+                            if progress_callback:
+                                progress_callback(processed_count, total_files, file_path, 0)
+                            return
+                    
+                    # Pre-check: Skip image-only PDFs to save processing time
+                    if file_path.lower().endswith('.pdf'):
+                        is_image_only, check_reason = is_image_only_pdf(file_path)
+                        if is_image_only:
+                            logger.info(f"Skipping image-only PDF: {file_path} ({check_reason})")
+                            with results_lock:
+                                processed_count += 1
+                                file_stats.append(IngestionFileStats(
+                                    file_path=file_path,
+                                    file_name=os.path.basename(file_path),
+                                    file_size_bytes=file_size,
+                                    started_at=file_start_time,
+                                    completed_at=datetime.now(),
+                                    processing_time_ms=(datetime.now() - file_start_time).total_seconds() * 1000,
+                                    chunks_created=0,
+                                    success=True,  # Not an error, just no content
+                                    error_type="image_only_pdf",
+                                    error_message=check_reason,
+                                    timeout_seconds=timeout_seconds,
+                                    profile_key=profile_key,
+                                    job_id=job_id,
+                                    content_hash=content_hash,
+                                    file_modified_at=file_modified_at,
+                                    classification="image_only_pdf"
+                                ))
                             if progress_callback:
                                 progress_callback(processed_count, total_files, file_path, 0)
                             return
@@ -1432,6 +1569,7 @@ class DocumentIngestionPipeline:
                         # Track stats - mark as failure if no chunks created
                         chunks_created = result.chunks_created if result else 0
                         is_no_chunks = chunks_created == 0 and result and not result.document_id
+                        error_type = "no_chunks" if is_no_chunks else None
                         
                         file_stats.append(IngestionFileStats(
                             file_path=file_path,
@@ -1442,11 +1580,14 @@ class DocumentIngestionPipeline:
                             processing_time_ms=processing_time,
                             chunks_created=chunks_created,
                             success=not is_no_chunks,
-                            error_type="no_chunks" if is_no_chunks else None,
+                            error_type=error_type,
                             error_message="No content extracted from document" if is_no_chunks else None,
                             timeout_seconds=timeout_seconds,
                             profile_key=profile_key,
-                            job_id=job_id
+                            job_id=job_id,
+                            content_hash=content_hash,
+                            file_modified_at=file_modified_at,
+                            classification=map_error_type_to_classification(error_type, chunks_created)
                         ))
                     
                     if progress_callback:
@@ -1487,7 +1628,10 @@ class DocumentIngestionPipeline:
                             error_message=error_msg,
                             timeout_seconds=timeout_seconds,
                             profile_key=profile_key,
-                            job_id=job_id
+                            job_id=job_id,
+                            content_hash=content_hash,
+                            file_modified_at=file_modified_at,
+                            classification="timeout"
                         ))
                     
                     if progress_callback:
@@ -1522,7 +1666,10 @@ class DocumentIngestionPipeline:
                             error_message=error_msg[:500],  # Truncate long error messages
                             timeout_seconds=timeout_seconds,
                             profile_key=profile_key,
-                            job_id=job_id
+                            job_id=job_id,
+                            content_hash=content_hash,
+                            file_modified_at=file_modified_at,
+                            classification="error"
                         ))
                     
                     if progress_callback:

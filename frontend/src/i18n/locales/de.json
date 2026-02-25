@@ -593,7 +593,19 @@
     "stopStream": "Stoppen",
     "noLogs": "Keine Protokolle. Starten Sie das Live-Protokoll, um Meldungen zu sehen.",
     "expand": "Erweitern",
-    "collapse": "Einklappen"
+    "collapse": "Einklappen",
+    "filters": {
+      "title": "Selektive Filter",
+      "retryGroup": "Bestimmte Dateitypen wiederholen",
+      "skipGroup": "Dateitypen überspringen",
+      "retryImagePdfs": "Bild-PDFs wiederholen",
+      "retryTimeouts": "Zeitüberschreitungen wiederholen",
+      "retryErrors": "Fehler wiederholen",
+      "retryNoChunks": "Leere Chunks wiederholen",
+      "skipImagePdfs": "Bild-PDFs überspringen",
+      "retryModeInfo": "Wiederholungsmodus: Nur Dateien, die den ausgewählten Filtern entsprechen, werden verarbeitet.",
+      "activeFilters": "Aktive Filter"
+    }
   },
   "indexes": {
     "title": "Suchindizes",

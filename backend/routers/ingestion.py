@@ -15,11 +15,12 @@ from bson import ObjectId
 from backend.models.schemas import (
     IngestionStartRequest, IngestionStatusResponse, IngestionStatus,
     DocumentInfo, DocumentListResponse, SuccessResponse,
-    IngestionRunSummary, IngestionRunsResponse
+    IngestionRunSummary, IngestionRunsResponse, FileClassification
 )
 from backend.core.config import settings
 from backend.routers.auth import require_admin, UserResponse
 from backend.routers.backup import trigger_post_ingestion_backup
+from backend.services.file_registry import FileRegistryService
 from fastapi import Depends
 
 logger = logging.getLogger(__name__)
@@ -293,17 +294,37 @@ def _get_files_metadata_batch_sync(file_paths: List[str], folders: List[str]) ->
     return results
 
 
-async def _build_pending_files_queue(pipeline, incremental: bool = True, job_state: dict = None):
+async def _build_pending_files_queue(pipeline, incremental: bool = True, job_state: dict = None, config: dict = None, db = None):
     """
     Build the pending files queue from the ingestion pipeline.
     
     Called at the start of ingestion to populate the queue.
     Uses thread pool for blocking file system operations.
     Updates job_state with discovery progress if provided.
+    
+    Supports selective ingestion filters:
+    - retry_image_only_pdfs: Only process image-only PDFs
+    - retry_timeouts: Only process timed-out files
+    - retry_errors: Only process errored files
+    - retry_no_chunks: Only process files with 0 chunks
+    - skip_image_only_pdfs: Skip known image-only PDFs
     """
     global _pending_files_queue
     
     logger.info("Starting _build_pending_files_queue...")
+    
+    # Extract filter options from config
+    retry_image_only_pdfs = config.get("retry_image_only_pdfs", False) if config else False
+    retry_timeouts = config.get("retry_timeouts", False) if config else False
+    retry_errors = config.get("retry_errors", False) if config else False
+    retry_no_chunks = config.get("retry_no_chunks", False) if config else False
+    skip_image_only_pdfs = config.get("skip_image_only_pdfs", False) if config else False
+    
+    any_retry_filter = retry_image_only_pdfs or retry_timeouts or retry_errors or retry_no_chunks
+    profile_key = config.get("profile", "") if config else ""
+    
+    # Initialize file registry service if db is available
+    registry_service = FileRegistryService(db) if db else None
     
     # Helper to update discovery progress
     def update_discovery(folders_scanned=None, total_folders=None, files_found=None, 
@@ -397,9 +418,62 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
                 if "source" in doc:
                     existing_sources.add(doc["source"])
         
+        # Get file registry data for selective filtering
+        registry_by_path = {}
+        files_to_retry = set()  # Files matching retry filters
+        files_to_skip = set()   # Files to skip based on classification
+        
+        if registry_service and profile_key:
+            # Build registry lookup by file path
+            registry_entries = await registry_service.list_files(
+                profile_key=profile_key,
+                limit=100000  # Get all entries
+            )
+            for entry in registry_entries:
+                registry_by_path[entry.get("file_path", "")] = entry
+            
+            # If any retry filter is active, collect files to retry
+            if any_retry_filter:
+                classifications_to_retry = []
+                if retry_image_only_pdfs:
+                    classifications_to_retry.append(FileClassification.IMAGE_ONLY_PDF.value)
+                if retry_timeouts:
+                    classifications_to_retry.append(FileClassification.TIMEOUT.value)
+                if retry_errors:
+                    classifications_to_retry.append(FileClassification.ERROR.value)
+                if retry_no_chunks:
+                    classifications_to_retry.append(FileClassification.NO_CHUNKS.value)
+                
+                for path, entry in registry_by_path.items():
+                    if entry.get("classification") in classifications_to_retry:
+                        files_to_retry.add(path)
+                
+                _ingestion_logs.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "level": "INFO",
+                    "message": f"Retry filters active: {len(files_to_retry)} files match retry criteria",
+                    "logger": "ingestion"
+                })
+            
+            # If skip_image_only_pdfs is set, collect files to skip
+            if skip_image_only_pdfs:
+                for path, entry in registry_by_path.items():
+                    if entry.get("classification") == FileClassification.IMAGE_ONLY_PDF.value:
+                        files_to_skip.add(path)
+                
+                _ingestion_logs.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "level": "INFO",
+                    "message": f"Skip filter active: {len(files_to_skip)} image-only PDFs will be skipped",
+                    "logger": "ingestion"
+                })
+        
         # Filter files that need processing
         files_to_process = []
         skipped_count = 0
+        skipped_by_registry = 0
+        retry_filter_count = 0
+        
         for file_path in all_files:
             document_source = os.path.basename(file_path)
             for folder in pipeline.documents_folders:
@@ -407,6 +481,22 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
                     document_source = os.path.relpath(file_path, folder)
                     break
             
+            # If retry filters are active and incremental is NOT checked:
+            # Only process files that match retry criteria
+            if any_retry_filter and not incremental:
+                if file_path in files_to_retry:
+                    files_to_process.append(file_path)
+                    retry_filter_count += 1
+                else:
+                    skipped_by_registry += 1
+                continue
+            
+            # Skip files based on skip filters
+            if file_path in files_to_skip:
+                skipped_by_registry += 1
+                continue
+            
+            # Standard incremental check
             if incremental and document_source in existing_sources:
                 skipped_count += 1
                 continue
@@ -414,9 +504,10 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
             files_to_process.append(file_path)
         
         # Update discovery with filter results
+        total_skipped = skipped_count + skipped_by_registry
         update_discovery(
             files_to_process=len(files_to_process),
-            files_skipped=skipped_count
+            files_skipped=total_skipped
         )
         
         # Yield control
@@ -426,13 +517,27 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
             _pending_files_queue = []
             logger.info("No new files to process")
             if job_state is not None:
-                job_state["phase_message"] = f"No new files (skipped {skipped_count} existing)"
+                skip_details = []
+                if skipped_count > 0:
+                    skip_details.append(f"{skipped_count} existing")
+                if skipped_by_registry > 0:
+                    skip_details.append(f"{skipped_by_registry} filtered")
+                job_state["phase_message"] = f"No files to process (skipped: {', '.join(skip_details) if skip_details else '0'})"
             return
+        
+        # Build log message with filter details
+        log_parts = [f"Processing {len(files_to_process)} files"]
+        if retry_filter_count > 0:
+            log_parts.append(f"retry filter matched: {retry_filter_count}")
+        if skipped_count > 0:
+            log_parts.append(f"existing: {skipped_count}")
+        if skipped_by_registry > 0:
+            log_parts.append(f"filtered by registry: {skipped_by_registry}")
         
         _ingestion_logs.append({
             "timestamp": datetime.now().isoformat(),
             "level": "INFO",
-            "message": f"Processing {len(files_to_process)} new files (skipped {skipped_count} existing)",
+            "message": " | ".join(log_parts),
             "logger": "ingestion"
         })
         
@@ -536,6 +641,69 @@ async def _apply_offline_mode_for_ingestion(db):
         os.environ["OFFLINE_MODE"] = "false"
 
 
+async def _calculate_job_extended_metrics(db, job_id: str) -> dict:
+    """
+    Calculate extended metrics for a job from ingestion_stats collection.
+    
+    Args:
+        db: Database connection
+        job_id: Job ID to calculate metrics for
+        
+    Returns:
+        Dictionary with extended metrics:
+        - image_only_pdf: Count of PDFs skipped due to no text layer
+        - no_chunks: Count of files that produced 0 chunks after processing
+        - timeout: Count of files that timed out
+        - error: Count of files with processing errors
+        - avg_processing_time_ms: Average processing time
+        - total_size_bytes: Total bytes processed
+    """
+    try:
+        stats_collection = db.db["ingestion_stats"]
+        
+        # Aggregate by error_type
+        error_pipeline = [
+            {"$match": {"job_id": job_id}},
+            {
+                "$group": {
+                    "_id": "$error_type",
+                    "count": {"$sum": 1}
+                }
+            }
+        ]
+        error_results = await stats_collection.aggregate(error_pipeline).to_list(length=100)
+        
+        # Build error type counts
+        error_counts = {}
+        for r in error_results:
+            error_type = r["_id"] if r["_id"] else "success"
+            error_counts[error_type] = r["count"]
+        
+        # Get aggregate stats
+        stats_pipeline = [
+            {"$match": {"job_id": job_id}},
+            {
+                "$group": {
+                    "_id": None,
+                    "avg_processing_time_ms": {"$avg": "$processing_time_ms"},
+                    "total_size_bytes": {"$sum": "$file_size_bytes"}
+                }
+            }
+        ]
+        agg_results = await stats_collection.aggregate(stats_pipeline).to_list(length=1)
+        agg_stats = agg_results[0] if agg_results else {}
+        
+        return {
+            **error_counts,
+            "avg_processing_time_ms": agg_stats.get("avg_processing_time_ms", 0) or 0,
+            "total_size_bytes": agg_stats.get("total_size_bytes", 0) or 0
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to calculate extended metrics for job {job_id}: {e}")
+        return {}
+
+
 async def run_ingestion(job_id: str, config: dict, db):
     """Run ingestion in background with DB persistence."""
     global _current_job_id, _shutdown_requested, _pause_requested, _stop_requested, _is_paused, _current_job_state, _pending_files_queue
@@ -588,6 +756,15 @@ async def run_ingestion(job_id: str, config: dict, db):
         # Processing metrics
         "first_file_time": None,
         "processing_rate": 0.0,  # files per minute
+        # Extended metrics for job analysis
+        "image_only_pdfs": 0,  # PDFs skipped due to no text layer
+        "no_chunks_files": 0,  # Files that produced 0 chunks after processing
+        "timeout_files": 0,  # Files that timed out
+        "error_files": 0,  # Files with processing errors
+        "avg_processing_time_ms": 0.0,
+        "total_size_bytes": 0,
+        "files_per_hour": 0.0,
+        "success_rate": 0.0,  # Percentage of files that produced chunks
     }
     
     # Store in global for real-time status access
@@ -671,7 +848,7 @@ async def run_ingestion(job_id: str, config: dict, db):
             })
         
         # Build initial pending files queue
-        await _build_pending_files_queue(pipeline, config.get("incremental", True), job_state)
+        await _build_pending_files_queue(pipeline, config.get("incremental", True), job_state, config, db)
         
         # Update phase to processing
         job_state["phase"] = "processing"
@@ -782,7 +959,7 @@ async def run_ingestion(job_id: str, config: dict, db):
         
         # Update phase to finalizing
         job_state["phase"] = "finalizing"
-        job_state["phase_message"] = "Saving results..."
+        job_state["phase_message"] = "Calculating metrics..."
         
         # Calculate stats - distinguish between real errors and duplicates
         duplicates_skipped = sum(
@@ -794,7 +971,18 @@ async def run_ingestion(job_id: str, config: dict, db):
             if r.errors and len(r.errors) > 0 and "Duplicate of:" not in r.errors[0]
         )
         
-        # Update job status to completed
+        # Calculate extended metrics from ingestion_stats
+        extended_metrics = await _calculate_job_extended_metrics(db, job_id)
+        
+        # Calculate elapsed time and files per hour
+        elapsed_seconds = (datetime.now() - datetime.fromisoformat(job_state["started_at"])).total_seconds()
+        files_per_hour = (len(results) / elapsed_seconds * 3600) if elapsed_seconds > 0 else 0
+        
+        # Calculate success rate (files that produced chunks)
+        successful_files = sum(1 for r in results if r.chunks_created > 0)
+        success_rate = (successful_files / len(results) * 100) if len(results) > 0 else 0
+        
+        # Update job status to completed with extended metrics
         await update_job_state(
             status=IngestionStatus.COMPLETED,
             completed_at=datetime.now().isoformat(),
@@ -805,7 +993,16 @@ async def run_ingestion(job_id: str, config: dict, db):
             errors=[err for r in results for err in r.errors if "Duplicate of:" not in err][:20],
             progress_percent=100.0,
             phase="completed",
-            phase_message="Ingestion complete"
+            phase_message="Ingestion complete",
+            # Extended metrics
+            image_only_pdfs=extended_metrics.get("image_only_pdf", 0),
+            no_chunks_files=extended_metrics.get("no_chunks", 0),
+            timeout_files=extended_metrics.get("timeout", 0),
+            error_files=extended_metrics.get("error", 0),
+            avg_processing_time_ms=extended_metrics.get("avg_processing_time_ms", 0),
+            total_size_bytes=extended_metrics.get("total_size_bytes", 0),
+            files_per_hour=files_per_hour,
+            success_rate=success_rate
         )
         
         _ingestion_logs.append({
@@ -1154,7 +1351,17 @@ async def list_ingestion_runs(
             video_count=doc.get("video_count", 0),
             chunks_created=doc.get("chunks_created", 0),
             elapsed_seconds=elapsed_seconds,
-            profile=doc.get("profile")
+            profile=doc.get("profile"),
+            # Extended metrics
+            duplicates_skipped=doc.get("duplicates_skipped", 0),
+            image_only_pdfs=doc.get("image_only_pdfs", 0),
+            no_chunks_files=doc.get("no_chunks_files", 0),
+            timeout_files=doc.get("timeout_files", 0),
+            error_files=doc.get("error_files", 0),
+            avg_processing_time_ms=doc.get("avg_processing_time_ms", 0.0),
+            total_size_bytes=doc.get("total_size_bytes", 0),
+            files_per_hour=doc.get("files_per_hour", 0.0),
+            success_rate=doc.get("success_rate", 0.0)
         ))
     
     return IngestionRunsResponse(

@@ -55,6 +55,12 @@ class QueuedIngestionJob(BaseModel):
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     error: Optional[str] = None
+    # Selective ingestion filters
+    retry_image_only_pdfs: bool = False
+    retry_timeouts: bool = False
+    retry_errors: bool = False
+    retry_no_chunks: bool = False
+    skip_image_only_pdfs: bool = False
 
 
 class ScheduledIngestionJob(BaseModel):
@@ -72,6 +78,12 @@ class ScheduledIngestionJob(BaseModel):
     last_run: Optional[str] = None
     next_run: Optional[str] = None
     created_at: str
+    # Selective ingestion filters
+    retry_image_only_pdfs: bool = False
+    retry_timeouts: bool = False
+    retry_errors: bool = False
+    retry_no_chunks: bool = False
+    skip_image_only_pdfs: bool = False
 
 
 class QueueRequest(BaseModel):
@@ -80,6 +92,12 @@ class QueueRequest(BaseModel):
     file_types: List[str] = Field(default=["all"])
     incremental: bool = True
     priority: int = 0
+    # Selective ingestion filters
+    retry_image_only_pdfs: bool = False
+    retry_timeouts: bool = False
+    retry_errors: bool = False
+    retry_no_chunks: bool = False
+    skip_image_only_pdfs: bool = False
 
 
 class ScheduleRequest(BaseModel):
@@ -91,6 +109,12 @@ class ScheduleRequest(BaseModel):
     hour: int = 0
     day_of_week: int = 0
     day_of_month: int = 1
+    # Selective ingestion filters
+    retry_image_only_pdfs: bool = False
+    retry_timeouts: bool = False
+    retry_errors: bool = False
+    retry_no_chunks: bool = False
+    skip_image_only_pdfs: bool = False
 
 
 class QueueStatus(BaseModel):
@@ -198,7 +222,13 @@ async def add_to_queue(
         "incremental": queue_request.incremental,
         "priority": queue_request.priority,
         "created_at": datetime.now().isoformat(),
-        "status": "queued"
+        "status": "queued",
+        # Selective ingestion filters
+        "retry_image_only_pdfs": queue_request.retry_image_only_pdfs,
+        "retry_timeouts": queue_request.retry_timeouts,
+        "retry_errors": queue_request.retry_errors,
+        "retry_no_chunks": queue_request.retry_no_chunks,
+        "skip_image_only_pdfs": queue_request.skip_image_only_pdfs
     }
     
     async with _queue_lock:
@@ -252,7 +282,13 @@ async def add_multiple_to_queue(
                 "incremental": queue_request.incremental,
                 "priority": queue_request.priority,
                 "created_at": datetime.now().isoformat(),
-                "status": "queued"
+                "status": "queued",
+                # Selective ingestion filters
+                "retry_image_only_pdfs": queue_request.retry_image_only_pdfs,
+                "retry_timeouts": queue_request.retry_timeouts,
+                "retry_errors": queue_request.retry_errors,
+                "retry_no_chunks": queue_request.retry_no_chunks,
+                "skip_image_only_pdfs": queue_request.skip_image_only_pdfs
             }
             
             _ingestion_queue.append(job)
@@ -407,7 +443,13 @@ async def _run_ingestion_job(job: Dict[str, Any], db):
         "config": {
             "profile": job["profile_key"],
             "incremental": job.get("incremental", True),
-            "file_types": job.get("file_types", ["all"])
+            "file_types": job.get("file_types", ["all"]),
+            # Selective ingestion filters
+            "retry_image_only_pdfs": job.get("retry_image_only_pdfs", False),
+            "retry_timeouts": job.get("retry_timeouts", False),
+            "retry_errors": job.get("retry_errors", False),
+            "retry_no_chunks": job.get("retry_no_chunks", False),
+            "skip_image_only_pdfs": job.get("skip_image_only_pdfs", False)
         },
         "profile": job["profile_key"],
         # Phase tracking
@@ -609,7 +651,13 @@ async def create_schedule(
         "enabled": True,
         "last_run": None,
         "next_run": next_run.isoformat(),
-        "created_at": datetime.now().isoformat()
+        "created_at": datetime.now().isoformat(),
+        # Selective ingestion filters
+        "retry_image_only_pdfs": schedule_request.retry_image_only_pdfs,
+        "retry_timeouts": schedule_request.retry_timeouts,
+        "retry_errors": schedule_request.retry_errors,
+        "retry_no_chunks": schedule_request.retry_no_chunks,
+        "skip_image_only_pdfs": schedule_request.skip_image_only_pdfs
     }
     
     # Save to database
@@ -651,7 +699,13 @@ async def update_schedule(
         "hour": schedule_request.hour,
         "day_of_week": schedule_request.day_of_week,
         "day_of_month": schedule_request.day_of_month,
-        "next_run": next_run.isoformat()
+        "next_run": next_run.isoformat(),
+        # Selective ingestion filters
+        "retry_image_only_pdfs": schedule_request.retry_image_only_pdfs,
+        "retry_timeouts": schedule_request.retry_timeouts,
+        "retry_errors": schedule_request.retry_errors,
+        "retry_no_chunks": schedule_request.retry_no_chunks,
+        "skip_image_only_pdfs": schedule_request.skip_image_only_pdfs
     }
     
     await _save_schedule_to_db(db, schedule)
@@ -815,7 +869,13 @@ async def check_scheduled_jobs(db):
                     "incremental": schedule.get("incremental", True),
                     "priority": 1,  # Normal priority for scheduled
                     "created_at": datetime.now().isoformat(),
-                    "status": "queued"
+                    "status": "queued",
+                    # Selective ingestion filters from schedule
+                    "retry_image_only_pdfs": schedule.get("retry_image_only_pdfs", False),
+                    "retry_timeouts": schedule.get("retry_timeouts", False),
+                    "retry_errors": schedule.get("retry_errors", False),
+                    "retry_no_chunks": schedule.get("retry_no_chunks", False),
+                    "skip_image_only_pdfs": schedule.get("skip_image_only_pdfs", False)
                 }
                 _ingestion_queue.append(job)
             

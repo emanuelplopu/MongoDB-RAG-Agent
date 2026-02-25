@@ -27,7 +27,7 @@ from fastapi.exceptions import RequestValidationError
 
 from backend.routers import chat, search, profiles, ingestion, system, sessions, auth
 from backend.routers import status, indexes, ingestion_queue, local_llm, prompts, model_versions
-from backend.routers import strategies, backup
+from backend.routers import strategies, backup, embedding_benchmark, file_registry
 from backend.routers.cloud_sources import (
     connections_router as cloud_connections,
     oauth_router as cloud_oauth,
@@ -469,6 +469,12 @@ app.include_router(
 )
 
 app.include_router(
+    file_registry.router,
+    prefix="/api/v1/file-registry",
+    tags=["File Registry"]
+)
+
+app.include_router(
     local_llm.router,
     prefix="/api/v1/local-llm",
     tags=["Local LLM"]
@@ -527,6 +533,12 @@ app.include_router(
     backup.router,
     prefix="/api/v1/backups",
     tags=["Backup & Restore"]
+)
+
+app.include_router(
+    embedding_benchmark.router,
+    prefix="/api/v1/benchmark",
+    tags=["Embedding Benchmark"]
 )
 
 

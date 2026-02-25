@@ -5,6 +5,7 @@ import {
   MagnifyingGlassCircleIcon,
   ArrowPathIcon,
   WrenchScrewdriverIcon,
+  BeakerIcon,
 } from '@heroicons/react/24/outline'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -37,6 +38,13 @@ const systemPages = [
     href: '/system/config',
     icon: WrenchScrewdriverIcon,
     color: 'bg-orange-500',
+  },
+  {
+    name: 'Embedding Benchmark',
+    description: 'Compare embedding providers (OpenAI, Ollama, vLLM)',
+    href: '/system/benchmark',
+    icon: BeakerIcon,
+    color: 'bg-cyan-500',
   },
 ]
 

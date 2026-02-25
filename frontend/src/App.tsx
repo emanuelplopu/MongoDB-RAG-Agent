@@ -35,6 +35,7 @@ import FailedDocumentsPage from './pages/FailedDocumentsPage'
 import IngestionAnalyticsPage from './pages/IngestionAnalyticsPage'
 import JobHistoryPage from './pages/JobHistoryPage'
 import BackupManagementPage from './pages/BackupManagementPage'
+import EmbeddingBenchmarkPage from './pages/EmbeddingBenchmarkPage'
 
 // Component to handle language redirect
 function LanguageRedirect() {
@@ -114,6 +115,7 @@ function AppRoutes() {
                     <Route path="system/strategies" element={<StrategiesPage />} />
                     <Route path="system/strategies/ab-test" element={<StrategyABTestPage />} />
                     <Route path="system/backups" element={<BackupManagementPage />} />
+                    <Route path="system/benchmark" element={<EmbeddingBenchmarkPage />} />
                     <Route path="archived-chats" element={<ArchivedChatsPage />} />
                     <Route path="cloud-sources" element={<CloudSourcesPage />} />
                     <Route path="cloud-sources/connections" element={<CloudSourceConnectionsPage />} />

@@ -26,6 +26,16 @@ class IngestionStatus(str, Enum):
     STOPPED = "stopped"
 
 
+class FileClassification(str, Enum):
+    """File classification for selective ingestion."""
+    NORMAL = "normal"               # Successfully processed with chunks
+    IMAGE_ONLY_PDF = "image_only_pdf"  # PDF with no extractable text
+    NO_CHUNKS = "no_chunks"         # Processed but produced 0 chunks
+    TIMEOUT = "timeout"             # Processing timed out
+    ERROR = "error"                 # Processing error
+    PENDING = "pending"             # Never processed
+
+
 # ============== Chat Models ==============
 
 class ChatMessage(BaseModel):
@@ -249,6 +259,13 @@ class IngestionStartRequest(BaseModel):
     chunk_size: int = Field(default=1000, ge=100, le=5000)
     chunk_overlap: int = Field(default=200, ge=0, le=1000)
     max_tokens: int = Field(default=512, ge=128, le=2048)
+    
+    # Selective ingestion filters
+    retry_image_only_pdfs: bool = Field(default=False, description="Only process image-only PDFs")
+    retry_timeouts: bool = Field(default=False, description="Only process timed-out files")
+    retry_errors: bool = Field(default=False, description="Only process errored files")
+    retry_no_chunks: bool = Field(default=False, description="Only process files with 0 chunks")
+    skip_image_only_pdfs: bool = Field(default=False, description="Skip known image-only PDFs")
 
 
 class DiscoveryProgress(BaseModel):
@@ -309,6 +326,16 @@ class IngestionRunSummary(BaseModel):
     chunks_created: int = 0
     elapsed_seconds: float = 0.0
     profile: Optional[str] = None
+    # Extended metrics for prioritization
+    duplicates_skipped: int = 0
+    image_only_pdfs: int = 0  # PDFs with no extractable text
+    no_chunks_files: int = 0  # Files that produced 0 chunks (after processing)
+    timeout_files: int = 0  # Files that timed out
+    error_files: int = 0  # Files with processing errors
+    avg_processing_time_ms: float = 0.0
+    total_size_bytes: int = 0
+    files_per_hour: float = 0.0
+    success_rate: float = 0.0  # Percentage of files that produced chunks
 
 
 class IngestionRunsResponse(BaseModel):
@@ -476,6 +503,51 @@ class PromptTemplateListResponse(BaseModel):
     """List of prompt templates."""
     templates: List[PromptTemplate]
     total: int
+
+
+# ============== File Registry Models ==============
+
+class FileRegistryEntry(BaseModel):
+    """Entry in the file registry for tracking file metadata and classification."""
+    id: Optional[str] = Field(None, description="Registry entry ID")
+    file_path: str = Field(..., description="Absolute file path")
+    file_name: str = Field(..., description="File name")
+    file_size_bytes: int = Field(..., description="File size in bytes")
+    content_hash: str = Field(..., description="SHA256 hash for change detection")
+    file_modified_at: datetime = Field(..., description="Filesystem modification time")
+    classification: FileClassification = Field(default=FileClassification.PENDING)
+    last_processed_at: Optional[datetime] = Field(None, description="Last processing timestamp")
+    last_job_id: Optional[str] = Field(None, description="Last job that processed this file")
+    chunks_created: int = Field(default=0, description="Number of chunks created")
+    processing_time_ms: float = Field(default=0, description="Processing time in milliseconds")
+    error_message: Optional[str] = Field(None, description="Error message if failed")
+    retry_count: int = Field(default=0, description="Number of retry attempts")
+    profile_key: str = Field(..., description="Profile this file belongs to")
+    created_at: Optional[datetime] = Field(None, description="Registry entry creation time")
+    updated_at: Optional[datetime] = Field(None, description="Registry entry update time")
+
+
+class FileRegistryStats(BaseModel):
+    """Statistics for file registry."""
+    total_files: int = 0
+    normal: int = 0
+    image_only_pdf: int = 0
+    no_chunks: int = 0
+    timeout: int = 0
+    error: int = 0
+    pending: int = 0
+    modified_since_last_run: int = 0
+    total_size_bytes: int = 0
+
+
+class FileRegistryListResponse(BaseModel):
+    """Paginated list of file registry entries."""
+    files: List[FileRegistryEntry]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    stats: Optional[FileRegistryStats] = None
 
 
 # ============== Generic Response Models ==============

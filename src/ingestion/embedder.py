@@ -1,15 +1,17 @@
-"""
-Document embedding generation for vector search.
-Supports OpenAI and Ollama embedding providers.
+"""Document embedding generation for vector search.
+Supports OpenAI and Ollama embedding providers with automatic fallback and retry.
 """
 
 import logging
 import asyncio
-from typing import List, Optional
+import os
+from typing import List, Optional, Tuple
 from datetime import datetime
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
 import openai
+import httpx
 
 from src.ingestion.chunker import DocumentChunk
 from src.settings import load_settings
@@ -18,6 +20,42 @@ from src.settings import load_settings
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+
+# Embedding resilience configuration
+@dataclass
+class EmbeddingResilienceConfig:
+    """Configuration for embedding resilience and fallback behavior."""
+    max_retries: int = 3
+    initial_retry_delay: float = 1.0  # seconds
+    max_retry_delay: float = 30.0  # seconds
+    retry_multiplier: float = 2.0  # exponential backoff multiplier
+    enable_fallback: bool = True
+    fallback_provider: str = "ollama"  # ollama, localai, etc.
+    fallback_model: str = "nomic-embed-text"  # default Ollama embedding model
+    fallback_url: str = "http://localhost:11434"  # Ollama default
+
+
+# Global resilience config - can be overridden
+_resilience_config = EmbeddingResilienceConfig()
+
+
+def configure_embedding_resilience(
+    max_retries: int = None,
+    enable_fallback: bool = None,
+    fallback_model: str = None,
+    fallback_url: str = None
+):
+    """Configure embedding resilience settings."""
+    global _resilience_config
+    if max_retries is not None:
+        _resilience_config.max_retries = max_retries
+    if enable_fallback is not None:
+        _resilience_config.enable_fallback = enable_fallback
+    if fallback_model is not None:
+        _resilience_config.fallback_model = fallback_model
+    if fallback_url is not None:
+        _resilience_config.fallback_url = fallback_url
 
 
 def get_embedding_client():
@@ -40,6 +78,56 @@ def get_client():
     if _embedding_client is None:
         _embedding_client = get_embedding_client()
     return _embedding_client
+
+
+async def _generate_ollama_embeddings(texts: List[str], model: str, base_url: str) -> List[List[float]]:
+    """
+    Generate embeddings using Ollama as fallback.
+    
+    Args:
+        texts: List of texts to embed
+        model: Ollama model name (e.g., 'nomic-embed-text')
+        base_url: Ollama API base URL
+        
+    Returns:
+        List of embedding vectors
+    """
+    embeddings = []
+    
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        for text in texts:
+            response = await client.post(
+                f"{base_url}/api/embeddings",
+                json={"model": model, "prompt": text}
+            )
+            response.raise_for_status()
+            data = response.json()
+            embeddings.append(data["embedding"])
+    
+    return embeddings
+
+
+async def _check_ollama_available(base_url: str, model: str) -> bool:
+    """Check if Ollama is available and has the required model."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            # Check if Ollama is running
+            response = await client.get(f"{base_url}/api/tags")
+            if response.status_code != 200:
+                return False
+            
+            # Check if model is available
+            data = response.json()
+            models = [m.get("name", "").split(":")[0] for m in data.get("models", [])]
+            
+            if model.split(":")[0] not in models:
+                logger.warning(f"Ollama model '{model}' not found. Available: {models}")
+                return False
+            
+            return True
+    except Exception as e:
+        logger.debug(f"Ollama check failed: {e}")
+        return False
 
 
 class EmbeddingGenerator:
@@ -87,7 +175,7 @@ class EmbeddingGenerator:
 
     async def generate_embedding(self, text: str) -> List[float]:
         """
-        Generate embedding for a single text.
+        Generate embedding for a single text with retry and fallback.
 
         Args:
             text: Text to embed
@@ -95,30 +183,129 @@ class EmbeddingGenerator:
         Returns:
             Embedding vector
         """
-        # Truncate text if too long (rough estimation: 4 chars per token)
-        if len(text) > self.config["max_tokens"] * 4:
-            text = text[:self.config["max_tokens"] * 4]
+        embeddings = await self.generate_embeddings_batch([text])
+        return embeddings[0]
 
-        response = await get_client().embeddings.create(
-            model=self.model,
-            input=text
-        )
+    async def _try_openai_embeddings(
+        self,
+        texts: List[str]
+    ) -> Tuple[Optional[List[List[float]]], Optional[str]]:
+        """
+        Try to generate embeddings using OpenAI with retry logic.
+        
+        Returns:
+            Tuple of (embeddings, error_message). If successful, error is None.
+        """
+        config = _resilience_config
+        last_error = None
+        
+        for attempt in range(config.max_retries):
+            try:
+                response = await get_client().embeddings.create(
+                    model=self.model,
+                    input=texts
+                )
+                return [data.embedding for data in response.data], None
+                
+            except openai.RateLimitError as e:
+                last_error = f"Rate limit: {e}"
+                delay = min(
+                    config.initial_retry_delay * (config.retry_multiplier ** attempt),
+                    config.max_retry_delay
+                )
+                logger.warning(f"OpenAI rate limit hit (attempt {attempt + 1}/{config.max_retries}), retrying in {delay:.1f}s...")
+                await asyncio.sleep(delay)
+                
+            except openai.APITimeoutError as e:
+                last_error = f"Timeout: {e}"
+                delay = min(
+                    config.initial_retry_delay * (config.retry_multiplier ** attempt),
+                    config.max_retry_delay
+                )
+                logger.warning(f"OpenAI timeout (attempt {attempt + 1}/{config.max_retries}), retrying in {delay:.1f}s...")
+                await asyncio.sleep(delay)
+                
+            except openai.APIConnectionError as e:
+                last_error = f"Connection error: {e}"
+                delay = min(
+                    config.initial_retry_delay * (config.retry_multiplier ** attempt),
+                    config.max_retry_delay
+                )
+                logger.warning(f"OpenAI connection error (attempt {attempt + 1}/{config.max_retries}), retrying in {delay:.1f}s...")
+                await asyncio.sleep(delay)
+                
+            except openai.APIStatusError as e:
+                # 5xx errors are retryable, 4xx are not (except rate limits)
+                if e.status_code >= 500:
+                    last_error = f"Server error ({e.status_code}): {e}"
+                    delay = min(
+                        config.initial_retry_delay * (config.retry_multiplier ** attempt),
+                        config.max_retry_delay
+                    )
+                    logger.warning(f"OpenAI server error (attempt {attempt + 1}/{config.max_retries}), retrying in {delay:.1f}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    # Non-retryable error (auth, invalid request, etc.)
+                    return None, f"OpenAI API error ({e.status_code}): {e}"
+                    
+            except Exception as e:
+                last_error = f"Unexpected error: {e}"
+                logger.warning(f"Unexpected OpenAI error (attempt {attempt + 1}/{config.max_retries}): {e}")
+                delay = min(
+                    config.initial_retry_delay * (config.retry_multiplier ** attempt),
+                    config.max_retry_delay
+                )
+                await asyncio.sleep(delay)
+        
+        return None, last_error
 
-        return response.data[0].embedding
+    async def _try_ollama_fallback(
+        self,
+        texts: List[str]
+    ) -> Tuple[Optional[List[List[float]]], Optional[str]]:
+        """
+        Try to generate embeddings using Ollama as fallback.
+        
+        Returns:
+            Tuple of (embeddings, error_message). If successful, error is None.
+        """
+        config = _resilience_config
+        
+        # Check if Ollama is available
+        if not await _check_ollama_available(config.fallback_url, config.fallback_model):
+            return None, "Ollama not available or model not found"
+        
+        try:
+            logger.info(f"Attempting Ollama fallback with model '{config.fallback_model}'...")
+            embeddings = await _generate_ollama_embeddings(
+                texts, 
+                config.fallback_model, 
+                config.fallback_url
+            )
+            logger.info(f"Ollama fallback successful: generated {len(embeddings)} embeddings")
+            return embeddings, None
+            
+        except Exception as e:
+            return None, f"Ollama fallback failed: {e}"
 
     async def generate_embeddings_batch(
         self,
         texts: List[str]
     ) -> List[List[float]]:
         """
-        Generate embeddings for a batch of texts.
+        Generate embeddings for a batch of texts with retry and automatic fallback.
 
         Args:
             texts: List of texts to embed
 
         Returns:
             List of embedding vectors
+            
+        Raises:
+            RuntimeError: If all embedding attempts fail
         """
+        config = _resilience_config
+        
         # Truncate texts if too long
         processed_texts = []
         for text in texts:
@@ -126,12 +313,42 @@ class EmbeddingGenerator:
                 text = text[:self.config["max_tokens"] * 4]
             processed_texts.append(text)
 
-        response = await get_client().embeddings.create(
-            model=self.model,
-            input=processed_texts
-        )
-
-        return [data.embedding for data in response.data]
+        # Try primary provider (OpenAI) with retries
+        embeddings, openai_error = await self._try_openai_embeddings(processed_texts)
+        
+        if embeddings is not None:
+            return embeddings
+        
+        # Primary failed - try fallback if enabled
+        if config.enable_fallback:
+            logger.warning(f"OpenAI embedding failed after {config.max_retries} retries: {openai_error}")
+            logger.info("Attempting Ollama fallback...")
+            
+            embeddings, fallback_error = await self._try_ollama_fallback(processed_texts)
+            
+            if embeddings is not None:
+                # Note: Ollama embeddings may have different dimensions
+                # This is logged but allowed - the caller should handle dimension mismatches
+                if embeddings and len(embeddings[0]) != self.config["dimensions"]:
+                    logger.warning(
+                        f"Fallback embedding dimension ({len(embeddings[0])}) differs from "
+                        f"configured dimension ({self.config['dimensions']}). "
+                        f"This may cause issues with vector search."
+                    )
+                return embeddings
+            
+            # Both failed
+            error_msg = (
+                f"All embedding attempts failed. "
+                f"OpenAI: {openai_error}. Ollama: {fallback_error}"
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+        else:
+            # Fallback disabled, report OpenAI failure
+            error_msg = f"OpenAI embedding failed after {config.max_retries} retries: {openai_error}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
 
     async def embed_chunks(
         self,

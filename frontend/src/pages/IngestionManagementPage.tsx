@@ -29,9 +29,9 @@ import {
   ClockIcon,
 } from '@heroicons/react/24/outline'
 import { 
-  ingestionApi, ingestionQueueApi, profilesApi,
+  ingestionApi, ingestionQueueApi, profilesApi, fileRegistryApi,
   QueueStatus, ScheduledIngestionJob, IngestionStatus, LogEntry,
-  Profile, IngestionStreamEvent
+  Profile, IngestionStreamEvent, FileRegistryStats
 } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -81,6 +81,7 @@ export default function IngestionManagementPage() {
   const [ingestionStatus, setIngestionStatus] = useState<IngestionStatus | null>(null)
   const [profiles, setProfiles] = useState<Record<string, Profile>>({})
   const [logs, setLogs] = useState<LogEntry[]>([])
+  const [registryStats, setRegistryStats] = useState<FileRegistryStats | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [showAddToQueue, setShowAddToQueue] = useState(false)
   const [showAddSchedule, setShowAddSchedule] = useState(false)
@@ -97,6 +98,13 @@ export default function IngestionManagementPage() {
   const [incremental, setIncremental] = useState(true)
   const [scheduleFrequency, setScheduleFrequency] = useState('daily')
   const [scheduleHour, setScheduleHour] = useState(0)
+  
+  // Selective ingestion filter states
+  const [retryImageOnlyPdfs, setRetryImageOnlyPdfs] = useState(false)
+  const [retryTimeouts, setRetryTimeouts] = useState(false)
+  const [retryErrors, setRetryErrors] = useState(false)
+  const [retryNoChunks, setRetryNoChunks] = useState(false)
+  const [skipImageOnlyPdfs, setSkipImageOnlyPdfs] = useState(false)
   
   // Safeguards - operation locking and cooldown
   const [isOperationPending, setIsOperationPending] = useState(false)
@@ -118,16 +126,18 @@ export default function IngestionManagementPage() {
   
   const fetchData = useCallback(async () => {
     try {
-      const [queueRes, schedulesRes, ingestionRes, profilesRes] = await Promise.all([
+      const [queueRes, schedulesRes, ingestionRes, profilesRes, registryRes] = await Promise.all([
         ingestionQueueApi.getQueue(),
         ingestionQueueApi.getSchedules(),
         ingestionApi.getStatus(),
-        profilesApi.list()
+        profilesApi.list(),
+        fileRegistryApi.getStats().catch(() => null)
       ])
       setQueueStatus(queueRes)
       setSchedules(schedulesRes.schedules)
       setIngestionStatus(ingestionRes)
       setProfiles(profilesRes.profiles)
+      if (registryRes) setRegistryStats(registryRes)
     } catch (err) {
       console.error('Error fetching data:', err)
     } finally {
@@ -287,11 +297,23 @@ export default function IngestionManagementPage() {
         profile_key,
         file_types: selectedFileTypes,
         incremental,
-        priority: 0
+        priority: 0,
+        // Selective ingestion filters
+        retry_image_only_pdfs: retryImageOnlyPdfs,
+        retry_timeouts: retryTimeouts,
+        retry_errors: retryErrors,
+        retry_no_chunks: retryNoChunks,
+        skip_image_only_pdfs: skipImageOnlyPdfs
       }))
       await ingestionQueueApi.addMultipleToQueue(jobs)
       setShowAddToQueue(false)
       setSelectedProfiles([])
+      // Reset filter states
+      setRetryImageOnlyPdfs(false)
+      setRetryTimeouts(false)
+      setRetryErrors(false)
+      setRetryNoChunks(false)
+      setSkipImageOnlyPdfs(false)
       fetchData()
     } catch (err) {
       console.error('Error adding to queue:', err)
@@ -687,6 +709,62 @@ export default function IngestionManagementPage() {
         </div>
       )}
 
+      {/* File Registry Stats */}
+      {registryStats && registryStats.total_files > 0 && (
+        <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+          <div className="flex items-center gap-3 mb-4">
+            <ChartBarIcon className="h-5 w-5 text-primary" />
+            <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">
+              {t('ingestion.filters.title', 'File Registry')} ({registryStats.total_files} files)
+            </h3>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+            {/* Normal */}
+            <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-900/20">
+              <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+                {registryStats.by_classification?.normal || 0}
+              </div>
+              <div className="text-xs text-emerald-700 dark:text-emerald-300">Normal</div>
+            </div>
+            {/* Image-Only PDFs */}
+            <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-900/20">
+              <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">
+                {registryStats.by_classification?.image_only_pdf || 0}
+              </div>
+              <div className="text-xs text-amber-700 dark:text-amber-300">Image PDFs</div>
+            </div>
+            {/* Timeouts */}
+            <div className="p-3 rounded-xl bg-orange-50 dark:bg-orange-900/20">
+              <div className="text-2xl font-bold text-orange-600 dark:text-orange-400">
+                {registryStats.by_classification?.timeout || 0}
+              </div>
+              <div className="text-xs text-orange-700 dark:text-orange-300">Timeouts</div>
+            </div>
+            {/* No Chunks */}
+            <div className="p-3 rounded-xl bg-purple-50 dark:bg-purple-900/20">
+              <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">
+                {registryStats.by_classification?.no_chunks || 0}
+              </div>
+              <div className="text-xs text-purple-700 dark:text-purple-300">No Chunks</div>
+            </div>
+            {/* Errors */}
+            <div className="p-3 rounded-xl bg-red-50 dark:bg-red-900/20">
+              <div className="text-2xl font-bold text-red-600 dark:text-red-400">
+                {registryStats.by_classification?.error || 0}
+              </div>
+              <div className="text-xs text-red-700 dark:text-red-300">Errors</div>
+            </div>
+            {/* Pending */}
+            <div className="p-3 rounded-xl bg-gray-50 dark:bg-gray-700">
+              <div className="text-2xl font-bold text-gray-600 dark:text-gray-400">
+                {registryStats.by_classification?.pending || 0}
+              </div>
+              <div className="text-xs text-gray-700 dark:text-gray-300">Pending</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Queue */}
       <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
         <div className="flex items-center justify-between mb-4">
@@ -762,6 +840,79 @@ export default function IngestionManagementPage() {
                 <span className="text-sm text-primary-900 dark:text-gray-200">{t('ingestion.incremental')}</span>
               </label>
               
+              {/* Selective Ingestion Filters */}
+              <div className="border-t border-gray-200 dark:border-gray-600 pt-3 mt-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <FunnelIcon className="h-4 w-4 text-secondary" />
+                  <span className="text-sm font-medium text-primary-900 dark:text-gray-200">{t('ingestion.filters.title', 'Selective Filters')}</span>
+                </div>
+                
+                {/* Info message when retry filters are active without incremental */}
+                {!incremental && (retryImageOnlyPdfs || retryTimeouts || retryErrors || retryNoChunks) && (
+                  <div className="mb-2 p-2 rounded-lg bg-blue-50 dark:bg-blue-900/30 text-xs text-blue-700 dark:text-blue-300 flex items-start gap-2">
+                    <InformationCircleIcon className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                    <span>{t('ingestion.filters.retryModeInfo', 'Retry mode: Only files matching the selected retry filters will be processed.')}</span>
+                  </div>
+                )}
+                
+                {/* Retry Filters */}
+                <div className="mb-2">
+                  <span className="text-xs text-secondary dark:text-gray-400 mb-1 block">{t('ingestion.filters.retryGroup', 'Retry Specific File Types')}</span>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="flex items-center gap-2">
+                      <input 
+                        type="checkbox" 
+                        checked={retryImageOnlyPdfs} 
+                        onChange={e => setRetryImageOnlyPdfs(e.target.checked)} 
+                        className="rounded text-amber-500" 
+                      />
+                      <span className="text-xs text-primary-900 dark:text-gray-200">{t('ingestion.filters.retryImagePdfs', 'Retry Image-Only PDFs')}</span>
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input 
+                        type="checkbox" 
+                        checked={retryTimeouts} 
+                        onChange={e => setRetryTimeouts(e.target.checked)} 
+                        className="rounded text-amber-500" 
+                      />
+                      <span className="text-xs text-primary-900 dark:text-gray-200">{t('ingestion.filters.retryTimeouts', 'Retry Timeouts')}</span>
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input 
+                        type="checkbox" 
+                        checked={retryErrors} 
+                        onChange={e => setRetryErrors(e.target.checked)} 
+                        className="rounded text-amber-500" 
+                      />
+                      <span className="text-xs text-primary-900 dark:text-gray-200">{t('ingestion.filters.retryErrors', 'Retry Errors')}</span>
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input 
+                        type="checkbox" 
+                        checked={retryNoChunks} 
+                        onChange={e => setRetryNoChunks(e.target.checked)} 
+                        className="rounded text-amber-500" 
+                      />
+                      <span className="text-xs text-primary-900 dark:text-gray-200">{t('ingestion.filters.retryNoChunks', 'Retry No-Chunks')}</span>
+                    </label>
+                  </div>
+                </div>
+                
+                {/* Skip Filters */}
+                <div>
+                  <span className="text-xs text-secondary dark:text-gray-400 mb-1 block">{t('ingestion.filters.skipGroup', 'Skip File Types')}</span>
+                  <label className="flex items-center gap-2">
+                    <input 
+                      type="checkbox" 
+                      checked={skipImageOnlyPdfs} 
+                      onChange={e => setSkipImageOnlyPdfs(e.target.checked)} 
+                      className="rounded text-red-500" 
+                    />
+                    <span className="text-xs text-primary-900 dark:text-gray-200">{t('ingestion.filters.skipImagePdfs', 'Skip Image-Only PDFs')}</span>
+                  </label>
+                </div>
+              </div>
+              
               <div className="flex gap-2">
                 <button 
                   onClick={handleAddToQueue} 
@@ -782,26 +933,45 @@ export default function IngestionManagementPage() {
         {/* Queue List */}
         {queueStatus && queueStatus.queue.length > 0 ? (
           <div className="space-y-2">
-            {queueStatus.queue.map((job, i) => (
-              <div key={job.id} className="flex items-center justify-between p-3 rounded-xl bg-surface-variant dark:bg-gray-700">
-                <div className="flex items-center gap-3">
-                  <span className="text-sm text-secondary dark:text-gray-400">#{i + 1}</span>
-                  <div>
-                    <p className="font-medium text-primary-900 dark:text-gray-200">{job.profile_name}</p>
-                    <p className="text-xs text-secondary dark:text-gray-500">
-                      {job.file_types.join(', ')} • {job.incremental ? t('ingestion.incremental') : t('ingestion.fullMode')}
-                    </p>
+            {queueStatus.queue.map((job, i) => {
+              // Collect active filters for display
+              const activeFilters: string[] = []
+              if (job.retry_image_only_pdfs) activeFilters.push(t('ingestion.filters.retryImagePdfs'))
+              if (job.retry_timeouts) activeFilters.push(t('ingestion.filters.retryTimeouts'))
+              if (job.retry_errors) activeFilters.push(t('ingestion.filters.retryErrors'))
+              if (job.retry_no_chunks) activeFilters.push(t('ingestion.filters.retryNoChunks'))
+              if (job.skip_image_only_pdfs) activeFilters.push(t('ingestion.filters.skipImagePdfs'))
+              
+              return (
+                <div key={job.id} className="flex items-center justify-between p-3 rounded-xl bg-surface-variant dark:bg-gray-700">
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm text-secondary dark:text-gray-400">#{i + 1}</span>
+                    <div>
+                      <p className="font-medium text-primary-900 dark:text-gray-200">{job.profile_name}</p>
+                      <p className="text-xs text-secondary dark:text-gray-500">
+                        {job.file_types.join(', ')} • {job.incremental ? t('ingestion.incremental') : t('ingestion.fullMode')}
+                      </p>
+                      {activeFilters.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {activeFilters.map((filter, idx) => (
+                            <span key={idx} className="px-1.5 py-0.5 rounded text-[10px] bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
+                              {filter}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
+                  <button 
+                    onClick={() => handleRemoveFromQueue(job.id)} 
+                    disabled={isOperationPending}
+                    className="p-2 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <TrashIcon className="h-4 w-4" />
+                  </button>
                 </div>
-                <button 
-                  onClick={() => handleRemoveFromQueue(job.id)} 
-                  disabled={isOperationPending}
-                  className="p-2 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <TrashIcon className="h-4 w-4" />
-                </button>
-              </div>
-            ))}
+              )
+            })}
           </div>
         ) : !showAddToQueue && (
           <div className="text-center py-8">
