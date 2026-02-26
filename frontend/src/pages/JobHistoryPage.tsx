@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '../contexts/AuthContext'
 import {
   ClockIcon,
@@ -96,6 +97,7 @@ const API_BASE = '/api/v1/ingestion'
 export default function JobHistoryPage() {
   const { user, isLoading: authLoading } = useAuth()
   const navigate = useNavigate()
+  const { t } = useTranslation()
   
   const [jobs, setJobs] = useState<JobSummary[]>([])
   const [summary, setSummary] = useState<JobsSummary | null>(null)
@@ -300,15 +302,15 @@ export default function JobHistoryPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-200">Ingestion Management</h2>
-          <p className="text-sm text-secondary dark:text-gray-400">Queue, scheduling, and progress</p>
+          <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-200">{t('ingestion.title')}</h2>
+          <p className="text-sm text-secondary dark:text-gray-400">{t('ingestion.subtitle')}</p>
         </div>
         <button
           onClick={fetchJobs}
-          className="flex items-center gap-2 rounded-xl bg-surface-variant dark:bg-gray-700 px-4 py-2 text-sm font-medium text-primary-700 dark:text-primary-300 transition-all hover:bg-primary-100 dark:hover:bg-gray-600"
+          className="flex items-center gap-2 rounded-xl bg-surface-variant dark:bg-gray-700 px-4 py-2 text-sm font-medium text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-gray-600"
         >
           <ArrowPathIcon className="h-4 w-4" />
-          Refresh
+          {t('common.refresh')}
         </button>
       </div>
 
@@ -346,45 +348,65 @@ export default function JobHistoryPage() {
 
       {/* Summary Cards */}
       {summary && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm border border-gray-200 dark:border-gray-700">
-            <div className="text-sm text-gray-500 dark:text-gray-400">Total Jobs</div>
-            <div className="text-2xl font-bold text-gray-900 dark:text-white">{summary.total_jobs}</div>
-            <div className="text-xs text-gray-400 mt-1">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-5 shadow-elevation-1">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="rounded-xl bg-blue-100 dark:bg-blue-900/50 p-2">
+                <ClockIcon className="h-5 w-5 text-blue-600" />
+              </div>
+              <span className="text-sm font-medium text-secondary dark:text-gray-400">Total Jobs</span>
+            </div>
+            <p className="text-2xl font-semibold text-primary-900 dark:text-gray-200">{summary.total_jobs}</p>
+            <p className="text-xs text-secondary dark:text-gray-400 mt-1">
               {summary.by_status.completed || 0} completed, {summary.by_status.failed || 0} failed
-            </div>
+            </p>
           </div>
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm border border-gray-200 dark:border-gray-700">
-            <div className="text-sm text-gray-500 dark:text-gray-400">Files Processed</div>
-            <div className="text-2xl font-bold text-gray-900 dark:text-white">
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-5 shadow-elevation-1">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="rounded-xl bg-green-100 dark:bg-green-900/50 p-2">
+                <CheckCircleIcon className="h-5 w-5 text-green-600" />
+              </div>
+              <span className="text-sm font-medium text-secondary dark:text-gray-400">Files Processed</span>
+            </div>
+            <p className="text-2xl font-semibold text-green-600">
               {summary.overall_stats?.total_files_processed.toLocaleString() || 0}
-            </div>
-            <div className="text-xs text-gray-400 mt-1">
+            </p>
+            <p className="text-xs text-secondary dark:text-gray-400 mt-1">
               {summary.overall_stats?.successful_files || 0} successful
-            </div>
+            </p>
           </div>
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm border border-gray-200 dark:border-gray-700">
-            <div className="text-sm text-gray-500 dark:text-gray-400">Total Chunks</div>
-            <div className="text-2xl font-bold text-gray-900 dark:text-white">
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-5 shadow-elevation-1">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="rounded-xl bg-purple-100 dark:bg-purple-900/50 p-2">
+                <ChartBarIcon className="h-5 w-5 text-purple-600" />
+              </div>
+              <span className="text-sm font-medium text-secondary dark:text-gray-400">Total Chunks</span>
+            </div>
+            <p className="text-2xl font-semibold text-purple-600">
               {summary.overall_stats?.total_chunks.toLocaleString() || 0}
-            </div>
+            </p>
           </div>
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm border border-gray-200 dark:border-gray-700">
-            <div className="text-sm text-gray-500 dark:text-gray-400">Total Size</div>
-            <div className="text-2xl font-bold text-gray-900 dark:text-white">
-              {formatBytes(summary.overall_stats?.total_size_bytes || 0)}
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-5 shadow-elevation-1">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="rounded-xl bg-orange-100 dark:bg-orange-900/50 p-2">
+                <FolderIcon className="h-5 w-5 text-orange-600" />
+              </div>
+              <span className="text-sm font-medium text-secondary dark:text-gray-400">Total Size</span>
             </div>
+            <p className="text-2xl font-semibold text-orange-600">
+              {formatBytes(summary.overall_stats?.total_size_bytes || 0)}
+            </p>
           </div>
         </div>
       )}
 
       {/* Jobs List */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
+      <div className="rounded-2xl bg-surface dark:bg-gray-800 shadow-elevation-1 overflow-hidden">
         <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
-          <h2 className="font-semibold text-gray-900 dark:text-white">Jobs</h2>
+          <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">Jobs</h3>
           <button
             onClick={fetchJobs}
-            className="p-2 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+            className="p-2 text-secondary hover:text-primary-700 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
             title="Refresh"
           >
             <ArrowPathIcon className="h-5 w-5" />
@@ -392,16 +414,19 @@ export default function JobHistoryPage() {
         </div>
 
         {loading ? (
-          <div className="p-8 text-center text-gray-500">Loading jobs...</div>
+          <div className="p-8 text-center text-secondary">
+            <ArrowPathIcon className="h-8 w-8 animate-spin text-primary mx-auto mb-2" />
+            Loading jobs...
+          </div>
         ) : jobs.length === 0 ? (
-          <div className="p-8 text-center text-gray-500">
-            <FolderIcon className="h-12 w-12 mx-auto mb-2 text-gray-300" />
-            No jobs found
+          <div className="p-8 text-center text-secondary">
+            <FolderIcon className="h-12 w-12 mx-auto mb-4 text-gray-300" />
+            <p>No jobs found</p>
           </div>
         ) : (
           <div className="divide-y divide-gray-200 dark:divide-gray-700">
             {jobs.map(job => (
-              <div key={job.job_id} className="hover:bg-gray-50 dark:hover:bg-gray-750">
+              <div key={job.job_id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
                 {/* Job Header Row */}
                 <div
                   className="p-4 flex items-center gap-4 cursor-pointer"
@@ -660,26 +685,24 @@ export default function JobHistoryPage() {
 
         {/* Pagination */}
         {total > limit && (
-          <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex justify-between items-center">
-            <div className="text-sm text-gray-500">
-              Showing {page * limit + 1}-{Math.min((page + 1) * limit, total)} of {total}
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setPage(p => Math.max(0, p - 1))}
-                disabled={page === 0}
-                className="px-3 py-1 text-sm bg-gray-100 dark:bg-gray-700 rounded disabled:opacity-50"
-              >
-                Previous
-              </button>
-              <button
-                onClick={() => setPage(p => p + 1)}
-                disabled={(page + 1) * limit >= total}
-                className="px-3 py-1 text-sm bg-gray-100 dark:bg-gray-700 rounded disabled:opacity-50"
-              >
-                Next
-              </button>
-            </div>
+          <div className="flex items-center justify-between border-t border-gray-100 dark:border-gray-700 px-4 py-3">
+            <button
+              onClick={() => setPage(p => Math.max(0, p - 1))}
+              disabled={page === 0}
+              className="rounded-lg px-3 py-1 text-sm font-medium text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+            <span className="text-sm text-secondary">
+              Page {page + 1} of {Math.ceil(total / limit)}
+            </span>
+            <button
+              onClick={() => setPage(p => p + 1)}
+              disabled={(page + 1) * limit >= total}
+              className="rounded-lg px-3 py-1 text-sm font-medium text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
           </div>
         )}
       </div>

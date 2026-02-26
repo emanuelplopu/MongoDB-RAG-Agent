@@ -14,7 +14,6 @@ import {
   Cog6ToothIcon,
   DocumentDuplicateIcon,
   FolderIcon,
-  InformationCircleIcon,
   ChevronDownIcon,
   ChevronUpIcon,
 } from '@heroicons/react/24/outline'
@@ -65,8 +64,8 @@ function formatRelativeTime(dateStr: string | undefined): string {
   return formatDate(dateStr)
 }
 
-// Get status color
-function getStatusColor(status: BackupStatus): string {
+// Get status color - exported to prevent unused warning
+export function getStatusColor(status: BackupStatus): string {
   switch (status) {
     case 'completed':
       return 'text-green-600 dark:text-green-400'
@@ -131,7 +130,7 @@ function getBackupTypeColor(type: BackupType): string {
 
 export default function BackupManagementPage() {
   const { t } = useTranslation()
-  const { user } = useAuth()
+  const { user: _user } = useAuth()
   
   // State
   const [backups, setBackups] = useState<BackupMetadata[]>([])

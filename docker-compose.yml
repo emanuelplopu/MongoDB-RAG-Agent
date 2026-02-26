@@ -84,6 +84,7 @@ services:
       - ./documents:/app/documents
       - ./projects:/app/projects
       - ./profiles.yaml:/app/profiles.yaml
+      - ./data/backups:/app/data/backups
       # Profile-specific document folders (create these on host to use)
       - ./mounts/parhelion-energy:/app/mounts/parhelion-energy:ro
       - ./mounts/gdrive-root:/app/mounts/gdrive-root:ro

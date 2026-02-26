@@ -19,5 +19,8 @@ transformers>=4.47.0
 docling>=2.14.0
 docling-core>=2.4.0
 
+# ONNX Runtime for RapidOCR (CPU inference)
+onnxruntime>=1.18.0
+
 # Audio processing
 pydub>=0.25.0

@@ -177,30 +177,298 @@ class IngestionFileStats:
         return result
 
 
-def calculate_file_timeout(file_size_bytes: int, max_timeout_seconds: int = 900) -> float:
+@dataclass
+class TimeoutConfig:
+    """Configuration for file processing timeouts."""
+    base_timeout: int = 120  # 2 minutes minimum (increased from 60)
+    seconds_per_mb: float = 30.0  # 30 seconds per MB (increased from 10)
+    max_timeout: int = 1800  # 30 minutes max (increased from 15)
+    pdf_multiplier: float = 1.5  # Extra time for PDFs (OCR-heavy)
+    complex_pdf_threshold_mb: float = 1.0  # PDFs above this get extra time
+    complex_pdf_multiplier: float = 2.0  # Extra multiplier for complex PDFs
+    max_retries: int = 2  # Number of retries for timed-out files
+    retry_timeout_multiplier: float = 1.5  # Increase timeout on retry
+
+
+# Global timeout config - can be updated from database
+_timeout_config = TimeoutConfig()
+
+
+def get_timeout_config() -> TimeoutConfig:
+    """Get current timeout configuration."""
+    return _timeout_config
+
+
+def update_timeout_config(
+    base_timeout: int = None,
+    seconds_per_mb: float = None,
+    max_timeout: int = None,
+    pdf_multiplier: float = None,
+    complex_pdf_threshold_mb: float = None,
+    complex_pdf_multiplier: float = None,
+    max_retries: int = None,
+    retry_timeout_multiplier: float = None
+) -> TimeoutConfig:
     """
-    Calculate timeout for a file based on its size.
+    Update timeout configuration values.
     
-    Formula: base_timeout + (size_in_mb * seconds_per_mb)
-    - Base timeout: 60 seconds minimum
-    - Per MB: 10 seconds per MB
-    - Max: 900 seconds (15 minutes)
+    Args:
+        base_timeout: Base timeout in seconds
+        seconds_per_mb: Seconds to add per MB of file size
+        max_timeout: Maximum timeout cap
+        pdf_multiplier: Multiplier for PDF files
+        complex_pdf_threshold_mb: Size threshold for complex PDF handling
+        complex_pdf_multiplier: Extra multiplier for complex PDFs
+        max_retries: Number of retries for timed-out files
+        retry_timeout_multiplier: Multiplier for timeout on retries
+        
+    Returns:
+        Updated TimeoutConfig
+    """
+    global _timeout_config
+    
+    if base_timeout is not None:
+        _timeout_config.base_timeout = base_timeout
+    if seconds_per_mb is not None:
+        _timeout_config.seconds_per_mb = seconds_per_mb
+    if max_timeout is not None:
+        _timeout_config.max_timeout = max_timeout
+    if pdf_multiplier is not None:
+        _timeout_config.pdf_multiplier = pdf_multiplier
+    if complex_pdf_threshold_mb is not None:
+        _timeout_config.complex_pdf_threshold_mb = complex_pdf_threshold_mb
+    if complex_pdf_multiplier is not None:
+        _timeout_config.complex_pdf_multiplier = complex_pdf_multiplier
+    if max_retries is not None:
+        _timeout_config.max_retries = max_retries
+    if retry_timeout_multiplier is not None:
+        _timeout_config.retry_timeout_multiplier = retry_timeout_multiplier
+    
+    logger.info(
+        f"Updated timeout config: base={_timeout_config.base_timeout}s, "
+        f"per_mb={_timeout_config.seconds_per_mb}s, max={_timeout_config.max_timeout}s, "
+        f"pdf_mult={_timeout_config.pdf_multiplier}, retries={_timeout_config.max_retries}"
+    )
+    return _timeout_config
+
+
+def calculate_file_timeout(
+    file_size_bytes: int, 
+    file_path: str = None,
+    max_timeout_seconds: int = None,
+    config: TimeoutConfig = None,
+    retry_attempt: int = 0
+) -> float:
+    """
+    Calculate adaptive timeout for a file based on its size and type.
+    
+    Formula: base_timeout + (size_in_mb * seconds_per_mb) * type_multiplier
+    - Base timeout: 120 seconds minimum (configurable)
+    - Per MB: 30 seconds per megabyte (configurable)
+    - PDF multiplier: 1.5x for standard PDFs, 2x+ for complex PDFs
+    - Max: 1800 seconds (30 minutes, configurable)
+    - Retry multiplier: Each retry increases timeout
     
     Args:
         file_size_bytes: Size of the file in bytes
-        max_timeout_seconds: Maximum timeout (default 15 minutes)
+        file_path: Optional path to determine file type for multiplier
+        max_timeout_seconds: Override for maximum timeout
+        config: Optional TimeoutConfig (uses global if not provided)
+        retry_attempt: Retry attempt number (0 = first try)
         
     Returns:
         Timeout in seconds
     """
-    BASE_TIMEOUT = 60  # 1 minute minimum
-    SECONDS_PER_MB = 10  # 10 seconds per megabyte
+    cfg = config or _timeout_config
+    max_timeout = max_timeout_seconds or cfg.max_timeout
     
     size_mb = file_size_bytes / (1024 * 1024)
-    calculated_timeout = BASE_TIMEOUT + (size_mb * SECONDS_PER_MB)
+    calculated_timeout = cfg.base_timeout + (size_mb * cfg.seconds_per_mb)
     
-    return min(calculated_timeout, max_timeout_seconds)
+    # Apply type-specific multipliers
+    if file_path:
+        ext = os.path.splitext(file_path)[1].lower()
+        
+        if ext == '.pdf':
+            # PDFs need more time due to OCR potential
+            calculated_timeout *= cfg.pdf_multiplier
+            
+            # Complex PDFs (larger than threshold) get even more time
+            if size_mb >= cfg.complex_pdf_threshold_mb:
+                calculated_timeout *= cfg.complex_pdf_multiplier
+                logger.debug(
+                    f"Complex PDF detected ({size_mb:.1f}MB): "
+                    f"timeout={calculated_timeout:.0f}s"
+                )
+    
+    # Apply retry multiplier for subsequent attempts
+    if retry_attempt > 0:
+        retry_multiplier = cfg.retry_timeout_multiplier ** retry_attempt
+        calculated_timeout *= retry_multiplier
+        logger.info(
+            f"Retry {retry_attempt}: timeout increased to {calculated_timeout:.0f}s "
+            f"(multiplier: {retry_multiplier:.1f}x)"
+        )
+    
+    return min(calculated_timeout, max_timeout)
 
+
+@dataclass
+class AcceleratorConfig:
+    """Configuration for GPU/CUDA acceleration in document processing."""
+    device: str = "auto"  # "auto", "cpu", "cuda", "mps"
+    cuda_device_id: int = 0  # CUDA device ID when using GPU
+    enable_ocr_acceleration: bool = True  # Enable GPU for OCR models
+    torch_dtype: str = "float16"  # "float16", "float32", "bfloat16"
+
+
+# Global accelerator config
+_accelerator_config = AcceleratorConfig()
+
+
+def get_accelerator_config() -> AcceleratorConfig:
+    """Get current accelerator configuration."""
+    return _accelerator_config
+
+
+def update_accelerator_config(
+    device: str = None,
+    cuda_device_id: int = None,
+    enable_ocr_acceleration: bool = None,
+    torch_dtype: str = None
+) -> AcceleratorConfig:
+    """
+    Update accelerator configuration values.
+    
+    Args:
+        device: Device to use - "auto", "cpu", "cuda", "mps"
+        cuda_device_id: CUDA device ID (for multi-GPU systems)
+        enable_ocr_acceleration: Whether to use GPU for OCR
+        torch_dtype: Torch data type for models
+        
+    Returns:
+        Updated AcceleratorConfig
+    """
+    global _accelerator_config
+    
+    if device is not None:
+        _accelerator_config.device = device
+    if cuda_device_id is not None:
+        _accelerator_config.cuda_device_id = cuda_device_id
+    if enable_ocr_acceleration is not None:
+        _accelerator_config.enable_ocr_acceleration = enable_ocr_acceleration
+    if torch_dtype is not None:
+        _accelerator_config.torch_dtype = torch_dtype
+    
+    logger.info(
+        f"Updated accelerator config: device={_accelerator_config.device}, "
+        f"cuda_id={_accelerator_config.cuda_device_id}, ocr_accel={_accelerator_config.enable_ocr_acceleration}"
+    )
+    return _accelerator_config
+
+
+def detect_available_device() -> str:
+    """
+    Detect the best available device for processing.
+    
+    Returns:
+        Device string: "cuda", "mps", or "cpu"
+    """
+    try:
+        import torch
+        
+        if torch.cuda.is_available():
+            device_name = torch.cuda.get_device_name(0)
+            logger.info(f"CUDA available: {device_name}")
+            return "cuda"
+        
+        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            logger.info("MPS (Apple Silicon) available")
+            return "mps"
+        
+        logger.info("No GPU detected, using CPU")
+        return "cpu"
+        
+    except ImportError:
+        logger.warning("PyTorch not available, falling back to CPU")
+        return "cpu"
+    except Exception as e:
+        logger.warning(f"Error detecting device: {e}, falling back to CPU")
+        return "cpu"
+
+
+def get_effective_device() -> str:
+    """
+    Get the effective device to use based on configuration.
+    
+    Returns:
+        Device string for torch/docling
+    """
+    cfg = _accelerator_config
+    
+    if cfg.device == "auto":
+        return detect_available_device()
+    
+    return cfg.device
+
+
+def create_document_converter():
+    """
+    Create a DocumentConverter with optimal settings for the current environment.
+    
+    Configures GPU acceleration when available and enabled.
+    
+    Returns:
+        Configured DocumentConverter instance
+    """
+    try:
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.datamodel.base_models import InputFormat
+        
+        # Get effective device
+        device = get_effective_device()
+        cfg = _accelerator_config
+        
+        # Configure pipeline options for PDF processing
+        pipeline_options = PdfPipelineOptions()
+        
+        # Set accelerator device
+        if device in ["cuda", "mps"]:
+            pipeline_options.accelerator_options = {
+                "device": device,
+            }
+            if device == "cuda" and cfg.cuda_device_id > 0:
+                pipeline_options.accelerator_options["device_id"] = cfg.cuda_device_id
+            
+            logger.info(f"Docling converter using GPU acceleration: {device}")
+        else:
+            logger.info("Docling converter using CPU")
+        
+        # Enable OCR with acceleration if configured
+        if cfg.enable_ocr_acceleration:
+            pipeline_options.do_ocr = True
+            pipeline_options.do_table_structure = True
+        
+        # Create format options
+        format_options = {
+            InputFormat.PDF: PdfFormatOption(
+                pipeline_options=pipeline_options
+            )
+        }
+        
+        converter = DocumentConverter(format_options=format_options)
+        return converter
+        
+    except ImportError as e:
+        logger.warning(f"Could not configure advanced Docling options: {e}")
+        # Fall back to basic converter
+        from docling.document_converter import DocumentConverter
+        return DocumentConverter()
+    except Exception as e:
+        logger.error(f"Error creating DocumentConverter: {e}")
+        from docling.document_converter import DocumentConverter
+        return DocumentConverter()
 
 def get_file_size_safe(file_path: str) -> int:
     """Get file size safely, returning 0 if file not found."""
@@ -507,14 +775,13 @@ class DocumentIngestionPipeline:
 
         if file_ext in docling_formats:
             try:
-                from docling.document_converter import DocumentConverter
-
+                # Use GPU-accelerated converter when available
                 logger.info(
                     f"Converting {file_ext} file using Docling: "
                     f"{os.path.basename(file_path)}"
                 )
 
-                converter = DocumentConverter()
+                converter = create_document_converter()
                 result = converter.convert(file_path)
 
                 # Export to markdown for consistent processing
@@ -1453,31 +1720,49 @@ class DocumentIngestionPipeline:
         
         total_files = len(document_files)
         profile_key = os.getenv("PROFILE", "default")
+        timeout_cfg = get_timeout_config()
         
-        async def process_file(index: int, file_path: str):
+        # Track timeout failures for potential retry
+        timed_out_files: List[Tuple[int, str, str]] = []  # (index, file_path, content_hash)
+        
+        async def process_file_with_retry(
+            index: int, 
+            file_path: str, 
+            retry_attempt: int = 0,
+            prev_content_hash: str = None
+        ):
+            """Process a file with retry support for timeouts."""
             nonlocal duplicates_skipped, processed_count
             
             async with semaphore:
                 file_start_time = datetime.now()
                 file_size = get_file_size_safe(file_path)
                 file_modified_at = get_file_modified_time_safe(file_path)
-                timeout_seconds = calculate_file_timeout(file_size)
+                # Use adaptive timeout with file type and retry awareness
+                timeout_seconds = calculate_file_timeout(
+                    file_size, 
+                    file_path=file_path,
+                    retry_attempt=retry_attempt
+                )
                 
                 # Progress callback before processing
                 if progress_callback:
                     progress_callback(processed_count, total_files, file_path)
                 
                 try:
-                    # Compute file hash with timeout
-                    loop = asyncio.get_running_loop()
-                    content_hash = await asyncio.wait_for(
-                        loop.run_in_executor(
-                            self.get_executor(),
-                            compute_file_hash,
-                            file_path
-                        ),
-                        timeout=60  # 1 minute timeout for hash computation
-                    )
+                    # Compute file hash with timeout (reuse from previous attempt if retrying)
+                    if prev_content_hash:
+                        content_hash = prev_content_hash
+                    else:
+                        loop = asyncio.get_running_loop()
+                        content_hash = await asyncio.wait_for(
+                            loop.run_in_executor(
+                                self.get_executor(),
+                                compute_file_hash,
+                                file_path
+                            ),
+                            timeout=60  # 1 minute timeout for hash computation
+                        )
                     
                     # Check for duplicates (thread-safe check)
                     with results_lock:
@@ -1599,11 +1884,33 @@ class DocumentIngestionPipeline:
                         )
                         
                 except asyncio.TimeoutError:
-                    # Timeout - file took too long, continue with others
+                    # Timeout - check if we should retry or record as failure
                     processing_time = (datetime.now() - file_start_time).total_seconds() * 1000
                     size_mb = file_size / (1024 * 1024)
-                    error_msg = f"Timeout after {timeout_seconds:.0f}s (file size: {size_mb:.1f}MB)"
-                    logger.error(f"TIMEOUT processing {file_path}: {error_msg}")
+                    
+                    # Check if we should retry
+                    if retry_attempt < timeout_cfg.max_retries:
+                        next_timeout = calculate_file_timeout(
+                            file_size, 
+                            file_path=file_path,
+                            retry_attempt=retry_attempt + 1
+                        )
+                        logger.warning(
+                            f"TIMEOUT (attempt {retry_attempt + 1}/{timeout_cfg.max_retries + 1}) "
+                            f"processing {file_path}: {timeout_seconds:.0f}s elapsed. "
+                            f"Will retry with {next_timeout:.0f}s timeout."
+                        )
+                        # Queue for retry with increased timeout
+                        with results_lock:
+                            timed_out_files.append((index, file_path, content_hash))
+                        return  # Don't count as processed yet
+                    
+                    # Max retries exceeded - record as final failure
+                    error_msg = (
+                        f"Timeout after {timeout_seconds:.0f}s "
+                        f"(file size: {size_mb:.1f}MB, retries exhausted: {retry_attempt + 1}/{timeout_cfg.max_retries + 1})"
+                    )
+                    logger.error(f"TIMEOUT (final) processing {file_path}: {error_msg}")
                     
                     with results_lock:
                         results.append(IngestionResult(
@@ -1675,14 +1982,50 @@ class DocumentIngestionPipeline:
                     if progress_callback:
                         progress_callback(processed_count, total_files, file_path, 0)
         
-        # Create tasks for all files
+        # Create initial tasks for all files (first attempt)
         tasks = [
-            asyncio.create_task(process_file(i, file_path))
+            asyncio.create_task(process_file_with_retry(i, file_path, retry_attempt=0))
             for i, file_path in enumerate(document_files)
         ]
         
-        # Wait for all tasks to complete
+        # Wait for all initial tasks to complete
         await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Process retry queue with increasing retry attempts
+        for retry_round in range(1, timeout_cfg.max_retries + 1):
+            if not timed_out_files:
+                break
+                
+            files_to_retry = list(timed_out_files)
+            timed_out_files.clear()
+            
+            logger.info(
+                f"Retry round {retry_round}/{timeout_cfg.max_retries}: "
+                f"Processing {len(files_to_retry)} timed-out files with increased timeout"
+            )
+            
+            retry_tasks = [
+                asyncio.create_task(
+                    process_file_with_retry(
+                        idx, 
+                        fpath, 
+                        retry_attempt=retry_round,
+                        prev_content_hash=chash
+                    )
+                )
+                for idx, fpath, chash in files_to_retry
+            ]
+            
+            await asyncio.gather(*retry_tasks, return_exceptions=True)
+        
+        # Log retry summary
+        if timeout_cfg.max_retries > 0:
+            timeout_failures = sum(1 for s in file_stats if s.error_type == "timeout")
+            if timeout_failures > 0:
+                logger.warning(
+                    f"Retry summary: {timeout_failures} files still timed out after "
+                    f"{timeout_cfg.max_retries} retries"
+                )
         
         # Save stats to database
         await self._save_ingestion_stats(file_stats)

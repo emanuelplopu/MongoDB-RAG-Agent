@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import {
   ExclamationTriangleIcon,
   ArrowPathIcon,
@@ -39,6 +40,7 @@ interface FailedDocsSummary {
 export default function FailedDocumentsPage() {
   const navigate = useNavigate()
   const { user, isLoading: authLoading } = useAuth()
+  const { t } = useTranslation()
   
   const [documents, setDocuments] = useState<FailedDocument[]>([])
   const [summary, setSummary] = useState<FailedDocsSummary | null>(null)
@@ -161,27 +163,16 @@ export default function FailedDocumentsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-200">Ingestion Management</h2>
-          <p className="text-sm text-secondary dark:text-gray-400">Queue, scheduling, and progress</p>
+          <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-200">{t('ingestion.title')}</h2>
+          <p className="text-sm text-secondary dark:text-gray-400">{t('ingestion.subtitle')}</p>
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={fetchData}
-            className="flex items-center gap-2 rounded-xl bg-surface-variant dark:bg-gray-700 px-4 py-2 text-sm font-medium text-primary-700 dark:text-primary-300 transition-all hover:bg-primary-100 dark:hover:bg-gray-600"
-          >
-            <ArrowPathIcon className="h-4 w-4" />
-            Refresh
-          </button>
-          {summary && summary.total_resolved > 0 && (
-            <button
-              onClick={handleClearResolved}
-              className="flex items-center gap-2 rounded-xl bg-red-100 dark:bg-red-900/30 px-4 py-2 text-sm font-medium text-red-700 dark:text-red-400 transition-all hover:bg-red-200 dark:hover:bg-red-900/50"
-            >
-              <TrashIcon className="h-4 w-4" />
-              Clear Resolved ({summary.total_resolved})
-            </button>
-          )}
-        </div>
+        <button
+          onClick={fetchData}
+          className="flex items-center gap-2 rounded-xl bg-surface-variant dark:bg-gray-700 px-4 py-2 text-sm font-medium text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-gray-600"
+        >
+          <ArrowPathIcon className="h-4 w-4" />
+          {t('common.refresh')}
+        </button>
       </div>
 
       {/* Sub-navigation */}
@@ -218,6 +209,19 @@ export default function FailedDocumentsPage() {
 
       {error && (
         <div className="rounded-2xl bg-red-50 dark:bg-red-900/30 p-4 text-red-700 dark:text-red-400">{error}</div>
+      )}
+
+      {/* Clear Resolved Button */}
+      {summary && summary.total_resolved > 0 && (
+        <div className="flex justify-end">
+          <button
+            onClick={handleClearResolved}
+            className="flex items-center gap-2 rounded-xl bg-red-100 dark:bg-red-900/30 px-4 py-2 text-sm font-medium text-red-700 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/50"
+          >
+            <TrashIcon className="h-4 w-4" />
+            {t('ingestion.clearResolved', 'Clear Resolved')} ({summary.total_resolved})
+          </button>
+        </div>
       )}
 
       {/* Summary Cards */}

@@ -1352,12 +1352,230 @@ async def load_ingestion_config_from_db(db) -> bool:
             settings.ingestion_file_processing_timeout = doc.get("file_processing_timeout", settings.ingestion_file_processing_timeout)
             settings.ingestion_job_poll_interval = doc.get("job_poll_interval_seconds", settings.ingestion_job_poll_interval)
             
+            # Load timeout config
+            timeout_cfg = doc.get("timeout_config", {})
+            if timeout_cfg:
+                from src.ingestion.ingest import update_timeout_config
+                update_timeout_config(
+                    base_timeout=timeout_cfg.get("base_timeout"),
+                    seconds_per_mb=timeout_cfg.get("seconds_per_mb"),
+                    max_timeout=timeout_cfg.get("max_timeout"),
+                    pdf_multiplier=timeout_cfg.get("pdf_multiplier"),
+                    complex_pdf_threshold_mb=timeout_cfg.get("complex_pdf_threshold_mb"),
+                    complex_pdf_multiplier=timeout_cfg.get("complex_pdf_multiplier"),
+                    max_retries=timeout_cfg.get("max_retries"),
+                    retry_timeout_multiplier=timeout_cfg.get("retry_timeout_multiplier")
+                )
+            
+            # Load accelerator config
+            accel_cfg = doc.get("accelerator_config", {})
+            if accel_cfg:
+                from src.ingestion.ingest import update_accelerator_config
+                update_accelerator_config(
+                    device=accel_cfg.get("device"),
+                    cuda_device_id=accel_cfg.get("cuda_device_id"),
+                    enable_ocr_acceleration=accel_cfg.get("enable_ocr_acceleration"),
+                    torch_dtype=accel_cfg.get("torch_dtype")
+                )
+            
             logger.info(f"Loaded ingestion performance config: concurrent_files={settings.ingestion_max_concurrent_files}, isolation={settings.ingestion_process_isolation}")
             return True
         return False
     except Exception as e:
         logger.warning(f"Failed to load ingestion config from database: {e}")
         return False
+
+
+# ==================== Timeout & Accelerator Configuration ====================
+
+class TimeoutConfigRequest(BaseModel):
+    """Request model for timeout configuration."""
+    base_timeout: Optional[int] = Field(None, ge=30, le=600, description="Base timeout in seconds (30-600)")
+    seconds_per_mb: Optional[float] = Field(None, ge=5.0, le=120.0, description="Seconds per MB (5-120)")
+    max_timeout: Optional[int] = Field(None, ge=300, le=7200, description="Maximum timeout in seconds (5min-2h)")
+    pdf_multiplier: Optional[float] = Field(None, ge=1.0, le=5.0, description="PDF timeout multiplier (1-5)")
+    complex_pdf_threshold_mb: Optional[float] = Field(None, ge=0.5, le=10.0, description="Complex PDF threshold in MB")
+    complex_pdf_multiplier: Optional[float] = Field(None, ge=1.0, le=5.0, description="Complex PDF timeout multiplier")
+    max_retries: Optional[int] = Field(None, ge=0, le=5, description="Max retry attempts for timeouts (0-5)")
+    retry_timeout_multiplier: Optional[float] = Field(None, ge=1.0, le=3.0, description="Timeout multiplier on retry")
+
+
+class AcceleratorConfigRequest(BaseModel):
+    """Request model for accelerator configuration."""
+    device: Optional[str] = Field(None, description="Device: 'auto', 'cpu', 'cuda', 'mps'")
+    cuda_device_id: Optional[int] = Field(None, ge=0, le=7, description="CUDA device ID (0-7)")
+    enable_ocr_acceleration: Optional[bool] = Field(None, description="Enable GPU for OCR")
+    torch_dtype: Optional[str] = Field(None, description="Torch dtype: 'float16', 'float32', 'bfloat16'")
+
+
+@router.get("/ingestion-timeout-config")
+async def get_ingestion_timeout_config(request: Request):
+    """
+    Get current timeout configuration for file processing.
+    
+    Returns adaptive timeout settings including:
+    - Base timeout and per-MB scaling
+    - PDF-specific multipliers
+    - Retry configuration
+    """
+    try:
+        from src.ingestion.ingest import get_timeout_config
+        cfg = get_timeout_config()
+        return {
+            "base_timeout": cfg.base_timeout,
+            "seconds_per_mb": cfg.seconds_per_mb,
+            "max_timeout": cfg.max_timeout,
+            "pdf_multiplier": cfg.pdf_multiplier,
+            "complex_pdf_threshold_mb": cfg.complex_pdf_threshold_mb,
+            "complex_pdf_multiplier": cfg.complex_pdf_multiplier,
+            "max_retries": cfg.max_retries,
+            "retry_timeout_multiplier": cfg.retry_timeout_multiplier
+        }
+    except ImportError:
+        return {"error": "Timeout config not available"}
+
+
+@router.post("/ingestion-timeout-config")
+async def save_ingestion_timeout_config(request: Request, config: TimeoutConfigRequest):
+    """
+    Update timeout configuration for file processing.
+    
+    Changes are applied immediately and persisted to database.
+    """
+    db = request.app.state.db
+    
+    try:
+        from src.ingestion.ingest import update_timeout_config, get_timeout_config
+        
+        # Update in-memory config
+        update_timeout_config(
+            base_timeout=config.base_timeout,
+            seconds_per_mb=config.seconds_per_mb,
+            max_timeout=config.max_timeout,
+            pdf_multiplier=config.pdf_multiplier,
+            complex_pdf_threshold_mb=config.complex_pdf_threshold_mb,
+            complex_pdf_multiplier=config.complex_pdf_multiplier,
+            max_retries=config.max_retries,
+            retry_timeout_multiplier=config.retry_timeout_multiplier
+        )
+        
+        # Persist to database
+        cfg = get_timeout_config()
+        collection = db.db[INGESTION_CONFIG_COLLECTION]
+        await collection.update_one(
+            {"_id": INGESTION_CONFIG_DOC_ID},
+            {"$set": {
+                "timeout_config": {
+                    "base_timeout": cfg.base_timeout,
+                    "seconds_per_mb": cfg.seconds_per_mb,
+                    "max_timeout": cfg.max_timeout,
+                    "pdf_multiplier": cfg.pdf_multiplier,
+                    "complex_pdf_threshold_mb": cfg.complex_pdf_threshold_mb,
+                    "complex_pdf_multiplier": cfg.complex_pdf_multiplier,
+                    "max_retries": cfg.max_retries,
+                    "retry_timeout_multiplier": cfg.retry_timeout_multiplier
+                },
+                "updated_at": datetime.now().isoformat()
+            }},
+            upsert=True
+        )
+        
+        logger.info(f"Saved timeout config: base={cfg.base_timeout}s, max_retries={cfg.max_retries}")
+        return {"success": True, "message": "Timeout configuration saved"}
+        
+    except ImportError:
+        raise HTTPException(status_code=500, detail="Timeout config module not available")
+    except Exception as e:
+        logger.error(f"Failed to save timeout config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/ingestion-accelerator-config")
+async def get_ingestion_accelerator_config(request: Request):
+    """
+    Get current GPU/accelerator configuration for document processing.
+    
+    Returns:
+    - Current device setting (auto/cpu/cuda/mps)
+    - CUDA device ID for multi-GPU systems
+    - OCR acceleration status
+    - Detected available device
+    """
+    try:
+        from src.ingestion.ingest import (
+            get_accelerator_config, 
+            get_effective_device,
+            detect_available_device
+        )
+        cfg = get_accelerator_config()
+        return {
+            "device": cfg.device,
+            "cuda_device_id": cfg.cuda_device_id,
+            "enable_ocr_acceleration": cfg.enable_ocr_acceleration,
+            "torch_dtype": cfg.torch_dtype,
+            "effective_device": get_effective_device(),
+            "detected_device": detect_available_device()
+        }
+    except ImportError:
+        return {"error": "Accelerator config not available"}
+
+
+@router.post("/ingestion-accelerator-config")
+async def save_ingestion_accelerator_config(request: Request, config: AcceleratorConfigRequest):
+    """
+    Update GPU/accelerator configuration for document processing.
+    
+    Changes are applied immediately and persisted to database.
+    Note: Changes take effect for the next document conversion.
+    """
+    db = request.app.state.db
+    
+    try:
+        from src.ingestion.ingest import update_accelerator_config, get_accelerator_config
+        
+        # Validate device value
+        if config.device and config.device not in ["auto", "cpu", "cuda", "mps"]:
+            raise HTTPException(status_code=400, detail="Invalid device. Must be: auto, cpu, cuda, or mps")
+        
+        # Validate torch_dtype
+        if config.torch_dtype and config.torch_dtype not in ["float16", "float32", "bfloat16"]:
+            raise HTTPException(status_code=400, detail="Invalid torch_dtype. Must be: float16, float32, or bfloat16")
+        
+        # Update in-memory config
+        update_accelerator_config(
+            device=config.device,
+            cuda_device_id=config.cuda_device_id,
+            enable_ocr_acceleration=config.enable_ocr_acceleration,
+            torch_dtype=config.torch_dtype
+        )
+        
+        # Persist to database
+        cfg = get_accelerator_config()
+        collection = db.db[INGESTION_CONFIG_COLLECTION]
+        await collection.update_one(
+            {"_id": INGESTION_CONFIG_DOC_ID},
+            {"$set": {
+                "accelerator_config": {
+                    "device": cfg.device,
+                    "cuda_device_id": cfg.cuda_device_id,
+                    "enable_ocr_acceleration": cfg.enable_ocr_acceleration,
+                    "torch_dtype": cfg.torch_dtype
+                },
+                "updated_at": datetime.now().isoformat()
+            }},
+            upsert=True
+        )
+        
+        logger.info(f"Saved accelerator config: device={cfg.device}, ocr_accel={cfg.enable_ocr_acceleration}")
+        return {"success": True, "message": "Accelerator configuration saved"}
+        
+    except ImportError:
+        raise HTTPException(status_code=500, detail="Accelerator config module not available")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to save accelerator config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ==================== Ingestion Worker Health ====================

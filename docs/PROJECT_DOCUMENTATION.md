@@ -17,8 +17,10 @@
 7. [Agent System](#7-agent-system)
 8. [Document Ingestion](#8-document-ingestion)
 9. [Cloud Source Providers](#9-cloud-source-providers)
-10. [Frontend Pages](#10-frontend-pages)
-11. [Environment Variables](#11-environment-variables)
+10. [Backup & Restore System](#10-backup--restore-system)
+11. [Embedding Benchmark System](#11-embedding-benchmark-system)
+12. [Frontend Pages](#12-frontend-pages)
+13. [Environment Variables](#13-environment-variables)
 
 ---
 
@@ -374,6 +376,149 @@ LLM provider configuration persistence.
 }
 ```
 
+#### 3.12 `file_registry` Collection
+File classification and selective ingestion tracking.
+
+```javascript
+{
+  "_id": ObjectId,
+  "file_path": String,              // Full file path
+  "profile_key": String,            // Associated profile
+  "classification": String,         // pending/completed/failed/timeout/image_only_pdf/no_chunks/excluded
+  "file_hash": String,              // SHA-256 hash for change detection
+  "file_size": Number,
+  "last_processed_at": ISODate,
+  "error_message": String,          // Error details if failed
+  "chunks_created": Number,
+  "processing_time_ms": Number
+}
+```
+
+#### 3.13 `ingestion_schedules` Collection
+Scheduled ingestion job configurations.
+
+```javascript
+{
+  "_id": String,                    // Schedule UUID
+  "profile_key": String,
+  "profile_name": String,
+  "file_types": [String],           // ["all", "documents", "images", "audio", "video"]
+  "incremental": Boolean,
+  "frequency": String,              // hourly/daily/weekly/monthly
+  "hour": Number,                   // 0-23 for daily/weekly/monthly
+  "day_of_week": Number,            // 0-6 for weekly
+  "day_of_month": Number,           // 1-31 for monthly
+  "enabled": Boolean,
+  "last_run": ISODate,
+  "next_run": ISODate,
+  "created_at": ISODate,
+  // Selective ingestion filters
+  "retry_image_only_pdfs": Boolean,
+  "retry_timeouts": Boolean,
+  "retry_errors": Boolean,
+  "retry_no_chunks": Boolean,
+  "skip_image_only_pdfs": Boolean
+}
+```
+
+#### 3.14 `backups` Collection
+Backup metadata and restore tracking.
+
+```javascript
+{
+  "_id": String,                    // Backup UUID
+  "backup_type": String,            // full/incremental/checkpoint/post_ingestion
+  "profile_key": String,
+  "name": String,
+  "description": String,
+  "status": String,                 // pending/running/completed/failed
+  "file_path": String,              // Path to backup file
+  "file_size_bytes": Number,
+  "created_at": ISODate,
+  "completed_at": ISODate,
+  "parent_backup_id": String,       // For incremental backups
+  "collections": [{
+    "name": String,
+    "document_count": Number,
+    "size_bytes": Number
+  }],
+  "include_embeddings": Boolean,
+  "compressed": Boolean,
+  "checksum": String                // SHA-256 for integrity
+}
+```
+
+#### 3.15 `benchmark_results` Collection
+Embedding benchmark results.
+
+```javascript
+{
+  "_id": String,                    // Benchmark UUID
+  "timestamp": ISODate,
+  "file_name": String,
+  "file_size_bytes": Number,
+  "content_preview": String,
+  "chunk_config": {
+    "chunk_size": Number,
+    "chunk_overlap": Number,
+    "max_tokens": Number
+  },
+  "results": [{
+    "provider": String,
+    "model": String,
+    "provider_type": String,
+    "total_time_ms": Number,
+    "embedding_time_ms": Number,
+    "avg_latency_ms": Number,
+    "tokens_processed": Number,
+    "chunks_created": Number,
+    "embedding_dimension": Number,
+    "memory_peak_mb": Number,
+    "cost_estimate_usd": Number,
+    "success": Boolean,
+    "error": String
+  }],
+  "winner": String
+}
+```
+
+#### 3.16 `strategy_metrics` Collection
+Agent strategy execution metrics for A/B testing.
+
+```javascript
+{
+  "_id": ObjectId,
+  "strategy_id": String,
+  "session_id": String,
+  "query": String,
+  "domain": String,
+  "execution_time_ms": Number,
+  "iterations": Number,
+  "confidence_score": Number,
+  "quality_score": Number,          // 0-100
+  "sources_retrieved": Number,
+  "user_feedback_score": Number,    // 1-5 if provided
+  "user_feedback_text": String,
+  "timestamp": ISODate
+}
+```
+
+#### 3.17 `backup_config` Collection
+Backup system configuration.
+
+```javascript
+{
+  "_id": "backup_config",
+  "auto_backup_after_ingestion": Boolean,
+  "retention_days": Number,
+  "max_backups_per_profile": Number,
+  "compression_enabled": Boolean,
+  "include_embeddings": Boolean,
+  "backup_schedule": String,        // Cron expression
+  "backup_directory": String
+}
+```
+
 ---
 
 ## 4. API Endpoints
@@ -516,7 +661,109 @@ LLM provider configuration persistence.
 | GET | `/offline-config` | Get offline config |
 | PUT | `/offline-config` | Update offline config |
 
-### 4.11 Cloud Sources (`/api/v1/cloud-sources`)
+### 4.11 Status Dashboard (`/api/v1/status`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/dashboard` | Comprehensive status dashboard with KPIs |
+| GET | `/metrics/profile/{key}` | Detailed metrics for a specific profile |
+| GET | `/health/detailed` | Component-level health check |
+
+### 4.12 Ingestion Queue (`/api/v1/ingestion-queue`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/queue` | Get current queue status |
+| POST | `/queue/add` | Add job to queue |
+| POST | `/queue/add-multiple` | Add multiple jobs to queue |
+| DELETE | `/queue/{id}` | Remove job from queue |
+| DELETE | `/queue` | Clear all queued jobs |
+| POST | `/queue/reorder` | Reorder queue by job IDs |
+| GET | `/schedules` | List scheduled jobs |
+| POST | `/schedules` | Create scheduled job |
+| PUT | `/schedules/{id}` | Update scheduled job |
+| DELETE | `/schedules/{id}` | Delete scheduled job |
+| POST | `/schedules/{id}/toggle` | Enable/disable schedule |
+| POST | `/schedules/{id}/run-now` | Trigger schedule immediately |
+
+### 4.13 File Registry (`/api/v1/file-registry`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/stats` | File registry statistics by classification |
+| GET | `/files` | List files with filters |
+| POST | `/reclassify/{path}` | Manually reclassify a file |
+| DELETE | `/clear` | Clear registry entries |
+| POST | `/retry-category` | Mark files for retry by category |
+
+### 4.14 Model Versions (`/api/v1/model-versions`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/` | List all available models |
+| GET | `/latest` | Get latest released models |
+| GET | `/cost-effective` | Get most cost-effective models |
+| GET | `/{model_id}` | Get model details |
+| POST | `/switch` | Switch model versions |
+| POST | `/check-compatibility` | Check model parameter compatibility |
+| GET | `/recommendations` | Get model recommendations |
+| GET | `/current` | Get currently configured models |
+
+### 4.15 Agent Strategies (`/api/v1/strategies`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/` | List available strategies |
+| GET | `/default` | Get default strategy |
+| GET | `/{strategy_id}` | Get strategy details |
+| GET | `/{strategy_id}/metrics` | Get strategy performance metrics |
+| POST | `/compare` | Compare two strategies |
+| GET | `/for-domain/{domain}` | Get best strategy for domain |
+| POST | `/auto-detect` | Auto-detect strategy from query |
+| GET | `/metrics/all` | Get metrics for all strategies |
+| POST | `/feedback` | Record user feedback |
+| POST | `/ab-compare-responses` | LLM-based A/B response comparison |
+
+### 4.16 Backup & Restore (`/api/v1/backups`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/create` | Create backup (full/incremental/checkpoint) |
+| POST | `/checkpoint` | Create lightweight checkpoint |
+| GET | `/` | List all backups |
+| GET | `/checkpoints` | List checkpoints only |
+| GET | `/{backup_id}` | Get backup details |
+| GET | `/{backup_id}/chain` | Get incremental backup chain |
+| POST | `/{backup_id}/restore` | Restore from backup |
+| DELETE | `/{backup_id}` | Delete backup |
+| GET | `/config` | Get backup configuration |
+| PUT | `/config` | Update backup configuration |
+| GET | `/status` | Get current backup operation status |
+| GET | `/storage` | Get backup storage statistics |
+
+### 4.17 Embedding Benchmark (`/api/v1/benchmark`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/run` | Run embedding benchmark |
+| POST | `/run-file` | Run benchmark with file upload |
+| GET | `/providers` | Get available embedding providers |
+| POST | `/test-provider` | Test provider connectivity |
+| GET | `/results` | Get historical benchmark results |
+| GET | `/results/{id}` | Get specific benchmark result |
+| DELETE | `/results/{id}` | Delete benchmark result |
+
+### 4.18 Cloud Sources Cache (`/api/v1/cloud-sources/cache`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/get-file` | Get or cache cloud file |
+| GET | `/serve/{conn_id}/{doc_id}` | Serve cached file for preview |
+| GET | `/stats/{connection_id}` | Get cache statistics |
+| DELETE | `/clear/{connection_id}` | Clear cache for connection |
+| GET | `/info/{document_id}` | Get cloud source info for document |
+
+### 4.19 Cloud Sources (`/api/v1/cloud-sources`)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -655,6 +902,48 @@ profiles:
 - Results aggregated and deduplicated
 - RRF fusion for multi-source results
 
+### 7.5 Agent Strategies
+
+Strategies define how the orchestrator behaves for different use cases.
+
+#### Strategy Domains
+
+| Domain | Description |
+|--------|-------------|
+| `general` | General-purpose knowledge retrieval |
+| `software_dev` | Software development queries |
+| `legal` | Legal document analysis |
+| `hr` | Human resources queries |
+
+#### Strategy Configuration
+
+```python
+@dataclass
+class StrategyConfig:
+    max_iterations: int          # Maximum orchestrator loops
+    confidence_threshold: float   # Early exit threshold (0.0-1.0)
+    early_exit_enabled: bool      # Allow early termination
+    cross_search_boost: float     # Boost for cross-profile results
+    content_length_penalty: float # Penalty for verbose responses
+    custom_params: dict           # Strategy-specific parameters
+```
+
+#### Strategy Prompts
+
+Each strategy defines custom prompts for:
+- **Analyze**: Query understanding and intent extraction
+- **Plan**: Task creation and resource allocation
+- **Evaluate**: Result quality assessment
+- **Synthesize**: Final response generation
+
+#### A/B Testing
+
+Strategies support A/B testing with:
+- Execution metrics (latency, iterations, confidence)
+- Quality scoring (0-100 based on response quality)
+- User feedback collection (1-5 rating)
+- LLM-based response comparison
+
 ---
 
 ## 8. Document Ingestion
@@ -716,6 +1005,77 @@ MongoDB Storage
 - **Progress Tracking**: Real-time progress and ETA
 - **Log Streaming**: SSE endpoint for live logs
 
+### 8.5 Selective Ingestion
+
+The File Registry tracks file processing status for selective re-ingestion.
+
+#### File Classifications
+
+| Classification | Description |
+|----------------|-------------|
+| `pending` | Not yet processed |
+| `completed` | Successfully processed |
+| `failed` | Processing failed with error |
+| `timeout` | Processing timed out |
+| `image_only_pdf` | PDF with only images (OCR needed) |
+| `no_chunks` | Processed but no chunks created |
+| `excluded` | Explicitly excluded from processing |
+
+#### Selective Ingestion Filters
+
+| Filter | Description |
+|--------|-------------|
+| `retry_image_only_pdfs` | Reprocess image-only PDFs |
+| `retry_timeouts` | Retry files that timed out |
+| `retry_errors` | Retry previously failed files |
+| `retry_no_chunks` | Retry files that created no chunks |
+| `skip_image_only_pdfs` | Skip image-only PDFs entirely |
+
+### 8.6 Ingestion Queue
+
+Advanced queue management for batch processing.
+
+#### Queue Features
+
+- **Priority Queue**: Higher priority jobs execute first
+- **Multi-Profile**: Queue jobs for different profiles
+- **File Type Filtering**: Process specific file types only
+- **Background Processing**: Non-blocking queue execution
+
+#### Job Types
+
+| Type | Description |
+|------|-------------|
+| `queued` | Waiting in queue |
+| `running` | Currently executing |
+| `completed` | Successfully finished |
+| `failed` | Failed with error |
+| `cancelled` | Manually cancelled |
+
+### 8.7 Scheduled Ingestion
+
+Automatic ingestion based on time schedules.
+
+#### Schedule Frequencies
+
+| Frequency | Description |
+|-----------|-------------|
+| `hourly` | Run every hour |
+| `daily` | Run once per day at specified hour |
+| `weekly` | Run once per week on specified day |
+| `monthly` | Run once per month on specified day |
+
+#### Schedule Configuration
+
+```yaml
+schedule:
+  frequency: daily
+  hour: 2              # Run at 2 AM
+  file_types: ["all"]
+  incremental: true
+  retry_errors: true   # Retry failed files
+```
+
 ---
 
 ## 9. Cloud Source Providers
@@ -772,20 +1132,135 @@ cloud_sources:
     collection_prefix: "gdrive_"
 ```
 
+### 9.4 Cloud Source File Caching
+
+Local caching system for cloud source documents.
+
+#### Cache Features
+
+- **On-Demand Download**: Files downloaded when needed for preview
+- **Access Tracking**: Track access count and last accessed time
+- **Size Limits**: Configurable cache size per connection
+- **Auto-Cleanup**: Remove least recently used files when limit reached
+
+#### Cache Information
+
+| Field | Description |
+|-------|-------------|
+| `remote_id` | File ID in cloud provider |
+| `local_path` | Local cached file path |
+| `cached_at` | When file was cached |
+| `last_accessed_at` | Last access timestamp |
+| `access_count` | Number of times accessed |
+| `web_view_url` | Link to view in cloud provider |
+
 ---
 
-## 10. Frontend Pages
+## 10. Backup & Restore System
 
-### 10.1 Main Pages
+### 10.1 Backup Types
+
+| Type | Description | Use Case |
+|------|-------------|----------|
+| `full` | Complete database backup | Regular scheduled backups |
+| `incremental` | Changes since last backup | Frequent backups with low storage |
+| `checkpoint` | Lightweight state snapshot | Quick restore points |
+| `post_ingestion` | Auto-backup after ingestion | Data protection after changes |
+
+### 10.2 Backup Configuration
+
+```yaml
+backup_config:
+  auto_backup_after_ingestion: true
+  retention_days: 30
+  max_backups_per_profile: 10
+  compression_enabled: true
+  include_embeddings: false       # Embeddings can be regenerated
+  backup_schedule: "0 0 * * 0"    # Weekly on Sunday
+```
+
+### 10.3 Restore Modes
+
+| Mode | Description |
+|------|-------------|
+| `full` | Replace all data with backup data |
+| `merge` | Add missing documents only |
+| `selective` | Restore specific collections |
+
+### 10.4 Restore Options
+
+| Option | Description |
+|--------|-------------|
+| `skip_users` | Don't restore user accounts |
+| `skip_sessions` | Don't restore chat sessions |
+| `collections` | Specific collections to restore |
+
+### 10.5 Backup Chain
+
+Incremental backups form a chain:
+
+```
+Full Backup (Base)
+    └── Incremental 1
+            └── Incremental 2
+                    └── Incremental 3 (Latest)
+```
+
+To restore Incremental 3, all backups in the chain are needed.
+
+---
+
+## 11. Embedding Benchmark System
+
+### 11.1 Overview
+
+Compare embedding providers to find the best fit for your use case.
+
+### 11.2 Supported Providers
+
+| Provider | Type | Description |
+|----------|------|-------------|
+| OpenAI | Cloud API | text-embedding-3-small, ada-002 |
+| Ollama | Local | nomic-embed-text, all-minilm |
+| vLLM | Self-hosted | Custom embedding models |
+
+### 11.3 Benchmark Metrics
+
+| Metric | Description |
+|--------|-------------|
+| `total_time_ms` | End-to-end processing time |
+| `chunking_time_ms` | Time for text chunking |
+| `embedding_time_ms` | Time for embedding generation |
+| `avg_latency_ms` | Average latency per chunk |
+| `tokens_processed` | Total tokens embedded |
+| `embedding_dimension` | Vector dimensions |
+| `memory_peak_mb` | Peak memory usage |
+| `cost_estimate_usd` | Estimated cost (for cloud APIs) |
+
+### 11.4 Running Benchmarks
+
+1. Upload a test document
+2. Configure providers to compare (max 3)
+3. Set chunking parameters
+4. Run benchmark
+5. Review results and select winner
+
+---
+
+## 12. Frontend Pages
+
+### 12.1 Main Pages
 
 | Page | Path | Description |
 |------|------|-------------|
-| Home | `/` | Dashboard with quick actions |
+| Dashboard | `/` | Dashboard with quick actions and stats |
 | Chat | `/chat/:id?` | Chat interface with sessions |
 | Search | `/search` | Direct search interface |
 | Documents | `/documents` | Browse indexed documents |
+| Document Preview | `/documents/:id` | Preview document content |
+| Landing | `/landing` | Public landing page |
 
-### 10.2 Configuration Pages
+### 12.2 Configuration Pages
 
 | Page | Path | Description |
 |------|------|-------------|
@@ -794,29 +1269,44 @@ cloud_sources:
 | Search Indexes | `/indexes` | Index status and setup |
 | Local LLM | `/local-llm` | Offline mode configuration |
 
-### 10.3 Integration Pages
+### 12.3 Integration Pages
 
 | Page | Path | Description |
 |------|------|-------------|
 | Cloud Sources | `/cloud-sources` | Cloud provider connections |
+| Cloud Connections | `/cloud-sources/connections` | Manage connections |
 | Cloud Connect | `/cloud-sources/connect/:type` | OAuth connection flow |
 | Email Config | `/cloud-sources/email/:type` | Email source setup |
 
-### 10.4 Admin Pages
+### 12.4 Admin Pages
 
 | Page | Path | Description |
 |------|------|-------------|
 | User Management | `/admin/users` | User CRUD, access control |
 | Ingestion | `/admin/ingestion` | Document ingestion control |
+| Ingestion Analytics | `/admin/ingestion/analytics` | Ingestion metrics and charts |
+| Job History | `/admin/ingestion/history` | Ingestion job history |
+| Failed Documents | `/admin/ingestion/failed` | Failed document management |
 | Prompts | `/admin/prompts` | Prompt template management |
 | API Keys | `/api-keys` | Personal API key management |
 | Status | `/status` | System status dashboard |
+| Backups | `/admin/backups` | Backup and restore management |
+
+### 12.5 Advanced Pages
+
+| Page | Path | Description |
+|------|------|-------------|
+| Strategies | `/strategies` | Agent strategy management |
+| Strategy A/B Test | `/strategies/ab-test` | A/B testing comparison |
+| Embedding Benchmark | `/benchmark` | Embedding provider comparison |
+| Developer Docs | `/developer-docs` | API documentation viewer |
+| Archived Chats | `/archived` | View archived chat sessions |
 
 ---
 
-## 11. Environment Variables
+## 13. Environment Variables
 
-### 11.1 Required Variables
+### 13.1 Required Variables
 
 ```bash
 # MongoDB
@@ -832,7 +1322,7 @@ ANTHROPIC_API_KEY=sk-ant-...
 JWT_SECRET_KEY=your-secret-key-here
 ```
 
-### 11.2 Optional Variables
+### 13.2 Optional Variables
 
 ```bash
 # API Configuration
@@ -872,9 +1362,19 @@ BRAVE_SEARCH_API_KEY=...
 
 # CORS
 CORS_ORIGINS=["http://localhost:3000","http://localhost:8080"]
+
+# Backup Configuration
+BACKUP_AUTO_AFTER_INGESTION=true
+BACKUP_RETENTION_DAYS=30
+BACKUP_DIRECTORY=./backups
+
+# Ingestion Performance
+INGESTION_MAX_CONCURRENT_FILES=1
+INGESTION_CHUNK_SIZE=1000
+INGESTION_CHUNK_OVERLAP=200
 ```
 
-### 11.3 Docker Environment
+### 13.3 Docker Environment
 
 ```bash
 # docker-compose.yml environment
@@ -951,4 +1451,4 @@ AIRBYTE_MONGODB_HOST=mongodb
 
 ---
 
-*Documentation generated for RecallHub v1.0.0*
+*Documentation generated for RecallHub v1.1.0 - Updated with complete API coverage*
