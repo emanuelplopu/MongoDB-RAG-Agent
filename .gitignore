@@ -46,3 +46,7 @@ uv.lock
 # Logs
 *.log
 frontend/node_modules
+
+# Large binary files
+*.tar
+*.tar.gz
