@@ -54,6 +54,7 @@ class RestoreBackupRequest(BaseModel):
     collections: Optional[List[str]] = Field(default=None, description="Collections to restore (for selective mode)")
     skip_users: bool = Field(default=False, description="Skip restoring users collection")
     skip_sessions: bool = Field(default=False, description="Skip restoring chat sessions")
+    target_database: Optional[str] = Field(default=None, description="Target database name (None = restore to original database)")
 
 
 class UpdateBackupConfigRequest(BaseModel):

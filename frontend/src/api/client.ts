@@ -3116,6 +3116,7 @@ export interface RestoreBackupRequest {
   collections?: string[]
   skip_users?: boolean
   skip_sessions?: boolean
+  target_database?: string
 }
 
 export interface UpdateBackupConfigRequest {

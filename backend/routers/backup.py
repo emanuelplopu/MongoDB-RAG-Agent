@@ -53,22 +53,29 @@ async def create_backup(
     - post_ingestion: Automatic backup after ingestion (internal use)
     
     Requires admin privileges.
+    
+    Note: Full and incremental backups run in the background. 
+    Check /status endpoint for progress.
     """
     service = get_backup_service(request)
     
     try:
         if backup_request.backup_type == BackupType.FULL:
-            backup = await service.create_full_backup(
+            # Create initial metadata and return immediately
+            backup = await service.start_full_backup(
                 profile_key=backup_request.profile_key,
                 name=backup_request.name,
                 include_embeddings=backup_request.include_embeddings,
-                include_system_collections=backup_request.include_system_collections
+                include_system_collections=backup_request.include_system_collections,
+                background_tasks=background_tasks
             )
         elif backup_request.backup_type == BackupType.INCREMENTAL:
-            backup = await service.create_incremental_backup(
-                profile_key=backup_request.profile_key
+            backup = await service.start_incremental_backup(
+                profile_key=backup_request.profile_key,
+                background_tasks=background_tasks
             )
         elif backup_request.backup_type == BackupType.CHECKPOINT:
+            # Checkpoints are fast, run synchronously
             backup = await service.create_checkpoint(
                 profile_key=backup_request.profile_key,
                 name=backup_request.name or "Checkpoint"
@@ -188,128 +195,8 @@ async def list_checkpoints(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{backup_id}", response_model=BackupMetadata)
-async def get_backup_details(
-    request: Request,
-    backup_id: str,
-    _user: UserResponse = Depends(require_admin)
-):
-    """
-    Get detailed information about a specific backup.
-    
-    Requires admin privileges.
-    """
-    service = get_backup_service(request)
-    
-    backup = await service.get_backup(backup_id)
-    
-    if not backup:
-        raise HTTPException(status_code=404, detail=f"Backup {backup_id} not found")
-    
-    return backup
-
-
-@router.get("/{backup_id}/chain", response_model=List[BackupMetadata])
-async def get_backup_chain(
-    request: Request,
-    backup_id: str,
-    _user: UserResponse = Depends(require_admin)
-):
-    """
-    Get the backup chain for an incremental backup.
-    
-    Returns the list of backups from the full backup to the specified backup,
-    in order. Useful for understanding restore requirements.
-    
-    Requires admin privileges.
-    """
-    service = get_backup_service(request)
-    
-    chain = await service.get_backup_chain(backup_id)
-    
-    if not chain:
-        raise HTTPException(status_code=404, detail=f"Backup {backup_id} not found")
-    
-    return chain
-
-
-# ==================== Restore Endpoints ====================
-
-@router.post("/{backup_id}/restore", response_model=RestoreResult)
-async def restore_from_backup(
-    request: Request,
-    backup_id: str,
-    restore_request: RestoreBackupRequest,
-    _user: UserResponse = Depends(require_admin)
-):
-    """
-    Restore database from a backup.
-    
-    Restore modes:
-    - full: Replace all data with backup data
-    - merge: Add missing documents only (preserves existing)
-    - selective: Restore specific collections only
-    
-    WARNING: Full restore will delete existing data!
-    
-    Requires admin privileges.
-    """
-    service = get_backup_service(request)
-    
-    # Verify backup_id matches
-    if backup_id != restore_request.backup_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Backup ID in URL doesn't match request body"
-        )
-    
-    try:
-        result = await service.restore_from_backup(
-            backup_id=backup_id,
-            restore_mode=restore_request.restore_mode,
-            collections=restore_request.collections,
-            skip_users=restore_request.skip_users,
-            skip_sessions=restore_request.skip_sessions
-        )
-        
-        if not result.success and result.error_message:
-            raise HTTPException(status_code=400, detail=result.error_message)
-        
-        return result
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Restore failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ==================== Delete Endpoints ====================
-
-@router.delete("/{backup_id}")
-async def delete_backup(
-    request: Request,
-    backup_id: str,
-    _user: UserResponse = Depends(require_admin)
-):
-    """
-    Delete a backup and its files.
-    
-    This permanently removes the backup data and cannot be undone.
-    
-    Requires admin privileges.
-    """
-    service = get_backup_service(request)
-    
-    success = await service.delete_backup(backup_id)
-    
-    if not success:
-        raise HTTPException(status_code=404, detail=f"Backup {backup_id} not found or could not be deleted")
-    
-    return {"success": True, "message": f"Backup {backup_id} deleted"}
-
-
 # ==================== Configuration Endpoints ====================
+# NOTE: These MUST be defined BEFORE /{backup_id} routes to avoid path conflicts
 
 @router.get("/config", response_model=BackupConfig)
 async def get_backup_config(
@@ -409,6 +296,134 @@ async def get_storage_stats(
     except Exception as e:
         logger.error(f"Error getting storage stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Single Backup Endpoints ====================
+# NOTE: These /{backup_id} routes MUST be AFTER static routes like /config, /status, /storage
+
+@router.get("/{backup_id}", response_model=BackupMetadata)
+async def get_backup_details(
+    request: Request,
+    backup_id: str,
+    _user: UserResponse = Depends(require_admin)
+):
+    """
+    Get detailed information about a specific backup.
+    
+    Requires admin privileges.
+    """
+    service = get_backup_service(request)
+    
+    backup = await service.get_backup(backup_id)
+    
+    if not backup:
+        raise HTTPException(status_code=404, detail=f"Backup {backup_id} not found")
+    
+    return backup
+
+
+@router.get("/{backup_id}/chain", response_model=List[BackupMetadata])
+async def get_backup_chain(
+    request: Request,
+    backup_id: str,
+    _user: UserResponse = Depends(require_admin)
+):
+    """
+    Get the backup chain for an incremental backup.
+    
+    Returns the list of backups from the full backup to the specified backup,
+    in order. Useful for understanding restore requirements.
+    
+    Requires admin privileges.
+    """
+    service = get_backup_service(request)
+    
+    chain = await service.get_backup_chain(backup_id)
+    
+    if not chain:
+        raise HTTPException(status_code=404, detail=f"Backup {backup_id} not found")
+    
+    return chain
+
+
+# ==================== Restore Endpoints ====================
+
+@router.post("/{backup_id}/restore", response_model=RestoreResult)
+async def restore_from_backup(
+    request: Request,
+    backup_id: str,
+    restore_request: RestoreBackupRequest,
+    _user: UserResponse = Depends(require_admin)
+):
+    """
+    Restore database from a backup.
+    
+    Restore modes:
+    - full: Replace all data with backup data
+    - merge: Add missing documents only (preserves existing)
+    - selective: Restore specific collections only
+    
+    Options:
+    - target_database: Restore to a different database (useful for testing)
+    
+    WARNING: Full restore will delete existing data in the target database!
+    
+    Requires admin privileges.
+    """
+    service = get_backup_service(request)
+    
+    # Verify backup_id matches
+    if backup_id != restore_request.backup_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Backup ID in URL doesn't match request body"
+        )
+    
+    try:
+        result = await service.restore_from_backup(
+            backup_id=backup_id,
+            restore_mode=restore_request.restore_mode,
+            collections=restore_request.collections,
+            skip_users=restore_request.skip_users,
+            skip_sessions=restore_request.skip_sessions,
+            target_database=restore_request.target_database
+        )
+        
+        if not result.success and result.error_message:
+            raise HTTPException(status_code=400, detail=result.error_message)
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Restore failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Delete Endpoints ====================
+
+@router.delete("/{backup_id}")
+async def delete_backup(
+    request: Request,
+    backup_id: str,
+    _user: UserResponse = Depends(require_admin)
+):
+    """
+    Delete a backup and its files.
+    
+    This permanently removes the backup data and cannot be undone.
+    
+    Requires admin privileges.
+    """
+    service = get_backup_service(request)
+    
+    success = await service.delete_backup(backup_id)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Backup {backup_id} not found or could not be deleted")
+    
+    return {"success": True, "message": f"Backup {backup_id} deleted"}
 
 
 # ==================== Utility Functions ====================

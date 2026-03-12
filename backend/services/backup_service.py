@@ -95,6 +95,45 @@ class BackupService:
             logger.error(f"Error getting backup config: {e}")
             return BackupConfig(**DEFAULT_BACKUP_CONFIG)
     
+    async def initialize_config(self) -> BackupConfig:
+        """Initialize backup configuration if not exists.
+        
+        Creates default config in database and ensures backup directories exist.
+        Called at application startup.
+        """
+        try:
+            db = self.db_manager.db
+            
+            # Check if config already exists
+            existing = await db[BACKUP_CONFIG_COLLECTION].find_one({"_id": "config"})
+            
+            if existing:
+                logger.info("Backup config already initialized")
+                del existing["_id"]
+                config = BackupConfig(**{**DEFAULT_BACKUP_CONFIG, **existing})
+            else:
+                # Create default config
+                config = BackupConfig(**DEFAULT_BACKUP_CONFIG)
+                await db[BACKUP_CONFIG_COLLECTION].insert_one({
+                    "_id": "config",
+                    **config.model_dump()
+                })
+                logger.info("Initialized default backup configuration")
+            
+            # Ensure backup directories exist
+            base_dir = Path(DEFAULT_BACKUP_CONFIG["backup_location"])
+            for backup_type in ["full", "incremental", "checkpoint", "post_ingestion"]:
+                type_dir = base_dir / backup_type
+                type_dir.mkdir(parents=True, exist_ok=True)
+            
+            logger.info(f"Backup directories verified at {base_dir}")
+            
+            return config
+            
+        except Exception as e:
+            logger.error(f"Error initializing backup config: {e}")
+            return BackupConfig(**DEFAULT_BACKUP_CONFIG)
+    
     async def update_config(self, updates: Dict[str, Any]) -> BackupConfig:
         """Update backup configuration."""
         try:
@@ -246,6 +285,226 @@ class BackupService:
         
         return len(documents)
     
+    async def start_full_backup(
+        self,
+        profile_key: Optional[str] = None,
+        name: Optional[str] = None,
+        include_embeddings: bool = True,
+        include_system_collections: bool = True,
+        background_tasks = None
+    ) -> BackupMetadata:
+        """
+        Start a full backup in the background.
+        
+        Returns immediately with IN_PROGRESS status.
+        Use get_backup_status() to monitor progress.
+        """
+        backup_id = self._generate_backup_id()
+        profile_key_resolved, database_name = await self._get_profile_database(profile_key)
+        
+        backup_dir = self._get_backup_dir(BackupType.FULL) / backup_id
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create initial metadata
+        metadata = BackupMetadata(
+            backup_id=backup_id,
+            backup_type=BackupType.FULL,
+            status=BackupStatus.IN_PROGRESS,
+            profile_key=profile_key_resolved,
+            database_name=database_name,
+            name=name,
+            created_at=datetime.now(),
+            file_path=str(backup_dir),
+            collections_included=[],
+            document_counts={}
+        )
+        
+        # Save initial metadata
+        await self._save_backup_metadata(metadata)
+        
+        # Set current backup progress
+        self._current_backup = BackupProgress(
+            backup_id=backup_id,
+            status=BackupStatus.IN_PROGRESS,
+            progress_percent=0,
+            started_at=datetime.now(),
+            total_collections=len(PROFILE_COLLECTIONS) + (len(SYSTEM_COLLECTIONS) if include_system_collections else 0),
+            message="Starting full backup..."
+        )
+        
+        logger.info(f"Starting background full backup: {backup_id}")
+        
+        # Schedule background task
+        if background_tasks:
+            background_tasks.add_task(
+                self._run_full_backup,
+                backup_id=backup_id,
+                profile_key=profile_key_resolved,
+                database_name=database_name,
+                backup_dir=backup_dir,
+                include_embeddings=include_embeddings,
+                include_system_collections=include_system_collections
+            )
+        else:
+            # Fallback to asyncio.create_task if no background_tasks
+            asyncio.create_task(
+                self._run_full_backup(
+                    backup_id=backup_id,
+                    profile_key=profile_key_resolved,
+                    database_name=database_name,
+                    backup_dir=backup_dir,
+                    include_embeddings=include_embeddings,
+                    include_system_collections=include_system_collections
+                )
+            )
+        
+        return metadata
+    
+    async def _run_full_backup(
+        self,
+        backup_id: str,
+        profile_key: str,
+        database_name: str,
+        backup_dir: Path,
+        include_embeddings: bool,
+        include_system_collections: bool
+    ):
+        """Run the actual full backup (called in background)."""
+        try:
+            config = await self.get_config()
+            total_size = 0
+            collections_done = 0
+            
+            collections_included = []
+            document_counts = {}
+            
+            # Get profile database
+            db = self.db_manager.client[database_name]
+            
+            # Backup profile collections
+            exclude_fields = ["embedding"] if not include_embeddings else None
+            
+            for collection_name in PROFILE_COLLECTIONS:
+                if self._current_backup:
+                    self._current_backup.current_collection = collection_name
+                    self._current_backup.message = f"Backing up {collection_name}..."
+                
+                exclude = exclude_fields if collection_name == "chunks" else None
+                doc_count, bytes_written = await self._export_collection(
+                    db, collection_name, backup_dir,
+                    compress=config.compression_enabled,
+                    exclude_fields=exclude
+                )
+                
+                collections_included.append(collection_name)
+                document_counts[collection_name] = doc_count
+                total_size += bytes_written
+                
+                collections_done += 1
+                if self._current_backup:
+                    self._current_backup.collections_completed = collections_done
+                    self._current_backup.progress_percent = (collections_done / self._current_backup.total_collections) * 100
+                    self._current_backup.bytes_written = total_size
+                
+                logger.info(f"Backed up {collection_name}: {doc_count} documents, {bytes_written} bytes")
+            
+            # Backup system collections if requested
+            if include_system_collections:
+                system_db = self.db_manager.db
+                
+                for collection_name in SYSTEM_COLLECTIONS:
+                    if self._current_backup:
+                        self._current_backup.current_collection = collection_name
+                        self._current_backup.message = f"Backing up system collection {collection_name}..."
+                    
+                    try:
+                        doc_count, bytes_written = await self._export_collection(
+                            system_db, collection_name, backup_dir,
+                            compress=config.compression_enabled
+                        )
+                        
+                        collections_included.append(f"system.{collection_name}")
+                        document_counts[f"system.{collection_name}"] = doc_count
+                        total_size += bytes_written
+                    except Exception as e:
+                        logger.warning(f"Could not backup system collection {collection_name}: {e}")
+                    
+                    collections_done += 1
+                    if self._current_backup:
+                        self._current_backup.collections_completed = collections_done
+                        self._current_backup.progress_percent = (collections_done / self._current_backup.total_collections) * 100
+                        self._current_backup.bytes_written = total_size
+            
+            # Save manifest
+            manifest = {
+                "backup_id": backup_id,
+                "backup_type": BackupType.FULL.value,
+                "profile_key": profile_key,
+                "database_name": database_name,
+                "created_at": datetime.now().isoformat(),
+                "collections": collections_included,
+                "document_counts": document_counts,
+                "include_embeddings": include_embeddings,
+                "compression_enabled": config.compression_enabled
+            }
+            
+            with open(backup_dir / "manifest.json", "w") as f:
+                json.dump(manifest, f, indent=2)
+            
+            # Update metadata to completed
+            db = self.db_manager.db
+            await db[BACKUPS_COLLECTION].update_one(
+                {"_id": backup_id},
+                {"$set": {
+                    "status": BackupStatus.COMPLETED.value,
+                    "completed_at": datetime.now(),
+                    "size_bytes": total_size,
+                    "collections_included": collections_included,
+                    "document_counts": document_counts
+                }}
+            )
+            
+            if self._current_backup:
+                self._current_backup.status = BackupStatus.COMPLETED
+                self._current_backup.progress_percent = 100
+                self._current_backup.message = "Backup completed successfully"
+            
+            logger.info(f"Full backup completed: {backup_id}, {total_size} bytes")
+            
+            # Cleanup old backups
+            await self._cleanup_old_backups(profile_key, BackupType.FULL)
+            
+        except Exception as e:
+            logger.error(f"Full backup failed: {e}")
+            # Update metadata to failed
+            db = self.db_manager.db
+            await db[BACKUPS_COLLECTION].update_one(
+                {"_id": backup_id},
+                {"$set": {
+                    "status": BackupStatus.FAILED.value,
+                    "error_message": str(e)
+                }}
+            )
+            
+            if self._current_backup:
+                self._current_backup.status = BackupStatus.FAILED
+                self._current_backup.message = f"Backup failed: {e}"
+        finally:
+            self._current_backup = None
+    
+    async def start_incremental_backup(
+        self,
+        profile_key: Optional[str] = None,
+        background_tasks = None
+    ) -> BackupMetadata:
+        """
+        Start an incremental backup in the background.
+        
+        For now, falls back to synchronous incremental backup.
+        """
+        # Incremental backups are usually fast, run synchronously for now
+        return await self.create_incremental_backup(profile_key)
+
     async def create_full_backup(
         self,
         profile_key: Optional[str] = None,
@@ -837,7 +1096,8 @@ class BackupService:
         restore_mode: RestoreMode = RestoreMode.FULL,
         collections: Optional[List[str]] = None,
         skip_users: bool = False,
-        skip_sessions: bool = False
+        skip_sessions: bool = False,
+        target_database: Optional[str] = None
     ) -> RestoreResult:
         """
         Restore database from a backup.
@@ -848,6 +1108,7 @@ class BackupService:
             collections: Specific collections to restore (for selective mode)
             skip_users: Skip restoring users collection
             skip_sessions: Skip restoring chat sessions
+            target_database: Target database name (None = restore to original database)
         
         Returns:
             RestoreResult with operation details
@@ -876,8 +1137,11 @@ class BackupService:
                 result.error_message = f"Backup directory not found: {backup_dir}"
                 return result
             
-            # Get target database
-            db = self.db_manager.client[backup.database_name]
+            # Get target database - use specified target or original
+            database_name = target_database if target_database else backup.database_name
+            db = self.db_manager.client[database_name]
+            
+            logger.info(f"Restoring backup {backup_id} to database: {database_name} (original: {backup.database_name})")
             
             # Determine which collections to restore
             collections_to_restore = collections if collections else backup.collections_included

@@ -38,6 +38,7 @@ from backend.routers.cloud_sources import (
 from backend.routers.system import load_config_from_db, load_llm_config_from_db
 from backend.routers.ingestion import check_and_resume_interrupted_jobs, graceful_shutdown_handler
 from backend.routers.prompts import initialize_default_templates
+from backend.services.backup_service import BackupService
 from backend.core.config import settings
 from backend.core.database import DatabaseManager
 from backend.core.security import (
@@ -196,6 +197,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         await initialize_default_templates(db_manager)
     except Exception as e:
         logger.warning(f"Failed to initialize default prompts: {e}")
+    
+    # Initialize backup configuration and directories
+    try:
+        backup_service = BackupService(db_manager)
+        await backup_service.initialize_config()
+    except Exception as e:
+        logger.warning(f"Failed to initialize backup config: {e}")
     
     logger.info(f"API ready at http://0.0.0.0:{settings.api_port}")
     

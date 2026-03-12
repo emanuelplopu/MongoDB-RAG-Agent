@@ -28,9 +28,9 @@ ENV MONGODB_URI=mongodb://mongodb:27017/?directConnection=true \
 # Worker doesn't need to expose a port, but we keep 8000 for potential health checks
 EXPOSE 8000
 
-# Health check - check if process is running
+# Health check - verify main process is still Python running the worker
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD pgrep -f "backend.workers.ingestion_worker" || exit 1
+    CMD cat /proc/1/cmdline | grep -q ingestion_worker || exit 1
 
 # Run the ingestion worker
 CMD ["python", "-m", "backend.workers.ingestion_worker"]

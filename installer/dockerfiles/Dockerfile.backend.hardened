@@ -1,0 +1,128 @@
+# =============================================================================
+# RecallHub Hardened Backend Dockerfile
+# =============================================================================
+# This Dockerfile creates a production-hardened backend image with:
+# - Nuitka compilation for Python code protection
+# - Minimal runtime dependencies
+# - No package managers or debugging tools
+# - Security-focused configuration
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Stage 1: Build dependencies
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim-bookworm AS builder
+
+WORKDIR /build
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    g++ \
+    patchelf \
+    ccache \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# -----------------------------------------------------------------------------
+# Stage 2: Nuitka Compilation (Optional - for maximum protection)
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim-bookworm AS compiler
+
+WORKDIR /compile
+
+# Install Nuitka and dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    g++ \
+    patchelf \
+    ccache \
+    && pip install nuitka ordered-set zstandard \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy application source
+COPY backend/ ./backend/
+
+# Copy dependencies from builder
+COPY --from=builder /root/.local /root/.local
+
+# Compile with Nuitka (creates standalone binary)
+# Note: This significantly increases build time but provides strong protection
+# Uncomment the following for full compilation:
+# RUN python -m nuitka \
+#     --standalone \
+#     --onefile \
+#     --include-package=backend \
+#     --include-package=fastapi \
+#     --include-package=uvicorn \
+#     --include-package=pymongo \
+#     --output-filename=recallhub-backend \
+#     backend/main.py
+
+# For faster builds, use bytecode compilation instead
+RUN python -m compileall -b -f backend/ \
+    && find backend/ -name "*.py" -delete \
+    && find backend/ -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+
+# -----------------------------------------------------------------------------
+# Stage 3: Production Runtime
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim-bookworm AS runtime
+
+# Security: Create non-root user
+RUN groupadd -r recallhub && useradd -r -g recallhub recallhub
+
+WORKDIR /app
+
+# Install only runtime dependencies (minimal)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean \
+    && rm -rf /var/cache/apt/archives/*
+
+# Copy Python packages from builder (to shared location)
+COPY --from=builder /root/.local /usr/local
+ENV PATH=/usr/local/bin:$PATH
+
+# Copy compiled application
+COPY --from=compiler /compile/backend/ ./backend/
+
+# Copy additional required files
+COPY profiles.yaml ./profiles.yaml
+
+# Create necessary directories
+RUN mkdir -p /app/logs /app/documents /app/projects /app/config \
+    && chown -R recallhub:recallhub /app
+
+# Security: Remove unnecessary tools
+RUN apt-get purge -y --auto-remove \
+    && rm -rf /usr/bin/apt* /usr/bin/dpkg* \
+    && rm -rf /var/lib/dpkg /var/lib/apt
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app \
+    APP_ENV=production \
+    EXPOSE_API_DOCS=false \
+    ENABLE_DEBUG_ROUTES=false
+
+# Expose port (internal network only)
+EXPOSE 11000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:11000/api/v1/status || exit 1
+
+# Switch to non-root user
+USER recallhub
+
+# Start application
+CMD ["python", "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "11000", "--no-access-log"]

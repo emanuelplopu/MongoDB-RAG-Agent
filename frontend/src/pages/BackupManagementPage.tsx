@@ -161,6 +161,7 @@ export default function BackupManagementPage() {
   const [restoreMode, setRestoreMode] = useState<RestoreMode>('full')
   const [skipUsers, setSkipUsers] = useState(false)
   const [skipSessions, setSkipSessions] = useState(false)
+  const [targetDatabase, setTargetDatabase] = useState('')
   
   // Filter state
   const [filterType, setFilterType] = useState<BackupType | ''>('')
@@ -270,6 +271,7 @@ export default function BackupManagementPage() {
         restore_mode: restoreMode,
         skip_users: skipUsers,
         skip_sessions: skipSessions,
+        target_database: targetDatabase || undefined,
       })
       
       if (result.success) {
@@ -280,12 +282,13 @@ export default function BackupManagementPage() {
       
       setShowRestoreModal(false)
       setSelectedBackupForRestore(null)
+      setTargetDatabase('')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to restore backup')
     } finally {
       setRestoring(null)
     }
-  }, [selectedBackupForRestore, restoreMode, skipUsers, skipSessions, showSuccess])
+  }, [selectedBackupForRestore, restoreMode, skipUsers, skipSessions, targetDatabase, showSuccess])
   
   // Delete backup
   const handleDelete = useCallback(async (backupId: string) => {
@@ -931,6 +934,22 @@ export default function BackupManagementPage() {
                     />
                     <span className="text-sm text-secondary dark:text-gray-300">Skip chat sessions</span>
                   </label>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-secondary dark:text-gray-300 mb-1">
+                    {t('backup.restore.targetDatabase', 'Target Database (optional)')}
+                  </label>
+                  <input
+                    type="text"
+                    value={targetDatabase}
+                    onChange={(e) => setTargetDatabase(e.target.value)}
+                    placeholder={selectedBackupForRestore?.database_name || 'Same as backup'}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-sm"
+                  />
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Leave empty to restore to original database. Enter a new name to restore to a different database for testing.
+                  </p>
                 </div>
               </div>
             </div>
