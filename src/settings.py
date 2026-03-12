@@ -73,7 +73,10 @@ class Settings(BaseSettings):
     )
 
     # Embedding Configuration
-    embedding_provider: str = Field(default="openai", description="Embedding provider")
+    embedding_provider: str = Field(
+        default="openai", 
+        description="Embedding provider (openai, google, voyageai, ollama)"
+    )
 
     embedding_api_key: str = Field(..., description="API key for embedding provider")
 
@@ -88,6 +91,22 @@ class Settings(BaseSettings):
     embedding_dimension: int = Field(
         default=1536,
         description="Embedding vector dimension (1536 for text-embedding-3-small)",
+    )
+    
+    # Provider-specific API Keys (for multi-provider embedding support)
+    openai_api_key: Optional[str] = Field(
+        default=None, 
+        description="OpenAI API key (defaults to embedding_api_key if not set)"
+    )
+    
+    google_api_key: Optional[str] = Field(
+        default=None, 
+        description="Google Gemini API key (for gemini-embedding-2-preview, gemini-embedding-001)"
+    )
+    
+    voyage_api_key: Optional[str] = Field(
+        default=None, 
+        description="Voyage AI API key (for voyage-4-large, voyage-4, voyage-4-lite)"
     )
 
     # Search Configuration

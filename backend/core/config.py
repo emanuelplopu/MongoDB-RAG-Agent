@@ -41,6 +41,7 @@ class BackendSettings(BaseSettings):
     openai_api_key: str = Field(default="", description="OpenAI API key")
     google_api_key: str = Field(default="", description="Google Gemini API key")
     anthropic_api_key: str = Field(default="", description="Anthropic Claude API key")
+    voyage_api_key: str = Field(default="", description="Voyage AI API key")
     
     # Fast/Worker LLM Settings (separate from orchestrator)
     fast_llm_provider: str = Field(default="google", description="Provider for fast/worker model")
@@ -220,7 +221,7 @@ class BackendSettings(BaseSettings):
         """Get the API key for a specific provider.
         
         Args:
-            provider: Provider name (openai, google, anthropic, ollama)
+            provider: Provider name (openai, google, anthropic, voyageai, ollama)
         
         Returns:
             API key for the provider, or empty string if not set
@@ -232,6 +233,8 @@ class BackendSettings(BaseSettings):
             return self.google_api_key or self.llm_api_key
         elif provider == "anthropic" or provider == "claude":
             return self.anthropic_api_key or self.llm_api_key
+        elif provider in ["voyageai", "voyage"]:
+            return self.voyage_api_key
         elif provider == "ollama":
             return ""  # Ollama doesn't need an API key
         else:

@@ -120,6 +120,8 @@ class ProviderInfo(BaseModel):
 class AvailableProvidersResponse(BaseModel):
     """Response with available providers."""
     openai: ProviderInfo
+    google: Optional[ProviderInfo] = None
+    voyageai: Optional[ProviderInfo] = None
     ollama: ProviderInfo
     vllm: ProviderInfo
 

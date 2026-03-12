@@ -2,6 +2,8 @@
 
 Provides functionality to benchmark and compare embedding providers:
 - OpenAI (cloud API)
+- Google Gemini (gemini-embedding-2-preview, gemini-embedding-001)
+- Voyage AI (voyage-4-large, voyage-4, voyage-4-lite)
 - Ollama (local)
 - vLLM/OpenAI-compatible (remote/VPN)
 
@@ -26,7 +28,25 @@ import openai
 logger = logging.getLogger(__name__)
 
 
-# Cost per 1M tokens for OpenAI embedding models (USD)
+# Cost per 1M tokens for embedding models (USD)
+EMBEDDING_COSTS = {
+    # OpenAI
+    "text-embedding-3-small": 0.02,
+    "text-embedding-3-large": 0.13,
+    "text-embedding-ada-002": 0.10,
+    # Google Gemini
+    "gemini-embedding-2-preview": 0.00,  # Preview is free
+    "gemini-embedding-001": 0.00025,
+    "text-embedding-004": 0.00025,
+    # Voyage AI
+    "voyage-4-large": 0.12,
+    "voyage-4": 0.06,
+    "voyage-4-lite": 0.02,
+    "voyage-code-3": 0.12,
+    "voyage-3-large": 0.12,
+}
+
+# Legacy alias for backwards compatibility
 OPENAI_EMBEDDING_COSTS = {
     "text-embedding-3-small": 0.02,
     "text-embedding-3-large": 0.13,
@@ -39,6 +59,16 @@ EMBEDDING_DIMENSIONS = {
     "text-embedding-3-small": 1536,
     "text-embedding-3-large": 3072,
     "text-embedding-ada-002": 1536,
+    # Google Gemini
+    "gemini-embedding-2-preview": 3072,
+    "gemini-embedding-001": 3072,
+    "text-embedding-004": 768,
+    # Voyage AI
+    "voyage-4-large": 1024,
+    "voyage-4": 1024,
+    "voyage-4-lite": 1024,
+    "voyage-code-3": 1024,
+    "voyage-3-large": 1024,
     # Ollama
     "nomic-embed-text": 768,
     "mxbai-embed-large": 1024,
@@ -47,6 +77,7 @@ EMBEDDING_DIMENSIONS = {
     "bge-large": 1024,
     "bge-base": 768,
     "bge-small": 384,
+    "bge-m3": 1024,
 }
 
 
@@ -368,12 +399,15 @@ class EmbeddingBenchmarkService:
             chunks_created=len(chunks),
         )
         
+        tracemalloc_started = False
+        
         try:
             # Record baseline memory
             metrics.memory_before_mb = self._process.memory_info().rss / 1024 / 1024
             
             # Start memory tracking
             tracemalloc.start()
+            tracemalloc_started = True
             
             # Record CPU before
             cpu_start = psutil.cpu_percent(interval=None)
@@ -383,6 +417,11 @@ class EmbeddingBenchmarkService:
             
             # Generate embeddings
             texts = [c["content"] for c in chunks]
+            
+            # Validate texts are not empty
+            if not texts:
+                raise ValueError("No texts to embed")
+            
             embeddings, latencies = await self._generate_embeddings(
                 provider, texts
             )
@@ -393,6 +432,7 @@ class EmbeddingBenchmarkService:
             # Get memory stats
             current, peak = tracemalloc.get_traced_memory()
             tracemalloc.stop()
+            tracemalloc_started = False
             
             metrics.memory_after_mb = self._process.memory_info().rss / 1024 / 1024
             metrics.memory_peak_mb = peak / 1024 / 1024
@@ -415,8 +455,12 @@ class EmbeddingBenchmarkService:
                     provider.model, 0
                 )
             
-            # Calculate cost for OpenAI
-            if provider.provider_type == "openai" and provider.model in OPENAI_EMBEDDING_COSTS:
+            # Calculate cost for API providers
+            if provider.model in EMBEDDING_COSTS:
+                cost_per_million = EMBEDDING_COSTS[provider.model]
+                metrics.cost_estimate_usd = (total_tokens / 1_000_000) * cost_per_million
+            elif provider.provider_type == "openai" and provider.model in OPENAI_EMBEDDING_COSTS:
+                # Legacy fallback for OpenAI
                 cost_per_million = OPENAI_EMBEDDING_COSTS[provider.model]
                 metrics.cost_estimate_usd = (total_tokens / 1_000_000) * cost_per_million
             
@@ -426,9 +470,10 @@ class EmbeddingBenchmarkService:
             logger.error(f"Benchmark failed for {provider.name}: {e}")
             metrics.success = False
             metrics.error = str(e)
-            
-            # Stop tracemalloc if still running
-            if tracemalloc.is_tracing():
+        
+        finally:
+            # Ensure tracemalloc is stopped
+            if tracemalloc_started and tracemalloc.is_tracing():
                 tracemalloc.stop()
         
         return metrics
@@ -446,6 +491,14 @@ class EmbeddingBenchmarkService:
         if provider.provider_type == "openai":
             embeddings, latencies = await self._generate_openai_embeddings(
                 texts, provider.model, provider.api_key, provider.base_url, batch_size
+            )
+        elif provider.provider_type in ["google", "gemini"]:
+            embeddings, latencies = await self._generate_gemini_embeddings(
+                texts, provider.model, provider.api_key
+            )
+        elif provider.provider_type in ["voyageai", "voyage"]:
+            embeddings, latencies = await self._generate_voyage_embeddings(
+                texts, provider.model, provider.api_key
             )
         elif provider.provider_type == "ollama":
             embeddings, latencies = await self._generate_ollama_embeddings(
@@ -554,6 +607,123 @@ class EmbeddingBenchmarkService:
         
         return embeddings, latencies
     
+    async def _generate_gemini_embeddings(
+        self,
+        texts: List[str],
+        model: str,
+        api_key: Optional[str],
+    ) -> Tuple[List[List[float]], List[float]]:
+        """Generate embeddings using Google Gemini API."""
+        from backend.core.config import settings
+        
+        api_key = api_key or settings.google_api_key or settings.embedding_api_key
+        
+        if not api_key or api_key.strip() == "":
+            raise ValueError("Google API key not configured")
+        
+        base_url = "https://generativelanguage.googleapis.com/v1beta"
+        url = f"{base_url}/models/{model}:embedContent"
+        
+        embeddings = []
+        latencies = []
+        
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            for text in texts:
+                # Skip empty texts
+                if not text or not text.strip():
+                    continue
+                    
+                payload = {
+                    "model": f"models/{model}",
+                    "content": {"parts": [{"text": text}]},
+                    "taskType": "RETRIEVAL_DOCUMENT",
+                }
+                
+                start = time.perf_counter()
+                response = await client.post(
+                    url,
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": api_key,
+                    },
+                    json=payload,
+                )
+                latency = (time.perf_counter() - start) * 1000
+                latencies.append(latency)
+                
+                response.raise_for_status()
+                data = response.json()
+                embedding_data = data.get("embedding", {})
+                embedding_values = embedding_data.get("values", [])
+                
+                if not embedding_values:
+                    raise ValueError(f"Gemini returned empty embedding for text")
+                
+                embeddings.append(embedding_values)
+        
+        return embeddings, latencies
+    
+    async def _generate_voyage_embeddings(
+        self,
+        texts: List[str],
+        model: str,
+        api_key: Optional[str],
+    ) -> Tuple[List[List[float]], List[float]]:
+        """Generate embeddings using Voyage AI API."""
+        from backend.core.config import settings
+        
+        api_key = api_key or getattr(settings, 'voyage_api_key', None) or settings.embedding_api_key
+        
+        if not api_key or api_key.strip() == "":
+            raise ValueError("Voyage AI API key not configured")
+        
+        base_url = "https://api.voyageai.com/v1"
+        url = f"{base_url}/embeddings"
+        
+        embeddings = []
+        latencies = []
+        
+        # Filter out empty texts
+        valid_texts = [t for t in texts if t and t.strip()]
+        if not valid_texts:
+            raise ValueError("No valid texts to embed")
+        
+        # Voyage AI has batch limit of 128 texts
+        BATCH_LIMIT = 128
+        
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            for batch_start in range(0, len(valid_texts), BATCH_LIMIT):
+                batch_texts = valid_texts[batch_start:batch_start + BATCH_LIMIT]
+                
+                payload = {
+                    "model": model,
+                    "input": batch_texts,
+                    "input_type": "document",  # Default to document for benchmarking
+                }
+                
+                start = time.perf_counter()
+                response = await client.post(
+                    url,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {api_key}",
+                    },
+                    json=payload,
+                )
+                latency = (time.perf_counter() - start) * 1000
+                latencies.append(latency)
+                
+                response.raise_for_status()
+                data = response.json()
+                
+                batch_embeddings = [item["embedding"] for item in data.get("data", [])]
+                if len(batch_embeddings) != len(batch_texts):
+                    raise ValueError(f"Voyage AI returned {len(batch_embeddings)} embeddings for {len(batch_texts)} texts")
+                
+                embeddings.extend(batch_embeddings)
+        
+        return embeddings, latencies
+    
     async def test_provider(
         self,
         provider: BenchmarkProviderConfig,
@@ -627,12 +797,36 @@ class EmbeddingBenchmarkService:
         providers = {
             "openai": {
                 "name": "OpenAI",
-                "available": bool(settings.embedding_api_key),
+                "available": bool(settings.embedding_api_key or settings.openai_api_key),
                 "models": [
-                    {"id": "text-embedding-3-small", "name": "text-embedding-3-small", "dimension": 1536},
-                    {"id": "text-embedding-3-large", "name": "text-embedding-3-large", "dimension": 3072},
-                    {"id": "text-embedding-ada-002", "name": "text-embedding-ada-002", "dimension": 1536},
+                    {"id": "text-embedding-3-small", "name": "text-embedding-3-small", "dimension": 1536, "cost_per_million": 0.02},
+                    {"id": "text-embedding-3-large", "name": "text-embedding-3-large", "dimension": 3072, "cost_per_million": 0.13},
+                    {"id": "text-embedding-ada-002", "name": "text-embedding-ada-002", "dimension": 1536, "cost_per_million": 0.10},
                 ],
+            },
+            "google": {
+                "name": "Google Gemini",
+                "available": bool(settings.google_api_key),
+                "models": [
+                    {"id": "gemini-embedding-2-preview", "name": "Gemini Embedding 2 (Preview)", "dimension": 3072, "cost_per_million": 0.00, "max_tokens": 8192, "multimodal": True},
+                    {"id": "gemini-embedding-001", "name": "Gemini Embedding 001", "dimension": 3072, "cost_per_million": 0.00025, "max_tokens": 2048},
+                    {"id": "text-embedding-004", "name": "Text Embedding 004", "dimension": 768, "cost_per_million": 0.00025, "max_tokens": 2048},
+                ],
+                "supports_task_type": True,
+                "task_types": ["RETRIEVAL_QUERY", "RETRIEVAL_DOCUMENT", "SEMANTIC_SIMILARITY", "CLASSIFICATION", "CLUSTERING", "QUESTION_ANSWERING", "CODE_RETRIEVAL_QUERY"],
+            },
+            "voyageai": {
+                "name": "Voyage AI",
+                "available": bool(getattr(settings, 'voyage_api_key', None)),
+                "models": [
+                    {"id": "voyage-4-large", "name": "Voyage 4 Large", "dimension": 1024, "cost_per_million": 0.12, "max_tokens": 32000},
+                    {"id": "voyage-4", "name": "Voyage 4", "dimension": 1024, "cost_per_million": 0.06, "max_tokens": 32000},
+                    {"id": "voyage-4-lite", "name": "Voyage 4 Lite", "dimension": 1024, "cost_per_million": 0.02, "max_tokens": 32000},
+                    {"id": "voyage-code-3", "name": "Voyage Code 3", "dimension": 1024, "cost_per_million": 0.12, "max_tokens": 32000},
+                    {"id": "voyage-3-large", "name": "Voyage 3 Large", "dimension": 1024, "cost_per_million": 0.12, "max_tokens": 32000},
+                ],
+                "supports_task_type": True,
+                "task_types": ["query", "document"],
             },
             "ollama": {
                 "name": "Ollama (Local)",
