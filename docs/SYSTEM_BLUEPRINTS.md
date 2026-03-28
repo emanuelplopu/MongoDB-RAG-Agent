@@ -9,6 +9,10 @@
 6. [i18n System](#6-i18n-system)
 7. [Docker Deployment Strategy](#7-docker-deployment-strategy)
 8. [Additional Database Collections](#8-additional-database-collections)
+9. [Agent Strategies System](#9-agent-strategies-system)
+10. [File Registry Service](#10-file-registry-service)
+11. [Backup Service](#11-backup-service)
+12. [Embedding Benchmark Service](#12-embedding-benchmark-service)
 
 ---
 
@@ -1161,6 +1165,887 @@ ingestion-worker:
     "errors": []
   }]
 }
+```
+
+---
+
+## 9. Agent Strategies System
+
+### 9.1 Overview
+
+The Agent Strategies system provides configurable execution patterns for different use cases and domains. Each strategy defines custom prompts, parameters, and behavior for the orchestrator.
+
+**Purpose:**
+- Enable A/B testing of different agent approaches
+- Optimize performance for specific query domains
+- Provide fine-grained control over agent behavior
+- Track and measure strategy effectiveness
+
+---
+
+### 9.2 Strategy Architecture
+
+```
+User Query
+    │
+    ▼
+Strategy Selection
+    │
+    ├── Auto-Detection ──▶ Analyze query intent
+    │                      Extract domain keywords
+    │                      Select best-matching strategy
+    │
+    ├── Manual Selection ─▶ User-specified strategy
+    │
+    └── Default ──────────▶ Fallback strategy
+            │
+            ▼
+    Load Strategy Config
+            │
+            ├── Prompts (Analyze, Plan, Evaluate, Synthesize)
+            ├── Parameters (max_iterations, confidence_threshold, etc.)
+            └── Domain Rules
+            │
+            ▼
+    Execute with Strategy
+```
+
+---
+
+### 9.3 Strategy Registry (`backend/agent/strategies/registry.py`)
+
+**Purpose:** Central catalog for all available strategies with auto-discovery.
+
+**Registration Pattern:**
+```python
+@StrategyRegistry.register
+class MyStrategy(BaseStrategy):
+    @property
+    def metadata(self) -> StrategyMetadata:
+        return StrategyMetadata(
+            id="my_strategy",
+            name="My Custom Strategy",
+            version="1.0.0",
+            description="Optimized for complex technical queries",
+            domains=[StrategyDomain.SOFTWARE_DEV],
+            tags=["technical", "code", "detailed"],
+            is_default=False,
+            author="Team"
+        )
+    
+    @property
+    def config(self) -> StrategyConfig:
+        return StrategyConfig(
+            max_iterations=3,
+            confidence_threshold=0.8,
+            early_exit_enabled=True,
+            cross_search_boost=1.2,
+            content_length_penalty=0.1
+        )
+```
+
+**Key Methods:**
+| Method | Description |
+|--------|-------------|
+| `get(strategy_id)` | Retrieve strategy by ID |
+| `list_strategies(domain?)` | List strategies, optionally filtered by domain |
+| `get_default()` | Get default strategy |
+| `auto_detect(query)` | Auto-detect strategy from query |
+| `compare(strategy_a, strategy_b)` | Compare two strategies |
+
+---
+
+### 9.4 Strategy Base Class (`backend/agent/strategies/base.py`)
+
+**Strategy Metadata Schema:**
+```python
+class StrategyMetadata:
+    id: str                      # Unique identifier
+    name: str                    # Display name
+    version: str                 # Version string
+    description: str             # Purpose description
+    domains: List[StrategyDomain] # Applicable domains
+    tags: List[str]              # Search tags
+    is_default: bool             # Is this the default?
+    is_legacy: bool              # Deprecated?
+    author: str                  # Creator
+```
+
+**Strategy Configuration:**
+```python
+class StrategyConfig:
+    max_iterations: int          # Maximum orchestrator loops
+    confidence_threshold: float   # Early exit threshold (0.0-1.0)
+    early_exit_enabled: bool      # Allow early termination
+    cross_search_boost: float     # Boost for cross-profile results
+    content_length_penalty: float # Penalty for verbose responses
+    custom_params: dict           # Strategy-specific parameters
+```
+
+**Strategy Domains:**
+| Domain | Description |
+|--------|-------------|
+| `general` | General-purpose knowledge retrieval |
+| `software_dev` | Software development queries |
+| `legal` | Legal document analysis |
+| `hr` | Human resources queries |
+
+---
+
+### 9.5 Strategy Prompts
+
+Each strategy defines custom prompts for the four orchestrator phases:
+
+**1. Analyze Prompt:**
+```python
+"""Analyze the user's query to understand intent and extract key entities.
+
+Query: {query}
+Domain: {domain}
+
+Tasks:
+1. Identify the primary intent
+2. Extract key entities and concepts
+3. Determine which sources are most relevant
+4. Assess query complexity
+
+Output JSON:
+{
+  "intent": "...",
+  "entities": [...],
+  "suggested_sources": [...],
+  "complexity": "simple|moderate|complex"
+}
+"""
+```
+
+**2. Plan Prompt:**
+```python
+"""Create an execution plan based on the analysis.
+
+Analysis: {analysis}
+Strategy: {strategy_name}
+
+Constraints:
+- Max iterations: {max_iterations}
+- Available sources: {sources}
+
+Create a plan with parallel tasks where possible.
+"""
+```
+
+**3. Evaluate Prompt:**
+```python
+"""Evaluate the quality and completeness of retrieved results.
+
+Results: {results_summary}
+Original Query: {query}
+
+Assessment Criteria:
+1. Relevance to query intent
+2. Coverage of key entities
+3. Information freshness
+4. Source credibility
+
+Rate quality 0-100 and identify gaps.
+"""
+```
+
+**4. Synthesize Prompt:**
+```python
+"""Generate final response from all gathered information.
+
+Query: {query}
+All Results: {aggregated_results}
+Evaluation: {evaluation}
+
+Requirements:
+- Answer the original query directly
+- Cite specific sources
+- Acknowledge uncertainties
+- Keep concise but complete
+"""
+```
+
+---
+
+### 9.6 Strategy Metrics & A/B Testing
+
+**Metrics Collection (`backend/agent/strategies/metrics.py`):**
+```python
+class StrategyMetrics:
+    strategy_id: str
+    execution_count: int
+    avg_latency_ms: float
+    median_latency_ms: float
+    avg_iterations: float
+    avg_confidence_score: float
+    quality_score: float  # 0-100
+    user_feedback_avg: Optional[float]
+    feedback_count: int
+```
+
+**A/B Test Flow:**
+```
+1. Split traffic between Strategy A and Strategy B
+2. Execute both strategies on similar queries
+3. Collect metrics:
+   - Latency
+   - Iterations
+   - Confidence scores
+   - Quality scores (LLM-evaluated)
+   - User feedback (1-5 rating)
+4. Statistical comparison
+5. Declare winner with confidence level
+```
+
+**LLM-Based Response Comparison:**
+```python
+# Endpoint: POST /api/v1/strategies/ab-compare-responses
+
+Request:
+{
+  "query": "...",
+  "response_a": "...",
+  "response_b": "...",
+  "sources_used": [...]
+}
+
+Response:
+{
+  "winner": "a|b|tie",
+  "confidence": "high|medium|low",
+  "reasoning": "...",
+  "quality_scores": {
+    "a": 85,
+    "b": 78
+  }
+}
+```
+
+---
+
+### 9.7 Strategy API Endpoints (`backend/routers/strategies.py`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/strategies` | List all strategies |
+| GET | `/strategies?domain={domain}` | Filter by domain |
+| GET | `/strategies/default` | Get default strategy |
+| GET | `/strategies/{id}` | Get strategy details |
+| GET | `/strategies/{id}/metrics` | Get performance metrics |
+| GET | `/strategies/for-domain/{domain}` | Get best for domain |
+| POST | `/strategies/auto-detect` | Detect from query |
+| POST | `/strategies/compare` | Compare two strategies |
+| POST | `/strategies/feedback` | Record user feedback |
+| POST | `/strategies/ab-compare-responses` | LLM response comparison |
+
+---
+
+### 9.8 Built-in Strategies
+
+**1. General Purpose (Default)**
+```python
+metadata = StrategyMetadata(
+    id="general_purpose",
+    name="General Purpose",
+    is_default=True,
+    domains=[StrategyDomain.GENERAL]
+)
+config = StrategyConfig(
+    max_iterations=3,
+    confidence_threshold=0.75,
+    early_exit_enabled=True
+)
+```
+
+**2. Software Development**
+```python
+metadata = StrategyMetadata(
+    id="software_dev",
+    name="Software Development",
+    domains=[StrategyDomain.SOFTWARE_DEV],
+    tags=["code", "technical", "api"]
+)
+config = StrategyConfig(
+    max_iterations=4,
+    confidence_threshold=0.8,
+    cross_search_boost=1.3
+)
+```
+
+**3. Legal Documents**
+```python
+metadata = StrategyMetadata(
+    id="legal",
+    name="Legal Analysis",
+    domains=[StrategyDomain.LEGAL],
+    tags=["legal", "contracts", "compliance"]
+)
+config = StrategyConfig(
+    max_iterations=5,
+    confidence_threshold=0.85,
+    content_length_penalty=0.05  # Allow more detail
+)
+```
+
+**4. HR Queries**
+```python
+metadata = StrategyMetadata(
+    id="hr",
+    name="HR Assistant",
+    domains=[StrategyDomain.HR],
+    tags=["hr","policies", "employee"]
+)
+config = StrategyConfig(
+    max_iterations=3,
+    confidence_threshold=0.7
+)
+```
+
+---
+
+### 9.9 Strategy Selection Logic
+
+**Auto-Detection Algorithm:**
+```python
+def auto_detect_strategy(query: str) -> str:
+    """Detect best strategy from query."""
+    
+    # Extract keywords and entities
+    keywords = extract_keywords(query)
+    
+    # Domain matching scores
+    domain_scores = {
+        StrategyDomain.SOFTWARE_DEV: 0.0,
+        StrategyDomain.LEGAL: 0.0,
+        StrategyDomain.HR: 0.0,
+        StrategyDomain.GENERAL: 0.0
+    }
+    
+    # Score based on keyword matches
+    for keyword in keywords:
+        if keyword in ["code", "api", "function", "bug"]:
+            domain_scores[StrategyDomain.SOFTWARE_DEV] += 1.0
+        elif keyword in ["contract", "clause", "legal", "compliance"]:
+            domain_scores[StrategyDomain.LEGAL] += 1.0
+        # ... more rules
+    
+    # Select highest scoring domain
+    best_domain = max(domain_scores, key=domain_scores.get)
+    
+    # Get best strategy for that domain
+    return get_best_strategy_for_domain(best_domain)
+```
+
+---
+
+## 10. File Registry Service
+
+### 10.1 Overview
+
+The File Registry tracks the processing status of all files in profile documents folders, enabling selective re-ingestion and providing visibility into file processing history.
+
+**Purpose:**
+- Track which files have been processed
+- Enable selective re-ingestion based on status
+- Prevent redundant processing
+- Provide ingestion analytics
+
+---
+
+### 10.2 File Registry Schema (`backend/models/schemas.py`)
+
+```python
+class FileRegistryEntry(BaseModel):
+    _id: ObjectId
+    file_path: str              # Full file path
+    profile_key: str            # Associated profile
+    classification: FileClassification  # Status enum
+    file_hash: str              # SHA-256 hash
+    file_size: int              # Bytes
+    last_processed_at: datetime
+    error_message: Optional[str]
+    chunks_created: int
+    processing_time_ms: int
+```
+
+**File Classifications:**
+| Classification | Description | Retry Action |
+|----------------|-------------|--------------|
+| `pending` | Not yet processed | Auto-process |
+| `completed` | Successfully processed | None needed |
+| `failed` | Processing failed | Retry with error fix |
+| `timeout` | Processing timed out | Retry with more time |
+| `image_only_pdf` | PDF with only images | OCR needed |
+| `no_chunks` | Processed but no chunks | Manual review |
+| `excluded` | Explicitly excluded | Skip always |
+
+---
+
+### 10.3 File Registry Service (`backend/services/file_registry.py`)
+
+**Key Operations:**
+
+**1. Register or Update File:**
+```python
+async def register_file(
+    file_path: str,
+    profile_key: str,
+    file_hash: str,
+    file_size: int
+) -> FileRegistryEntry:
+    """Register new file or update existing entry."""
+```
+
+**2. Mark Processing Status:**
+```python
+async def mark_completed(path: str, chunks: int, duration_ms: int):
+    """Mark file as successfully processed."""
+
+async def mark_failed(path: str, error: str):
+    """Mark file as failed with error message."""
+
+async def mark_timeout(path: str):
+    """Mark file as timed out."""
+
+async def mark_no_chunks(path: str):
+    """Mark file that created no chunks."""
+```
+
+**3. Query Files by Status:**
+```python
+async def get_files_by_classification(
+    classification: FileClassification,
+    profile_key: Optional[str] = None,
+    limit: int = 100
+) -> List[FileRegistryEntry]:
+```
+
+**4. Selective Re-ingestion:**
+```python
+async def mark_for_retry(
+    classifications: List[FileClassification],
+    profile_key: str
+) -> int:
+    """Mark files for retry based on classification."""
+```
+
+---
+
+### 10.4 File Registry API (`backend/routers/file_registry.py`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/file-registry/stats` | Statistics by classification |
+| GET | `/file-registry/files` | List files with filters |
+| POST | `/file-registry/reclassify/{path}` | Manually reclassify |
+| DELETE | `/file-registry/clear` | Clear entries |
+| POST | `/file-registry/retry/category` | Retry by category |
+
+**Stats Response:**
+```json
+{
+  "total_files": 1250,
+  "by_classification": {
+    "completed": 1180,
+    "failed": 25,
+    "timeout": 15,
+    "image_only_pdf": 20,
+    "no_chunks": 10,
+    "pending": 0
+  },
+  "profile_breakdown": {
+    "default": 800,
+    "parhelion": 450
+  }
+}
+```
+
+---
+
+### 10.5 Integration with Ingestion
+
+**Ingestion Flow with Registry:**
+```
+1. Scan documents folder
+2. For each file:
+   a. Check registry for existing entry
+   b. If completed and hash unchanged → Skip
+   c. If failed/timeout → Optionally retry
+   d. Process file
+   e. Update registry with result
+3. Report skipped vs processed
+```
+
+**Change Detection:**
+```python
+async def should_process_file(file_path: str) -> bool:
+    """Check if file needs processing."""
+    
+    entry = await registry.get(file_path)
+    
+    if not entry:
+        return True  # New file
+    
+    if entry.classification == "excluded":
+        return False  # Explicitly excluded
+    
+    current_hash = compute_hash(file_path)
+    
+    if current_hash != entry.file_hash:
+        return True  # File changed
+    
+    if entry.classification in ["failed", "timeout"]:
+        return True  # Retry needed
+    
+    return False  # Already processed successfully
+```
+
+---
+
+## 11. Backup Service
+
+### 11.1 Overview
+
+The Backup Service provides comprehensive backup and restore capabilities for MongoDB collections with support for full, incremental, and checkpoint backups.
+
+**Purpose:**
+- Protect against data loss
+- Enable point-in-time recovery
+- Support selective restore
+- Minimize storage requirements
+
+---
+
+### 11.2 Backup Types
+
+| Type | Description | Storage | Use Case |
+|------|-------------|---------|----------|
+| `full` | Complete collection dump | Large | Weekly scheduled |
+| `incremental` | Changes since last backup | Small | Daily/hourly |
+| `checkpoint` | Lightweight state snapshot | Minimal | Before risky operations |
+| `post_ingestion` | Auto-backup after ingestion | Medium | Data protection |
+
+---
+
+### 11.3 Backup Architecture
+
+```
+Backup Chain (Incremental):
+Full Backup (Base)
+    └── Incremental 1 (changes from Full)
+            └── Incremental 2 (changes from Inc 1)
+                    └── Incremental 3 (latest)
+
+Restore Process:
+1. Restore Full Backup
+2. Apply Incremental 1 changes
+3. Apply Incremental 2 changes
+4. Apply Incremental 3 changes
+5. Result: State at Incremental 3
+```
+
+---
+
+### 11.4 Backup Service (`backend/services/backup_service.py`)
+
+**Core Methods:**
+
+**1. Create Full Backup:**
+```python
+async def create_full_backup(
+    profile_key: str,
+    include_embeddings: bool = False,
+    compress: bool = True
+) -> BackupMetadata:
+    """Create complete backup of profile collections."""
+```
+
+**2. Create Incremental Backup:**
+```python
+async def create_incremental_backup(
+    profile_key: str,
+    parent_backup_id: str
+) -> BackupMetadata:
+    """Create incremental backup from parent."""
+```
+
+**3. Create Checkpoint:**
+```python
+async def create_checkpoint(
+    name: str,
+    description: str
+) -> BackupMetadata:
+    """Create lightweight checkpoint."""
+```
+
+**4. Restore:**
+```python
+async def restore_from_backup(
+    backup_id: str,
+    mode: RestoreMode = "full",
+    collections: Optional[List[str]] = None,
+    skip_users: bool = False,
+    skip_sessions: bool = False
+) -> RestoreResult:
+    """Restore from backup."""
+```
+
+---
+
+### 11.5 Backup Schemas (`backend/models/backup_schemas.py`)
+
+**Backup Metadata:**
+```python
+class BackupMetadata(BaseModel):
+    _id: str                     # UUID
+    backup_type: BackupType      # full/incremental/checkpoint
+    profile_key: str
+    name: str
+    description: str
+    status: BackupStatus         # pending/running/completed/failed
+    file_path: str               # Path to backup file
+    file_size_bytes: int
+    created_at: datetime
+    completed_at: Optional[datetime]
+    parent_backup_id: Optional[str]  # For incrementals
+    collections: List[CollectionInfo]
+    include_embeddings: bool
+    compressed: bool
+    checksum: str                # SHA-256
+```
+
+**Restore Options:**
+```python
+class RestoreOptions(BaseModel):
+    mode: RestoreMode            # full/merge/selective
+    collections: Optional[List[str]]
+    skip_users: bool = False
+    skip_sessions: bool = False
+    dry_run: bool = False
+```
+
+---
+
+### 11.6 Backup API (`backend/routers/backup.py`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/backups/create` | Create full backup |
+| POST | `/backups/checkpoint` | Create checkpoint |
+| GET | `/backups/` | List all backups |
+| GET | `/backups/checkpoints` | List checkpoints |
+| GET | `/backups/{id}` | Get backup details |
+| GET | `/backups/{id}/chain` | Get backup chain |
+| POST | `/backups/{id}/restore` | Restore from backup |
+| DELETE | `/backups/{id}` | Delete backup |
+| GET | `/backups/config` | Get backup config |
+| PUT | `/backups/config` | Update backup config |
+| GET | `/backups/status` | Get operation status |
+| GET | `/backups/storage` | Get storage stats |
+
+---
+
+### 11.7 Backup Configuration
+
+```python
+class BackupConfig(BaseModel):
+    auto_backup_after_ingestion: bool = True
+    retention_days: int = 30
+    max_backups_per_profile: int = 10
+    compression_enabled: bool = True
+    include_embeddings: bool = False  # Can regenerate
+    backup_schedule: str = "0 0 * * 0"  # Weekly
+    backup_directory: str = "./backups"
+```
+
+---
+
+### 11.8 Restore Modes
+
+**Full Restore:**
+```python
+# Replace all data with backup data
+collections_to_restore = ["documents", "chunks"]
+options = RestoreOptions(
+    mode="full",
+    collections=collections_to_restore,
+    skip_users=True,
+    skip_sessions=True
+)
+```
+
+**Merge Restore:**
+```python
+# Add missing documents only (no overwrites)
+options = RestoreOptions(
+    mode="merge",
+    collections=["documents", "chunks"]
+)
+```
+
+**Selective Restore:**
+```python
+# Restore specific collections only
+options = RestoreOptions(
+    mode="selective",
+    collections=["documents"]  # Only documents, not chunks
+)
+```
+
+---
+
+## 12. Embedding Benchmark Service
+
+### 12.1 Overview
+
+The Embedding Benchmark Service enables comparison of different embedding providers and models to find the optimal choice for your use case.
+
+**Purpose:**
+- Compare embedding providers (OpenAI, Ollama, vLLM)
+- Measure performance metrics
+- Estimate costs
+- Select best provider for requirements
+
+---
+
+### 12.2 Supported Providers
+
+| Provider | Type | Models |
+|----------|------|--------|
+| OpenAI | Cloud API | text-embedding-3-small, ada-002 |
+| Ollama | Local | nomic-embed-text, all-minilm |
+| vLLM | Self-hosted | Custom models |
+
+---
+
+### 12.3 Benchmark Architecture
+
+```
+Benchmark Execution:
+1. Upload test document
+2. Configure providers to compare (max 3)
+3. For each provider:
+   a. Read document
+   b. Chunk text (configurable chunk_size/overlap)
+   c. Generate embeddings (batched)
+   d. Measure timing and memory
+   e. Calculate cost estimate
+4. Aggregate results
+5. Declare winner based on criteria
+```
+
+---
+
+### 12.4 Benchmark Metrics
+
+**Performance Metrics:**
+| Metric | Description | Importance |
+|--------|-------------|------------|
+| `total_time_ms` | End-to-end processing | High |
+| `chunking_time_ms` | Text chunking time | Medium |
+| `embedding_time_ms` | Embedding generation | High |
+| `avg_latency_ms` | Average per-chunk latency | Medium |
+| `tokens_processed` | Total tokens embedded | High |
+| `embedding_dimension` | Vector dimensions | High |
+| `memory_peak_mb` | Peak memory usage | Medium |
+| `cost_estimate_usd` | Estimated cost | High |
+
+---
+
+### 12.5 Benchmark Service (`backend/services/embedding_benchmark.py`)
+
+**Run Benchmark:**
+```python
+async def run_benchmark(
+    file_content: str,
+    file_name: str,
+    providers: List[str],
+    chunk_size: int = 1000,
+    chunk_overlap: int = 200,
+    max_tokens: int = 512
+) -> BenchmarkResult:
+    """Run benchmark across multiple providers."""
+```
+
+**Test Provider:**
+```python
+async def test_provider(provider: str, model: str) -> ProviderTestResult:
+    """Test provider connectivity and basic functionality."""
+```
+
+---
+
+### 12.6 Benchmark API (`backend/routers/embedding_benchmark.py`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/benchmark/run` | Run benchmark |
+| POST | `/benchmark/run-file` | Run with file upload |
+| GET | `/benchmark/providers` | Get available providers |
+| POST | `/benchmark/test-provider` | Test provider |
+| GET | `/benchmark/results` | Get historical results |
+| GET | `/benchmark/results/{id}` | Get specific result |
+| DELETE | `/benchmark/results/{id}` | Delete result |
+
+---
+
+### 12.7 Benchmark Result Schema
+
+```python
+class BenchmarkResult(BaseModel):
+    _id: str                     # UUID
+    timestamp: datetime
+    file_name: str
+    file_size_bytes: int
+    content_preview: str
+    chunk_config: ChunkConfig
+    results: List[ProviderResult]
+    winner: str                  # Best provider
+
+class ProviderResult(BaseModel):
+    provider: str
+    model: str
+    provider_type: str           # cloud/local/self-hosted
+    total_time_ms: float
+    embedding_time_ms: float
+    avg_latency_ms: float
+    tokens_processed: int
+    chunks_created: int
+    embedding_dimension: int
+    memory_peak_mb: float
+    cost_estimate_usd: float
+    success: bool
+    error: Optional[str]
+```
+
+---
+
+### 12.8 Winner Selection Logic
+
+**Scoring Algorithm:**
+```python
+def select_winner(results: List[ProviderResult]) -> str:
+    """Select best provider based on weighted scoring."""
+    
+    scores = {}
+    
+    for result in results:
+        if not result.success:
+            continue
+        
+        # Weighted scoring
+        score = (
+            (1000 / result.total_time_ms) * 0.3 +      # Speed
+            (result.cost_estimate_usd * -1) * 0.4 +    # Cost (lower=better)
+            (result.embedding_dimension / 100) * 0.2 + # Dimension
+            (100 / result.avg_latency_ms) * 0.1        # Latency
+        )
+        
+        scores[result.provider] = score
+    
+    return max(scores, key=scores.get)
 ```
 
 ---

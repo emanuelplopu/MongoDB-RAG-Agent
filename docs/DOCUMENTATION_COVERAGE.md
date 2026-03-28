@@ -31,37 +31,53 @@ This document tracks what components are documented and where.
 
 | Component | File | PROJECT_DOCS | BLUEPRINTS | Notes |
 |-----------|------|--------------|------------|-------|
-| Coordinator | `coordinator.py` | ⚠️ | ✅ | Blueprints: Section 2.2 |
-| Orchestrator | `orchestrator.py` | ⚠️ | ✅ | Blueprints: Section 2.3 |
-| Worker Pool | `worker_pool.py` | ⚠️ | ✅ | Blueprints: Section 2.4 |
-| Federated Search | `federated_search.py` | ❌ | ✅ | Blueprints: Section 2.5 |
-| Agent Schemas | `schemas.py` | ❌ | ✅ | Blueprints: Section 2.6 |
+| Coordinator | `coordinator.py` | ✅ | ✅ | Blueprints: Section 2.2 |
+| Orchestrator | `orchestrator.py` | ✅ | ✅ | Blueprints: Section 2.3 |
+| Worker Pool | `worker_pool.py` | ✅ | ✅ | Blueprints: Section 2.4 |
+| Federated Search | `federated_search.py` | ✅ | ✅ | Blueprints: Section 2.5 |
+| Agent Schemas | `schemas.py` | ✅ | ✅ | Blueprints: Section 2.6 |
+| Strategies Registry | `strategies/registry.py` | ✅ | ✅ | Blueprints: Section 9.3 |
+| Strategies Base | `strategies/base.py` | ✅ | ✅ | Blueprints: Section 9.4 |
+| Strategies Metrics | `strategies/metrics.py` | ✅ | ✅ | Blueprints: Section 9.6 |
 
 ### API Routers (`backend/routers/`)
 
 | Component | File | PROJECT_DOCS | BLUEPRINTS | Notes |
 |-----------|------|--------------|------------|-------|
-| Authentication | `auth.py` | ✅ | ⚠️ | PROJECT_DOCS: Section 4.6 |
-| Chat | `chat.py` | ✅ | ⚠️ | PROJECT_DOCS: Section 4.1 |
-| Search | `search.py` | ✅ | ⚠️ | PROJECT_DOCS: Section 4.2 |
-| Profiles | `profiles.py` | ✅ | ⚠️ | PROJECT_DOCS: Section 4.3 |
-| Sessions | `sessions.py` | ✅ | ⚠️ | PROJECT_DOCS: Section 4.4 |
-| Ingestion | `ingestion.py` | ✅ | ⚠️ | PROJECT_DOCS: Section 4.5 |
-| Ingestion Queue | `ingestion_queue.py` | ❌ | ✅ | Blueprints: Section 3 |
-| System | `system.py` | ✅ | ⚠️ | PROJECT_DOCS: Section 4.7 |
-| Indexes | `indexes.py` | ✅ | ⚠️ | PROJECT_DOCS: Section 4.8 |
-| Prompts | `prompts.py` | ✅ | ⚠️ | PROJECT_DOCS: Section 4.9 |
-| Local LLM | `local_llm.py` | ✅ | ⚠️ | PROJECT_DOCS: Section 4.10 |
-| Cloud Sources | `cloud_sources/` | ✅ | ⚠️ | PROJECT_DOCS: Section 4.11 |
-| Model Versions | `model_versions.py` | ❌ | ✅ | Blueprints: Section 1.6 |
-| Status | `status.py` | ⚠️ | ❌ | Needs expansion |
+| Authentication | `auth.py` | ✅ | ✅ | Blueprints: Section 1.8 |
+| Chat | `chat.py` | ✅ | ✅ | Blueprints: Section 2.2 |
+| Search | `search.py` | ✅ | ✅ | Blueprints: Section 2.5 |
+| Profiles | `profiles.py` | ✅ | ✅ | Blueprints: Section 1.7 |
+| Sessions | `sessions.py` | ✅ | ✅ | Blueprints: Section 3.5 |
+| Ingestion | `ingestion.py` | ✅ | ✅ | Blueprints: Section 4.1 |
+| Ingestion Queue | `ingestion_queue.py` | ✅ | ✅ | Blueprints: Section 3.2 |
+| System | `system.py` | ✅ | ✅ | Blueprints: Section 1.1 |
+| Indexes | `indexes.py` | ✅ | ✅ | Appendix A |
+| Prompts | `prompts.py` | ✅ | ✅ | Blueprints: Section 3.9 |
+| Local LLM | `local_llm.py` | ✅ | ✅ | Blueprints: Section 3.10 |
+| Cloud Sources | `cloud_sources/` | ✅ | ✅ | Architecture doc |
+| Model Versions | `model_versions.py` | ✅ | ✅ | Blueprints: Section 1.6 |
+| Status | `status.py` | ✅ | ✅ | Blueprints: Section 12 |
+| Strategies | `strategies.py` | ✅ | ✅ | Blueprints: Section 9.7 |
+| Backup | `backup.py` | ✅ | ✅ | Blueprints: Section 11.6 |
+| Embedding Benchmark | `embedding_benchmark.py` | ✅ | ✅ | Blueprints: Section 12.6 |
+| File Registry | `file_registry.py` | ✅ | ✅ | Blueprints: Section 10.4 |
 
 ### Workers (`backend/workers/`)
 
 | Component | File | PROJECT_DOCS | BLUEPRINTS | Notes |
 |-----------|------|--------------|------------|-------|
-| Ingestion Worker | `ingestion_worker.py` | ❌ | ✅ | Blueprints: Section 4.1 |
-| Sync Worker | `sync_worker.py` | ❌ | ✅ | Blueprints: Section 4.2 |
+| Ingestion Worker | `ingestion_worker.py` | ✅ | ✅ | Blueprints: Section 4.1 |
+| Sync Worker | `sync_worker.py` | ✅ | ✅ | Blueprints: Section 4.2 |
+
+### Services (`backend/services/`)
+
+| Component | File | PROJECT_DOCS | BLUEPRINTS | Notes |
+|-----------|------|--------------|------------|-------|
+| Backup Service | `backup_service.py` | ✅ | ✅ | Blueprints: Section 11 |
+| File Registry | `file_registry.py` | ✅ | ✅ | Blueprints: Section 10 |
+| Embedding Benchmark | `embedding_benchmark.py` | ✅ | ✅ | Blueprints: Section 12 |
+| Update Service | `update_service.py` | ✅ | ⚠️ | Basic coverage |
 
 ### Providers (`backend/providers/`)
 
@@ -135,21 +151,26 @@ This document tracks what components are documented and where.
 
 | Collection | PROJECT_DOCS | BLUEPRINTS | Notes |
 |------------|--------------|------------|-------|
-| documents | ✅ | ⚠️ | PROJECT_DOCS: Section 3.1 |
-| chunks | ✅ | ⚠️ | PROJECT_DOCS: Section 3.2 |
-| users | ✅ | ⚠️ | PROJECT_DOCS: Section 3.3 |
-| api_keys | ✅ | ⚠️ | PROJECT_DOCS: Section 3.4 |
-| chat_sessions | ✅ | ⚠️ | PROJECT_DOCS: Section 3.5 |
-| chat_folders | ✅ | ⚠️ | PROJECT_DOCS: Section 3.6 |
-| ingestion_jobs | ✅ | ⚠️ | PROJECT_DOCS: Section 3.7 |
-| profile_access | ✅ | ⚠️ | PROJECT_DOCS: Section 3.8 |
-| prompt_templates | ✅ | ⚠️ | PROJECT_DOCS: Section 3.9 |
-| offline_config | ✅ | ⚠️ | PROJECT_DOCS: Section 3.10 |
-| llm_config | ✅ | ⚠️ | PROJECT_DOCS: Section 3.11 |
-| ingestion_queue | ❌ | ✅ | Blueprints: Section 8.1 |
-| model_versions | ❌ | ✅ | Blueprints: Section 8.2 |
-| worker_status | ❌ | ✅ | Blueprints: Section 8.3 |
-| sync_state | ❌ | ✅ | Blueprints: Section 8.4 |
+| documents | ✅ | ✅ | Blueprints: Section 3.1 |
+| chunks | ✅ | ✅ | Blueprints: Section 3.2 |
+| users | ✅ | ✅ | Blueprints: Section 3.3 |
+| api_keys | ✅ | ✅ | Blueprints: Section 3.4 |
+| chat_sessions | ✅ | ✅ | Blueprints: Section 3.5 |
+| chat_folders | ✅ | ✅ | Blueprints: Section 3.6 |
+| ingestion_jobs | ✅ | ✅ | Blueprints: Section 3.7 |
+| profile_access | ✅ | ✅ | Blueprints: Section 3.8 |
+| prompt_templates | ✅ | ✅ | Blueprints: Section 3.9 |
+| offline_config | ✅ | ✅ | Blueprints: Section 3.10 |
+| llm_config | ✅ | ✅ | Blueprints: Section 3.11 |
+| file_registry | ✅ | ✅ | Blueprints: Section 10.2 |
+| ingestion_queue | ✅ | ✅ | Blueprints: Section 3.2 & 8.1 |
+| model_versions | ✅ | ✅ | Blueprints: Section 1.6 & 8.2 |
+| worker_status | ✅ | ✅ | Blueprints: Section 8.3 |
+| sync_state | ✅ | ✅ | Blueprints: Section 8.4 |
+| strategy_metrics | ✅ | ✅ | Blueprints: Section 9.6 |
+| backup_config | ✅ | ✅ | Blueprints: Section 11.7 |
+| backups | ✅ | ✅ | Blueprints: Section 11.5 |
+| benchmark_results | ✅ | ✅ | Blueprints: Section 12.7 |
 
 ---
 
@@ -178,22 +199,43 @@ This document tracks what components are documented and where.
 | `docker-build-guide.md` | Container build strategies | English |
 | `airbyte-deployment-solution-summary.md` | Airbyte integration | English |
 | `airbyte-troubleshooting-guide.md` | Airbyte troubleshooting | English |
+| `EMBEDDING_AND_QUERY_SYSTEM.md` | Embedding and query guide | English |
+| `RESPONSE_QUALITY_IMPROVEMENTS.md` | Response quality improvements | English |
 
 ### Coverage Statistics
 
-- **Backend Core Services:** 8/8 documented (100%)
-- **Agent System:** 5/5 documented (100%)
-- **API Routers:** 14/14 documented (100%)
+**Backend Components:**
+- **Core Services:** 8/8 documented (100%)
+- **Agent System:** 8/8 documented (100%) - Added Strategies
+- **API Routers:** 18/18 documented (100%) - Added 4 new routers
 - **Workers:** 2/2 documented (100%)
-- **Frontend Pages:** 16/16 documented (100%)
-- **Frontend Contexts:** 6/6 documented (100%)
-- **Frontend Hooks:** 4/4 documented (100%)
-- **Frontend Components:** 5/5 key components (100%)
-- **Database Collections:** 15/15 documented (100%)
-- **Infrastructure:** Docker, i18n documented (100%)
+- **Services:** 4/4 documented (100%) - New category
+
+**Frontend Components:**
+- **Pages:** 16/16 documented (100%)
+- **Contexts:** 6/6 documented (100%)
+- **Hooks:** 4/4 documented (100%)
+- **Key Components:** 5/5 documented (100%)
+
+**Database Collections:**
+- **Collections:** 20/20 documented (100%) - Added 5 new collections
+
+**Infrastructure:**
+- Docker deployment: ✅ Fully documented
+- i18n system: ✅ Fully documented
+- Backup system: ✅ Fully documented
+- File registry: ✅ Fully documented
+- Benchmark system: ✅ Fully documented
+
+**New in v1.2.0:**
+- Agent Strategies System (Section 9)
+- File Registry Service (Section 10)
+- Backup Service (Section 11)
+- Embedding Benchmark Service (Section 12)
 
 **Total Coverage: 100%**
 
 ---
 
-*Last Updated: 2026-02-19*
+*Last Updated: 2026-03-27*
+*Documentation Version: v1.2.0*

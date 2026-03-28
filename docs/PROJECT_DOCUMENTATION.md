@@ -21,6 +21,7 @@
 11. [Embedding Benchmark System](#11-embedding-benchmark-system)
 12. [Frontend Pages](#12-frontend-pages)
 13. [Environment Variables](#13-environment-variables)
+14. [Agent Strategies](#14-agent-strategies)
 
 ---
 
@@ -1385,6 +1386,141 @@ AIRBYTE_MONGODB_HOST=mongodb
 
 ---
 
+## 14. Agent Strategies
+
+### 14.1 Overview
+
+Agent Strategies provide configurable execution patterns for different use cases and domains. Each strategy defines custom prompts, parameters, and behavior for the orchestrator.
+
+**Key Features:**
+- A/B testing of different agent approaches
+- Domain-specific optimization (general, software_dev, legal, hr)
+- Performance tracking and metrics
+- Auto-detection based on query intent
+
+---
+
+### 14.2 Strategy Domains
+
+| Domain | Description | Use Cases |
+|--------|-------------|-----------|
+| `general` | General-purpose knowledge retrieval | Business docs, FAQs, general queries |
+| `software_dev` | Software development queries | Code, APIs, debugging, architecture |
+| `legal` | Legal document analysis | Contracts, compliance, policies |
+| `hr` | Human resources queries | Employee handbook, benefits, policies |
+
+---
+
+### 14.3 Strategy Configuration
+
+Each strategy defines:
+
+```python
+@dataclass
+class StrategyConfig:
+    max_iterations: int = 3          # Maximum orchestrator loops
+    confidence_threshold: float = 0.75  # Early exit threshold
+    early_exit_enabled: bool = True   # Allow early termination
+    cross_search_boost: float = 1.2   # Boost cross-profile results
+    content_length_penalty: float = 0.1  # Penalize verbosity
+```
+
+---
+
+### 14.4 Built-in Strategies
+
+**General Purpose (Default)**
+- ID: `general_purpose`
+- Max iterations: 3
+- Confidence threshold: 0.75
+- Optimized for balanced performance
+
+**Software Development**
+- ID: `software_dev`
+- Max iterations: 4
+- Confidence threshold: 0.8
+- Enhanced cross-search boosting
+
+**Legal Analysis**
+- ID: `legal`
+- Max iterations: 5
+- Confidence threshold: 0.85
+- Allows more detailed responses
+
+**HR Assistant**
+- ID: `hr`
+- Max iterations: 3
+- Confidence threshold: 0.7
+- Fast response times
+
+---
+
+### 14.5 A/B Testing
+
+Strategies support A/B testing with:
+
+**Metrics Tracked:**
+- Execution count
+- Average latency (ms)
+- Average iterations
+- Confidence scores
+- Quality scores (0-100)
+- User feedback (1-5 rating)
+
+**Comparison Methods:**
+1. **Statistical Comparison**: Compare latency, iterations, confidence
+2. **LLM-Based Evaluation**: LLM judges response quality
+3. **User Feedback**: Collect explicit ratings
+
+**A/B Test Flow:**
+```
+1. Split traffic between Strategy A and B
+2. Execute both on similar queries
+3. Collect metrics and feedback
+4. Statistical analysis
+5. Declare winner with confidence level
+```
+
+---
+
+### 14.6 Strategy API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/strategies` | List all strategies |
+| GET | `/strategies?domain={domain}` | Filter by domain |
+| GET | `/strategies/default` | Get default strategy |
+| GET | `/strategies/{id}` | Get strategy details |
+| GET | `/strategies/{id}/metrics` | Get performance metrics |
+| POST | `/strategies/compare` | Compare two strategies |
+| POST | `/strategies/auto-detect` | Detect from query |
+| POST | `/strategies/feedback` | Record user feedback |
+| POST | `/strategies/ab-compare-responses` | LLM response comparison |
+
+---
+
+### 14.7 Strategy Metrics Collection
+
+**Database Schema (`strategy_metrics` collection):**
+```javascript
+{
+  "_id": ObjectId,
+  "strategy_id": "software_dev",
+  "session_id": "uuid",
+  "query": "How to implement OAuth authentication?",
+  "execution_time_ms": 1250,
+  "iterations": 2,
+  "confidence_score": 0.85,
+  "quality_score": 92,
+  "sources_retrieved": 8,
+  "user_feedback_score": 5,
+  "user_feedback_text": "Very helpful!",
+  "timestamp": ISODate
+}
+```
+
+---
+
 ## Appendix A: Search Index Definitions
 
 ### Vector Search Index (`vector_index`)
@@ -1451,4 +1587,6 @@ AIRBYTE_MONGODB_HOST=mongodb
 
 ---
 
-*Documentation generated for RecallHub v1.1.0 - Updated with complete API coverage*
+*Documentation generated for RecallHub v1.2.0 - Updated with Agent Strategies, File Registry, Backup Service, and Embedding Benchmark*
+
+**Last Updated:** 2026-03-27
