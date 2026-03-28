@@ -4,3 +4,6 @@ mongoDB/configdb/*
 !mongoDB/.gitkeep
 !mongoDB/db/.gitkeep
 !mongoDB/configdb/.gitkeep
+
+# Ignore backup data files (too large for GitHub)
+backups/
