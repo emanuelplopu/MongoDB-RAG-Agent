@@ -299,7 +299,9 @@ export interface OpenExplorerResponse {
   success: boolean
   message: string
   file_path?: string
+  host_path?: string
   source?: string
+  is_docker?: boolean
 }
 
 export interface DocumentListResponse {
@@ -1588,6 +1590,11 @@ export const sessionsApi = {
 
   deletePermanently: async (sessionIds: string[]): Promise<{ success: boolean; deleted_count: number }> => {
     const response = await api.post('/sessions/delete-permanent', { session_ids: sessionIds })
+    return response.data
+  },
+
+  moveToFolder: async (sessionIds: string[], folderId: string | null): Promise<{ success: boolean; moved_count: number }> => {
+    const response = await api.post('/sessions/move-to-folder', { session_ids: sessionIds, folder_id: folderId })
     return response.data
   },
 

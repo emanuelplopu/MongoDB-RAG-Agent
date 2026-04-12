@@ -145,11 +145,14 @@ export default function DocumentPreviewPage() {
     setExplorerMessage(null)
     try {
       const result = await documentsApi.openInExplorer(documentId)
-      if (result.success) {
-        setExplorerMessage(result.message)
-      } else if ((result as any).is_docker && result.file_path) {
-        // Running in Docker - show path with copy functionality
+      if (result.is_docker && result.host_path) {
+        // Docker with successful host path translation - show copyable host path
+        setExplorerMessage(`📂 ${result.host_path}`)
+      } else if (result.is_docker && result.file_path) {
+        // Docker without mapping - show container path as fallback
         setExplorerMessage(`📋 ${result.message}\n\n${result.file_path}`)
+      } else if (result.success) {
+        setExplorerMessage(result.message)
       } else if (result.file_path) {
         setExplorerMessage(`${result.message}\nPath: ${result.file_path}`)
       } else {
@@ -271,15 +274,20 @@ export default function DocumentPreviewPage() {
       </div>
 
       {explorerMessage && (
-        <div className={`p-3 rounded-xl text-sm ${explorerMessage.includes('Failed') || (explorerMessage.includes('not') && !explorerMessage.includes('Docker')) ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400' : explorerMessage.includes('Docker') ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400' : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'}`}>
+        <div className={`p-3 rounded-xl text-sm ${explorerMessage.includes('Failed') || (explorerMessage.includes('not') && !explorerMessage.includes('Docker')) ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400' : explorerMessage.startsWith('📂') || explorerMessage.startsWith('📋') ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400' : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'}`}>
           <pre className="whitespace-pre-wrap">{explorerMessage}</pre>
-          {explorerMessage.includes('Docker') && explorerMessage.includes('/app/mounts') && (
+          {(explorerMessage.startsWith('📂') || explorerMessage.startsWith('📋')) && (
             <button
               onClick={() => {
-                const path = explorerMessage.split('\n\n')[1]
+                // Extract the path: for host paths it's after the emoji, for container paths it's after the double newline
+                let path = ''
+                if (explorerMessage.startsWith('📂')) {
+                  path = explorerMessage.replace('📂 ', '')
+                } else {
+                  path = explorerMessage.split('\n\n')[1] || ''
+                }
                 if (path) {
                   navigator.clipboard.writeText(path)
-                  // Briefly change button text
                   const btn = document.activeElement as HTMLButtonElement
                   if (btn) {
                     const original = btn.innerText
@@ -288,7 +296,7 @@ export default function DocumentPreviewPage() {
                   }
                 }
               }}
-              className="mt-2 px-3 py-1 bg-amber-200 dark:bg-amber-800 hover:bg-amber-300 dark:hover:bg-amber-700 rounded-lg text-xs font-medium transition-colors"
+              className="mt-2 px-3 py-1 bg-blue-200 dark:bg-blue-800 hover:bg-blue-300 dark:hover:bg-blue-700 rounded-lg text-xs font-medium transition-colors"
             >
               Copy Path
             </button>

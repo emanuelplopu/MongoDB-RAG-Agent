@@ -60,6 +60,7 @@ interface ChatSidebarContextType {
   clearSelection: () => void
   archiveSelected: () => Promise<void>
   deleteSelected: () => Promise<void>
+  moveSelectedToFolder: (folderId: string | null) => Promise<void>
 }
 
 const ChatSidebarContext = createContext<ChatSidebarContextType | null>(null)
@@ -351,6 +352,25 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
     }
   }, [selectedSessions, currentSession])
 
+  const moveSelectedToFolder = useCallback(async (folderId: string | null) => {
+    if (selectedSessions.size === 0) return
+    try {
+      const ids = Array.from(selectedSessions)
+      await sessionsApi.moveToFolder(ids, folderId)
+      // Update folder_id on sessions in state
+      setSessions(prev => prev.map(s =>
+        selectedSessions.has(s.id) ? { ...s, folder_id: folderId ?? undefined } : s
+      ))
+      if (currentSession && selectedSessions.has(currentSession.id)) {
+        setCurrentSession(prev => prev ? { ...prev, folder_id: folderId ?? undefined } : null)
+      }
+      setSelectedSessions(new Set())
+      setIsSelectMode(false)
+    } catch (err) {
+      console.error('Failed to move sessions to folder:', err)
+    }
+  }, [selectedSessions, currentSession])
+
   const value: ChatSidebarContextType = {
     sessions,
     folders,
@@ -389,6 +409,7 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
     clearSelection,
     archiveSelected,
     deleteSelected,
+    moveSelectedToFolder,
   }
 
   return (

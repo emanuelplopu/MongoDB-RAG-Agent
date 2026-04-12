@@ -34,6 +34,8 @@ import {
   ArchiveBoxIcon,
   BeakerIcon,
   CloudArrowUpIcon,
+  PencilSquareIcon,
+  FolderArrowDownIcon,
 } from '@heroicons/react/24/outline'
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid'
 import ThemeSwitcher from './ThemeSwitcher'
@@ -74,6 +76,7 @@ const systemMenuItems = [
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
+  const [showMoveMenu, setShowMoveMenu] = useState(false)
   const [sidebarWarnings, setSidebarWarnings] = useState<SidebarWarning[]>([])
   const [dismissedWarnings, setDismissedWarnings] = useState<Set<string>>(new Set())
   const userMenuRef = useRef<HTMLDivElement>(null)
@@ -114,6 +117,7 @@ export default function Layout() {
     clearSelection,
     archiveSelected,
     deleteSelected,
+    moveSelectedToFolder,
   } = useChatSidebar()
 
   // Group sessions by folder
@@ -245,36 +249,73 @@ export default function Layout() {
             </div>
             <div className="flex gap-2">
               <button
-                onClick={selectAllSessions}
-                className="flex-1 px-2 py-1.5 text-xs bg-surface-variant dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
+                onClick={selectedSessions.size === sessions.length ? clearSelection : selectAllSessions}
+                className="flex-1 px-2 py-1.5 text-xs bg-surface-variant dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
               >
-                              {t('sidebar.selectAll')}
-              </button>
-              <button
-                onClick={clearSelection}
-                className="flex-1 px-2 py-1.5 text-xs bg-surface-variant dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
-              >
-                              {t('common.clear')}
+                {selectedSessions.size === sessions.length ? t('sidebar.deselectAll') : t('sidebar.selectAll')}
               </button>
             </div>
             {selectedSessions.size > 0 && (
-              <div className="flex gap-2">
-                <button
-                  onClick={archiveSelected}
-                  className="flex-1 px-2 py-1.5 text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 rounded-lg hover:bg-amber-200 dark:hover:bg-amber-900/50"
-                >
-                                    {t('sidebar.archive')} ({selectedSessions.size})
-                </button>
-                <button
-                  onClick={() => {
-                    if (confirm(t('confirm.deleteMultiple', { count: selectedSessions.size }))) {
-                      deleteSelected()
-                    }
-                  }}
-                  className="flex-1 px-2 py-1.5 text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50"
-                >
-                                    {t('common.delete')} ({selectedSessions.size})
-                </button>
+              <div className="flex flex-col gap-1.5">
+                {/* Move to Project */}
+                <div className="relative">
+                  <button
+                    onClick={() => setShowMoveMenu(!showMoveMenu)}
+                    className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 rounded-lg hover:bg-primary-200 dark:hover:bg-primary-900/50 transition-colors"
+                  >
+                    <FolderArrowDownIcon className="h-3.5 w-3.5" />
+                    {t('sidebar.moveToProject')} ({selectedSessions.size})
+                  </button>
+                  {showMoveMenu && (
+                    <>
+                      <div className="fixed inset-0 z-30" onClick={() => setShowMoveMenu(false)} />
+                      <div className="absolute left-0 right-0 top-full mt-1 z-40 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-surface-variant dark:border-gray-600 py-1 max-h-48 overflow-y-auto">
+                        <button
+                          onClick={() => { moveSelectedToFolder(null); setShowMoveMenu(false) }}
+                          className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-surface-variant dark:hover:bg-gray-700 text-secondary dark:text-gray-400"
+                        >
+                          <XMarkIcon className="h-3.5 w-3.5" />
+                          {t('sidebar.unfiled')}
+                        </button>
+                        {folders.map(folder => (
+                          <button
+                            key={folder.id}
+                            onClick={() => { moveSelectedToFolder(folder.id); setShowMoveMenu(false) }}
+                            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-surface-variant dark:hover:bg-gray-700 dark:text-gray-200"
+                          >
+                            <FolderIcon className="h-3.5 w-3.5" style={{ color: folder.color }} />
+                            {folder.name}
+                          </button>
+                        ))}
+                        {folders.length === 0 && (
+                          <div className="px-3 py-2 text-xs text-secondary dark:text-gray-500 italic">
+                            {t('sidebar.noProjects')}
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={archiveSelected}
+                    className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 rounded-lg hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors"
+                  >
+                    <ArchiveBoxIcon className="h-3.5 w-3.5" />
+                    {t('sidebar.archive')} ({selectedSessions.size})
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (confirm(t('confirm.deleteMultiple', { count: selectedSessions.size }))) {
+                        deleteSelected()
+                      }
+                    }}
+                    className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors"
+                  >
+                    <TrashIcon className="h-3.5 w-3.5" />
+                    {t('common.delete')} ({selectedSessions.size})
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -290,9 +331,9 @@ export default function Layout() {
             <button
               onClick={toggleSelectMode}
               className="px-3 py-3 rounded-xl border border-surface-variant dark:border-gray-600 hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-sm text-secondary dark:text-gray-400"
-              title={t('sidebar.selectMultiple')}
+              title={t('sidebar.editChats')}
             >
-              <CheckIcon className="h-5 w-5" />
+              <PencilSquareIcon className="h-5 w-5" />
             </button>
           </div>
         )}

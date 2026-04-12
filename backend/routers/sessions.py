@@ -319,6 +319,12 @@ class BulkSessionsRequest(BaseModel):
     session_ids: List[str] = Field(..., min_length=1)
 
 
+class BulkMoveToFolderRequest(BaseModel):
+    """Request for moving multiple sessions to a folder."""
+    session_ids: List[str] = Field(..., min_length=1)
+    folder_id: Optional[str] = None  # None means move to unfiled
+
+
 class ModelInfo(BaseModel):
     id: str
     pricing: Dict[str, float]
@@ -696,6 +702,34 @@ async def restore_sessions(
     return {
         "success": True,
         "restored_count": result.modified_count
+    }
+
+
+@router.post("/move-to-folder")
+async def move_sessions_to_folder(
+    request: Request,
+    bulk_request: BulkMoveToFolderRequest,
+    user: Optional[UserResponse] = Depends(get_current_user)
+):
+    """Move multiple chat sessions to a folder (or unfiled)."""
+    collection = await get_sessions_collection(request)
+    
+    query = {"_id": {"$in": bulk_request.session_ids}}
+    if user:
+        query["user_id"] = user.id
+    
+    result = await collection.update_many(
+        query,
+        {
+            "$set": {
+                "folder_id": bulk_request.folder_id
+            }
+        }
+    )
+    
+    return {
+        "success": True,
+        "moved_count": result.modified_count
     }
 
 
@@ -1183,9 +1217,15 @@ async def send_message_stream(
             agent_task = asyncio.create_task(process_agent())
             
             # Stream events as they arrive
-            while True:
+            # Use short timeout to send keepalive pings, preventing
+            # Cloudflare/proxy timeouts on idle SSE connections
+            KEEPALIVE_INTERVAL = 15  # seconds between heartbeats
+            max_total_timeout = 600  # 10 minute hard limit
+            elapsed = 0
+            
+            while elapsed < max_total_timeout:
                 try:
-                    event = await asyncio.wait_for(event_queue.get(), timeout=600)  # 10 minute timeout
+                    event = await asyncio.wait_for(event_queue.get(), timeout=KEEPALIVE_INTERVAL)
                     
                     if event['type'] == 'done':
                         break
@@ -1201,9 +1241,15 @@ async def send_message_stream(
                         yield f"data: {json.dumps(event)}\n\n"
                         
                 except asyncio.TimeoutError:
-                    logger.error("Agent processing timed out")
-                    yield f"data: {json.dumps({'type': 'error', 'message': 'Processing timed out'})}\n\n"
-                    break
+                    # No event received within interval - send SSE keepalive
+                    # This prevents Cloudflare and reverse proxies from
+                    # closing the connection due to inactivity
+                    elapsed += KEEPALIVE_INTERVAL
+                    if elapsed >= max_total_timeout:
+                        logger.error("Agent processing timed out")
+                        yield f"data: {json.dumps({'type': 'error', 'message': 'Processing timed out'})}\n\n"
+                        break
+                    yield f": keepalive\n\n"
             
             # Wait for agent task to complete
             await agent_task

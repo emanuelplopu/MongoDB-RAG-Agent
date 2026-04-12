@@ -132,7 +132,12 @@
     "archive": "Archive",
     "pin": "Pin",
     "unpin": "Unpin",
-    "rename": "Rename"
+    "rename": "Rename",
+    "editChats": "Edit chats",
+    "deselectAll": "Deselect All",
+    "moveToProject": "Move to Project",
+    "unfiled": "Unfiled (no project)",
+    "noProjects": "No projects yet"
   },
   "warnings": {
     "missingBothIndexes": "Search indexes missing! Vector and text search will not work until indexes are created.",

@@ -2270,13 +2270,65 @@ async def delete_document(request: Request, document_id: str):
     )
 
 
+def _get_mount_mappings() -> dict[str, str]:
+    """
+    Parse MOUNT_MAPPINGS env var to get container→host path mappings.
+    
+    Format: pipe-separated entries of container_path=host_path
+    Example: /app/mounts/parhelion-energy=D:/parhelion.energy|/app/documents=D:/dev/repos/MongoDB-RAG-Agent/documents
+    
+    Also supports /app/documents and /app/projects default mappings via
+    DOCUMENTS_HOST_PATH and PROJECTS_HOST_PATH env vars.
+    """
+    mappings = {}
+    
+    # Parse MOUNT_MAPPINGS env var
+    mount_str = os.environ.get("MOUNT_MAPPINGS", "")
+    if mount_str:
+        for entry in mount_str.split("|"):
+            entry = entry.strip()
+            if "=" in entry:
+                container_path, host_path = entry.split("=", 1)
+                mappings[container_path.strip()] = host_path.strip()
+    
+    return mappings
+
+
+def _translate_container_to_host_path(container_path: str) -> str | None:
+    """
+    Translate a container path to the corresponding Windows host path
+    using mount mappings. Returns None if no mapping found.
+    """
+    mappings = _get_mount_mappings()
+    if not mappings:
+        return None
+    
+    # Find the longest matching mount prefix (most specific match)
+    best_match = ""
+    best_host = ""
+    for mount_container, mount_host in mappings.items():
+        if container_path.startswith(mount_container) and len(mount_container) > len(best_match):
+            best_match = mount_container
+            best_host = mount_host
+    
+    if not best_match:
+        return None
+    
+    # Get the relative path after the mount point
+    relative = container_path[len(best_match):]
+    
+    # Convert forward slashes to backslashes for Windows
+    host_path = best_host.rstrip("/\\") + relative.replace("/", "\\")
+    return host_path
+
+
 @router.post("/documents/{document_id}/open-explorer")
 async def open_in_explorer(request: Request, document_id: str):
     """
     Open the document's folder in OS file explorer.
     
     For local execution: Opens the file in the OS file explorer.
-    For Docker: Returns the container path (cannot open explorer from container).
+    For Docker: Translates container path to host path using MOUNT_MAPPINGS env var.
     """
     import subprocess
     import platform
@@ -2304,17 +2356,28 @@ async def open_in_explorer(request: Request, document_id: str):
         }
     
     # Check if we're running in Docker (container path or .dockerenv exists)
-    is_docker = file_path.startswith("/app/mounts/") or os.path.exists("/.dockerenv")
+    is_docker = file_path.startswith("/app/") or os.path.exists("/.dockerenv")
     
     if is_docker:
-        # Running in Docker - cannot open file explorer, return path for manual navigation
-        # The file exists in the container but we can't open explorer from there
-        return {
-            "success": False,
-            "message": "Cannot open explorer from Docker container. Copy the path below to navigate manually.",
-            "file_path": file_path,
-            "is_docker": True
-        }
+        # Running in Docker - translate container path to host path
+        host_path = _translate_container_to_host_path(file_path)
+        
+        if host_path:
+            return {
+                "success": True,
+                "message": "Path translated to host location. Copy the path below to open in Explorer.",
+                "file_path": file_path,
+                "host_path": host_path,
+                "is_docker": True
+            }
+        else:
+            # No mapping found - return container path as fallback
+            return {
+                "success": False,
+                "message": "Could not determine host path. MOUNT_MAPPINGS env var may not be configured. Container path shown below.",
+                "file_path": file_path,
+                "is_docker": True
+            }
     
     # Check if file exists (only for non-Docker, where paths are local)
     if not os.path.exists(file_path):
