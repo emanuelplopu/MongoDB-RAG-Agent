@@ -1069,7 +1069,13 @@
     "content": "Inhalt",
     "noContent": "Kein Inhalt verfügbar",
     "download": "Original herunterladen",
-    "close": "Schließen"
+    "close": "Schließen",
+    "openInNewTab": "In neuem Tab öffnen",
+    "loading": "Vorschau wird geladen...",
+    "noPreview": "Vorschau ist für diesen Dateityp nicht verfügbar.",
+    "extractedText": "Extrahierter Textinhalt wird angezeigt:",
+    "downloadFile": "Datei herunterladen",
+    "failedToLoad": "Vorschau konnte nicht geladen werden"
   },
   "errors": {
     "notFound": {

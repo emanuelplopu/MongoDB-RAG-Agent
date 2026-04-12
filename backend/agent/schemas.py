@@ -139,6 +139,7 @@ class DocumentReference(BaseModel):
     title: str = Field(description="Document title")
     source_type: DataSourceType = Field(description="Source type")
     source_database: str = Field(description="Database name")
+    document_source: str = Field(default="", description="Original document source path")
     excerpt: str = Field(description="Relevant excerpt (max 500 chars)")
     full_content: Optional[str] = Field(default=None, description="Full chunk content")
     similarity_score: float = Field(default=0.0)

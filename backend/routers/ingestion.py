@@ -2413,12 +2413,15 @@ async def open_in_explorer(request: Request, document_id: str):
 
 
 @router.get("/documents/{document_id}/file")
-async def get_document_file(request: Request, document_id: str):
+async def get_document_file(request: Request, document_id: str, inline: bool = False):
     """
     Serve the document file for browser preview.
     
     Returns the file content with appropriate content type for browser display.
     Supports: PDF, images, text files, HTML, markdown.
+    
+    Query params:
+        inline: If true, always serve with Content-Disposition: inline (for modal preview)
     """
     from fastapi.responses import FileResponse, Response
     import mimetypes
@@ -2459,7 +2462,7 @@ async def get_document_file(request: Request, document_id: str):
     
     filename = os.path.basename(file_path)
     
-    if mime_type in viewable_types or mime_type.startswith("text/"):
+    if inline or mime_type in viewable_types or mime_type.startswith("text/"):
         return FileResponse(
             path=file_path,
             media_type=mime_type,

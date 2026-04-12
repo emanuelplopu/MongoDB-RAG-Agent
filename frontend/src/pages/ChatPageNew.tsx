@@ -423,6 +423,13 @@ export default function ChatPage() {
             setIsLoading(false)
             streamAbortRef.current = null
           },
+          onTitleUpdate: (title: string) => {
+            // Update session title in sidebar and current session
+            setCurrentSession(prev => prev ? { ...prev, title } : null)
+            setSessions(prev => prev.map(s =>
+              s.id === session!.id ? { ...s, title } : s
+            ))
+          },
         }
       )
     } else {

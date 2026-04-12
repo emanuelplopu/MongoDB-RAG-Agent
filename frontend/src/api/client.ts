@@ -1440,6 +1440,7 @@ export const sessionsApi = {
       }) => void
       onError?: (error: string) => void
       onDone?: () => void
+      onTitleUpdate?: (title: string) => void
     }
   ): { abort: () => void } => {
     const abortController = new AbortController()
@@ -1501,6 +1502,9 @@ export const sessionsApi = {
                     break
                   case 'error':
                     callbacks?.onError?.(data.message)
+                    break
+                  case 'title_update':
+                    callbacks?.onTitleUpdate?.(data.title)
                     break
                   case 'done':
                     callbacks?.onDone?.()

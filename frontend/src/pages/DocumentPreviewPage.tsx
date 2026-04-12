@@ -14,6 +14,7 @@ import {
   ArrowTopRightOnSquareIcon,
 } from '@heroicons/react/24/outline'
 import { documentsApi, DocumentFullInfo, DocumentChunk, cloudSourcesApi } from '../api/client'
+import FilePreviewModal from '../components/FilePreviewModal'
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 Bytes'
@@ -98,6 +99,11 @@ export default function DocumentPreviewPage() {
   } | null>(null)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_loadingCloudInfo, setLoadingCloudInfo] = useState(false)
+  
+  // File preview modal state
+  const [previewModalOpen, setPreviewModalOpen] = useState(false)
+  const [previewFileUrl, setPreviewFileUrl] = useState('')
+  const [previewFilename, setPreviewFilename] = useState('')
 
   useEffect(() => {
     if (!documentId) return
@@ -168,13 +174,16 @@ export default function DocumentPreviewPage() {
   const handleOpenPreview = async () => {
     if (!documentId) return
     
+    const filename = doc?.source || doc?.title || 'document'
+    
     // For cloud sources, use cached file URL
     if (cloudSourceInfo?.is_cloud_source && cloudSourceInfo.connection_id) {
-      // Trigger cache download and open
       try {
         await cloudSourcesApi.getCachedFile(documentId, cloudSourceInfo.connection_id)
         const url = cloudSourcesApi.getCachedFileUrl(cloudSourceInfo.connection_id, documentId)
-        window.open(url, '_blank')
+        setPreviewFileUrl(url)
+        setPreviewFilename(filename)
+        setPreviewModalOpen(true)
       } catch (err) {
         console.error('Failed to cache file:', err)
         // Fallback to web view if available
@@ -185,8 +194,10 @@ export default function DocumentPreviewPage() {
       return
     }
     
-    // For local files, use direct file URL
-    window.open(documentsApi.getFileUrl(documentId), '_blank')
+    // For local files, open in modal
+    setPreviewFileUrl(documentsApi.getFileUrl(documentId))
+    setPreviewFilename(filename)
+    setPreviewModalOpen(true)
   }
 
   if (loading) {
@@ -447,6 +458,15 @@ export default function DocumentPreviewPage() {
           ))}
         </div>
       </div>
+
+      {/* File Preview Modal */}
+      <FilePreviewModal
+        isOpen={previewModalOpen}
+        onClose={() => setPreviewModalOpen(false)}
+        fileUrl={previewFileUrl}
+        filename={previewFilename}
+        fallbackContent={doc.content}
+      />
     </div>
   )
 }

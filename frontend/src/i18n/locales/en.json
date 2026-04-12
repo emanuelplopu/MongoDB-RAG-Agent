@@ -1069,7 +1069,13 @@
     "content": "Content",
     "noContent": "No content available",
     "download": "Download Original",
-    "close": "Close"
+    "close": "Close",
+    "openInNewTab": "Open in new tab",
+    "loading": "Loading preview...",
+    "noPreview": "Preview is not available for this file type.",
+    "extractedText": "Showing extracted text content:",
+    "downloadFile": "Download File",
+    "failedToLoad": "Failed to load preview"
   },
   "errors": {
     "notFound": {

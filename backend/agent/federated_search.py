@@ -517,6 +517,7 @@ class FederatedSearch:
                     title=result.get("document_title", "Unknown"),
                     source_type=source.type,
                     source_database=source.database,
+                    document_source=result.get("document_source", ""),
                     excerpt=result.get("content", "")[:500],
                     full_content=result.get("content", ""),
                     similarity_score=result.get("rrf_score", result.get("similarity", 0)),

@@ -951,7 +951,8 @@ async def send_message(
     for doc_ref in trace.all_documents[:10]:  # Top 10 documents
         sources.append({
             "title": doc_ref.title,
-            "source": doc_ref.source_type,
+            "source": doc_ref.document_source or doc_ref.metadata.get("document_source", ""),
+            "source_type": doc_ref.source_type,
             "database": doc_ref.source_database,
             "relevance": doc_ref.similarity_score,
             "excerpt": doc_ref.excerpt[:300]
@@ -1282,7 +1283,8 @@ async def send_message_stream(
             for doc_ref in trace.all_documents[:10]:
                 sources.append({
                     "title": doc_ref.title,
-                    "source": doc_ref.source_type,
+                    "source": doc_ref.document_source or doc_ref.metadata.get("document_source", ""),
+                    "source_type": doc_ref.source_type,
                     "database": doc_ref.source_database,
                     "relevance": doc_ref.similarity_score,
                     "excerpt": doc_ref.excerpt[:300]
@@ -1334,6 +1336,59 @@ async def send_message_stream(
                 "total_cost_usd": current_stats.get("total_cost_usd", 0) + trace.estimated_cost_usd,
             }
             
+            # Auto-generate title (same logic as non-streaming path)
+            title_update = {}
+            message_count_after_this = len(messages) + 2  # +2 for user and assistant messages being added
+            
+            if len(messages) == 0:
+                # First message - use first few words as placeholder
+                first_words = msg_request.content.split()[:6]
+                title = " ".join(first_words)
+                if len(title) > 40:
+                    title = title[:40] + "..."
+                title_update["title"] = title
+            elif message_count_after_this == 6:  # After 3 exchanges
+                # Generate a better title using LLM
+                try:
+                    import litellm
+                    
+                    conversation_summary = []
+                    for msg in messages[-6:]:
+                        role = "User" if msg["role"] == "user" else "Assistant"
+                        content_preview = msg["content"][:200] if len(msg["content"]) > 200 else msg["content"]
+                        conversation_summary.append(f"{role}: {content_preview}")
+                    conversation_summary.append(f"User: {msg_request.content[:200]}")
+                    
+                    title_prompt = [
+                        {
+                            "role": "system",
+                            "content": "Generate a short, descriptive title (max 8 words) for this conversation. Return ONLY the title, nothing else."
+                        },
+                        {
+                            "role": "user",
+                            "content": "\n".join(conversation_summary)
+                        }
+                    ]
+                    
+                    title_response = await litellm.acompletion(
+                        model=session_model,
+                        messages=title_prompt,
+                        temperature=0.7,
+                        max_tokens=30,
+                        api_key=settings.llm_api_key,
+                        api_base=settings.llm_base_url if settings.llm_base_url else None,
+                    )
+                    
+                    generated_title = title_response.choices[0].message.content.strip()
+                    generated_title = generated_title.strip('"\'')
+                    words = generated_title.split()[:8]
+                    generated_title = " ".join(words)
+                    if generated_title:
+                        title_update["title"] = generated_title
+                        logger.info(f"Generated title for session {session_id}: {generated_title}")
+                except Exception as e:
+                    logger.warning(f"Failed to generate title for session {session_id}: {e}")
+            
             await collection.update_one(
                 {"_id": session_id},
                 {
@@ -1344,10 +1399,15 @@ async def send_message_stream(
                     },
                     "$set": {
                         "updated_at": datetime.now(),
-                        "stats": new_stats
+                        "stats": new_stats,
+                        **title_update
                     }
                 }
             )
+            
+            # Send title update event if title changed, so frontend can update sidebar
+            if title_update:
+                yield f"data: {json.dumps({'type': 'title_update', 'title': title_update['title']})}\n\n"
             
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
             
