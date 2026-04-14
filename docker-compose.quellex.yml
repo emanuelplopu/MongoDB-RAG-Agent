@@ -1,0 +1,13 @@
+# Quellex (Law Firm) tenant override
+# Usage: docker compose -f docker-compose.yml -f docker-compose.quellex.yml up --build
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      args:
+        TENANT: quellex
+
+  backend:
+    environment:
+      - TENANT_ID=quellex

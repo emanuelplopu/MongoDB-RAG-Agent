@@ -190,7 +190,7 @@ export default function ArchivedChatsPage() {
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
           {loading ? (
             <div className="flex justify-center py-12">
-              <div className="animate-spin h-8 w-8 border-2 border-indigo-600 border-t-transparent rounded-full" />
+              <div className="animate-spin h-8 w-8 border-2 border-primary border-t-transparent rounded-full" />
             </div>
           ) : sessions.length === 0 ? (
             <div className="py-12 text-center text-gray-500 dark:text-gray-400">
@@ -211,7 +211,7 @@ export default function ArchivedChatsPage() {
                     type="checkbox"
                     checked={selectedIds.has(session.id)}
                     onChange={() => toggleSelection(session.id)}
-                    className="h-5 w-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                    className="h-5 w-5 rounded border-gray-300 text-primary focus:ring-primary"
                   />
                   
                   <div className="flex-1 min-w-0">

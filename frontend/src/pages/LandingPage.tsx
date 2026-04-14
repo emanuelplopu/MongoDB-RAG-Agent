@@ -10,9 +10,12 @@ import {
   CheckCircleIcon,
 } from '@heroicons/react/24/outline'
 import { useAuth } from '../contexts/AuthContext'
+import { useTenant } from '../contexts/TenantContext'
 import { LocalizedLink } from '../components/LocalizedLink'
+import TenantLogo from '../components/TenantLogo'
 import ThemeSwitcher from '../components/ThemeSwitcher'
 import LanguageSwitcher from '../components/LanguageSwitcher'
+import QuellexLandingPage from './QuellexLandingPage'
 
 // Feature card data with translation keys
 const features = [
@@ -70,6 +73,70 @@ const benefitKeys = [
 export default function LandingPage() {
   const { isAuthenticated, user } = useAuth()
   const { t } = useTranslation()
+  const { tenant } = useTenant()
+  const variant = tenant.features.landingPageVariant
+
+  // Quellex variant: dedicated landing page
+  if (variant === 'quellex') {
+    return <QuellexLandingPage />
+  }
+
+  // Minimal variant: streamlined hero + single CTA, no features/benefits sections
+  if (variant === 'minimal') {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-background to-surface-variant dark:from-gray-900 dark:to-gray-800 flex flex-col">
+        <div className="absolute top-4 right-4 z-50 flex items-center gap-2">
+          <LanguageSwitcher />
+          <ThemeSwitcher />
+        </div>
+
+        <div className="flex-1 flex items-center justify-center px-4">
+          <div className="text-center max-w-2xl">
+            <div className="flex justify-center mb-6">
+              <TenantLogo size="lg" />
+            </div>
+            <h1 className="text-4xl sm:text-5xl font-bold text-primary-900 dark:text-white mb-4">
+              {t('common.appName')}
+            </h1>
+            <p className="text-xl text-secondary dark:text-gray-400 mb-10">
+              {t('landing.subtitle')}
+            </p>
+            {isAuthenticated ? (
+              <LocalizedLink
+                to="/dashboard"
+                className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl bg-gradient-brand text-white font-semibold text-lg shadow-lg hover:shadow-xl transition-all hover:-translate-y-0.5"
+              >
+                <SparklesIcon className="h-6 w-6" />
+                {t('landing.goToDashboard')}
+                <ArrowRightIcon className="h-5 w-5" />
+              </LocalizedLink>
+            ) : (
+              <LocalizedLink
+                to="/login"
+                className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl bg-gradient-brand text-white font-semibold text-lg shadow-lg hover:shadow-xl transition-all hover:-translate-y-0.5"
+              >
+                {t('landing.getStarted')}
+                <ArrowRightIcon className="h-5 w-5" />
+              </LocalizedLink>
+            )}
+          </div>
+        </div>
+
+        <footer className="border-t border-surface-variant dark:border-gray-700">
+          <div className="max-w-7xl mx-auto px-4 py-6 flex justify-between items-center">
+            <div className="flex items-center gap-2">
+              <TenantLogo size="sm" className="shadow-none" />
+              <span className="font-semibold text-primary-900 dark:text-white">{t('common.appName')}</span>
+            </div>
+            <p className="text-sm text-secondary dark:text-gray-400">{t('landing.footerTagline')}</p>
+          </div>
+        </footer>
+      </div>
+    )
+  }
+
+  // Professional variant: authoritative tone, muted decorations, trust-focused CTA
+  const isProfessional = variant === 'professional'
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-surface-variant dark:from-gray-900 dark:to-gray-800">
@@ -83,26 +150,20 @@ export default function LandingPage() {
       <div className="relative overflow-hidden">
         {/* Background decoration */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute -top-40 -right-40 w-80 h-80 bg-primary/10 rounded-full blur-3xl" />
-          <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-purple-500/10 rounded-full blur-3xl" />
+          <div className={`absolute -top-40 -right-40 w-80 h-80 rounded-full blur-3xl ${isProfessional ? 'bg-primary/5' : 'bg-primary/10'}`} />
+          <div className={`absolute -bottom-40 -left-40 w-80 h-80 rounded-full blur-3xl ${isProfessional ? 'bg-secondary/5' : 'bg-purple-500/10'}`} />
         </div>
 
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-16 pb-20">
           <div className="text-center">
             {/* Logo and Title */}
             <div className="flex justify-center mb-6">
-              <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 shadow-xl">
-                <svg className="h-12 w-12" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M12 10h6c2.76 0 5 2.24 5 5s-2.24 5-5 5h-4" stroke="white" strokeWidth="2.5" strokeLinecap="round" fill="none"/>
-                  <path d="M14 18l-3 3-3-3" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-                  <path d="M11 21v2" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
-                </svg>
-              </div>
+              <TenantLogo size="lg" />
             </div>
 
-            <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-primary-900 dark:text-white mb-6">
+            <h1 className={`font-bold text-primary-900 dark:text-white mb-6 ${isProfessional ? 'text-3xl sm:text-4xl lg:text-5xl' : 'text-4xl sm:text-5xl lg:text-6xl'}`}>
               {t('landing.welcomeTo')}{' '}
-              <span className="bg-gradient-to-r from-indigo-500 to-purple-600 bg-clip-text text-transparent">
+              <span className={isProfessional ? 'text-primary' : 'text-gradient-brand'}>
                 {t('common.appName')}
               </span>
             </h1>
@@ -117,7 +178,7 @@ export default function LandingPage() {
                 <>
                   <LocalizedLink
                     to="/dashboard"
-                    className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold text-lg shadow-lg hover:shadow-xl transition-all hover:-translate-y-0.5"
+                    className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl bg-gradient-brand text-white font-semibold text-lg shadow-lg hover:shadow-xl transition-all hover:-translate-y-0.5"
                   >
                     <SparklesIcon className="h-6 w-6" />
                     {t('landing.goToDashboard')}
@@ -135,7 +196,7 @@ export default function LandingPage() {
                 <>
                   <LocalizedLink
                     to="/login"
-                    className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold text-lg shadow-lg hover:shadow-xl transition-all hover:-translate-y-0.5"
+                    className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl bg-gradient-brand text-white font-semibold text-lg shadow-lg hover:shadow-xl transition-all hover:-translate-y-0.5"
                   >
                     {t('landing.getStarted')}
                     <ArrowRightIcon className="h-5 w-5" />
@@ -154,7 +215,7 @@ export default function LandingPage() {
       </div>
 
       {/* Features Section */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
+      <div className={`max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 ${isProfessional ? 'py-16' : 'py-20'}`}>
         <div className="text-center mb-16">
           <h2 className="text-3xl sm:text-4xl font-bold text-primary-900 dark:text-white mb-4">
             {t('landing.featuresTitle')}
@@ -164,7 +225,7 @@ export default function LandingPage() {
           </p>
         </div>
 
-        <div className="grid gap-8 md:grid-cols-2 lg:grid-cols-3">
+        <div className={`grid gap-8 ${isProfessional ? 'md:grid-cols-2 lg:grid-cols-3' : 'md:grid-cols-2 lg:grid-cols-3'}`}>
           {features.map((feature) => (
             <div
               key={feature.titleKey}
@@ -215,7 +276,7 @@ export default function LandingPage() {
             </div>
 
             <div className="relative">
-              <div className="bg-gradient-to-br from-indigo-500/20 to-purple-600/20 rounded-2xl p-8">
+              <div className="bg-primary/20 rounded-2xl p-8">
                 <div className="bg-surface dark:bg-gray-800 rounded-xl shadow-xl p-6 space-y-4">
                   <div className="flex items-center gap-3">
                     <div className="w-3 h-3 rounded-full bg-red-500" />
@@ -241,7 +302,7 @@ export default function LandingPage() {
 
       {/* CTA Section */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
-        <div className="relative bg-gradient-to-r from-indigo-500 to-purple-600 rounded-3xl p-8 sm:p-12 overflow-hidden">
+        <div className="relative bg-gradient-brand rounded-3xl p-8 sm:p-12 overflow-hidden">
           {/* Background decoration */}
           <div className="absolute inset-0 overflow-hidden pointer-events-none">
             <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
@@ -285,13 +346,7 @@ export default function LandingPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
-                <svg className="h-5 w-5" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M12 10h6c2.76 0 5 2.24 5 5s-2.24 5-5 5h-4" stroke="white" strokeWidth="2.5" strokeLinecap="round" fill="none"/>
-                  <path d="M14 18l-3 3-3-3" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-                  <path d="M11 21v2" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
-                </svg>
-              </div>
+              <TenantLogo size="sm" className="shadow-none" />
               <span className="font-semibold text-primary-900 dark:text-white">{t('common.appName')}</span>
             </div>
 

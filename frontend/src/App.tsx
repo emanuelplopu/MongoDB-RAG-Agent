@@ -36,6 +36,7 @@ import IngestionAnalyticsPage from './pages/IngestionAnalyticsPage'
 import JobHistoryPage from './pages/JobHistoryPage'
 import BackupManagementPage from './pages/BackupManagementPage'
 import EmbeddingBenchmarkPage from './pages/EmbeddingBenchmarkPage'
+import FeatureGuard from './components/FeatureGuard'
 
 // Component to handle language redirect
 function LanguageRedirect() {
@@ -100,7 +101,7 @@ function AppRoutes() {
                     <Route path="search" element={<SearchPage />} />
                     <Route path="documents" element={<DocumentsPage />} />
                     <Route path="documents/:documentId" element={<DocumentPreviewPage />} />
-                    <Route path="profiles" element={<ProfilesPage />} />
+                    <Route path="profiles" element={<FeatureGuard feature="showProfiles"><ProfilesPage /></FeatureGuard>} />
                     <Route path="system" element={<SystemPage />} />
                     <Route path="system/status" element={<StatusPage />} />
                     <Route path="system/indexes" element={<SearchIndexesPage />} />
@@ -112,16 +113,16 @@ function AppRoutes() {
                     <Route path="system/users" element={<UserManagementPage />} />
                     <Route path="system/prompts" element={<PromptManagementPage />} />
                     <Route path="system/api-keys" element={<APIKeysPage />} />
-                    <Route path="system/strategies" element={<StrategiesPage />} />
-                    <Route path="system/strategies/ab-test" element={<StrategyABTestPage />} />
-                    <Route path="system/backups" element={<BackupManagementPage />} />
-                    <Route path="system/benchmark" element={<EmbeddingBenchmarkPage />} />
+                    <Route path="system/strategies" element={<FeatureGuard feature="showStrategies"><StrategiesPage /></FeatureGuard>} />
+                    <Route path="system/strategies/ab-test" element={<FeatureGuard feature="showStrategies"><StrategyABTestPage /></FeatureGuard>} />
+                    <Route path="system/backups" element={<FeatureGuard feature="showBackups"><BackupManagementPage /></FeatureGuard>} />
+                    <Route path="system/benchmark" element={<FeatureGuard feature="showEmbeddingBenchmark"><EmbeddingBenchmarkPage /></FeatureGuard>} />
                     <Route path="archived-chats" element={<ArchivedChatsPage />} />
-                    <Route path="cloud-sources" element={<CloudSourcesPage />} />
-                    <Route path="cloud-sources/connections" element={<CloudSourceConnectionsPage />} />
-                    <Route path="cloud-sources/connections/:connectionId" element={<CloudSourceConnectionsPage />} />
-                    <Route path="cloud-sources/connect/:providerType" element={<CloudSourceConnectPage />} />
-                    <Route path="email-cloud-config" element={<EmailCloudConfigPage />} />
+                    <Route path="cloud-sources" element={<FeatureGuard feature="showCloudSources"><CloudSourcesPage /></FeatureGuard>} />
+                    <Route path="cloud-sources/connections" element={<FeatureGuard feature="showCloudSources"><CloudSourceConnectionsPage /></FeatureGuard>} />
+                    <Route path="cloud-sources/connections/:connectionId" element={<FeatureGuard feature="showCloudSources"><CloudSourceConnectionsPage /></FeatureGuard>} />
+                    <Route path="cloud-sources/connect/:providerType" element={<FeatureGuard feature="showCloudSources"><CloudSourceConnectPage /></FeatureGuard>} />
+                    <Route path="email-cloud-config" element={<FeatureGuard feature="showEmailConfig"><EmailCloudConfigPage /></FeatureGuard>} />
                   </Route>
                   <Route path="*" element={<NotFoundPage />} />
                 </Routes>

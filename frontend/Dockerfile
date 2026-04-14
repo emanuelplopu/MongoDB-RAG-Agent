@@ -15,6 +15,10 @@ RUN npm ci --prefer-offline --no-audit --no-fund
 # Copy source code
 COPY . .
 
+# Tenant branding (default: recallhub)
+ARG TENANT=recallhub
+ENV VITE_TENANT=$TENANT
+
 # Build for production with optimization
 RUN npm run build
 

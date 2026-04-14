@@ -13,6 +13,7 @@ class BackendSettings(BaseSettings):
     api_port: int = Field(default=8000, description="API server port")
     api_workers: int = Field(default=4, description="Number of API workers")
     debug: bool = Field(default=False, description="Debug mode")
+    tenant_id: str = Field(default="recallhub", description="Tenant identifier for branding")
     
     # CORS Settings
     cors_origins: List[str] = Field(

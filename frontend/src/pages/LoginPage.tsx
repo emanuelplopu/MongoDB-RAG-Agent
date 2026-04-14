@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { ExclamationCircleIcon } from '@heroicons/react/24/outline'
 import { ApiError } from '../api/client'
 import { useLocalizedNavigate } from '../components/LocalizedLink'
+import TenantLogo from '../components/TenantLogo'
 import ThemeSwitcher from '../components/ThemeSwitcher'
 import LanguageSwitcher from '../components/LanguageSwitcher'
 
@@ -69,12 +70,8 @@ export default function LoginPage() {
       <div className="max-w-md w-full">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 mb-4">
-            <svg className="h-10 w-10" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M12 10h6c2.76 0 5 2.24 5 5s-2.24 5-5 5h-4" stroke="white" strokeWidth="2.5" strokeLinecap="round" fill="none"/>
-              <path d="M14 18l-3 3-3-3" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-              <path d="M11 21v2" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
-            </svg>
+          <div className="inline-flex items-center justify-center mb-4">
+            <TenantLogo size="md" />
           </div>
           <h1 className="text-2xl font-bold text-primary-900 dark:text-white">{t('common.appName')}</h1>
           <p className="text-secondary dark:text-gray-400 mt-2">

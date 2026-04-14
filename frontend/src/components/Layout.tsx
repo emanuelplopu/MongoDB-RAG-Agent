@@ -45,6 +45,7 @@ import CommandPalette, { useCommandPalette } from './CommandPalette'
 import { LocalizedLink, useLocalizedNavigate } from './LocalizedLink'
 import { useChatSidebar } from '../contexts/ChatSidebarContext'
 import { useAuth } from '../contexts/AuthContext'
+import { useTenant } from '../contexts/TenantContext'
 import { ChatSession, indexesApi } from '../api/client'
 import SidebarWarningToast, { SidebarWarning } from './SidebarWarningToast'
 
@@ -84,6 +85,7 @@ export default function Layout() {
   const navigate = useLocalizedNavigate()
   const { t } = useTranslation()
   const { user, isAuthenticated, isLoading: isAuthLoading, logout } = useAuth()
+  const { tenant } = useTenant()
   const commandPalette = useCommandPalette()
   const {
     sessions,
@@ -150,8 +152,23 @@ export default function Layout() {
     return item ? t(item.nameKey) : t('nav.chat')
   }
 
-  // Filter menu items based on user admin status
-  const userMenuItems = baseMenuItems.filter(item => !item.adminOnly || user?.is_admin)
+  // Filter menu items based on user admin status and tenant features
+  const userMenuItems = baseMenuItems.filter(item => {
+    if (item.adminOnly && !user?.is_admin) return false
+    if (item.href === '/cloud-sources' && !tenant.features.showCloudSources) return false
+    if (item.href === '/email-cloud-config' && !tenant.features.showEmailConfig) return false
+    if (item.href === '/profiles' && !tenant.features.showProfiles) return false
+    if (item.nameKey === 'nav.apiDocs' && !tenant.features.showApiDocs) return false
+    return true
+  })
+
+  // Filter system menu items based on tenant features
+  const filteredSystemItems = systemMenuItems.filter(item => {
+    if (item.href === '/system/strategies' && !tenant.features.showStrategies) return false
+    if (item.href === '/system/benchmark' && !tenant.features.showEmbeddingBenchmark) return false
+    if (item.href === '/system/backups' && !tenant.features.showBackups) return false
+    return true
+  })
   
   // State for system submenu expansion
   const [systemMenuOpen, setSystemMenuOpen] = useState(location.pathname.startsWith('/system'))
@@ -583,7 +600,7 @@ export default function Layout() {
                   </button>
                   {systemMenuOpen && (
                     <div className="ml-4 border-l border-surface-variant dark:border-gray-600">
-                      {systemMenuItems.map((subItem) => {
+                      {filteredSystemItems.map((subItem) => {
                         const isSubActive = location.pathname === subItem.href
                         return (
                           <LocalizedLink
@@ -652,7 +669,7 @@ export default function Layout() {
           onClick={() => setUserMenuOpen(!userMenuOpen)}
           className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors"
         >
-          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-sm font-medium">
+          <div className="w-8 h-8 rounded-full bg-gradient-brand flex items-center justify-center text-white text-sm font-medium">
             {isAuthenticated && user ? (
               user.name.charAt(0).toUpperCase()
             ) : (
@@ -665,7 +682,7 @@ export default function Layout() {
           </div>
           <div className="flex-1 text-left">
             <div className="text-sm font-medium text-primary-900 dark:text-gray-200 truncate">
-              {isAuthenticated && user ? user.name : 'RecallHub'}
+              {isAuthenticated && user ? user.name : tenant.branding.appName}
             </div>
             {isAuthenticated && user && (
               <div className="text-xs text-secondary dark:text-gray-500 truncate">{user.email}</div>

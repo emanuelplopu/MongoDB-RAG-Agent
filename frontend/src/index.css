@@ -2,9 +2,59 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Tenant theme variables (defaults = RecallHub, overridden by TenantContext) */
+:root {
+  --color-primary: #6750A4;
+  --color-primary-50: #F6F2FF;
+  --color-primary-100: #E9DDFF;
+  --color-primary-200: #D0BCFF;
+  --color-primary-300: #B69DF8;
+  --color-primary-400: #9A82DB;
+  --color-primary-500: #7F67BE;
+  --color-primary-600: #6750A4;
+  --color-primary-700: #4F378B;
+  --color-primary-800: #381E72;
+  --color-primary-900: #21005D;
+  
+  --color-secondary: #625B71;
+  --color-secondary-50: #F9F5FF;
+  --color-secondary-100: #E8DEF8;
+  
+  --color-surface: #FFFBFE;
+  --color-surface-variant: #E7E0EC;
+  --color-background: #FFFBFE;
+  --color-background-dark: #1C1B1F;
+  
+  --color-gradient-from: #6366f1;
+  --color-gradient-to: #8b5cf6;
+  
+  --font-sans: 'Inter', 'Roboto', system-ui, sans-serif;
+  --font-display: 'Inter', 'Roboto', system-ui, sans-serif;
+  
+  --radius-base: 16px;
+  --radius-button: 12px;
+  --radius-input: 8px;
+  
+  --color-dark-background: #111827;
+  --color-dark-surface: #1f2937;
+  --color-dark-text: #f3f4f6;
+}
+
+/* Tenant brand gradient utility */
+.bg-gradient-brand {
+  background: linear-gradient(to right, var(--color-gradient-from), var(--color-gradient-to));
+}
+
+.text-gradient-brand {
+  background: linear-gradient(to right, var(--color-gradient-from), var(--color-gradient-to));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
 /* Custom styles */
 body {
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: var(--font-sans, 'Inter', system-ui, sans-serif);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -47,6 +97,146 @@ body {
 
 .dark ::-webkit-scrollbar-thumb:hover {
   background: #6b7280;
+}
+
+/* ========================================
+   Quellex Tenant Utilities
+   ======================================== */
+
+/* Quellex HSL-based CSS variables (injected when quellex tenant is active) */
+:root {
+  --quellex-gold: 43 65% 46%;
+  --quellex-gold-light: 43 70% 56%;
+  --quellex-navy: 216 50% 15%;
+  --quellex-navy-light: 40 15% 88%;
+  --quellex-navy-surface: 40 20% 92%;
+  --quellex-teal: 180 60% 35%;
+  --quellex-border: 40 15% 82%;
+}
+
+.dark {
+  --quellex-gold: 43 65% 52%;
+  --quellex-gold-light: 43 70% 62%;
+  --quellex-navy: 216 60% 10%;
+  --quellex-navy-light: 216 50% 18%;
+  --quellex-navy-surface: 216 55% 13%;
+  --quellex-teal: 180 100% 32%;
+  --quellex-border: 216 30% 22%;
+}
+
+/* Font utilities */
+.font-serif-display {
+  font-family: 'Playfair Display', Georgia, serif;
+}
+
+.font-serif-quote {
+  font-family: 'EB Garamond', Georgia, serif;
+}
+
+/* Glass surface effects */
+.quellex-glass-surface {
+  background: linear-gradient(
+    145deg,
+    hsl(var(--quellex-navy-surface) / 0.75),
+    hsl(var(--quellex-navy-light) / 0.5)
+  );
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid hsl(var(--quellex-border) / 0.4);
+  box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.04), inset 0 -1px 0 hsl(0 0% 0% / 0.1);
+}
+
+.quellex-glass-surface-strong {
+  background: linear-gradient(
+    160deg,
+    hsl(var(--quellex-navy-surface) / 0.95),
+    hsl(var(--quellex-navy-light) / 0.75),
+    hsl(var(--quellex-navy-surface) / 0.9)
+  );
+  backdrop-filter: blur(40px);
+  -webkit-backdrop-filter: blur(40px);
+  border: 1px solid hsl(var(--quellex-border) / 0.5);
+  box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.06), inset 0 -1px 0 hsl(0 0% 0% / 0.15);
+}
+
+/* Shadow utilities */
+.quellex-app-shadow {
+  box-shadow:
+    0 30px 80px -15px hsl(0 0% 0% / 0.55),
+    0 15px 30px -10px hsl(0 0% 0% / 0.35),
+    0 0 0 1px hsl(var(--quellex-border) / 0.25),
+    inset 0 1px 0 hsl(0 0% 100% / 0.05),
+    inset 0 -1px 0 hsl(0 0% 0% / 0.1);
+}
+
+.quellex-card-shadow {
+  box-shadow:
+    0 8px 32px -8px hsl(0 0% 0% / 0.4),
+    0 4px 12px -4px hsl(0 0% 0% / 0.2),
+    inset 0 1px 0 hsl(0 0% 100% / 0.04);
+}
+
+.quellex-card-hover-shadow {
+  box-shadow:
+    0 12px 40px -8px hsl(0 0% 0% / 0.5),
+    0 6px 16px -4px hsl(0 0% 0% / 0.3),
+    0 0 0 1px hsl(var(--quellex-gold) / 0.15),
+    inset 0 1px 0 hsl(0 0% 100% / 0.06);
+}
+
+.quellex-gold-glow {
+  box-shadow: 0 0 20px hsl(var(--quellex-gold) / 0.3), 0 0 40px hsl(var(--quellex-gold) / 0.1);
+}
+
+.quellex-gold-glow-hover {
+  box-shadow: 0 4px 24px hsl(var(--quellex-gold) / 0.4), 0 0 48px hsl(var(--quellex-gold) / 0.15), 0 2px 8px hsl(0 0% 0% / 0.3);
+}
+
+/* Color utilities */
+.text-quellex-gold { color: hsl(var(--quellex-gold)); }
+.text-quellex-gold-light { color: hsl(var(--quellex-gold-light)); }
+.bg-quellex-gold { background-color: hsl(var(--quellex-gold)); }
+.text-quellex-teal { color: hsl(var(--quellex-teal)); }
+.bg-quellex-navy-surface { background-color: hsl(var(--quellex-navy-surface)); }
+.border-quellex-gold { border-color: hsl(var(--quellex-gold) / 0.3); }
+
+/* Section divider */
+.quellex-section-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, hsl(var(--quellex-gold) / 0.15), transparent);
+}
+
+/* Scroll reveal animations */
+.quellex-reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1), transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.quellex-reveal.revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+.quellex-reveal-delay-1 { transition-delay: 0.1s; }
+.quellex-reveal-delay-2 { transition-delay: 0.2s; }
+.quellex-reveal-delay-3 { transition-delay: 0.3s; }
+
+/* Keyframe animations */
+@keyframes quellex-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes quellex-slide-up {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.quellex-animate-fade-in {
+  animation: quellex-fade-in 0.6s ease-out forwards;
+}
+
+.quellex-animate-slide-up {
+  animation: quellex-slide-up 0.6s ease-out forwards;
 }
 
 /* Chat message animations */

@@ -154,7 +154,7 @@ export default function APIKeysPage() {
         <div className="mb-6 flex justify-between items-center">
           <button
             onClick={() => setShowCreateModal(true)}
-            className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2"
+            className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center gap-2"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -212,7 +212,7 @@ export default function APIKeysPage() {
               {loading ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-8 text-center text-gray-500 dark:text-gray-400">
-                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600 mx-auto mb-2"></div>
+                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto mb-2"></div>
                     {t('common.loading')}
                   </td>
                 </tr>
@@ -258,7 +258,7 @@ export default function APIKeysPage() {
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                       <button
                         onClick={() => handleToggleKey(key.id)}
-                        className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-900 dark:hover:text-indigo-300 mr-3"
+                        className="text-primary dark:text-primary-400 hover:text-primary-900 dark:hover:text-primary-300 mr-3"
                       >
                         {key.is_active ? t('common.disable') : t('common.enable')}
                       </button>
@@ -332,7 +332,7 @@ export default function APIKeysPage() {
                 <button
                   onClick={handleCreateKey}
                   disabled={!newKeyName.trim() || creating}
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {creating ? t('common.loading') : t('apiKeys.create')}
                 </button>

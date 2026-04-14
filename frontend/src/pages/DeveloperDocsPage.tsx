@@ -188,7 +188,7 @@ export default function DeveloperDocsPage() {
                   Method 1: API Key (for external services)
                 </h4>
                 <p className="text-gray-600 dark:text-gray-400 mb-2 text-sm">
-                  Create an API key from the <a href="/system/api-keys" className="text-indigo-600 dark:text-indigo-400 hover:underline">API Keys page</a> and use it in the X-API-Key header:
+                  Create an API key from the <a href="/system/api-keys" className="text-primary dark:text-primary-400 hover:underline">API Keys page</a> and use it in the X-API-Key header:
                 </p>
                 <pre className="bg-gray-100 dark:bg-gray-700 p-3 rounded text-sm font-mono overflow-x-auto">
 {`# Using API Key (best for external apps like FocusAhead)
@@ -299,7 +299,7 @@ GET /api/v1/status/dashboard`}
 
           {loading ? (
             <div className="p-8 text-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto"></div>
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
               <p className="mt-2 text-gray-500 dark:text-gray-400">Loading API spec...</p>
             </div>
           ) : error ? (
@@ -313,7 +313,7 @@ GET /api/v1/status/dashboard`}
               <p className="text-gray-500 dark:text-gray-400 text-sm mb-4">{error}</p>
               <button
                 onClick={() => { setLoading(true); fetchOpenApiSpec(); }}
-                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-700"
               >
                 Retry
               </button>
