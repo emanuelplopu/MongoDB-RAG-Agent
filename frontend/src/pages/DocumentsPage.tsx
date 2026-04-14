@@ -39,25 +39,25 @@ interface TreeNode {
 const getFileIcon = (filename: string) => {
   const ext = filename.split('.').pop()?.toLowerCase() || ''
   if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(ext)) {
-    return <PhotoIcon className="h-5 w-5 text-pink-500" />
+    return <PhotoIcon className="h-5 w-5 text-primary" />
   }
   if (['mp3', 'wav', 'flac', 'm4a', 'ogg'].includes(ext)) {
-    return <MusicalNoteIcon className="h-5 w-5 text-purple-500" />
+    return <MusicalNoteIcon className="h-5 w-5 text-secondary" />
   }
   if (['mp4', 'avi', 'mkv', 'mov', 'webm'].includes(ext)) {
-    return <FilmIcon className="h-5 w-5 text-blue-500" />
+    return <FilmIcon className="h-5 w-5 text-primary" />
   }
   if (['pdf'].includes(ext)) {
     return <DocumentIcon className="h-5 w-5 text-red-500" />
   }
   if (['doc', 'docx'].includes(ext)) {
-    return <DocumentIcon className="h-5 w-5 text-blue-600" />
+    return <DocumentIcon className="h-5 w-5 text-primary" />
   }
   if (['xls', 'xlsx'].includes(ext)) {
-    return <DocumentIcon className="h-5 w-5 text-green-600" />
+    return <DocumentIcon className="h-5 w-5 text-secondary" />
   }
   if (['ppt', 'pptx'].includes(ext)) {
-    return <DocumentIcon className="h-5 w-5 text-orange-500" />
+    return <DocumentIcon className="h-5 w-5 text-primary-700" />
   }
   if (['md', 'txt'].includes(ext)) {
     return <DocumentTextIcon className="h-5 w-5 text-gray-500" />
@@ -138,9 +138,9 @@ function FolderNode({ node, style, dragHandle }: NodeRendererProps<TreeNode>) {
         }}
       >
         {node.isOpen ? (
-          <FolderOpenIcon className="h-5 w-5 text-yellow-500" />
+          <FolderOpenIcon className="h-5 w-5 text-primary" />
         ) : (
-          <FolderIcon className="h-5 w-5 text-yellow-500" />
+          <FolderIcon className="h-5 w-5 text-primary" />
         )}
       </span>
       <span className="text-sm text-primary-900 dark:text-gray-200 truncate flex-1">
@@ -593,7 +593,7 @@ export default function DocumentsPage() {
                 className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg transition-colors ${
                   isRebuilding 
                     ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300' 
-                    : 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 hover:bg-yellow-200 dark:hover:bg-yellow-900/50'
+                    : 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-900/50'
                 }`}
                 title={isRebuilding ? 'Rebuilding metadata...' : `${docsWithZeroChunks} documents need metadata repair`}
               >
@@ -642,7 +642,7 @@ export default function DocumentsPage() {
             )}
             {/* Rebuild completed message */}
             {rebuildStatus?.status === 'completed' && !isRebuilding && (
-              <span className="text-green-600 dark:text-green-400">
+              <span className="text-secondary dark:text-secondary-400">
                 Rebuild complete: {rebuildStatus.updated} docs updated
               </span>
             )}
@@ -696,7 +696,7 @@ export default function DocumentsPage() {
                       onClick={() => setCurrentPath(folder.path)}
                       className="group flex flex-col items-center p-4 rounded-xl transition-all cursor-pointer hover:bg-surface-variant dark:hover:bg-gray-700"
                     >
-                      <FolderIcon className="h-10 w-10 text-yellow-500" />
+                      <FolderIcon className="h-10 w-10 text-primary" />
                       <span className="mt-2 text-xs text-center text-primary-900 dark:text-gray-200 line-clamp-2 w-full">
                         {folder.name}
                       </span>
@@ -804,7 +804,7 @@ export default function DocumentsPage() {
                   >
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-2">
-                        <FolderIcon className="h-5 w-5 text-yellow-500" />
+                        <FolderIcon className="h-5 w-5 text-primary" />
                         <span className="text-sm text-primary-900 dark:text-gray-200">
                           {folder.name}
                         </span>

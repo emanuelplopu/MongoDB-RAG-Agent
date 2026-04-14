@@ -61,21 +61,21 @@ const AGENT_MODES = {
     icon: '🔄',
     description: 'Automatically chooses mode based on query complexity',
     details: 'Uses FAST mode for short/simple queries (<50 chars). Uses THINKING mode for complex queries with words like "analyze", "step by step", "compare", "explain", "why", "how does".',
-    color: 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300',
+    color: 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300',
   },
   thinking: {
     label: 'Thinking',
     icon: '🧠',
     description: 'Full orchestrator-worker pipeline for complex questions',
     details: 'Always uses the Orchestrator (GPT-5.2) to analyze intent, create a search plan, execute parallel searches via Workers, evaluate results, and synthesize a comprehensive answer. Best for multi-step questions, research tasks, and when you need thorough answers.',
-    color: 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300',
+    color: 'bg-secondary-100 dark:bg-secondary-900/40 text-secondary-700 dark:text-secondary-300',
   },
   fast: {
     label: 'Fast',
     icon: '⚡',
     description: 'Direct search without orchestration for quick answers',
     details: 'Skips the Orchestrator entirely and performs a direct hybrid search. Faster but less thorough. Good for simple factual questions or when you know the information exists in documents.',
-    color: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300',
+    color: 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300',
   },
 } as const
 
@@ -713,12 +713,12 @@ export default function ChatPage() {
                         </div>
                         
                         {/* Auto Mode Threshold */}
-                        <div className="p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800">
-                          <div className="flex items-center gap-2 font-medium text-yellow-700 dark:text-yellow-300">
+                        <div className="p-2 bg-primary-50 dark:bg-primary-900/20 rounded-lg border border-primary-200 dark:border-primary-800">
+                          <div className="flex items-center gap-2 font-medium text-primary-700 dark:text-primary-300">
                             <InformationCircleIcon className="h-4 w-4" />
                             Auto Mode Threshold
                           </div>
-                          <p className="text-yellow-600 dark:text-yellow-400 mt-1">
+                          <p className="text-primary-600 dark:text-primary-400 mt-1">
                             In AUTO mode, queries &lt;20 characters use FAST mode (no orchestrator).
                             Short questions like "what is X?" skip the planning phase.
                           </p>
@@ -1133,7 +1133,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
               absolute -top-2 ${isUser ? '-left-2' : '-right-2'}
               p-1.5 rounded-lg shadow-md transition-all duration-150
               ${copied 
-                ? 'bg-green-500 text-white' 
+                ? 'bg-secondary text-white' 
                 : 'bg-white dark:bg-gray-600 text-gray-500 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-500'
               }
               opacity-0 group-hover:opacity-100 focus:opacity-100
@@ -1216,8 +1216,8 @@ function MessageBubble({ message }: { message: SessionMessage }) {
                     <div className="flex items-center gap-2">
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
                         op.index_type === 'vector' 
-                          ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300' 
-                          : 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300'
+                          ? 'bg-secondary-100 dark:bg-secondary-900/40 text-secondary-700 dark:text-secondary-300' 
+                          : 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300'
                       }`}>
                         {op.index_type === 'vector' ? 'Vector Search' : 'Text Search'}
                       </span>

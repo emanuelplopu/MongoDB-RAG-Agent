@@ -19,7 +19,7 @@ services:
       # Mount mappings: maps container paths to host paths for "Open in Explorer" feature
       # Format: container_path=host_path separated by | (pipe)
       # Must match the volume mounts below
-      - MOUNT_MAPPINGS=/app/mounts/parhelion-energy=D:/parhelion.energy|/app/mounts/gdrive-root=G:/My Drive/root|/app/documents=./documents
+      - MOUNT_MAPPINGS=/app/mounts/parhelion-energy=D:/parhelion.energy|/app/mounts/gdrive-root=G:/My Drive/root|/app/mounts/test-law=D:/test-law|/app/documents=./documents
     volumes:
       # Default volumes (must be repeated as override replaces the list)
       - ./documents:/app/documents
@@ -29,6 +29,7 @@ services:
       # External document folders - add your drives here
       - D:/parhelion.energy:/app/mounts/parhelion-energy:ro
       - "G:/My Drive/root:/app/mounts/gdrive-root:ro"
+      - D:/test-law:/app/mounts/test-law:ro
       # - E:/another-drive:/app/mounts/another-drive:ro
       # - //server/share:/app/mounts/network-share:ro
 
@@ -42,6 +43,7 @@ services:
       # External document folders - same as backend
       - D:/parhelion.energy:/app/mounts/parhelion-energy:ro
       - "G:/My Drive/root:/app/mounts/gdrive-root:ro"
+      - D:/test-law:/app/mounts/test-law:ro
 
   cli:
     volumes:
@@ -53,5 +55,6 @@ services:
       # External document folders - add your drives here
       - D:/parhelion.energy:/app/mounts/parhelion-energy:ro
       - "G:/My Drive/root:/app/mounts/gdrive-root:ro"
+      - D:/test-law:/app/mounts/test-law:ro
       # - E:/another-drive:/app/mounts/another-drive:ro
       # - //server/share:/app/mounts/network-share:ro

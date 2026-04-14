@@ -316,7 +316,7 @@ export default function Layout() {
                 <div className="flex gap-1.5">
                   <button
                     onClick={archiveSelected}
-                    className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 rounded-lg hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors"
+                    className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-xs bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 rounded-lg hover:bg-primary-200 dark:hover:bg-primary-900/50 transition-colors"
                   >
                     <ArchiveBoxIcon className="h-3.5 w-3.5" />
                     {t('sidebar.archive')} ({selectedSessions.size})
@@ -382,7 +382,7 @@ export default function Layout() {
               autoFocus
             />
             <button onClick={handleCreateFolder} className="p-1">
-              <CheckIcon className="h-4 w-4 text-green-500" />
+              <CheckIcon className="h-4 w-4 text-secondary" />
             </button>
             <button onClick={() => setShowNewFolder(false)} className="p-1">
               <XMarkIcon className="h-4 w-4 text-red-500" />
@@ -784,7 +784,7 @@ export default function Layout() {
                       </>
                     ) : (
                       <>
-                        <StarIconSolid className="h-4 w-4 text-yellow-500" />
+                        <StarIconSolid className="h-4 w-4 text-primary" />
                         {t('sidebar.pin')}
                       </>
                     )}
@@ -893,7 +893,7 @@ function SessionItem({
         <span className="flex-1 text-sm truncate">{session.title || t('chat.newChat')}</span>
       )}
       {session.is_pinned && (
-        <StarIconSolid className="h-3 w-3 text-yellow-500 flex-shrink-0" />
+        <StarIconSolid className="h-3 w-3 text-primary flex-shrink-0" />
       )}
     </div>
   )

@@ -44,10 +44,10 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
 
   // Phase icons and colors
   const phaseConfig: Record<string, { icon: typeof LightBulbIcon; color: string }> = {
-    analyze: { icon: MagnifyingGlassIcon, color: 'text-blue-600 dark:text-blue-400' },
-    plan: { icon: LightBulbIcon, color: 'text-yellow-600 dark:text-yellow-400' },
-    evaluate: { icon: BeakerIcon, color: 'text-purple-600 dark:text-purple-400' },
-    synthesize: { icon: SparklesIcon, color: 'text-green-600 dark:text-green-400' },
+    analyze: { icon: MagnifyingGlassIcon, color: 'text-secondary dark:text-secondary-400' },
+    plan: { icon: LightBulbIcon, color: 'text-primary dark:text-primary-400' },
+    evaluate: { icon: BeakerIcon, color: 'text-secondary-700 dark:text-secondary-300' },
+    synthesize: { icon: SparklesIcon, color: 'text-primary-700 dark:text-primary-300' },
   }
 
   // Task type icons
@@ -328,7 +328,7 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
                             href={link.url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-blue-600 dark:text-blue-400 hover:underline truncate flex-1"
+                            className="text-primary dark:text-primary-400 hover:underline truncate flex-1"
                           >
                             {link.title || link.url}
                           </a>

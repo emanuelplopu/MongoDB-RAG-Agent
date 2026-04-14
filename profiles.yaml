@@ -40,3 +40,14 @@ profiles:
       default_schedule_type: scheduled
       default_schedule_cron: 0 */6 * * *
     cloud_sources: []
+  test-law:
+    name: Test Law
+    description: Test law documents from D:/test-law
+    documents_folders:
+    - /app/mounts/test-law
+    database: rag_test_law
+    collection_documents: documents
+    collection_chunks: chunks
+    vector_index: vector_index
+    text_index: text_index
+    cloud_sources: []

@@ -53,7 +53,7 @@ function ChunkCard({ chunk, index }: { chunk: DocumentChunk; index: number }) {
             </span>
           )}
           {chunk.has_embedding && (
-            <span className="text-xs text-green-700 dark:text-green-400 bg-green-100 dark:bg-green-900/30 px-2 py-1 rounded-full">
+            <span className="text-xs text-secondary-700 dark:text-secondary-400 bg-secondary-100 dark:bg-secondary-900/30 px-2 py-1 rounded-full">
               Embedded ({chunk.embedding_dimensions}d)
             </span>
           )}
@@ -245,7 +245,7 @@ export default function DocumentPreviewPage() {
       <div className="flex flex-wrap gap-3">
         {/* Cloud Source Badge */}
         {cloudSourceInfo?.is_cloud_source && (
-          <div className="flex items-center gap-2 px-3 py-2 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded-xl text-sm">
+          <div className="flex items-center gap-2 px-3 py-2 bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 rounded-xl text-sm">
             <CloudIcon className="h-4 w-4" />
             <span>Cloud Source: {cloudSourceInfo.provider?.replace('_', ' ')}</span>
           </div>
@@ -285,7 +285,7 @@ export default function DocumentPreviewPage() {
       </div>
 
       {explorerMessage && (
-        <div className={`p-3 rounded-xl text-sm ${explorerMessage.includes('Failed') || (explorerMessage.includes('not') && !explorerMessage.includes('Docker')) ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400' : explorerMessage.startsWith('📂') || explorerMessage.startsWith('📋') ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400' : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'}`}>
+        <div className={`p-3 rounded-xl text-sm ${explorerMessage.includes('Failed') || (explorerMessage.includes('not') && !explorerMessage.includes('Docker')) ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400' : explorerMessage.startsWith('📂') || explorerMessage.startsWith('📋') ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400' : 'bg-secondary-100 dark:bg-secondary-900/30 text-secondary-700 dark:text-secondary-400'}`}>
           <pre className="whitespace-pre-wrap">{explorerMessage}</pre>
           {(explorerMessage.startsWith('📂') || explorerMessage.startsWith('📋')) && (
             <button
@@ -307,7 +307,7 @@ export default function DocumentPreviewPage() {
                   }
                 }
               }}
-              className="mt-2 px-3 py-1 bg-blue-200 dark:bg-blue-800 hover:bg-blue-300 dark:hover:bg-blue-700 rounded-lg text-xs font-medium transition-colors"
+              className="mt-2 px-3 py-1 bg-primary-200 dark:bg-primary-800 hover:bg-primary-300 dark:hover:bg-primary-700 rounded-lg text-xs font-medium transition-colors"
             >
               Copy Path
             </button>
@@ -372,7 +372,7 @@ export default function DocumentPreviewPage() {
             </div>
             <div className="flex justify-between">
               <dt className="text-secondary">Embeddings:</dt>
-              <dd className="text-green-600 dark:text-green-400">
+              <dd className="text-secondary dark:text-secondary-400">
                 {doc.chunks.filter(c => c.has_embedding).length}/{doc.chunks_count}
               </dd>
             </div>
@@ -412,7 +412,7 @@ export default function DocumentPreviewPage() {
             {cloudSourceInfo?.is_cloud_source ? cloudSourceInfo.remote_path : doc.file_path}
           </code>
           {cloudSourceInfo?.is_cloud_source && cloudSourceInfo.is_cached && (
-            <p className="text-xs text-green-600 dark:text-green-400 mt-2">
+            <p className="text-xs text-secondary dark:text-secondary-400 mt-2">
               ✓ Cached locally for preview
             </p>
           )}

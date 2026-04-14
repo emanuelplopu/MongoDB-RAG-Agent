@@ -49,7 +49,7 @@ const formatRelativeTime = (dateStr: string): string => {
 const getStatusBadge = (status: string) => {
   const statusConfig: Record<string, { color: string; bg: string; icon: typeof CheckCircleIcon }> = {
     completed: { color: 'text-green-600', bg: 'bg-green-100 dark:bg-green-900/30', icon: CheckCircleIcon },
-    running: { color: 'text-blue-600', bg: 'bg-blue-100 dark:bg-blue-900/30', icon: ArrowPathIcon },
+    running: { color: 'text-primary-600', bg: 'bg-primary-100 dark:bg-primary-900/30', icon: ArrowPathIcon },
     failed: { color: 'text-red-600', bg: 'bg-red-100 dark:bg-red-900/30', icon: ExclamationCircleIcon },
     idle: { color: 'text-gray-600', bg: 'bg-gray-100 dark:bg-gray-700', icon: ClockIcon },
   }
@@ -199,8 +199,8 @@ export default function DashboardPage() {
           to="/search"
           className="flex items-center gap-3 p-4 rounded-2xl bg-surface dark:bg-gray-800 shadow-elevation-1 hover:shadow-elevation-2 transition-all group"
         >
-          <div className="rounded-xl bg-blue-100 dark:bg-blue-900/50 p-2 group-hover:bg-blue-200 dark:group-hover:bg-blue-800/50 transition-colors">
-            <MagnifyingGlassIcon className="h-6 w-6 text-blue-600" />
+          <div className="rounded-xl bg-secondary-100 dark:bg-secondary-900/50 p-2 group-hover:bg-secondary-200 dark:group-hover:bg-secondary-800/50 transition-colors">
+            <MagnifyingGlassIcon className="h-6 w-6 text-secondary" />
           </div>
           <div>
             <p className="font-semibold text-primary-900 dark:text-gray-100">{t('dashboard.quickActions.search')}</p>
@@ -212,8 +212,8 @@ export default function DashboardPage() {
           to="/documents"
           className="flex items-center gap-3 p-4 rounded-2xl bg-surface dark:bg-gray-800 shadow-elevation-1 hover:shadow-elevation-2 transition-all group"
         >
-          <div className="rounded-xl bg-green-100 dark:bg-green-900/50 p-2 group-hover:bg-green-200 dark:group-hover:bg-green-800/50 transition-colors">
-            <DocumentTextIcon className="h-6 w-6 text-green-600" />
+          <div className="rounded-xl bg-primary-100 dark:bg-primary-900/50 p-2 group-hover:bg-primary-200 dark:group-hover:bg-primary-800/50 transition-colors">
+            <DocumentTextIcon className="h-6 w-6 text-primary" />
           </div>
           <div>
             <p className="font-semibold text-primary-900 dark:text-gray-100">{t('dashboard.quickActions.documents')}</p>
@@ -226,8 +226,8 @@ export default function DashboardPage() {
             to="/system/ingestion"
             className="flex items-center gap-3 p-4 rounded-2xl bg-surface dark:bg-gray-800 shadow-elevation-1 hover:shadow-elevation-2 transition-all group"
           >
-            <div className="rounded-xl bg-purple-100 dark:bg-purple-900/50 p-2 group-hover:bg-purple-200 dark:group-hover:bg-purple-800/50 transition-colors">
-              <DocumentArrowUpIcon className="h-6 w-6 text-purple-600" />
+            <div className="rounded-xl bg-secondary-100 dark:bg-secondary-900/50 p-2 group-hover:bg-secondary-200 dark:group-hover:bg-secondary-800/50 transition-colors">
+              <DocumentArrowUpIcon className="h-6 w-6 text-secondary" />
             </div>
             <div>
               <p className="font-semibold text-primary-900 dark:text-gray-100">{t('dashboard.quickActions.ingestion')}</p>
@@ -295,7 +295,7 @@ export default function DashboardPage() {
         <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-primary-900 dark:text-gray-100 flex items-center gap-2">
-              <DocumentTextIcon className="h-5 w-5 text-green-600" />
+              <DocumentTextIcon className="h-5 w-5 text-primary" />
               {t('dashboard.recentDocuments.title')}
             </h2>
             <LocalizedLink
@@ -318,8 +318,8 @@ export default function DashboardPage() {
                   to={`/documents/${doc.id}`}
                   className="flex items-center gap-3 p-3 rounded-xl hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors group"
                 >
-                  <div className="rounded-lg bg-green-100 dark:bg-green-900/50 p-2 group-hover:bg-green-200 dark:group-hover:bg-green-800/50 transition-colors">
-                    <DocumentTextIcon className="h-4 w-4 text-green-600" />
+                  <div className="rounded-lg bg-primary-100 dark:bg-primary-900/50 p-2 group-hover:bg-primary-200 dark:group-hover:bg-primary-800/50 transition-colors">
+                    <DocumentTextIcon className="h-4 w-4 text-primary" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-primary-900 dark:text-gray-100 truncate">
@@ -353,7 +353,7 @@ export default function DashboardPage() {
         <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-primary-900 dark:text-gray-100 flex items-center gap-2">
-              <ArrowPathIcon className="h-5 w-5 text-blue-600" />
+              <ArrowPathIcon className="h-5 w-5 text-secondary" />
               {t('dashboard.ingestionActivity.title')}
             </h2>
             {user?.is_admin && (
@@ -368,24 +368,24 @@ export default function DashboardPage() {
 
           {/* Current Ingestion Status */}
           {currentIngestion && currentIngestion.status !== 'idle' && (
-            <div className="mb-4 p-4 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
+            <div className="mb-4 p-4 rounded-xl bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800">
               <div className="flex items-center justify-between mb-2">
-                <span className="font-medium text-blue-700 dark:text-blue-300">{t('dashboard.ingestionActivity.running')}</span>
+                <span className="font-medium text-primary-700 dark:text-primary-300">{t('dashboard.ingestionActivity.running')}</span>
                 {getStatusBadge(currentIngestion.status)}
               </div>
               <div className="mb-2">
-                <div className="flex justify-between text-xs text-blue-600 dark:text-blue-400 mb-1">
+                <div className="flex justify-between text-xs text-primary-600 dark:text-primary-400 mb-1">
                   <span>{t('dashboard.ingestionActivity.progress')}</span>
                   <span>{currentIngestion.progress_percent}%</span>
                 </div>
-                <div className="w-full h-2 bg-blue-200 dark:bg-blue-800 rounded-full overflow-hidden">
+                <div className="w-full h-2 bg-primary-200 dark:bg-primary-800 rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-blue-600 rounded-full transition-all"
+                    className="h-full bg-primary-600 rounded-full transition-all"
                     style={{ width: `${currentIngestion.progress_percent}%` }}
                   />
                 </div>
               </div>
-              <p className="text-xs text-blue-600 dark:text-blue-400">
+              <p className="text-xs text-primary-600 dark:text-primary-400">
                 {currentIngestion.processed_files} / {currentIngestion.total_files} files processed
               </p>
             </div>
@@ -402,8 +402,8 @@ export default function DashboardPage() {
                   key={run.job_id}
                   className="flex items-center gap-3 p-3 rounded-xl bg-surface-variant dark:bg-gray-700"
                 >
-                  <div className="rounded-lg bg-blue-100 dark:bg-blue-900/50 p-2">
-                    <CpuChipIcon className="h-4 w-4 text-blue-600" />
+                  <div className="rounded-lg bg-primary-100 dark:bg-primary-900/50 p-2">
+                    <CpuChipIcon className="h-4 w-4 text-primary" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
@@ -431,7 +431,7 @@ export default function DashboardPage() {
         <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-primary-900 dark:text-gray-100 flex items-center gap-2">
-              <FolderIcon className="h-5 w-5 text-purple-600" />
+              <FolderIcon className="h-5 w-5 text-secondary" />
               {t('dashboard.profiles.title')}
             </h2>
             {user?.is_admin && (
@@ -462,10 +462,10 @@ export default function DashboardPage() {
                   <div className={`rounded-lg p-2 ${
                     key === profiles.active_profile
                       ? 'bg-primary-200 dark:bg-primary-800'
-                      : 'bg-purple-100 dark:bg-purple-900/50'
+                      : 'bg-secondary-100 dark:bg-secondary-900/50'
                   }`}>
                     <FolderIcon className={`h-4 w-4 ${
-                      key === profiles.active_profile ? 'text-primary-700' : 'text-purple-600'
+                      key === profiles.active_profile ? 'text-primary-700' : 'text-secondary'
                     }`} />
                   </div>
                   <div className="flex-1 min-w-0">
@@ -496,7 +496,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Tips & Productivity Section */}
-      <div className="rounded-2xl bg-gradient-to-br from-primary-50 to-blue-50 dark:from-gray-800 dark:to-gray-800 p-6 border border-primary-100 dark:border-gray-700">
+      <div className="rounded-2xl bg-gradient-to-br from-primary-50 to-secondary-50 dark:from-gray-800 dark:to-gray-800 p-6 border border-primary-100 dark:border-gray-700">
         <h2 className="text-lg font-semibold text-primary-900 dark:text-gray-100 mb-4 flex items-center gap-2">
           <ArrowTrendingUpIcon className="h-5 w-5 text-primary" />
           {t('dashboard.tips.title')}
@@ -512,8 +512,8 @@ export default function DashboardPage() {
             </p>
           </div>
           <div className="bg-white/50 dark:bg-gray-700/50 rounded-xl p-4">
-            <div className="rounded-lg bg-green-100 dark:bg-green-900/50 w-10 h-10 flex items-center justify-center mb-3">
-              <DocumentTextIcon className="h-5 w-5 text-green-600" />
+            <div className="rounded-lg bg-secondary-100 dark:bg-secondary-900/50 w-10 h-10 flex items-center justify-center mb-3">
+              <DocumentTextIcon className="h-5 w-5 text-secondary" />
             </div>
             <h3 className="font-medium text-primary-900 dark:text-gray-100 mb-1">{t('dashboard.tips.checkSources.title')}</h3>
             <p className="text-sm text-secondary dark:text-gray-400">
@@ -521,8 +521,8 @@ export default function DashboardPage() {
             </p>
           </div>
           <div className="bg-white/50 dark:bg-gray-700/50 rounded-xl p-4">
-            <div className="rounded-lg bg-blue-100 dark:bg-blue-900/50 w-10 h-10 flex items-center justify-center mb-3">
-              <MagnifyingGlassIcon className="h-5 w-5 text-blue-600" />
+            <div className="rounded-lg bg-primary-100 dark:bg-primary-900/50 w-10 h-10 flex items-center justify-center mb-3">
+              <MagnifyingGlassIcon className="h-5 w-5 text-primary" />
             </div>
             <h3 className="font-medium text-primary-900 dark:text-gray-100 mb-1">{t('dashboard.tips.useSearch.title')}</h3>
             <p className="text-sm text-secondary dark:text-gray-400">
