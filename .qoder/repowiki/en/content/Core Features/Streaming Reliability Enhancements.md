@@ -12,25 +12,36 @@
 - [nginx.conf](file://frontend/nginx.conf)
 - [SYSTEM_BLUEPRINT.md](file://SYSTEM_BLUEPRINT.md)
 - [config.py](file://backend/core/config.py)
+- [ingestion.py](file://backend/routers/ingestion.py)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Added comprehensive automatic session title generation with intelligent LLM-based title creation
+- Enhanced streaming architecture with new `title_update` event for real-time title synchronization
+- Improved inline file serving capabilities with better MIME type detection and browser preview support
+- Updated streaming event protocol to include title update notifications
+- Enhanced frontend streaming client with title update callback handling
 
 ## Table of Contents
 1. [Introduction](#introduction)
 2. [Streaming Architecture Overview](#streaming-architecture-overview)
 3. [Backend Streaming Implementation](#backend-streaming-implementation)
 4. [Frontend Streaming Client](#frontend-streaming-client)
-5. [Reliability Mechanisms](#reliability-mechanisms)
-6. [Error Handling and Recovery](#error-handling-and-recovery)
-7. [Performance Optimizations](#performance-optimizations)
-8. [Configuration Management](#configuration-management)
-9. [Monitoring and Debugging](#monitoring-and-debugging)
-10. [Best Practices](#best-practices)
+5. [Enhanced Title Generation System](#enhanced-title-generation-system)
+6. [Improved Inline File Serving](#improved-inline-file-serving)
+7. [Reliability Mechanisms](#reliability-mechanisms)
+8. [Error Handling and Recovery](#error-handling-and-recovery)
+9. [Performance Optimizations](#performance-optimizations)
+10. [Configuration Management](#configuration-management)
+11. [Monitoring and Debugging](#monitoring-and-debugging)
+12. [Best Practices](#best-practices)
 
 ## Introduction
 
 The Streaming Reliability Enhancements project focuses on implementing robust, fault-tolerant streaming capabilities for the MongoDB RAG Agent system. This comprehensive solution ensures reliable real-time communication between the frontend and backend through Server-Sent Events (SSE), with built-in mechanisms for handling network interruptions, timeouts, and partial failures.
 
-The system provides real-time streaming of AI agent processing phases, worker task execution updates, and final response delivery, while maintaining high availability and performance under various network conditions.
+The system provides real-time streaming of AI agent processing phases, worker task execution updates, and final response delivery, while maintaining high availability and performance under various network conditions. Recent enhancements include intelligent automatic session title generation and improved inline file serving capabilities for better user experience.
 
 ## Streaming Architecture Overview
 
@@ -42,16 +53,19 @@ subgraph "Frontend Layer"
 UI[React Chat Interface]
 Client[Streaming Client]
 Indicator[Streaming Indicator]
+TitleCallback[Title Update Callback]
 end
 subgraph "Network Layer"
 Nginx[Nginx Proxy]
 SSE[SSE Connection]
+TitleEvent[Title Update Event]
 end
 subgraph "Backend Layer"
 API[FastAPI Router]
 Agent[Federated Agent]
 Orchestrator[Orchestrator]
 Workers[Worker Pool]
+TitleGen[Title Generator]
 end
 subgraph "Data Layer"
 DB[(MongoDB)]
@@ -64,21 +78,24 @@ SSE --> API
 API --> Agent
 Agent --> Orchestrator
 Agent --> Workers
+Agent --> TitleGen
 Workers --> DB
 Orchestrator --> DB
 Agent --> Cache
 SSE --> Client
+SSE --> TitleEvent
+TitleEvent --> TitleCallback
 Client --> Indicator
 ```
 
 **Diagram sources**
-- [sessions.py:1180-1379](file://backend/routers/sessions.py#L1180-L1379)
+- [sessions.py:1180-1426](file://backend/routers/sessions.py#L1180-L1426)
 - [client.ts:1440-1639](file://frontend/src/api/client.ts#L1440-L1639)
 - [ChatPageNew.tsx:327-456](file://frontend/src/pages/ChatPageNew.tsx#L327-L456)
 
 ## Backend Streaming Implementation
 
-The backend streaming implementation centers around the `FederatedAgent` class and the `/sessions/{session_id}/messages/stream` endpoint. The system uses asynchronous queues and event callbacks to stream real-time updates during agent processing.
+The backend streaming implementation centers around the `FederatedAgent` class and the `/sessions/{session_id}/messages/stream` endpoint. The system uses asynchronous queues and event callbacks to stream real-time updates during agent processing, now enhanced with automatic title generation capabilities.
 
 ### Core Streaming Components
 
@@ -89,10 +106,13 @@ sequenceDiagram
 participant Client as "Frontend Client"
 participant API as "Sessions Router"
 participant Agent as "FederatedAgent"
+participant TitleGen as "Title Generator"
 participant Queue as "Async Queue"
 participant SSE as "SSE Response"
 Client->>API : POST /sessions/{id}/messages/stream
 API->>Agent : FederatedAgent.process()
+Agent->>TitleGen : Generate title if needed
+TitleGen-->>Agent : Generated title
 Agent->>Queue : on_event callback registration
 Agent->>Agent : Process with streaming
 Agent->>Queue : Emit 'start' event
@@ -103,17 +123,19 @@ Agent->>Queue : Emit 'worker_step' events
 Queue->>SSE : yield data : {type : 'worker_step'}
 Agent->>Queue : Emit 'response' event
 Queue->>SSE : yield data : {type : 'response'}
+Agent->>Queue : Emit 'title_update' event (if title changed)
+Queue->>SSE : yield data : {type : 'title_update'}
 Agent->>Queue : Emit 'done' event
 Queue->>SSE : yield data : {type : 'done'}
 ```
 
 **Diagram sources**
-- [sessions.py:1180-1379](file://backend/routers/sessions.py#L1180-L1379)
+- [sessions.py:1180-1426](file://backend/routers/sessions.py#L1180-L1426)
 - [coordinator.py:184-251](file://backend/agent/coordinator.py#L184-L251)
 
-### Event Streaming Protocol
+### Enhanced Event Streaming Protocol
 
-The backend implements a structured event streaming protocol with specific event types:
+The backend implements a structured event streaming protocol with specific event types, now including title update notifications:
 
 | Event Type | Purpose | Payload Structure |
 |------------|---------|-------------------|
@@ -122,16 +144,17 @@ The backend implements a structured event streaming protocol with specific event
 | `orchestrator_step` | Orchestrator processing updates | `{phase, reasoning, duration_ms, tokens}` |
 | `worker_step` | Worker task execution updates | `{task_id, task_type, documents_count, duration_ms}` |
 | `response` | Final response with sources | `{content, sources, stats, trace}` |
+| `title_update` | Session title change notification | `{title}` |
 | `error` | Error notifications | `{message}` |
 | `done` | Stream completion signal | `{}` |
 
 **Section sources**
-- [sessions.py:1180-1379](file://backend/routers/sessions.py#L1180-L1379)
+- [sessions.py:1180-1426](file://backend/routers/sessions.py#L1180-L1426)
 - [coordinator.py:280-372](file://backend/agent/coordinator.py#L280-L372)
 
 ## Frontend Streaming Client
 
-The frontend streaming client provides a robust interface for consuming real-time events from the backend, with comprehensive error handling and retry mechanisms.
+The frontend streaming client provides a robust interface for consuming real-time events from the backend, with comprehensive error handling, retry mechanisms, and enhanced title update support.
 
 ### Streaming Client Architecture
 
@@ -172,9 +195,9 @@ StreamingClient --> StreamState : "maintains"
 - [client.ts:1440-1639](file://frontend/src/api/client.ts#L1440-L1639)
 - [ChatPageNew.tsx:327-456](file://frontend/src/pages/ChatPageNew.tsx#L327-L456)
 
-### Real-time Event Processing
+### Enhanced Real-time Event Processing
 
-The frontend client implements sophisticated event processing with automatic buffering and parsing:
+The frontend client implements sophisticated event processing with automatic buffering, parsing, and title update handling:
 
 ```mermaid
 flowchart TD
@@ -186,6 +209,7 @@ EventType --> |phase| PhaseHandler[Update Processing Phase]
 EventType --> |orchestrator_step| OrchestratorHandler[Collect Steps]
 EventType --> |worker_step| WorkerHandler[Collect Worker Steps]
 EventType --> |response| ResponseHandler[Update Final Response]
+EventType --> |title_update| TitleHandler[Update Session Title]
 EventType --> |error| ErrorHandler[Display Error]
 EventType --> |done| DoneHandler[Cleanup and Finish]
 StartHandler --> Continue[Continue Streaming]
@@ -193,8 +217,10 @@ PhaseHandler --> Continue
 OrchestratorHandler --> Continue
 WorkerHandler --> Continue
 ResponseHandler --> Continue
+TitleHandler --> UpdateUI[Update UI with New Title]
 ErrorHandler --> Cleanup[Cleanup Resources]
 DoneHandler --> Cleanup
+UpdateUI --> Continue
 Continue --> End([Event Processed])
 Cleanup --> End
 ```
@@ -205,6 +231,86 @@ Cleanup --> End
 **Section sources**
 - [client.ts:1440-1639](file://frontend/src/api/client.ts#L1440-L1639)
 - [ChatPageNew.tsx:327-456](file://frontend/src/pages/ChatPageNew.tsx#L327-L456)
+
+## Enhanced Title Generation System
+
+The system now includes intelligent automatic session title generation that enhances user experience by providing meaningful conversation titles without manual input.
+
+### Title Generation Logic
+
+```mermaid
+flowchart TD
+MessageReceived[Message Received] --> CheckMessages{Any Previous Messages?}
+CheckMessages --> |No| FirstMessage[Use First Few Words]
+CheckMessages --> |Yes| CheckCount{Message Count >= 6?}
+FirstMessage --> SetPlaceholder[Set Placeholder Title]
+SetPlaceholder --> SaveToDB[Save to Database]
+CheckCount --> |No| WaitMore[Wait for More Messages]
+CheckCount --> |Yes| GenerateTitle[Generate LLM Title]
+WaitMore --> SaveToDB
+GenerateTitle --> CleanTitle[Clean and Format Title]
+CleanTitle --> CheckLength{Title > 8 Words?}
+CheckLength --> |Yes| Truncate[Truncate to 8 Words]
+CheckLength --> |No| ValidTitle[Use Generated Title]
+Truncate --> SaveToDB
+ValidTitle --> SaveToDB
+SaveToDB --> SendEvent[Send title_update Event]
+SendEvent --> UpdateUI[Update Frontend UI]
+```
+
+### Title Generation Strategies
+
+The system employs different strategies based on conversation progress:
+
+| Strategy | Trigger Condition | Implementation |
+|----------|-------------------|----------------|
+| Placeholder Title | First message only | Uses first 6 words of user message |
+| LLM-Generated Title | After 3 exchanges (6 messages) | Uses conversation summary for context |
+| Fallback Protection | Generation failure | Keeps existing title or uses placeholder |
+
+**Section sources**
+- [sessions.py:1004-1060](file://backend/routers/sessions.py#L1004-L1060)
+- [sessions.py:1340-1391](file://backend/routers/sessions.py#L1340-L1391)
+
+## Improved Inline File Serving
+
+The document ingestion system now provides enhanced inline file serving capabilities with better MIME type detection and browser preview support.
+
+### Enhanced File Serving Architecture
+
+```mermaid
+flowchart TD
+FileRequest[File Request] --> CheckInline{Inline Preview?}
+CheckInline --> |Yes| ForceInline[Force Inline Serving]
+CheckInline --> |No| CheckType{File Type?}
+ForceInline --> ServeInline[Serve Inline with Filename]
+CheckType --> CheckViewable{Viewable Type?}
+CheckViewable --> |Yes| ServeInline[Serve Inline with Filename]
+CheckViewable --> |No| ServeDownload[Force Download]
+CheckType --> CheckExists{File Exists?}
+CheckExists --> |No| FallbackContent[Return Stored Content]
+CheckExists --> |Yes| CheckViewable
+FallbackContent --> ServeInline
+ServeInline --> End[File Served]
+ServeDownload --> End
+```
+
+### File Serving Capabilities
+
+The system now supports comprehensive file serving with intelligent content disposition:
+
+| File Type | Serving Method | Content-Disposition |
+|-----------|----------------|---------------------|
+| PDF | Inline Preview | `inline; filename=".pdf"` |
+| Images | Inline Preview | `inline; filename="image.ext"` |
+| Text Files | Inline Preview | `inline; filename="file.txt"` |
+| HTML/XML | Inline Preview | `inline; filename="file.ext"` |
+| Office Docs | Forced Download | `attachment; filename="file.ext"` |
+| Binary Files | Forced Download | `attachment; filename="file.bin"` |
+| Missing Files | Inline Fallback | `inline; filename="document.txt"` |
+
+**Section sources**
+- [ingestion.py:2415-2480](file://backend/routers/ingestion.py#L2415-L2480)
 
 ## Reliability Mechanisms
 
@@ -218,16 +324,19 @@ subgraph "Network Layer"
 KeepAlive[Keep-Alive Mechanism]
 Retry[Automatic Retry]
 Timeout[Connection Timeout]
+TitleSync[Title Synchronization]
 end
 subgraph "Backend Reliability"
 Heartbeat[SSE Heartbeats]
 Graceful[Graceful Degradation]
 Fallback[Fallback Responses]
+TitleGen[Title Generation]
 end
 subgraph "Frontend Resilience"
 Abort[Abort Controller]
 Buffer[Event Buffering]
 Recovery[Recovery Logic]
+TitleCallback[Title Callbacks]
 end
 KeepAlive --> Heartbeat
 Retry --> Graceful
@@ -235,6 +344,8 @@ Timeout --> Fallback
 Heartbeat --> Abort
 Graceful --> Buffer
 Fallback --> Recovery
+TitleSync --> TitleGen
+TitleGen --> TitleCallback
 ```
 
 ### Keep-Alive and Timeout Management
@@ -247,6 +358,7 @@ The system implements intelligent keep-alive mechanisms to prevent connection dr
 | Hard Timeout Limit | Maximum processing time | 10 minutes |
 | Connection Buffering | Handle network interruptions | Automatic buffering |
 | Graceful Degradation | Continue with partial results | Fallback responses |
+| Title Update Sync | Real-time title synchronization | Event-driven updates |
 
 **Section sources**
 - [sessions.py:1220-1253](file://backend/routers/sessions.py#L1220-L1253)
@@ -265,14 +377,17 @@ ErrorType --> |Network| NetworkError[Network Error]
 ErrorType --> |Processing| ProcessingError[Processing Error]
 ErrorType --> |Timeout| TimeoutError[Timeout Error]
 ErrorType --> |Connection| ConnectionError[Connection Error]
+ErrorType --> |TitleGen| TitleGenError[Title Generation Error]
 NetworkError --> RetryLogic[Retry Logic]
 ProcessingError --> Fallback[Fallback Response]
 TimeoutError --> Graceful[Graceful Timeout]
 ConnectionError --> Reconnect[Reconnection Attempt]
+TitleGenError --> FallbackTitle[Fallback Title]
 RetryLogic --> UserNotification[Notify User]
 Fallback --> UserNotification
 Graceful --> UserNotification
 Reconnect --> UserNotification
+FallbackTitle --> UserNotification
 UserNotification --> Cleanup[Resource Cleanup]
 Cleanup --> End([Error Handled])
 ```
@@ -287,6 +402,7 @@ The frontend implements sophisticated error recovery mechanisms:
 | Processing Timeout | Show timeout error with retry option | "Request timed out" message |
 | Network Interruption | Buffer events until reconnected | "Network disconnected" warning |
 | Server Error | Display error and allow retry | "Server error - please try again" |
+| Title Generation Failure | Use fallback title or keep existing | "Title generation failed" notice |
 
 **Section sources**
 - [client.ts:1519-1524](file://frontend/src/api/client.ts#L1519-L1524)
@@ -305,6 +421,7 @@ Buffering[Event Buffering]
 Compression[Response Compression]
 Chunking[Chunked Transfer]
 Caching[Partial Result Caching]
+TitleOptimization[Title Generation Optimization]
 end
 subgraph "Resource Management"
 Memory[Memory Management]
@@ -316,11 +433,13 @@ subgraph "Network Efficiency"
 KeepAlive[Keep-Alive Packets]
 ConnectionPooling[Connection Pooling]
 TimeoutOptimization[Timeout Optimization]
+InlineServing[Inline File Serving]
 end
 Buffering --> Memory
 Compression --> ConnectionPooling
 Chunking --> TimeoutOptimization
 Caching --> Monitoring
+TitleOptimization --> InlineServing
 ```
 
 ### Resource Management Strategies
@@ -334,6 +453,8 @@ The system implements efficient resource management:
 | Response Compression | Reduce bandwidth usage | Gzip compression for SSE |
 | Memory Cleanup | Prevent memory leaks | Automatic resource cleanup |
 | Timeout Management | Prevent resource starvation | Configurable timeout limits |
+| Title Generation Caching | Reduce LLM calls | Cache generated titles |
+| Inline File Serving | Improve user experience | Direct browser preview |
 
 **Section sources**
 - [nginx.conf:108-130](file://frontend/nginx.conf#L108-L130)
@@ -352,6 +473,7 @@ The streaming system provides extensive configuration options for tuning reliabi
 | `REQUEST_TIMEOUT_SECONDS` | 30 seconds | Standard request timeout | Balances responsiveness |
 | `CHAT_TIMEOUT_SECONDS` | 300 seconds | Extended chat timeout | Allows long processing |
 | `agent_total_timeout` | 300 seconds | Agent processing timeout | Controls AI generation |
+| `title_generation_threshold` | 6 messages | LLM title generation trigger | Optimizes LLM usage |
 
 ### Environment Configuration
 
@@ -367,6 +489,7 @@ Frontend --> UI[UI Settings]
 Streaming --> Timeout[Timeout Configuration]
 Streaming --> Buffer[Buffer Settings]
 Streaming --> Retry[Retry Configuration]
+Streaming --> TitleGen[Title Generation Settings]
 UI --> Indicator[Indicator Settings]
 UI --> Feedback[Feedback Settings]
 ```
@@ -388,12 +511,14 @@ Metrics[Performance Metrics]
 Logs[Detailed Logging]
 Health[Health Checks]
 Tracing[Request Tracing]
+TitleMetrics[Title Generation Metrics]
 end
 subgraph "Frontend Monitoring"
 Stats[Usage Statistics]
 Errors[Error Tracking]
 Performance[Performance Metrics]
 UserFeedback[User Feedback]
+TitleSync[Title Sync Tracking]
 end
 subgraph "Debugging Tools"
 DevTools[Developer Tools]
@@ -405,6 +530,7 @@ Metrics --> Stats
 Logs --> Errors
 Health --> Performance
 Tracing --> UserFeedback
+TitleMetrics --> TitleSync
 DevTools --> Console
 Console --> Network
 Network --> Timeline
@@ -421,6 +547,8 @@ The system collects comprehensive debug information:
 | Error Details | Both ends | Troubleshooting |
 | Resource Usage | Backend monitoring | Capacity planning |
 | User Actions | Frontend analytics | UX improvement |
+| Title Generation | Backend processing | Conversation management |
+| File Serving | Backend processing | Document access tracking |
 
 **Section sources**
 - [coordinator.py:280-372](file://backend/agent/coordinator.py#L280-L372)
@@ -437,6 +565,8 @@ This section outlines best practices for implementing and maintaining reliable s
 3. **Resource Management**: Properly manage memory and connection resources
 4. **Timeout Configuration**: Tune timeout values based on use case requirements
 5. **Monitoring**: Implement comprehensive logging and metrics collection
+6. **Title Generation**: Balance LLM usage with performance requirements
+7. **File Serving**: Optimize MIME type detection for browser compatibility
 
 ### Operational Recommendations
 
@@ -445,6 +575,8 @@ This section outlines best practices for implementing and maintaining reliable s
 3. **Backup Strategies**: Implement backup and recovery procedures
 4. **Performance Monitoring**: Continuously monitor streaming performance
 5. **User Experience**: Provide clear feedback during streaming operations
+6. **Title Generation**: Monitor LLM costs and generation success rates
+7. **File Access**: Track file serving patterns for optimization
 
 ### Maintenance Procedures
 
@@ -453,5 +585,7 @@ This section outlines best practices for implementing and maintaining reliable s
 3. **Capacity Planning**: Monitor and plan for streaming traffic growth
 4. **Disaster Recovery**: Test and maintain disaster recovery procedures
 5. **Documentation**: Maintain comprehensive documentation for streaming components
+6. **Title Generation**: Monitor and adjust title generation thresholds
+7. **File Serving**: Regularly audit file serving performance and compatibility
 
-The Streaming Reliability Enhancements system provides a robust foundation for real-time AI agent interactions, with comprehensive reliability mechanisms, performance optimizations, and monitoring capabilities to ensure consistent and dependable operation in production environments.
+The Streaming Reliability Enhancements system provides a robust foundation for real-time AI agent interactions, with comprehensive reliability mechanisms, performance optimizations, enhanced title generation capabilities, and improved file serving functionality to ensure consistent and dependable operation in production environments.

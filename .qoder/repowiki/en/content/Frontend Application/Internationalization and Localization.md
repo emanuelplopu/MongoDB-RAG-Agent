@@ -8,6 +8,7 @@
 - [frontend/src/contexts/LanguageContext.tsx](file://frontend/src/contexts/LanguageContext.tsx)
 - [frontend/src/components/LanguageSwitcher.tsx](file://frontend/src/components/LanguageSwitcher.tsx)
 - [frontend/src/components/Layout.tsx](file://frontend/src/components/Layout.tsx)
+- [frontend/src/components/FilePreviewModal.tsx](file://frontend/src/components/FilePreviewModal.tsx)
 - [frontend/src/pages/DocumentPreviewPage.tsx](file://frontend/src/pages/DocumentPreviewPage.tsx)
 - [frontend/src/App.tsx](file://frontend/src/App.tsx)
 - [backend/main.py](file://backend/main.py)
@@ -15,11 +16,11 @@
 
 ## Update Summary
 **Changes Made**
-- Updated German localization with 101 new translation entries covering new features
-- Enhanced English localization with 6 new translation entries
-- Added comprehensive project management and move-to-folder functionality translations
-- Updated DocumentPreviewPage to display both container and host paths with improved UI messaging
-- Expanded sidebar and project management translation coverage
+- Enhanced FilePreviewModal UI elements with new translation support for modal header actions
+- Updated German and English translations for FilePreviewModal UI elements including open in new tab, download, and close actions
+- Expanded existing preview translation coverage with new UI interaction messages
+- Enhanced DocumentPreviewPage to display both container and host paths with improved UI messaging
+- Updated translation resources to support comprehensive file preview functionality across all supported languages
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -28,11 +29,12 @@
 4. [Architecture Overview](#architecture-overview)
 5. [Detailed Component Analysis](#detailed-component-analysis)
 6. [Enhanced Translation Coverage](#enhanced-translation-coverage)
-7. [DocumentPreviewPage Improvements](#documentpreviewpage-improvements)
-8. [Dependency Analysis](#dependency-analysis)
-9. [Performance Considerations](#performance-considerations)
-10. [Troubleshooting Guide](#troubleshooting-guide)
-11. [Conclusion](#conclusion)
+7. [FilePreviewModal UI Enhancements](#filepreviewmodal-ui-enhancements)
+8. [DocumentPreviewPage Improvements](#documentpreviewpage-improvements)
+9. [Dependency Analysis](#dependency-analysis)
+10. [Performance Considerations](#performance-considerations)
+11. [Troubleshooting Guide](#troubleshooting-guide)
+12. [Conclusion](#conclusion)
 
 ## Introduction
 
@@ -40,11 +42,11 @@ This document provides comprehensive documentation for the internationalization 
 
 The internationalization system has been significantly enhanced with comprehensive German localization covering 101 new translation entries and enhanced English localization with 6 new entries. These improvements specifically target new features including move-to-folder functionality, project management capabilities, and enhanced UI elements for better user experience across both supported languages.
 
-The current implementation focuses entirely on frontend localization, with backend services remaining language-neutral to ensure scalability and maintainability. The system now provides complete coverage for project-based organization features and improved document management interfaces.
+The current implementation focuses entirely on frontend localization, with backend services remaining language-neutral to ensure scalability and maintainability. The system now provides complete coverage for project-based organization features, enhanced document management interfaces, and comprehensive file preview functionality.
 
 ## Project Structure
 
-The internationalization system is organized across three main areas of the frontend application:
+The internationalization system is organized across four main areas of the frontend application:
 
 ```mermaid
 graph TB
@@ -56,17 +58,18 @@ C --> E[de.json - German translations]
 F[frontend/src/contexts/] --> G[LanguageContext.tsx - Language state management]
 H[frontend/src/components/] --> I[LanguageSwitcher.tsx - Language selector UI]
 H --> J[Layout.tsx - Main layout with language integration]
-K[frontend/src/pages/] --> L[DocumentPreviewPage.tsx - Enhanced with path display]
-M[frontend/src/] --> N[App.tsx - Route configuration with language support]
+H --> K[FilePreviewModal.tsx - Enhanced with translation support]
+L[frontend/src/pages/] --> M[DocumentPreviewPage.tsx - Enhanced with path display]
+N[frontend/src/] --> O[App.tsx - Route configuration with language support]
 end
 subgraph "Backend Integration"
-O[backend/main.py] --> P[API endpoints remain language-neutral]
+P[backend/main.py] --> Q[API endpoints remain language-neutral]
 end
 B --> G
 G --> I
 G --> J
 I --> J
-N --> G
+O --> G
 ```
 
 **Diagram sources**
@@ -74,6 +77,7 @@ N --> G
 - [frontend/src/contexts/LanguageContext.tsx:1-96](file://frontend/src/contexts/LanguageContext.tsx#L1-L96)
 - [frontend/src/components/LanguageSwitcher.tsx:1-80](file://frontend/src/components/LanguageSwitcher.tsx#L1-L80)
 - [frontend/src/components/Layout.tsx:1-767](file://frontend/src/components/Layout.tsx#L1-L767)
+- [frontend/src/components/FilePreviewModal.tsx:1-353](file://frontend/src/components/FilePreviewModal.tsx#L1-L353)
 - [frontend/src/pages/DocumentPreviewPage.tsx:1-453](file://frontend/src/pages/DocumentPreviewPage.tsx#L1-L453)
 - [frontend/src/App.tsx:53-86](file://frontend/src/App.tsx#L53-L86)
 
@@ -82,6 +86,7 @@ N --> G
 - [frontend/src/contexts/LanguageContext.tsx:1-96](file://frontend/src/contexts/LanguageContext.tsx#L1-L96)
 - [frontend/src/components/LanguageSwitcher.tsx:1-80](file://frontend/src/components/LanguageSwitcher.tsx#L1-L80)
 - [frontend/src/components/Layout.tsx:1-767](file://frontend/src/components/Layout.tsx#L1-L767)
+- [frontend/src/components/FilePreviewModal.tsx:1-353](file://frontend/src/components/FilePreviewModal.tsx#L1-L353)
 - [frontend/src/pages/DocumentPreviewPage.tsx:1-453](file://frontend/src/pages/DocumentPreviewPage.tsx#L1-L453)
 - [frontend/src/App.tsx:53-86](file://frontend/src/App.tsx#L53-L86)
 
@@ -100,7 +105,7 @@ The internationalization system is built around a centralized configuration that
 2. Local storage preference
 3. Browser language detection (lowest priority)
 
-**Resource Management**: Translation resources are organized in structured JSON files with semantic grouping for maintainability and scalability. The recent updates have significantly expanded coverage for project management and document preview features.
+**Resource Management**: Translation resources are organized in structured JSON files with semantic grouping for maintainability and scalability. The recent updates have significantly expanded coverage for project management, document preview, and file preview modal features.
 
 **Section sources**
 - [frontend/src/i18n/index.ts:8-14](file://frontend/src/i18n/index.ts#L8-L14)
@@ -144,6 +149,7 @@ The main Layout component integrates internationalization throughout the applica
 - System status and error messages
 - Form labels and placeholders
 - Project management and move-to-folder functionality
+- File preview modal actions and UI elements
 
 **Section sources**
 - [frontend/src/components/Layout.tsx:45-54](file://frontend/src/components/Layout.tsx#L45-L54)
@@ -189,7 +195,7 @@ The architecture ensures seamless language switching without page reloads, maint
 
 ### Translation Resource Structure
 
-The translation system organizes content into logical categories for maintainability and scalability, with recent expansions for project management and document preview features:
+The translation system organizes content into logical categories for maintainability and scalability, with recent expansions for project management, document preview, and file preview modal features:
 
 ```mermaid
 graph TD
@@ -202,6 +208,7 @@ A --> G[Error Messages]
 A --> H[Confirmation Dialogs]
 A --> I[Project Management]
 A --> J[Document Preview]
+A --> K[File Preview Modal]
 B --> B1[Basic UI terms]
 B --> B2[Action verbs]
 B --> B3[Status indicators]
@@ -232,17 +239,21 @@ J --> J1[File paths]
 J --> J2[Cloud source info]
 J --> J3[Container/host paths]
 J --> J4[Preview actions]
+K --> K1[Modal header actions]
+K --> K2[Preview controls]
+K --> K3[Download options]
+K --> K4[Navigation buttons]
 ```
 
 **Diagram sources**
-- [frontend/src/i18n/locales/en.json:1-1250](file://frontend/src/i18n/locales/en.json#L1-L1250)
-- [frontend/src/i18n/locales/de.json:1-1250](file://frontend/src/i18n/locales/de.json#L1-L1250)
+- [frontend/src/i18n/locales/en.json:1-1256](file://frontend/src/i18n/locales/en.json#L1-L1256)
+- [frontend/src/i18n/locales/de.json:1-1256](file://frontend/src/i18n/locales/de.json#L1-L1256)
 
-The recent updates have significantly expanded the project management and document preview sections, adding comprehensive coverage for new features including move-to-folder functionality and enhanced path display capabilities.
+The recent updates have significantly expanded the project management, document preview, and file preview modal sections, adding comprehensive coverage for new features including move-to-folder functionality, enhanced path display capabilities, and modal UI element translations.
 
 **Section sources**
-- [frontend/src/i18n/locales/en.json:1-1250](file://frontend/src/i18n/locales/en.json#L1-L1250)
-- [frontend/src/i18n/locales/de.json:1-1250](file://frontend/src/i18n/locales/de.json#L1-L1250)
+- [frontend/src/i18n/locales/en.json:1-1256](file://frontend/src/i18n/locales/en.json#L1-L1256)
+- [frontend/src/i18n/locales/de.json:1-1256](file://frontend/src/i18n/locales/de.json#L1-L1256)
 
 ### Language Detection Algorithm
 
@@ -321,6 +332,12 @@ The German localization has been comprehensively updated with 101 new translatio
 - Container and host path differentiation
 - Preview and download actions
 
+**File Preview Modal UI Elements**:
+- Modal header action translations (open in new tab, download, close)
+- Preview control UI elements
+- Navigation button labels
+- File type indicator translations
+
 **UI Element Improvements**:
 - Context menu translations
 - Confirmation dialog text
@@ -337,6 +354,12 @@ The English localization has been enhanced with 6 new translation entries focusi
 - Container environment references
 - Preview functionality descriptions
 
+**File Preview Modal Enhancements**:
+- Modal header action labels (open in new tab, download, close)
+- Preview control UI elements
+- Navigation button translations
+- File type indicator messages
+
 **User Experience Improvements**:
 - More descriptive action buttons
 - Clearer status indicators
@@ -346,6 +369,59 @@ The English localization has been enhanced with 6 new translation entries focusi
 **Section sources**
 - [frontend/src/i18n/locales/en.json:120-141](file://frontend/src/i18n/locales/en.json#L120-L141)
 - [frontend/src/i18n/locales/de.json:120-141](file://frontend/src/i18n/locales/de.json#L120-L141)
+
+## FilePreviewModal UI Enhancements
+
+The FilePreviewModal component has been enhanced with comprehensive UI element translations that provide a complete localized user experience:
+
+### Enhanced Modal Header Actions
+
+**New Translation Coverage**:
+- Open in new tab functionality with localized tooltips
+- Download file action with descriptive labels
+- Close modal action with keyboard shortcut hints
+- File extension badge with language-specific formatting
+
+**UI Interaction Improvements**:
+- Action buttons with proper tooltip translations
+- Hover states with localized feedback
+- Keyboard accessibility with screen reader support
+- Responsive design for mobile devices
+
+**Technical Implementation**:
+- Modal header action buttons with translation keys
+- Tooltip integration for accessibility
+- Icon-only buttons with descriptive titles
+- Consistent styling across all supported languages
+
+**Section sources**
+- [frontend/src/components/FilePreviewModal.tsx:320-342](file://frontend/src/components/FilePreviewModal.tsx#L320-L342)
+- [frontend/src/i18n/locales/en.json:1065-1079](file://frontend/src/i18n/locales/en.json#L1065-L1079)
+- [frontend/src/i18n/locales/de.json:1065-1079](file://frontend/src/i18n/locales/de.json#L1065-L1079)
+
+### Enhanced Preview Content Translations
+
+**Loading States**:
+- Loading spinner with localized status messages
+- Animated progress indicators with descriptive text
+- Error state messages with actionable feedback
+
+**Error Handling**:
+- Preview loading failures with localized error messages
+- Fallback content display with explanatory text
+- Download option availability notifications
+- File type compatibility warnings
+
+**Content Display**:
+- File type-specific preview messages
+- Extracted text content display with proper labeling
+- Unsupported file type handling with guidance
+- Audio/video player controls with localized labels
+
+**Section sources**
+- [frontend/src/components/FilePreviewModal.tsx:160-301](file://frontend/src/components/FilePreviewModal.tsx#L160-L301)
+- [frontend/src/i18n/locales/en.json:1073-1078](file://frontend/src/i18n/locales/en.json#L1073-L1078)
+- [frontend/src/i18n/locales/de.json:1074-1078](file://frontend/src/i18n/locales/de.json#L1074-L1078)
 
 ## DocumentPreviewPage Improvements
 
@@ -400,17 +476,21 @@ G --> I[localStorage API]
 G --> J[Window Location API]
 K[LanguageSwitcher] --> G
 L[Layout] --> G
-M[Translation Resources] --> N[JSON Files]
-M --> O[TypeScript Types]
-P[DocumentPreviewPage] --> Q[Enhanced Path Display]
+M[FilePreviewModal] --> N[Translation Resources]
+O[DocumentPreviewPage] --> P[Enhanced Path Display]
+Q[Translation Resources] --> R[JSON Files]
+Q --> S[TypeScript Types]
+T[Preview Translations] --> U[Modal UI Elements]
+V[Document Preview] --> W[Enhanced UI Feedback]
 end
 subgraph "Application Integration"
-R[App Routes] --> G
-S[Components] --> K
-S --> L
-T[Backend API] --> U[Remains Language-Neutral]
-V[Project Management] --> W[New Translation Coverage]
-X[Document Preview] --> Y[Enhanced UI Feedback]
+X[App Routes] --> G
+Y[Components] --> K
+Y --> L
+Z[Backend API] --> AA[Remains Language-Neutral]
+BB[Project Management] --> CC[New Translation Coverage]
+DD[File Preview] --> EE[Comprehensive UI Translation]
+FF[Document Preview] --> GG[Enhanced Path Display]
 end
 A --> G
 C --> G
@@ -421,6 +501,7 @@ E --> G
 - [frontend/package-lock.json:4411-4450](file://frontend/package-lock.json#L4411-L4450)
 - [frontend/src/contexts/LanguageContext.tsx:1-4](file://frontend/src/contexts/LanguageContext.tsx#L1-L4)
 - [frontend/src/components/LanguageSwitcher.tsx:1-4](file://frontend/src/components/LanguageSwitcher.tsx#L1-L4)
+- [frontend/src/components/FilePreviewModal.tsx:1-4](file://frontend/src/components/FilePreviewModal.tsx#L1-L4)
 - [frontend/src/pages/DocumentPreviewPage.tsx:1-16](file://frontend/src/pages/DocumentPreviewPage.tsx#L1-L16)
 
 The system leverages modern React patterns with hooks and context APIs, ensuring efficient re-renders and optimal performance. The backend remains completely agnostic to language preferences, maintaining separation of concerns and enabling future scalability.
@@ -443,7 +524,9 @@ The internationalization implementation is designed for optimal performance thro
 
 **Scalability**: The modular architecture allows for easy addition of new languages without impacting existing functionality, supporting long-term growth and maintenance.
 
-**Enhanced Translation Loading**: Recent updates have optimized translation loading for project management and document preview features, reducing bundle size while maintaining comprehensive coverage.
+**Enhanced Translation Loading**: Recent updates have optimized translation loading for project management, document preview, and file preview modal features, reducing bundle size while maintaining comprehensive coverage.
+
+**File Preview Optimization**: The FilePreviewModal component efficiently manages translation resources and UI state, ensuring smooth modal interactions across all supported languages.
 
 ## Troubleshooting Guide
 
@@ -474,6 +557,12 @@ The internationalization implementation is designed for optimal performance thro
 - Check for proper JSON syntax in translation files
 - Ensure translation keys follow the established naming conventions
 
+**File Preview Modal Translation Issues**
+- Verify FilePreviewModal translation keys are properly defined
+- Check for missing translation entries in preview section
+- Ensure modal header action translations are included
+- Verify fallback content translation keys exist
+
 **Document Preview Path Issues**
 - Verify cloud source integration is properly configured
 - Check Docker volume mapping for container path resolution
@@ -494,7 +583,9 @@ For debugging internationalization issues, developers can utilize several built-
 
 **Resource Validation**: JSON translation files are validated against their structure, ensuring all required keys are present and properly formatted.
 
-**Translation Coverage Monitoring**: Recent updates include monitoring for missing translation entries in project management and document preview features.
+**Translation Coverage Monitoring**: Recent updates include monitoring for missing translation entries in project management, document preview, and file preview modal features.
+
+**File Preview Testing**: The FilePreviewModal component includes comprehensive error handling and fallback content display for testing translation coverage.
 
 **Section sources**
 - [frontend/src/i18n/index.ts:38-59](file://frontend/src/i18n/index.ts#L38-L59)
@@ -502,7 +593,7 @@ For debugging internationalization issues, developers can utilize several built-
 
 ## Conclusion
 
-The MongoDB RAG Agent implements a comprehensive internationalization system that provides a solid foundation for multilingual support. The recent updates have significantly enhanced the German localization with 101 new translation entries and improved English localization with 6 new entries, specifically targeting new features including move-to-folder functionality, project management capabilities, and enhanced document preview features.
+The MongoDB RAG Agent implements a comprehensive internationalization system that provides a solid foundation for multilingual support. The recent updates have significantly enhanced the German localization with 101 new translation entries and improved English localization with 6 new entries, specifically targeting new features including move-to-folder functionality, project management capabilities, enhanced document preview features, and comprehensive FilePreviewModal UI element translations.
 
 The system's strength lies in its modular architecture, type-safe design, and React-centric implementation that ensures optimal performance and maintainability. The backend remains intentionally language-neutral, supporting future expansion without architectural constraints.
 
@@ -512,8 +603,9 @@ Key achievements of the current implementation include:
 - Persistent user preferences across sessions
 - Comprehensive translation coverage across all UI components
 - Enhanced project management and document preview functionality
+- Complete FilePreviewModal UI element translation support
 - Scalable architecture supporting future language additions
 
-The recent enhancements particularly strengthen the system's support for project-based organization features and improve the user experience for document management operations. The dual-path display system in DocumentPreviewPage provides clear guidance for users working with both local and cloud-based document sources.
+The recent enhancements particularly strengthen the system's support for project-based organization features, improved document management operations, and comprehensive file preview functionality. The dual-path display system in DocumentPreviewPage provides clear guidance for users working with both local and cloud-based document sources, while the FilePreviewModal component offers a fully localized preview experience with proper action translations.
 
-Future enhancements could include dynamic loading of translation resources, pluralization support for different languages, and integration with backend services for locale-specific formatting. However, the current implementation provides a robust foundation that meets the immediate needs of the application while maintaining flexibility for future growth.
+Future enhancements could include dynamic loading of translation resources, pluralization support for different languages, integration with backend services for locale-specific formatting, and expanded FilePreviewModal functionality for additional file types. However, the current implementation provides a robust foundation that meets the immediate needs of the application while maintaining flexibility for future growth.
