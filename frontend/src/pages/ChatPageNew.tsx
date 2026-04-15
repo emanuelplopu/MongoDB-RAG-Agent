@@ -56,26 +56,17 @@ const formatTps = (tps: number | undefined | null): string => {
 }
 
 // Agent mode configuration with descriptions
-const AGENT_MODES = {
+const AGENT_MODES_CONFIG = {
   auto: {
-    label: 'Auto',
     icon: '🔄',
-    description: 'Automatically chooses mode based on query complexity',
-    details: 'Uses FAST mode for short/simple queries (<50 chars). Uses THINKING mode for complex queries with words like "analyze", "step by step", "compare", "explain", "why", "how does".',
     color: 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300',
   },
   thinking: {
-    label: 'Thinking',
     icon: '🧠',
-    description: 'Full orchestrator-worker pipeline for complex questions',
-    details: 'Always uses the Orchestrator (GPT-5.2) to analyze intent, create a search plan, execute parallel searches via Workers, evaluate results, and synthesize a comprehensive answer. Best for multi-step questions, research tasks, and when you need thorough answers.',
     color: 'bg-secondary-100 dark:bg-secondary-900/40 text-secondary-700 dark:text-secondary-300',
   },
   fast: {
-    label: 'Fast',
     icon: '⚡',
-    description: 'Direct search without orchestration for quick answers',
-    details: 'Skips the Orchestrator entirely and performs a direct hybrid search. Faster but less thorough. Good for simple factual questions or when you know the information exists in documents.',
     color: 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300',
   },
 } as const
@@ -97,7 +88,7 @@ export default function ChatPage() {
   const { user } = useAuth()
   
   // Get current language for agent response language
-  const { i18n } = useTranslation()
+  const { t, i18n } = useTranslation()
 
   // Local state
   const [input, setInput] = useState('')
@@ -647,25 +638,25 @@ export default function ChatPage() {
               <div className="relative">
                 <button
                   onClick={() => setShowAgentModeSelector(!showAgentModeSelector)}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${AGENT_MODES[agentMode].color} hover:opacity-80 text-sm transition-all`}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${AGENT_MODES_CONFIG[agentMode].color} hover:opacity-80 text-sm transition-all`}
                 >
-                  <span>{AGENT_MODES[agentMode].icon}</span>
-                  <span>{AGENT_MODES[agentMode].label}</span>
+                  <span>{AGENT_MODES_CONFIG[agentMode].icon}</span>
+                  <span>{t(`chatPage.modes.${agentMode}.label`)}</span>
                   <ChevronDownIcon className="h-4 w-4" />
                 </button>
                 {showAgentModeSelector && (
                   <div className="absolute right-0 mt-1 w-80 bg-white dark:bg-gray-900 rounded-xl shadow-xl border border-gray-200 dark:border-gray-600 z-50">
                     <div className="p-2">
                       <div className="text-xs font-medium text-secondary dark:text-gray-400 px-2 py-1 uppercase flex items-center gap-1">
-                        Agent Mode
+                        {t('chatPage.agentMode')}
                         <div className="group relative inline-block">
                           <InformationCircleIcon className="h-3.5 w-3.5 cursor-help" />
                           <div className="absolute left-0 bottom-full mb-2 w-64 p-2 bg-gray-900 text-white text-[10px] rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
-                            Controls how the AI processes your question. Different modes trade off between speed and thoroughness.
+                            {t('chatPage.agentModeTooltip')}
                           </div>
                         </div>
                       </div>
-                      {(Object.entries(AGENT_MODES) as [keyof typeof AGENT_MODES, typeof AGENT_MODES[keyof typeof AGENT_MODES]][]).map(([mode, config]) => (
+                      {(['auto', 'thinking', 'fast'] as const).map((mode) => (
                         <button
                           key={mode}
                           onClick={() => {
@@ -677,14 +668,14 @@ export default function ChatPage() {
                           }`}
                         >
                           <div className="flex items-center gap-2">
-                            <span>{config.icon}</span>
-                            <span className="text-sm font-medium dark:text-gray-200">{config.label}</span>
+                            <span>{AGENT_MODES_CONFIG[mode].icon}</span>
+                            <span className="text-sm font-medium dark:text-gray-200">{t(`chatPage.modes.${mode}.label`)}</span>
                             {agentMode === mode && (
                               <CheckCircleIcon className="h-4 w-4 text-primary ml-auto" />
                             )}
                           </div>
                           <p className="text-xs text-secondary dark:text-gray-400 mt-1 ml-6">
-                            {config.description}
+                            {t(`chatPage.modes.${mode}.description`)}
                           </p>
                         </button>
                       ))}
@@ -693,8 +684,8 @@ export default function ChatPage() {
                         <div className="flex items-start gap-2">
                           <InformationCircleIcon className="h-4 w-4 text-primary flex-shrink-0 mt-0.5" />
                           <div className="text-[10px] text-secondary dark:text-gray-400">
-                            <strong className="text-primary-700 dark:text-primary-300">Current: {AGENT_MODES[agentMode].label}</strong>
-                            <p className="mt-1">{AGENT_MODES[agentMode].details}</p>
+                            <strong className="text-primary-700 dark:text-primary-300">Current: {t(`chatPage.modes.${agentMode}.label`)}</strong>
+                            <p className="mt-1">{t(`chatPage.modes.${agentMode}.details`)}</p>
                           </div>
                         </div>
                       </div>
@@ -708,7 +699,7 @@ export default function ChatPage() {
                 <button
                   onClick={() => setShowSettingsInfo(!showSettingsInfo)}
                   className="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 text-secondary hover:text-primary transition-colors"
-                  title="View hidden settings that affect behavior"
+                  title={t('chatPage.settingsTooltip')}
                 >
                   <Cog6ToothIcon className="h-5 w-5" />
                 </button>
@@ -717,17 +708,17 @@ export default function ChatPage() {
                     <div className="p-3">
                       <div className="flex items-center gap-2 mb-3">
                         <Cog6ToothIcon className="h-4 w-4 text-primary" />
-                        <span className="text-sm font-medium dark:text-gray-200">Settings That Affect Behavior</span>
+                        <span className="text-sm font-medium dark:text-gray-200">{t('chatPage.settingsTitle')}</span>
                       </div>
                       <div className="space-y-3 text-xs">
                         {/* Agent Mode */}
                         <div className="p-2 bg-surface-variant dark:bg-gray-700 rounded-lg">
                           <div className="flex items-center gap-2 font-medium text-primary-700 dark:text-primary-300">
-                            <span>{AGENT_MODES[agentMode].icon}</span>
-                            Agent Mode: {AGENT_MODES[agentMode].label}
+                            <span>{AGENT_MODES_CONFIG[agentMode].icon}</span>
+                            {t('chatPage.agentMode')}: {t(`chatPage.modes.${agentMode}.label`)}
                           </div>
                           <p className="text-secondary dark:text-gray-400 mt-1">
-                            {AGENT_MODES[agentMode].description}
+                            {t(`chatPage.modes.${agentMode}.description`)}
                           </p>
                         </div>
                         
@@ -735,11 +726,10 @@ export default function ChatPage() {
                         <div className="p-2 bg-primary-50 dark:bg-primary-900/20 rounded-lg border border-primary-200 dark:border-primary-800">
                           <div className="flex items-center gap-2 font-medium text-primary-700 dark:text-primary-300">
                             <InformationCircleIcon className="h-4 w-4" />
-                            Auto Mode Threshold
+                            {t('chatPage.autoModeThreshold')}
                           </div>
                           <p className="text-primary-600 dark:text-primary-400 mt-1">
-                            In AUTO mode, queries &lt;20 characters use FAST mode (no orchestrator).
-                            Short questions like "what is X?" skip the planning phase.
+                            {t('chatPage.autoModeThresholdDesc')}
                           </p>
                         </div>
                         
@@ -747,10 +737,10 @@ export default function ChatPage() {
                         <div className="p-2 bg-surface-variant dark:bg-gray-700 rounded-lg">
                           <div className="flex items-center gap-2 font-medium text-primary-700 dark:text-primary-300">
                             <MagnifyingGlassIcon className="h-4 w-4" />
-                            Search Type: Hybrid
+                            {t('chatPage.searchTypeHybrid')}
                           </div>
                           <p className="text-secondary dark:text-gray-400 mt-1">
-                            Combines vector (semantic) + text (keyword) search with RRF fusion.
+                            {t('chatPage.searchTypeHybridDesc')}
                           </p>
                         </div>
                         
@@ -758,10 +748,10 @@ export default function ChatPage() {
                         <div className="p-2 bg-surface-variant dark:bg-gray-700 rounded-lg">
                           <div className="flex items-center gap-2 font-medium text-primary-700 dark:text-primary-300">
                             <DocumentTextIcon className="h-4 w-4" />
-                            Max Results: 10
+                            {t('chatPage.maxResults')}
                           </div>
                           <p className="text-secondary dark:text-gray-400 mt-1">
-                            Maximum documents retrieved per search operation.
+                            {t('chatPage.maxResultsDesc')}
                           </p>
                         </div>
                         
@@ -769,18 +759,17 @@ export default function ChatPage() {
                         <div className="p-2 bg-surface-variant dark:bg-gray-700 rounded-lg">
                           <div className="flex items-center gap-2 font-medium text-primary-700 dark:text-primary-300">
                             <CpuChipIcon className="h-4 w-4" />
-                            Models
+                            {t('chatPage.models')}
                           </div>
                           <div className="text-secondary dark:text-gray-400 mt-1 space-y-1">
-                            <p><span className="font-medium">Chat:</span> {currentSession.model}</p>
-                            <p><span className="font-medium">Orchestrator:</span> gpt-5.2 (planning/synthesis)</p>
-                            <p><span className="font-medium">Worker:</span> gpt-4o-mini (search execution)</p>
+                            <p><span className="font-medium">{t('chatPage.modelChat')}</span> {currentSession.model}</p>
+                            <p><span className="font-medium">{t('chatPage.modelOrchestrator')}</span> {t('chatPage.modelOrchestratorDetail')}</p>
+                            <p><span className="font-medium">{t('chatPage.modelWorker')}</span> {t('chatPage.modelWorkerDetail')}</p>
                           </div>
                         </div>
                         
                         <p className="text-[10px] text-center text-secondary dark:text-gray-500 pt-2 border-t border-gray-200 dark:border-gray-700">
-                          These settings affect how the AI processes your questions.
-                          Use THINKING mode for complex queries to ensure thorough processing.
+                          {t('chatPage.settingsFooter')}
                         </p>
                       </div>
                     </div>
@@ -793,7 +782,7 @@ export default function ChatPage() {
                 <div className="flex items-center gap-3 text-xs text-secondary dark:text-gray-400">
                   <span className="flex items-center gap-1">
                     <DocumentTextIcon className="h-4 w-4" />
-                    {(currentSession.stats?.total_tokens ?? 0).toLocaleString()} tokens
+                    {(currentSession.stats?.total_tokens ?? 0).toLocaleString()} {t('chatPage.tokens')}
                   </span>
                   <span className="flex items-center gap-1">
                     <CurrencyDollarIcon className="h-4 w-4" />
@@ -826,12 +815,7 @@ export default function ChatPage() {
                           <div className="flex items-center gap-2 text-xs text-primary-700 dark:text-primary-300">
                             <CpuChipIcon className="h-4 w-4 animate-pulse" />
                             <span className="font-medium capitalize">
-                              {liveTrace.currentPhase === 'synthesize' ? 'Generating response...' : 
-                               liveTrace.currentPhase === 'executing' ? 'Executing tasks...' :
-                               liveTrace.currentPhase === 'evaluate' ? 'Evaluating results...' :
-                               liveTrace.currentPhase === 'plan' ? 'Planning...' :
-                               liveTrace.currentPhase === 'analyze' ? 'Analyzing...' :
-                               'Starting...'}
+                              {t(`chatPage.phases.${liveTrace.currentPhase}`, { defaultValue: t('chatPage.phases.starting') })}
                             </span>
                           </div>
                           <div className="flex items-center gap-2 text-[10px] text-secondary dark:text-gray-400">
@@ -844,7 +828,7 @@ export default function ChatPage() {
                         {liveTrace.orchestrator_steps.length > 0 && (
                           <div className="space-y-1">
                             <div className="text-[10px] text-secondary dark:text-gray-400">
-                              🧠 Orchestrator: {liveTrace.orchestrator_steps.length} step(s)
+                              🧠 {t('chatPage.orchestratorSteps', { count: liveTrace.orchestrator_steps.length })}
                             </div>
                             {liveTrace.orchestrator_steps.slice(-2).map((step, idx) => (
                               <div key={idx} className="text-[10px] text-gray-600 dark:text-gray-400 pl-4 border-l-2 border-purple-300 dark:border-purple-700">
@@ -863,13 +847,13 @@ export default function ChatPage() {
                         {liveTrace.worker_steps.length > 0 && (
                           <div className="space-y-1">
                             <div className="text-[10px] text-secondary dark:text-gray-400">
-                              ⚡ Workers: {liveTrace.worker_steps.length} task(s)
+                              ⚡ {t('chatPage.workerTasks', { count: liveTrace.worker_steps.length })}
                             </div>
                             {liveTrace.worker_steps.slice(-3).map((step, idx) => (
                               <div key={idx} className="text-[10px] text-gray-600 dark:text-gray-400 pl-4 border-l-2 border-blue-300 dark:border-blue-700">
                                 <span className="font-medium">{step.task_type}</span>
                                 <span className={`ml-2 ${step.success ? 'text-green-600' : 'text-red-600'}`}>
-                                  {step.documents.length} docs
+                                  {step.documents.length} {t('chatPage.docs')}
                                 </span>
                                 <span className="text-secondary dark:text-gray-500 ml-2">{step.duration_ms.toFixed(0)}ms</span>
                               </div>
@@ -889,7 +873,7 @@ export default function ChatPage() {
                             className="flex items-center gap-1 px-2 py-1 rounded-lg bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors"
                           >
                             <StopIcon className="h-3 w-3" />
-                            <span>Stop</span>
+                            <span>{t('chatPage.stop')}</span>
                           </button>
                         </div>
                       </div>
@@ -905,7 +889,7 @@ export default function ChatPage() {
                           className="flex items-center gap-1 px-2 py-1 rounded-lg bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors text-xs"
                         >
                           <StopIcon className="h-3 w-3" />
-                          <span>Stop</span>
+                          <span>{t('chatPage.stop')}</span>
                         </button>
                       </div>
                     )}
@@ -925,7 +909,7 @@ export default function ChatPage() {
                   className="flex items-center gap-2 px-4 py-2 text-sm text-secondary dark:text-gray-400 hover:text-primary dark:hover:text-primary-300 hover:bg-surface-variant dark:hover:bg-gray-700 rounded-lg transition-colors"
                 >
                   <ArrowPathIcon className="h-4 w-4" />
-                  Regenerate response
+                  {t('chatPage.regenerate')}
                 </button>
               </div>
             </div>
@@ -945,14 +929,14 @@ export default function ChatPage() {
                       className="flex items-center gap-1 px-3 py-1 rounded-lg bg-red-100 dark:bg-red-800/30 hover:bg-red-200 dark:hover:bg-red-800/50 transition-colors"
                     >
                       <ArrowPathIcon className="h-4 w-4" />
-                      Retry
+                      {t('chatPage.retry')}
                     </button>
                   )}
                   <button
                     onClick={() => { setError(null); setLastFailedMessage(null); }}
                     className="text-red-500 hover:text-red-700 dark:hover:text-red-300"
                   >
-                    Dismiss
+                    {t('common.dismiss')}
                   </button>
                 </div>
               </div>
@@ -1025,7 +1009,7 @@ export default function ChatPage() {
                   value={input}
                   onChange={handleInputChange}
                   onKeyDown={handleKeyDown}
-                  placeholder="Message..."
+                  placeholder={t('chatPage.messagePlaceholder')}
                   rows={1}
                   className="flex-1 resize-none bg-transparent px-3 py-2 text-primary-900 dark:text-gray-100 placeholder:text-secondary dark:placeholder:text-gray-500 focus:outline-none max-h-52"
                   disabled={isLoading}
@@ -1039,7 +1023,7 @@ export default function ChatPage() {
                 </button>
               </div>
               <p className="text-xs text-center text-secondary dark:text-gray-500 mt-2">
-                Press Enter to send, Shift+Enter for new line{attachments.length > 0 ? ` • ${attachments.length} file(s) attached` : ''}
+                {t('chatPage.keyboardHint')}{attachments.length > 0 ? ` • ${t('chatPage.filesAttached', { count: attachments.length })}` : ''}
               </p>
             </form>
           </div>
@@ -1051,17 +1035,17 @@ export default function ChatPage() {
             <ChatBubbleLeftRightIcon className="h-16 w-16 text-primary" />
           </div>
           <h2 className="text-2xl font-semibold text-primary-900 dark:text-gray-100 mb-3">
-            RecallHub Assistant
+            {t('chatPage.assistantTitle')}
           </h2>
           <p className="text-secondary dark:text-gray-400 max-w-md mb-6">
-            Ask questions about your documents. I'll search through your knowledge base to find relevant information.
+            {t('chatPage.emptyStateDesc')}
           </p>
           <button
             onClick={() => handleNewChat()}
             className="flex items-center gap-2 px-6 py-3 rounded-xl bg-primary text-white hover:bg-primary-700 transition-colors font-medium"
           >
             <PlusIcon className="h-5 w-5" />
-            Start New Chat
+            {t('chatPage.startNewChat')}
           </button>
         </div>
       )}
@@ -1077,13 +1061,14 @@ function MessageBubble({ message }: { message: SessionMessage }) {
   const [showThinking, setShowThinking] = useState(false)
   const [copied, setCopied] = useState(false)
   const toast = useToast()
+  const { t } = useTranslation()
 
   // Copy message content to clipboard
   const handleCopy = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(message.content)
       setCopied(true)
-      toast.success('Copied to clipboard')
+      toast.success(t('chatPage.copiedToClipboard'))
       setTimeout(() => setCopied(false), 2000)
     } catch {
       // Fallback
@@ -1096,7 +1081,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
       document.execCommand('copy')
       document.body.removeChild(textArea)
       setCopied(true)
-      toast.success('Copied to clipboard')
+      toast.success(t('chatPage.copiedToClipboard'))
       setTimeout(() => setCopied(false), 2000)
     }
   }, [message.content, toast])
@@ -1157,7 +1142,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
               }
               opacity-0 group-hover:opacity-100 focus:opacity-100
             `}
-            title={copied ? 'Copied!' : 'Copy message'}
+            title={copied ? t('chatPage.copied') : t('chatPage.copyMessage')}
           >
             {copied ? (
               <ClipboardDocumentCheckIcon className="h-4 w-4" />
@@ -1194,7 +1179,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
               {message.content ? (
                 <MarkdownRenderer content={message.content} />
               ) : (
-                <p className="text-gray-500 italic">Loading response...</p>
+                <p className="text-gray-500 italic">{t('chatPage.loadingResponse')}</p>
               )}
             </div>
           )}
@@ -1214,9 +1199,9 @@ function MessageBubble({ message }: { message: SessionMessage }) {
               )}
               <CpuChipIcon className="h-3 w-3" />
               <span>
-                Agent Operations
-                {(message.thinking.search?.operations?.length ?? 0) > 0 && ` (${message.thinking.search?.operations?.length} search)`}
-                {(message.thinking.tool_calls?.length ?? 0) > 0 && ` (${message.thinking.tool_calls?.length} tool)`}
+                {t('chatPage.agentOperations')}
+                {(message.thinking.search?.operations?.length ?? 0) > 0 && ` (${t('chatPage.searchOps', { count: message.thinking.search?.operations?.length })})`}
+                {(message.thinking.tool_calls?.length ?? 0) > 0 && ` (${t('chatPage.toolOps', { count: message.thinking.tool_calls?.length })})`}
               </span>
               <span className="text-[10px] opacity-60">
                 {message.thinking.total_duration_ms.toFixed(0)}ms
@@ -1238,7 +1223,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
                           ? 'bg-secondary-100 dark:bg-secondary-900/40 text-secondary-700 dark:text-secondary-300' 
                           : 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300'
                       }`}>
-                        {op.index_type === 'vector' ? 'Vector Search' : 'Text Search'}
+                        {op.index_type === 'vector' ? t('chatPage.vectorSearch') : t('chatPage.textSearch')}
                       </span>
                       <span className="text-secondary dark:text-gray-500">
                         {op.index_name}
@@ -1247,7 +1232,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
                     
                     {/* Query sent to search */}
                     <div className="bg-gray-100 dark:bg-gray-700/50 rounded px-2 py-1">
-                      <span className="text-[10px] text-secondary dark:text-gray-500 font-medium">Query: </span>
+                      <span className="text-[10px] text-secondary dark:text-gray-500 font-medium">{t('chatPage.query')} </span>
                       <span className="text-primary-900 dark:text-gray-200">
                         {op.query.length > 100 ? op.query.substring(0, 100) + '...' : op.query}
                       </span>
@@ -1257,7 +1242,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
                     <div className="flex items-center gap-3 text-secondary dark:text-gray-400">
                       <span className="flex items-center gap-1">
                         <MagnifyingGlassIcon className="h-3 w-3" />
-                        {op.results_count} results
+                        {t('chatPage.results', { count: op.results_count })}
                       </span>
                       <span className="flex items-center gap-1">
                         <ClockIcon className="h-3 w-3" />
@@ -1266,7 +1251,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
                       {op.top_score !== null && (
                         <span className="flex items-center gap-1">
                           <BoltIcon className="h-3 w-3" />
-                          {(op.top_score * 100).toFixed(1)}% top score
+                          {t('chatPage.topScore', { score: (op.top_score * 100).toFixed(1) })}
                         </span>
                       )}
                     </div>
@@ -1274,7 +1259,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
                     {/* Top results excerpts */}
                     {op.top_results && op.top_results.length > 0 && (
                       <div className="space-y-1 border-t border-gray-200 dark:border-gray-700 pt-1 mt-1">
-                        <span className="text-[10px] text-secondary dark:text-gray-500 font-medium">Top Results:</span>
+                        <span className="text-[10px] text-secondary dark:text-gray-500 font-medium">{t('chatPage.topResults')}</span>
                         {op.top_results.slice(0, 3).map((result, ridx) => (
                           <div key={ridx} className="bg-gray-50 dark:bg-gray-800 rounded px-2 py-1">
                             <div className="flex items-center justify-between">
@@ -1333,7 +1318,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
                     {/* Tool Input Parameters */}
                     {tool.tool_input && Object.keys(tool.tool_input).length > 0 && (
                       <div className="bg-gray-100 dark:bg-gray-700/50 rounded px-2 py-1">
-                        <span className="text-[10px] text-secondary dark:text-gray-500 font-medium">Input: </span>
+                        <span className="text-[10px] text-secondary dark:text-gray-500 font-medium">{t('chatPage.input')} </span>
                         <span className="text-primary-900 dark:text-gray-200 text-[10px]">
                           {(() => {
                             const inputStr = JSON.stringify(tool.tool_input)
@@ -1352,7 +1337,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
                           : 'bg-green-50 dark:bg-green-900/20'
                       }`}>
                         <span className="text-[10px] text-secondary dark:text-gray-500 font-medium">
-                          {tool.error ? 'Error: ' : 'Result: '}
+                          {tool.error ? t('chatPage.error') : t('chatPage.result')}
                         </span>
                         <span className={`text-[10px] ${
                           tool.error 
@@ -1369,7 +1354,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
                 ))}
                 
                 <div className="text-[10px] text-secondary dark:text-gray-500">
-                  Total: {message.thinking.search?.total_results ?? 0} search results in {message.thinking.total_duration_ms.toFixed(0)}ms
+                  {t('chatPage.totalSearchResults', { count: message.thinking.search?.total_results ?? 0, ms: message.thinking.total_duration_ms.toFixed(0) })}
                 </div>
               </div>
             )}
@@ -1385,7 +1370,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
         {message.sources && message.sources.length > 0 && (
           <div className="mt-2 flex flex-wrap items-center gap-1">
             <span className="text-[9px] text-secondary dark:text-gray-500 font-medium">
-              {message.sources.length} matches:
+              {t('chatPage.matches', { count: message.sources.length })}
             </span>
             {message.sources.map((source, idx) => {
               const docId = documentIds[source.source]
