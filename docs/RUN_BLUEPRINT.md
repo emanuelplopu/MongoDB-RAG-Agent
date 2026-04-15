@@ -178,3 +178,40 @@ Invoke-WebRequest http://localhost:11000/health
 # Open a shell in the backend container
 docker compose exec backend bash
 ```
+
+## Cloudflare Tunnel
+
+The tunnel exposes local Docker services to production domains via Cloudflare.
+
+| Setting | Value |
+|---------|-------|
+| Token Name (Cloudflare dashboard) | `knowledge-tools-zones` |
+| Env Variable | `CLOUDFLARE_API_TOKEN` in `.env` |
+| Zones | `recallhub.app`, `quellex.at` |
+| Permissions | Account > Cloudflare Tunnel > Edit, Zone > DNS > Edit, Zone > Zone > Read |
+| Script | `setup-cloudflare-tunnel.ps1` |
+
+### Domain Routing
+
+| Domain | Service | Local Port |
+|--------|---------|------------|
+| `recallhub.app` / `www.recallhub.app` | RecallHub Frontend | 11080 |
+| `api.recallhub.app` | RecallHub Backend | 11000 |
+| `test-0-8-7.quellex.at` | Quellex Frontend | 11081 |
+| `api.test-0-8-7.quellex.at` | Quellex Backend | 11001 |
+
+### Commands
+
+```bash
+# First-time setup (creates tunnel + DNS records)
+.\setup-cloudflare-tunnel.ps1
+
+# Run tunnel
+.\setup-cloudflare-tunnel.ps1 -Run
+
+# Check status
+.\setup-cloudflare-tunnel.ps1 -Status
+
+# Install as Windows service (requires admin)
+.\setup-cloudflare-tunnel.ps1 -Install
+```

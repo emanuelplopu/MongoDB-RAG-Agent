@@ -119,6 +119,9 @@ services:
       # Tenant
       - TENANT_ID=recallhub
       
+      # Profile (overrides profiles.yaml active_profile)
+      - ACTIVE_PROFILE=parhelion
+      
       # LLM Configuration
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}
       - LLM_API_KEY=${LLM_API_KEY}
@@ -200,6 +203,9 @@ services:
       # Tenant
       - TENANT_ID=quellex
       
+      # Profile (overrides profiles.yaml active_profile)
+      - ACTIVE_PROFILE=test-law
+      
       # LLM Configuration
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}
       - LLM_API_KEY=${LLM_API_KEY}
@@ -247,8 +253,8 @@ services:
       - "11081:80"
     environment:
       - BACKEND_HOST=backend-quellex
-      - SERVER_DOMAINS=quellex.at www.quellex.at
-      - API_DOMAIN=api.quellex.at
+      - SERVER_DOMAINS=test-0-8-7.quellex.at
+      - API_DOMAIN=api.test-0-8-7.quellex.at
     depends_on:
       - backend-quellex
     networks:

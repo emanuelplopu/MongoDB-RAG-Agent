@@ -1,12 +1,12 @@
-# Docker Compose Override - Additional Volume Mounts
+# Docker Compose Override - Local Dev Overrides
 # This file is automatically loaded with docker-compose.yml
 # Contains user-specific volume mounts for external document folders
 #
 # HOW TO ADD NEW DRIVES:
-# 1. Add a volume mount below: - "X:/path/to/folder:/app/mounts/name:ro"
+# 1. Add a volume mount below (to BOTH backend and backend-quellex): - "X:/path/to/folder:/app/mounts/name:ro"
 # 2. Add the mapping to MOUNT_MAPPINGS: /app/mounts/name=X:/path/to/folder
 # 3. Add a profile entry in profiles.yaml with path: /app/mounts/name
-# 4. Run: docker-compose up -d backend  (recreates container in ~2 seconds, no rebuild)
+# 4. Run: docker compose --profile recallhub --profile quellex up -d
 #
 # MOUNT_MAPPINGS enables "Open in Explorer" to show the correct Windows/network path.
 # Format: container_path=host_path separated by | (pipe)
@@ -14,6 +14,9 @@
 # NOTE: Google Drive File Stream virtual paths may not work - use local/network paths.
 
 services:
+  # -------------------------------------------
+  # RecallHub Backend overrides
+  # -------------------------------------------
   backend:
     environment:
       # Mount mappings: maps container paths to host paths for "Open in Explorer" feature
@@ -25,14 +28,34 @@ services:
       - ./documents:/app/documents
       - ./projects:/app/projects
       - ./profiles.yaml:/app/profiles.yaml
+      - ./data/backups:/app/data/backups
       
       # External document folders - add your drives here
       - D:/parhelion.energy:/app/mounts/parhelion-energy:ro
       - "G:/My Drive/root:/app/mounts/gdrive-root:ro"
       - D:/test-law:/app/mounts/test-law:ro
-      # - E:/another-drive:/app/mounts/another-drive:ro
-      # - //server/share:/app/mounts/network-share:ro
 
+  # -------------------------------------------
+  # Quellex Backend overrides (same mounts)
+  # -------------------------------------------
+  backend-quellex:
+    environment:
+      - MOUNT_MAPPINGS=/app/mounts/parhelion-energy=D:/parhelion.energy|/app/mounts/gdrive-root=G:/My Drive/root|/app/mounts/test-law=D:/test-law|/app/documents=./documents
+    volumes:
+      # Default volumes (must be repeated as override replaces the list)
+      - ./documents:/app/documents
+      - ./projects:/app/projects
+      - ./profiles.yaml:/app/profiles.yaml
+      - ./data/backups:/app/data/backups
+      
+      # External document folders - same as backend
+      - D:/parhelion.energy:/app/mounts/parhelion-energy:ro
+      - "G:/My Drive/root:/app/mounts/gdrive-root:ro"
+      - D:/test-law:/app/mounts/test-law:ro
+
+  # -------------------------------------------
+  # Ingestion Worker overrides
+  # -------------------------------------------
   ingestion-worker:
     volumes:
       # Default volumes (must be repeated as override replaces the list)
@@ -45,6 +68,9 @@ services:
       - "G:/My Drive/root:/app/mounts/gdrive-root:ro"
       - D:/test-law:/app/mounts/test-law:ro
 
+  # -------------------------------------------
+  # CLI overrides
+  # -------------------------------------------
   cli:
     volumes:
       # Default volumes (must be repeated as override replaces the list)
@@ -56,5 +82,3 @@ services:
       - D:/parhelion.energy:/app/mounts/parhelion-energy:ro
       - "G:/My Drive/root:/app/mounts/gdrive-root:ro"
       - D:/test-law:/app/mounts/test-law:ro
-      # - E:/another-drive:/app/mounts/another-drive:ro
-      # - //server/share:/app/mounts/network-share:ro

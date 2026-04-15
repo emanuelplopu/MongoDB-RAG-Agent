@@ -1,13 +1,10 @@
-# Quellex (Law Firm) tenant override
-# Usage: docker compose -f docker-compose.yml -f docker-compose.quellex.yml up --build
-version: '3.8'
-
-services:
-  frontend:
-    build:
-      args:
-        TENANT: quellex
-
-  backend:
-    environment:
-      - TENANT_ID=quellex
+# DEPRECATED - Quellex tenant is now defined in docker-compose.yml via profiles
+#
+# Instead of:
+#   docker compose -f docker-compose.yml -f docker-compose.quellex.yml up --build
+#
+# Use:
+#   docker compose --profile quellex up -d           # Quellex only
+#   docker compose --profile recallhub --profile quellex up -d  # Both tenants
+#
+# This file is kept for reference only and can be safely deleted.

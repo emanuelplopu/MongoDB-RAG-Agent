@@ -28,8 +28,16 @@ FROM nginx:alpine as production
 # Copy custom nginx configs
 # Main config with rate limiting zones
 COPY nginx.main.conf /etc/nginx/nginx.conf
-# Server block config
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Server block config as template (env var substitution at startup)
+# nginx official image auto-runs envsubst on /etc/nginx/templates/*.template
+# Only actual env vars (BACKEND_HOST, SERVER_DOMAINS, API_DOMAIN) are substituted;
+# nginx variables ($uri, $host, etc.) are left untouched.
+COPY nginx.conf /etc/nginx/templates/default.conf.template
+
+# Default env vars for nginx template (overridden by docker-compose per tenant)
+ENV BACKEND_HOST=backend
+ENV SERVER_DOMAINS=""
+ENV API_DOMAIN=""
 
 # Copy built assets from builder stage
 COPY --from=builder /app/dist /usr/share/nginx/html

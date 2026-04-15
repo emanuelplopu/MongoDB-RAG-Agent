@@ -186,6 +186,8 @@ class TimeoutConfig:
     pdf_multiplier: float = 1.5  # Extra time for PDFs (OCR-heavy)
     complex_pdf_threshold_mb: float = 1.0  # PDFs above this get extra time
     complex_pdf_multiplier: float = 2.0  # Extra multiplier for complex PDFs
+    image_multiplier: float = 2.0  # Extra time for images (OCR processing)
+    audio_multiplier: float = 3.0  # Extra time for audio (transcription)
     max_retries: int = 2  # Number of retries for timed-out files
     retry_timeout_multiplier: float = 1.5  # Increase timeout on retry
 
@@ -300,6 +302,22 @@ def calculate_file_timeout(
                     f"Complex PDF detected ({size_mb:.1f}MB): "
                     f"timeout={calculated_timeout:.0f}s"
                 )
+        
+        elif ext in ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.tif'):
+            # Images need extra time for OCR processing
+            calculated_timeout *= cfg.image_multiplier
+            logger.debug(
+                f"Image file detected ({size_mb:.1f}MB): "
+                f"timeout={calculated_timeout:.0f}s (OCR multiplier)"
+            )
+        
+        elif ext in ('.mp3', '.wav', '.m4a', '.flac', '.ogg'):
+            # Audio files need extra time for transcription
+            calculated_timeout *= cfg.audio_multiplier
+            logger.debug(
+                f"Audio file detected ({size_mb:.1f}MB): "
+                f"timeout={calculated_timeout:.0f}s (transcription multiplier)"
+            )
     
     # Apply retry multiplier for subsequent attempts
     if retry_attempt > 0:
@@ -654,7 +672,7 @@ class DocumentIngestionPipeline:
             ".xlsx", ".xls",  # Excel
             ".html", ".htm",  # HTML
             ".msg",  # Outlook email
-            ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",  # Images
+            ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif",  # Images
             ".mp3", ".wav", ".m4a", ".flac",  # Audio formats
             ".mp4", ".avi", ".mkv", ".mov", ".webm",  # Video formats
         }
@@ -711,7 +729,7 @@ class DocumentIngestionPipeline:
             '.pptx': 6, '.ppt': 6,
             '.msg': 4,  # Outlook email - similar priority to Office docs
             # Images - can need OCR
-            '.png': 7, '.jpg': 7, '.jpeg': 7, '.gif': 7, '.webp': 7, '.bmp': 7, '.svg': 7,
+            '.png': 7, '.jpg': 7, '.jpeg': 7, '.gif': 7, '.webp': 7, '.bmp': 7, '.tiff': 7, '.tif': 7, '.svg': 7,
             # Audio - requires transcription
             '.mp3': 8, '.wav': 8, '.m4a': 8, '.flac': 8, '.ogg': 8,
             # Video - slowest
@@ -780,8 +798,20 @@ class DocumentIngestionPipeline:
             # Returns tuple: (markdown_content, docling_document)
             return self._transcribe_audio(file_path)
 
+        # Video formats - skip with placeholder (no transcription pipeline yet)
+        video_formats = ['.mp4', '.avi', '.mkv', '.mov', '.webm', '.wmv']
+        if file_ext in video_formats:
+            logger.warning(
+                f"Skipping video file (no video transcription pipeline): "
+                f"{os.path.basename(file_path)}"
+            )
+            return (
+                f"[Video: {os.path.basename(file_path)} - video transcription not yet supported]",
+                None
+            )
+
         # Image formats - convert via Docling with OCR
-        image_formats = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']
+        image_formats = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.tif']
         if file_ext in image_formats:
             try:
                 logger.info(
@@ -1933,7 +1963,7 @@ class DocumentIngestionPipeline:
         timeout_cfg = get_timeout_config()
         
         # Track timeout failures for potential retry
-        timed_out_files: List[Tuple[int, str, str]] = []  # (index, file_path, content_hash)
+        timed_out_files: List[Tuple[int, str, Optional[str]]] = []  # (index, file_path, content_hash or None)
         
         async def process_file_with_retry(
             index: int, 
@@ -1954,6 +1984,10 @@ class DocumentIngestionPipeline:
                     file_path=file_path,
                     retry_attempt=retry_attempt
                 )
+                
+                # Initialize content_hash before try block to avoid NameError
+                # in exception handlers if hash computation itself times out
+                content_hash = prev_content_hash or None
                 
                 # Progress callback before processing
                 if progress_callback:
