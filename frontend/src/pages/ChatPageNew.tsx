@@ -87,6 +87,9 @@ export default function ChatPage() {
     handleNewChat,
     models,
     getPricing,
+    pendingMessage,
+    pendingAttachments,
+    setPendingMessage,
   } = useChatSidebar()
   
   // Get current user for error message handling
@@ -202,6 +205,32 @@ export default function ChatPage() {
       setElapsedTime(0)
     }
   }, [liveTrace?.startTime])
+
+  // Pick up pending message from dashboard transition
+  const pendingHandled = useRef(false)
+  useEffect(() => {
+    if (pendingMessage && currentSession && !pendingHandled.current) {
+      pendingHandled.current = true
+      const msg = pendingMessage
+      const atts = pendingAttachments
+      setPendingMessage(null)
+
+      // Set the input and attachments, then trigger submit
+      setInput(msg)
+      if (atts && atts.length > 0) {
+        setAttachments(atts)
+        setAttachmentTokens(atts.reduce((sum: number, a: any) => sum + (a.token_estimate || 0), 0))
+      }
+
+      // Use a microtask to trigger submit after state updates
+      setTimeout(() => {
+        const form = document.querySelector('form')
+        if (form) {
+          form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }))
+        }
+      }, 100)
+    }
+  }, [pendingMessage, currentSession, pendingAttachments, setPendingMessage])
 
   // Change model for current session
   const handleChangeModel = async (modelId: string) => {

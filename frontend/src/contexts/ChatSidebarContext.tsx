@@ -34,6 +34,9 @@ interface ChatSidebarContextType {
   // Multi-select
   isSelectMode: boolean
   selectedSessions: Set<string>
+  // Pending message (for dashboard-to-chat transition)
+  pendingMessage: string | null
+  pendingAttachments: any[] | null
 
   // Actions
   loadSessions: () => Promise<void>
@@ -61,6 +64,7 @@ interface ChatSidebarContextType {
   archiveSelected: () => Promise<void>
   deleteSelected: () => Promise<void>
   moveSelectedToFolder: (folderId: string | null) => Promise<void>
+  setPendingMessage: (message: string | null, attachments?: any[] | null) => void
 }
 
 const ChatSidebarContext = createContext<ChatSidebarContextType | null>(null)
@@ -94,6 +98,14 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
   // Multi-select state
   const [isSelectMode, setIsSelectMode] = useState(false)
   const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set())
+  // Pending message for dashboard-to-chat transition
+  const [pendingMessage, setPendingMessageState] = useState<string | null>(null)
+  const [pendingAttachments, setPendingAttachmentsState] = useState<any[] | null>(null)
+
+  const setPendingMessage = useCallback((message: string | null, attachments?: any[] | null) => {
+    setPendingMessageState(message)
+    setPendingAttachmentsState(attachments ?? null)
+  }, [])
 
   // Load collapsed folders from localStorage
   useEffect(() => {
@@ -410,6 +422,9 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
     archiveSelected,
     deleteSelected,
     moveSelectedToFolder,
+    pendingMessage,
+    pendingAttachments,
+    setPendingMessage,
   }
 
   return (

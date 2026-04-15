@@ -36,6 +36,8 @@ import {
   CloudArrowUpIcon,
   PencilSquareIcon,
   FolderArrowDownIcon,
+  ArrowUpTrayIcon,
+  ChevronDoubleLeftIcon,
 } from '@heroicons/react/24/outline'
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid'
 import ThemeSwitcher from './ThemeSwitcher'
@@ -46,7 +48,7 @@ import { LocalizedLink, useLocalizedNavigate } from './LocalizedLink'
 import { useChatSidebar } from '../contexts/ChatSidebarContext'
 import { useAuth } from '../contexts/AuthContext'
 import { useTenant } from '../contexts/TenantContext'
-import { ChatSession, indexesApi } from '../api/client'
+import { ChatSession, indexesApi, profilesApi, ProfileListResponse } from '../api/client'
 import SidebarWarningToast, { SidebarWarning } from './SidebarWarningToast'
 
 // User menu items (shown in dropdown like OpenAI's user menu)
@@ -74,12 +76,34 @@ const systemMenuItems = [
   { nameKey: 'nav.backups', href: '/system/backups', icon: CloudArrowUpIcon },
 ]
 
+// Q Logo SVG component
+function QLogo({ className = 'h-8 w-8' }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect width="32" height="32" rx="8" className="fill-primary" />
+      <text x="16" y="22" textAnchor="middle" className="fill-white" style={{ fontSize: '18px', fontWeight: 700, fontFamily: 'system-ui, sans-serif' }}>Q</text>
+    </svg>
+  )
+}
+
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem('recallhub_sidebar_collapsed') === 'true'
+    } catch { return false }
+  })
+  const [sidebarHovered, setSidebarHovered] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [showMoveMenu, setShowMoveMenu] = useState(false)
   const [sidebarWarnings, setSidebarWarnings] = useState<SidebarWarning[]>([])
   const [dismissedWarnings, setDismissedWarnings] = useState<Set<string>>(new Set())
+  const [chatSearchQuery, setChatSearchQuery] = useState('')
+  const [showChatSearch, setShowChatSearch] = useState(false)
+  // Knowledge profiles state
+  const [profilesDropdownOpen, setProfilesDropdownOpen] = useState(false)
+  const [profilesData, setProfilesData] = useState<ProfileListResponse | null>(null)
+  const profilesDropdownRef = useRef<HTMLDivElement>(null)
   const userMenuRef = useRef<HTMLDivElement>(null)
   const location = useLocation()
   const navigate = useLocalizedNavigate()
@@ -122,6 +146,50 @@ export default function Layout() {
     moveSelectedToFolder,
   } = useChatSidebar()
 
+  // Persist sidebar collapsed state
+  useEffect(() => {
+    localStorage.setItem('recallhub_sidebar_collapsed', String(desktopSidebarCollapsed))
+  }, [desktopSidebarCollapsed])
+
+  // Fetch profiles for header dropdown
+  const fetchProfiles = useCallback(async () => {
+    try {
+      const res = await profilesApi.list()
+      setProfilesData(res)
+    } catch (err) {
+      console.error('Error fetching profiles for header:', err)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (isAuthenticated && !isAuthLoading) {
+      fetchProfiles()
+    }
+  }, [isAuthenticated, isAuthLoading, fetchProfiles])
+
+  // Close profiles dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (profilesDropdownRef.current && !profilesDropdownRef.current.contains(event.target as Node)) {
+        setProfilesDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const handleSwitchProfile = async (profileKey: string) => {
+    try {
+      await profilesApi.switch(profileKey)
+      setProfilesData(prev => prev ? { ...prev, active_profile: profileKey } : null)
+      setProfilesDropdownOpen(false)
+      // Reload the page to refresh data for new profile
+      window.location.reload()
+    } catch (err) {
+      console.error('Error switching profile:', err)
+    }
+  }
+
   // Group sessions by folder
   const sessionsByFolder = new Map<string | null, ChatSession[]>()
   const pinnedSessions: ChatSession[] = []
@@ -137,6 +205,13 @@ export default function Layout() {
       sessionsByFolder.get(key)!.push(session)
     }
   })
+
+  // Filter sessions by chat search
+  const filterSessions = (sessionList: ChatSession[]) => {
+    if (!chatSearchQuery.trim()) return sessionList
+    const q = chatSearchQuery.toLowerCase()
+    return sessionList.filter(s => (s.title || '').toLowerCase().includes(q))
+  }
 
   // Check if we're on the chat page
   const isOnChatPage = location.pathname.startsWith('/chat')
@@ -249,9 +324,10 @@ export default function Layout() {
 
   const SidebarContent = () => (
     <div className="flex flex-col h-full">
-      {/* Top Section - New Chat Button or Select Mode Actions */}
-      <div className="p-3 flex-shrink-0">
+      {/* Top Section - ChatGPT-style header */}
+      <div className="p-3 flex-shrink-0 space-y-1">
         {isSelectMode ? (
+          /* Select Mode Actions - unchanged */
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-primary-900 dark:text-gray-200">
@@ -274,7 +350,6 @@ export default function Layout() {
             </div>
             {selectedSessions.size > 0 && (
               <div className="flex flex-col gap-1.5">
-                {/* Move to Project */}
                 <div className="relative">
                   <button
                     onClick={() => setShowMoveMenu(!showMoveMenu)}
@@ -337,22 +412,99 @@ export default function Layout() {
             )}
           </div>
         ) : (
-          <div className="flex gap-2">
-            <button
-              onClick={() => handleNewChat()}
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-surface-variant dark:border-gray-600 hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-sm font-medium text-primary-900 dark:text-gray-200"
+          <>
+            {/* Row 1: Q Logo | + New Chat | Edit | Collapse */}
+            <div className="flex items-center gap-1">
+              <LocalizedLink
+                to="/dashboard"
+                className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors flex-shrink-0"
+                title={t('sidebar.home')}
+              >
+                <QLogo className="h-7 w-7" />
+              </LocalizedLink>
+              <button
+                onClick={() => handleNewChat()}
+                className="flex-1 flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-sm font-medium text-primary-900 dark:text-gray-200"
+              >
+                <PencilSquareIcon className="h-5 w-5" />
+                {t('sidebar.newChat')}
+              </button>
+              <button
+                onClick={toggleSelectMode}
+                className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-secondary dark:text-gray-400 flex-shrink-0"
+                title={t('sidebar.editChats')}
+              >
+                <PencilIcon className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => setDesktopSidebarCollapsed(true)}
+                className="hidden lg:flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-secondary dark:text-gray-400 flex-shrink-0"
+                title={t('sidebar.collapse')}
+              >
+                <ChevronDoubleLeftIcon className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Row 2: Search / Find Documents */}
+            <LocalizedLink
+              to="/search"
+              className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-sm text-primary-900 dark:text-gray-300"
             >
-              <PlusIcon className="h-5 w-5" />
-              {t('sidebar.newChat')}
-            </button>
+              <MagnifyingGlassIcon className="h-5 w-5 text-secondary dark:text-gray-400" />
+              {t('sidebar.searchDocuments')}
+            </LocalizedLink>
+
+            {/* Row 3: Search Chats */}
             <button
-              onClick={toggleSelectMode}
-              className="px-3 py-3 rounded-xl border border-surface-variant dark:border-gray-600 hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-sm text-secondary dark:text-gray-400"
-              title={t('sidebar.editChats')}
+              onClick={() => setShowChatSearch(!showChatSearch)}
+              className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-sm text-primary-900 dark:text-gray-300"
             >
-              <PencilSquareIcon className="h-5 w-5" />
+              <MagnifyingGlassCircleIcon className="h-5 w-5 text-secondary dark:text-gray-400" />
+              {t('sidebar.searchChats')}
             </button>
-          </div>
+
+            {/* Chat Search Input (conditionally shown) */}
+            {showChatSearch && (
+              <div className="relative px-1">
+                <input
+                  type="text"
+                  value={chatSearchQuery}
+                  onChange={(e) => setChatSearchQuery(e.target.value)}
+                  placeholder={t('sidebar.searchChats')}
+                  className="w-full text-sm bg-surface-variant dark:bg-gray-700 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary dark:text-gray-200 placeholder:text-secondary dark:placeholder:text-gray-500"
+                  autoFocus
+                />
+                {chatSearchQuery && (
+                  <button
+                    onClick={() => { setChatSearchQuery(''); setShowChatSearch(false) }}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-secondary hover:text-primary"
+                  >
+                    <XMarkIcon className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Row 4: Documents + Datenimport */}
+            <div className="flex items-center gap-1">
+              <LocalizedLink
+                to="/documents"
+                className="flex-1 flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-sm text-primary-900 dark:text-gray-300"
+              >
+                <DocumentTextIcon className="h-5 w-5 text-secondary dark:text-gray-400" />
+                {t('nav.documents')}
+              </LocalizedLink>
+              {user?.is_admin && (
+                <LocalizedLink
+                  to="/system/ingestion"
+                  className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-secondary dark:text-gray-400 flex-shrink-0"
+                  title={t('sidebar.datenimport')}
+                >
+                  <ArrowUpTrayIcon className="h-5 w-5" />
+                </LocalizedLink>
+              )}
+            </div>
+          </>
         )}
       </div>
 
@@ -436,7 +588,7 @@ export default function Layout() {
               </div>
               {!collapsedFolders.has(folder.id) && (
                 <div className="ml-4 mt-0.5 space-y-0.5">
-                  {(sessionsByFolder.get(folder.id) || []).map(session => (
+                  {filterSessions(sessionsByFolder.get(folder.id) || []).map(session => (
                     <SessionItem
                       key={session.id}
                       session={session}
@@ -475,12 +627,12 @@ export default function Layout() {
         ) : (
           <div className="space-y-0.5">
             {/* Pinned Sessions */}
-            {pinnedSessions.length > 0 && (
+            {filterSessions(pinnedSessions).length > 0 && (
               <div className="mb-2">
                 <div className="px-2 py-1 text-xs font-medium text-secondary dark:text-gray-500 uppercase tracking-wider">
                   {t('sidebar.pinned')}
                 </div>
-                {pinnedSessions.map(session => (
+                {filterSessions(pinnedSessions).map(session => (
                   <SessionItem
                     key={session.id}
                     session={session}
@@ -504,12 +656,12 @@ export default function Layout() {
             )}
 
             {/* Your Chats */}
-            {(sessionsByFolder.get(null) || []).length > 0 && (
+            {filterSessions(sessionsByFolder.get(null) || []).length > 0 && (
               <div>
                 <div className="px-2 py-1 text-xs font-medium text-secondary dark:text-gray-500 uppercase tracking-wider">
                   {t('sidebar.yourChats')}
                 </div>
-                {(sessionsByFolder.get(null) || []).map(session => (
+                {filterSessions(sessionsByFolder.get(null) || []).map(session => (
                   <SessionItem
                     key={session.id}
                     session={session}
@@ -545,7 +697,7 @@ export default function Layout() {
       <div className="flex-shrink-0 border-t border-surface-variant dark:border-gray-700 p-3" ref={userMenuRef}>
         {/* User Menu Dropdown (appears above the button) */}
         {userMenuOpen && (
-          <div className="absolute bottom-20 left-3 right-3 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-surface-variant dark:border-gray-600 py-2 z-50">
+          <div className="absolute bottom-20 left-3 right-3 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-surface-variant dark:border-gray-600 py-2 z-50 max-h-[70vh] overflow-y-auto">
             {/* User Info */}
             {isAuthenticated && user && (
               <div className="px-4 py-2 border-b border-surface-variant dark:border-gray-700">
@@ -678,11 +830,7 @@ export default function Layout() {
             {isAuthenticated && user ? (
               user.name.charAt(0).toUpperCase()
             ) : (
-              <svg className="h-5 w-5" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M12 10h6c2.76 0 5 2.24 5 5s-2.24 5-5 5h-4" stroke="white" strokeWidth="2.5" strokeLinecap="round" fill="none"/>
-                <path d="M14 18l-3 3-3-3" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-                <path d="M11 21v2" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
-              </svg>
+              <QLogo className="h-5 w-5" />
             )}
           </div>
           <div className="flex-1 text-left min-w-0">
@@ -703,6 +851,9 @@ export default function Layout() {
       </div>
     </div>
   )
+
+  // Determine if desktop sidebar is effectively visible
+  const desktopSidebarVisible = !desktopSidebarCollapsed || sidebarHovered
 
   return (
     <div className="min-h-screen bg-background dark:bg-gray-900 transition-colors duration-200">
@@ -736,33 +887,120 @@ export default function Layout() {
         <SidebarContent />
       </div>
 
-      {/* Desktop sidebar */}
-      <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-72 lg:flex-col">
-        <div className="flex grow flex-col bg-surface dark:bg-gray-800 shadow-elevation-1">
+      {/* Desktop sidebar - collapsible */}
+      <div
+        className={`hidden lg:fixed lg:inset-y-0 lg:flex lg:flex-col transition-all duration-300 ease-in-out z-40 ${
+          desktopSidebarVisible ? 'lg:w-72' : 'lg:w-0'
+        }`}
+        onMouseEnter={() => { if (desktopSidebarCollapsed) setSidebarHovered(true) }}
+        onMouseLeave={() => { if (desktopSidebarCollapsed) setSidebarHovered(false) }}
+      >
+        <div className={`flex grow flex-col bg-surface dark:bg-gray-800 shadow-elevation-1 transition-all duration-300 ${
+          desktopSidebarVisible ? 'w-72 opacity-100' : 'w-0 opacity-0 overflow-hidden'
+        }`}>
           <SidebarContent />
         </div>
       </div>
 
+      {/* Collapsed sidebar toggle - shown when sidebar is collapsed */}
+      {desktopSidebarCollapsed && !sidebarHovered && (
+        <div
+          className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:flex lg:items-start lg:pt-3 lg:pl-3 z-30 group"
+        >
+          <button
+            onClick={() => setDesktopSidebarCollapsed(false)}
+            className="flex items-center justify-center w-9 h-9 rounded-lg text-secondary dark:text-gray-400 hover:bg-surface-variant dark:hover:bg-gray-700 opacity-0 group-hover:opacity-100 transition-all duration-200 bg-surface dark:bg-gray-800 shadow-sm"
+            title={t('sidebar.expand')}
+          >
+            <Bars3Icon className="h-5 w-5" />
+          </button>
+        </div>
+      )}
+
       {/* Main content */}
-      <div className="lg:pl-72">
-        {/* Top bar - only show on non-chat pages or mobile */}
-        <div className="sticky top-0 z-30 flex h-14 items-center gap-x-4 bg-surface/95 dark:bg-gray-800/95 px-4 shadow-sm backdrop-blur lg:hidden">
+      <div className={`transition-all duration-300 ${desktopSidebarVisible ? 'lg:pl-72' : 'lg:pl-0'}`}>
+        {/* Desktop Header Bar */}
+        <div className="sticky top-0 z-30 flex h-14 items-center gap-x-4 bg-surface/95 dark:bg-gray-800/95 px-4 shadow-sm backdrop-blur">
+          {/* Mobile menu button */}
           <button
             type="button"
-            className="-m-2.5 p-2.5 text-secondary dark:text-gray-400"
+            className="-m-2.5 p-2.5 text-secondary dark:text-gray-400 lg:hidden"
             onClick={() => setSidebarOpen(true)}
           >
             <Bars3Icon className="h-6 w-6" />
           </button>
+
+          {/* Desktop: collapsed sidebar expand button */}
+          {desktopSidebarCollapsed && !sidebarHovered && (
+            <button
+              type="button"
+              className="hidden lg:flex -m-2.5 p-2.5 text-secondary dark:text-gray-400 hover:text-primary transition-colors"
+              onClick={() => setDesktopSidebarCollapsed(false)}
+              title={t('sidebar.expand')}
+            >
+              <Bars3Icon className="h-6 w-6" />
+            </button>
+          )}
+
           <div className="flex flex-1 items-center justify-between">
             <h1 className="text-lg font-semibold text-primary-900 dark:text-primary-200">
               {getPageTitle()}
             </h1>
+            
+            {/* Right side: Knowledge Profiles dropdown */}
+            <div className="flex items-center gap-3">
+              {/* Knowledge Profiles Dropdown */}
+              {profilesData && Object.keys(profilesData.profiles).length > 0 && (
+                <div className="relative" ref={profilesDropdownRef}>
+                  <button
+                    onClick={() => setProfilesDropdownOpen(!profilesDropdownOpen)}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-sm"
+                  >
+                    <FolderIcon className="h-4 w-4 text-primary" />
+                    <span className="text-primary-900 dark:text-gray-200 hidden sm:inline">
+                      {profilesData.profiles[profilesData.active_profile]?.name || profilesData.active_profile}
+                    </span>
+                    <ChevronDownIcon className="h-3 w-3 text-secondary" />
+                  </button>
+                  {profilesDropdownOpen && (
+                    <div className="absolute right-0 mt-1 w-64 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-surface-variant dark:border-gray-600 py-2 z-50">
+                      <div className="px-3 py-1.5 text-xs font-medium text-secondary dark:text-gray-500 uppercase">
+                        {t('nav.knowledgeProfiles')}
+                      </div>
+                      {Object.entries(profilesData.profiles).map(([key, profile]) => (
+                        <button
+                          key={key}
+                          onClick={() => handleSwitchProfile(key)}
+                          className={`w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors ${
+                            key === profilesData.active_profile
+                              ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300'
+                              : 'text-primary-900 dark:text-gray-300 hover:bg-surface-variant dark:hover:bg-gray-700'
+                          }`}
+                        >
+                          <FolderIcon className={`h-4 w-4 ${key === profilesData.active_profile ? 'text-primary' : 'text-secondary'}`} />
+                          <div className="flex-1 text-left min-w-0">
+                            <div className="truncate font-medium">{profile.name}</div>
+                            {profile.description && (
+                              <div className="text-xs text-secondary dark:text-gray-500 truncate">{profile.description}</div>
+                            )}
+                          </div>
+                          {key === profilesData.active_profile && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary text-white font-medium">
+                              {t('dashboard.profiles.active')}
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
         {/* Page content */}
-        <main className={isOnChatPage || isOnDashboardPage ? (isOnDashboardPage ? 'py-6 px-4 sm:px-6 lg:px-8' : '') : 'py-6 px-4 sm:px-6 lg:px-8'}>
+        <main className={isOnChatPage || isOnDashboardPage ? (isOnDashboardPage ? '' : '') : 'py-6 px-4 sm:px-6 lg:px-8'}>
           <Outlet />
         </main>
       </div>

@@ -49,7 +49,9 @@
     "dismiss": "Dismiss",
     "never": "Never",
     "active": "Active",
-    "inactive": "Inactive"
+    "inactive": "Inactive",
+    "send": "send",
+    "newLine": "new line"
   },
   "emptyStates": {
     "noDocuments": {
@@ -285,6 +287,12 @@
         "title": "Use Search",
         "description": "Search your documents directly for quick lookups and discovery."
       }
+    },
+    "suggestions": {
+      "summarize": "Summarize my documents",
+      "findDocument": "Find a specific document",
+      "compare": "Compare two topics",
+      "explain": "Explain a concept"
     },
     "time": {
       "justNow": "Just now",
