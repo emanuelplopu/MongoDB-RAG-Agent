@@ -51,6 +51,8 @@ class User(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     email: str
     name: str
+    title_prefix: Optional[str] = None  # e.g. "Mag.", "Dr.", "RA"
+    title_suffix: Optional[str] = None  # e.g. "Rechtsanwältin", "LL.M.", "MBA"
     password_hash: str
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
@@ -63,6 +65,8 @@ class UserResponse(BaseModel):
     id: str
     email: str
     name: str
+    title_prefix: Optional[str] = None
+    title_suffix: Optional[str] = None
     created_at: datetime
     is_active: bool
     is_admin: bool = False
@@ -72,6 +76,8 @@ class RegisterRequest(BaseModel):
     """Registration request."""
     email: EmailStr
     name: str = Field(..., min_length=2, max_length=100)
+    title_prefix: Optional[str] = Field(None, max_length=50, description="Title before name, e.g. Mag., Dr.")
+    title_suffix: Optional[str] = Field(None, max_length=100, description="Title after name, e.g. Rechtsanwältin, LL.M.")
     password: str = Field(..., min_length=6, max_length=100)
     invite_code: Optional[str] = Field(None, description="Invite code (required if registration mode is 'invite'")
 
@@ -249,6 +255,8 @@ async def get_current_user(
         id=str(user_doc["_id"]),
         email=user_doc["email"],
         name=user_doc["name"],
+        title_prefix=user_doc.get("title_prefix"),
+        title_suffix=user_doc.get("title_suffix"),
         created_at=user_doc["created_at"],
         is_active=user_doc.get("is_active", True),
         is_admin=user_doc.get("is_admin", False)
@@ -337,6 +345,8 @@ async def register(request: Request, reg_request: RegisterRequest):
     user = User(
         email=reg_request.email.lower(),
         name=reg_request.name,
+        title_prefix=reg_request.title_prefix,
+        title_suffix=reg_request.title_suffix,
         password_hash=get_password_hash(reg_request.password)
     )
     
@@ -352,6 +362,8 @@ async def register(request: Request, reg_request: RegisterRequest):
         id=user.id,
         email=user.email,
         name=user.name,
+        title_prefix=user.title_prefix,
+        title_suffix=user.title_suffix,
         created_at=user.created_at,
         is_active=user.is_active,
         is_admin=user.is_admin
@@ -399,6 +411,8 @@ async def login(request: Request, login_request: LoginRequest):
         id=user_id,
         email=user_doc["email"],
         name=user_doc["name"],
+        title_prefix=user_doc.get("title_prefix"),
+        title_suffix=user_doc.get("title_suffix"),
         created_at=user_doc["created_at"],
         is_active=user_doc.get("is_active", True),
         is_admin=user_doc.get("is_admin", False)
@@ -423,18 +437,29 @@ async def logout():
     return {"success": True, "message": "Logged out successfully"}
 
 
+class UpdateMeRequest(BaseModel):
+    """Update profile request."""
+    name: Optional[str] = None
+    title_prefix: Optional[str] = Field(None, max_length=50)
+    title_suffix: Optional[str] = Field(None, max_length=100)
+
+
 @router.put("/me")
 async def update_me(
     request: Request,
-    name: Optional[str] = None,
+    update_data: UpdateMeRequest,
     user: UserResponse = Depends(require_auth)
 ):
     """Update current user info."""
     collection = await get_users_collection(request)
     
     update_dict = {"updated_at": datetime.now()}
-    if name:
-        update_dict["name"] = name
+    if update_data.name is not None:
+        update_dict["name"] = update_data.name
+    if update_data.title_prefix is not None:
+        update_dict["title_prefix"] = update_data.title_prefix or None  # empty string → None
+    if update_data.title_suffix is not None:
+        update_dict["title_suffix"] = update_data.title_suffix or None
     
     await collection.update_one(
         {"_id": user.id},
@@ -484,6 +509,8 @@ class UserListResponse(BaseModel):
     id: str
     email: str
     name: str
+    title_prefix: Optional[str] = None
+    title_suffix: Optional[str] = None
     is_active: bool
     is_admin: bool
     created_at: datetime
@@ -529,6 +556,8 @@ async def list_users(
             id=str(doc["_id"]),
             email=doc["email"],
             name=doc["name"],
+            title_prefix=doc.get("title_prefix"),
+            title_suffix=doc.get("title_suffix"),
             is_active=doc.get("is_active", True),
             is_admin=doc.get("is_admin", False),
             created_at=doc["created_at"]
@@ -552,6 +581,8 @@ async def get_access_matrix(
             id=str(doc["_id"]),
             email=doc["email"],
             name=doc["name"],
+            title_prefix=doc.get("title_prefix"),
+            title_suffix=doc.get("title_suffix"),
             is_active=doc.get("is_active", True),
             is_admin=doc.get("is_admin", False),
             created_at=doc["created_at"]
@@ -670,6 +701,8 @@ class AdminCreateUserRequest(BaseModel):
     """Admin request to create a new user."""
     email: EmailStr
     name: str = Field(..., min_length=2, max_length=100)
+    title_prefix: Optional[str] = Field(None, max_length=50)
+    title_suffix: Optional[str] = Field(None, max_length=100)
     password: str = Field(..., min_length=6, max_length=100)
     is_admin: bool = False
 
@@ -678,6 +711,8 @@ class AdminUpdateUserRequest(BaseModel):
     """Admin request to update a user."""
     name: Optional[str] = Field(None, min_length=2, max_length=100)
     email: Optional[EmailStr] = None
+    title_prefix: Optional[str] = Field(None, max_length=50)
+    title_suffix: Optional[str] = Field(None, max_length=100)
     is_admin: Optional[bool] = None
     new_password: Optional[str] = Field(None, min_length=6, max_length=100)
 
@@ -712,6 +747,8 @@ async def admin_create_user(
     user = User(
         email=create_request.email.lower(),
         name=create_request.name,
+        title_prefix=create_request.title_prefix,
+        title_suffix=create_request.title_suffix,
         password_hash=get_password_hash(create_request.password),
         is_admin=create_request.is_admin
     )
@@ -727,6 +764,8 @@ async def admin_create_user(
         id=user.id,
         email=user.email,
         name=user.name,
+        title_prefix=user.title_prefix,
+        title_suffix=user.title_suffix,
         is_active=user.is_active,
         is_admin=user.is_admin,
         created_at=user.created_at
@@ -765,6 +804,12 @@ async def admin_update_user(
     if update_request.name is not None:
         update_dict["name"] = update_request.name
     
+    if update_request.title_prefix is not None:
+        update_dict["title_prefix"] = update_request.title_prefix or None
+    
+    if update_request.title_suffix is not None:
+        update_dict["title_suffix"] = update_request.title_suffix or None
+    
     if update_request.email is not None:
         # Check if email is already taken by another user
         existing = await collection.find_one({
@@ -795,6 +840,8 @@ async def admin_update_user(
         id=str(updated_doc["_id"]),
         email=updated_doc["email"],
         name=updated_doc["name"],
+        title_prefix=updated_doc.get("title_prefix"),
+        title_suffix=updated_doc.get("title_suffix"),
         is_active=updated_doc.get("is_active", True),
         is_admin=updated_doc.get("is_admin", False),
         created_at=updated_doc["created_at"]

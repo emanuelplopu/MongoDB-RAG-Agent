@@ -147,7 +147,11 @@ class Orchestrator:
             }
             
             # Check if this is a newer OpenAI model that requires max_completion_tokens
-            if "gpt-5" in model_string.lower() or "gpt-4o" in model_string.lower():
+            model_lower = model_string.lower()
+            needs_max_completion_tokens = any(prefix in model_lower for prefix in [
+                "gpt-5", "gpt-4o", "gpt-4.1", "o1", "o3", "o4"
+            ])
+            if needs_max_completion_tokens:
                 llm_params["max_completion_tokens"] = 2000
             else:
                 llm_params["max_tokens"] = 2000

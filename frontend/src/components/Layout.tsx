@@ -549,7 +549,12 @@ export default function Layout() {
             {/* User Info */}
             {isAuthenticated && user && (
               <div className="px-4 py-2 border-b border-surface-variant dark:border-gray-700">
-                <div className="font-medium text-sm text-primary-900 dark:text-gray-200">{user.name}</div>
+                <div className="font-medium text-sm text-primary-900 dark:text-gray-200">
+                  {user.title_prefix ? `${user.title_prefix} ` : ''}{user.name}
+                </div>
+                {user.title_suffix && (
+                  <div className="text-xs text-primary-600/70 dark:text-gray-400 font-medium">{user.title_suffix}</div>
+                )}
                 <div className="text-xs text-secondary dark:text-gray-400">{user.email}</div>
               </div>
             )}
@@ -680,10 +685,15 @@ export default function Layout() {
               </svg>
             )}
           </div>
-          <div className="flex-1 text-left">
+          <div className="flex-1 text-left min-w-0">
             <div className="text-sm font-medium text-primary-900 dark:text-gray-200 truncate">
-              {isAuthenticated && user ? user.name : tenant.branding.appName}
+              {isAuthenticated && user ? (
+                <>{user.title_prefix ? `${user.title_prefix} ` : ''}{user.name}</>
+              ) : tenant.branding.appName}
             </div>
+            {isAuthenticated && user && user.title_suffix && (
+              <div className="text-[11px] text-primary-600/60 dark:text-gray-400 truncate leading-tight">{user.title_suffix}</div>
+            )}
             {isAuthenticated && user && (
               <div className="text-xs text-secondary dark:text-gray-500 truncate">{user.email}</div>
             )}

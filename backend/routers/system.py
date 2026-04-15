@@ -48,30 +48,35 @@ MATCH_COUNT_OPTIONS = [5, 10, 15, 20, 25, 50, 100]
 
 OPENAI_MODELS = {
     "chat": [
+        # GPT-5 Series
+        {"id": "gpt-5.2-pro", "name": "GPT-5.2 Pro", "type": "chat", "context": 200000, "multimodal": True, "description": "Most powerful GPT-5 for complex reasoning"},
+        {"id": "gpt-5.2", "name": "GPT-5.2", "type": "chat", "context": 200000, "multimodal": True, "description": "Latest flagship GPT-5 model"},
+        {"id": "gpt-5.1", "name": "GPT-5.1", "type": "chat", "context": 200000, "multimodal": True, "description": "High-performance GPT-5 variant"},
+        {"id": "gpt-5", "name": "GPT-5", "type": "chat", "context": 128000, "multimodal": True, "description": "GPT-5 base model"},
+        {"id": "gpt-5-mini", "name": "GPT-5 Mini", "type": "chat", "context": 128000, "multimodal": True, "description": "Fast, affordable GPT-5"},
+        # GPT-4.1 Series
+        {"id": "gpt-4.1", "name": "GPT-4.1", "type": "chat", "context": 1047576, "multimodal": True, "description": "1M context, excellent instruction following"},
+        {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini", "type": "chat", "context": 1047576, "multimodal": True, "description": "Fast GPT-4.1 with 1M context"},
+        {"id": "gpt-4.1-nano", "name": "GPT-4.1 Nano", "type": "chat", "context": 1047576, "description": "Ultra-fast, cheapest GPT-4.1"},
         # GPT-4o Series (Flagship Multimodal)
         {"id": "gpt-4o", "name": "GPT-4o", "type": "chat", "context": 128000, "multimodal": True, "description": "Flagship multimodal model for complex tasks"},
         {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "type": "chat", "context": 128000, "multimodal": True, "description": "Fast, affordable for focused tasks"},
         {"id": "gpt-4o-2024-11-20", "name": "GPT-4o (Nov 2024)", "type": "chat", "context": 128000, "multimodal": True, "description": "Latest GPT-4o snapshot"},
-        {"id": "gpt-4o-2024-08-06", "name": "GPT-4o (Aug 2024)", "type": "chat", "context": 128000, "multimodal": True, "description": "Structured outputs support"},
         {"id": "gpt-4o-audio-preview", "name": "GPT-4o Audio Preview", "type": "chat", "context": 128000, "multimodal": True, "audio": True, "description": "Audio input/output capable"},
         {"id": "chatgpt-4o-latest", "name": "ChatGPT-4o Latest", "type": "chat", "context": 128000, "multimodal": True, "description": "Dynamic ChatGPT version"},
         # O-Series Reasoning Models
-        {"id": "o1", "name": "O1", "type": "reasoning", "context": 200000, "description": "Advanced reasoning model for complex problems"},
-        {"id": "o1-preview", "name": "O1 Preview", "type": "reasoning", "context": 128000, "description": "Reasoning model preview"},
-        {"id": "o1-mini", "name": "O1 Mini", "type": "reasoning", "context": 128000, "description": "Faster reasoning model"},
-        {"id": "o3-mini", "name": "O3 Mini", "type": "reasoning", "context": 200000, "description": "Latest fast reasoning model"},
-        # GPT-4 Turbo Series
+        {"id": "o4-mini", "name": "O4 Mini", "type": "reasoning", "context": 200000, "multimodal": True, "description": "Latest fast reasoning model"},
+        {"id": "o3", "name": "O3", "type": "reasoning", "context": 200000, "multimodal": True, "description": "Advanced reasoning with tool use"},
+        {"id": "o3-mini", "name": "O3 Mini", "type": "reasoning", "context": 200000, "description": "Fast reasoning model"},
+        {"id": "o1", "name": "O1", "type": "reasoning", "context": 200000, "multimodal": True, "description": "Deep reasoning model"},
+        {"id": "o1-pro", "name": "O1 Pro", "type": "reasoning", "context": 200000, "multimodal": True, "description": "Most powerful reasoning, extended compute"},
+        {"id": "o1-preview", "name": "O1 Preview", "type": "reasoning", "context": 128000, "description": "Reasoning model preview (deprecated)"},
+        {"id": "o1-mini", "name": "O1 Mini", "type": "reasoning", "context": 128000, "description": "Faster reasoning model (deprecated)"},
+        # Legacy GPT-4 Series
         {"id": "gpt-4-turbo", "name": "GPT-4 Turbo", "type": "chat", "context": 128000, "multimodal": True, "description": "Enhanced GPT-4 with vision"},
-        {"id": "gpt-4-turbo-preview", "name": "GPT-4 Turbo Preview", "type": "chat", "context": 128000, "description": "GPT-4 Turbo preview"},
-        {"id": "gpt-4-turbo-2024-04-09", "name": "GPT-4 Turbo (Apr 2024)", "type": "chat", "context": 128000, "multimodal": True, "description": "GPT-4 Turbo with Vision"},
-        # GPT-4 Series
         {"id": "gpt-4", "name": "GPT-4", "type": "chat", "context": 8192, "description": "Original GPT-4 model"},
-        {"id": "gpt-4-32k", "name": "GPT-4 32K", "type": "chat", "context": 32768, "description": "Extended context GPT-4"},
-        {"id": "gpt-4-0613", "name": "GPT-4 (June 2023)", "type": "chat", "context": 8192, "description": "Snapshot for function calling"},
         # GPT-3.5 Series
-        {"id": "gpt-3.5-turbo", "name": "GPT-3.5 Turbo", "type": "chat", "context": 16385, "description": "Fast and cost-effective"},
-        {"id": "gpt-3.5-turbo-16k", "name": "GPT-3.5 Turbo 16K", "type": "chat", "context": 16385, "description": "Extended context 3.5"},
-        {"id": "gpt-3.5-turbo-instruct", "name": "GPT-3.5 Turbo Instruct", "type": "completion", "context": 4096, "description": "Instruction-following model"},
+        {"id": "gpt-3.5-turbo", "name": "GPT-3.5 Turbo", "type": "chat", "context": 16385, "description": "Fast and cost-effective (deprecated)"},
     ],
     "embedding": [
         {"id": "text-embedding-3-large", "name": "Text Embedding 3 Large", "type": "embedding", "dimension": 3072, "description": "Best quality embeddings"},
@@ -95,9 +100,13 @@ OPENAI_MODELS = {
 
 GOOGLE_MODELS = {
     "chat": [
+        # Gemini 2.5 Series
+        {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "type": "chat", "context": 1000000, "multimodal": True, "description": "Most capable Gemini, hybrid reasoning"},
+        {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash", "type": "chat", "context": 1000000, "multimodal": True, "description": "Fast thinking model with reasoning"},
         # Gemini 2.0 Series
+        {"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash", "type": "chat", "context": 1000000, "multimodal": True, "description": "Fast multimodal with audio I/O"},
         {"id": "gemini-2.0-flash-exp", "name": "Gemini 2.0 Flash (Experimental)", "type": "chat", "context": 1000000, "multimodal": True, "description": "Next-gen multimodal with thinking"},
-        {"id": "gemini-2.0-flash", "name": "Gemini 2.0 Flash", "type": "chat", "context": 1000000, "multimodal": True, "description": "Fast multimodal"},
+        {"id": "gemini-2.0-flash-lite", "name": "Gemini 2.0 Flash Lite", "type": "chat", "context": 1000000, "multimodal": True, "description": "Cheapest Gemini 2.0"},
         {"id": "gemini-2.0-flash-thinking-exp", "name": "Gemini 2.0 Flash Thinking", "type": "reasoning", "context": 1000000, "multimodal": True, "description": "Reasoning with chain-of-thought"},
         # Gemini 1.5 Series
         {"id": "gemini-1.5-pro", "name": "Gemini 1.5 Pro", "type": "chat", "context": 2000000, "multimodal": True, "description": "Complex tasks, 2M context window"},
@@ -128,8 +137,13 @@ GOOGLE_MODELS = {
 
 ANTHROPIC_MODELS = {
     "chat": [
+        # Claude 4 Series
+        {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4", "type": "chat", "context": 200000, "multimodal": True, "description": "Latest Claude Sonnet, best coding"},
+        # Claude 3.7 Series
+        {"id": "claude-3-7-sonnet-latest", "name": "Claude 3.7 Sonnet Latest", "type": "chat", "context": 200000, "multimodal": True, "description": "Extended thinking, hybrid reasoning"},
+        {"id": "claude-3-7-sonnet-20250219", "name": "Claude 3.7 Sonnet (Feb 2025)", "type": "chat", "context": 200000, "multimodal": True, "description": "Claude 3.7 with extended thinking"},
         # Claude 3.5 Series
-        {"id": "claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet (Oct 2024)", "type": "chat", "context": 200000, "multimodal": True, "description": "Most intelligent Claude model"},
+        {"id": "claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet (Oct 2024)", "type": "chat", "context": 200000, "multimodal": True, "description": "Most intelligent Claude 3.5"},
         {"id": "claude-3-5-sonnet-latest", "name": "Claude 3.5 Sonnet Latest", "type": "chat", "context": 200000, "multimodal": True, "description": "Latest Sonnet"},
         {"id": "claude-3-5-sonnet-20240620", "name": "Claude 3.5 Sonnet (Jun 2024)", "type": "chat", "context": 200000, "multimodal": True, "description": "Original 3.5 Sonnet"},
         {"id": "claude-3-5-haiku-20241022", "name": "Claude 3.5 Haiku", "type": "chat", "context": 200000, "multimodal": True, "description": "Fastest Claude 3.5"},
@@ -714,16 +728,23 @@ async def list_llm_models():
     if not api_key:
         # Return fallback list if no API key
         fallback_models = [
+            {"id": "gpt-5.2-pro", "owned_by": "openai", "created": None},
             {"id": "gpt-5.2", "owned_by": "openai", "created": None},
+            {"id": "gpt-5.1", "owned_by": "openai", "created": None},
             {"id": "gpt-5", "owned_by": "openai", "created": None},
+            {"id": "gpt-5-mini", "owned_by": "openai", "created": None},
+            {"id": "gpt-4.1", "owned_by": "openai", "created": None},
+            {"id": "gpt-4.1-mini", "owned_by": "openai", "created": None},
+            {"id": "gpt-4.1-nano", "owned_by": "openai", "created": None},
             {"id": "gpt-4o", "owned_by": "openai", "created": None},
             {"id": "gpt-4o-mini", "owned_by": "openai", "created": None},
-            {"id": "gpt-4.1", "owned_by": "openai", "created": None},
+            {"id": "o4-mini", "owned_by": "openai", "created": None},
+            {"id": "o3", "owned_by": "openai", "created": None},
+            {"id": "o3-mini", "owned_by": "openai", "created": None},
+            {"id": "o1", "owned_by": "openai", "created": None},
+            {"id": "o1-pro", "owned_by": "openai", "created": None},
             {"id": "gpt-4-turbo", "owned_by": "openai", "created": None},
-            {"id": "gpt-4", "owned_by": "openai", "created": None},
             {"id": "gpt-3.5-turbo", "owned_by": "openai", "created": None},
-            {"id": "o1-preview", "owned_by": "openai", "created": None},
-            {"id": "o1-mini", "owned_by": "openai", "created": None},
         ]
         return {
             "models": fallback_models,
@@ -759,16 +780,20 @@ async def list_llm_models():
             mid = m["id"]
             if "gpt-5" in mid:
                 return (0, mid)
-            elif "gpt-4o" in mid:
-                return (1, mid)
             elif "gpt-4.1" in mid:
+                return (1, mid)
+            elif "gpt-4o" in mid:
                 return (2, mid)
-            elif "gpt-4" in mid:
+            elif "o4-" in mid:
                 return (3, mid)
-            elif "o1-" in mid or "o3-" in mid:
+            elif "o3-" in mid or "o3" == mid:
                 return (4, mid)
-            elif "gpt-3.5" in mid:
+            elif "o1-" in mid or "o1" == mid:
                 return (5, mid)
+            elif "gpt-4" in mid:
+                return (6, mid)
+            elif "gpt-3.5" in mid:
+                return (7, mid)
             return (9, mid)
         
         models.sort(key=sort_key)
@@ -1709,9 +1734,9 @@ async def get_llm_provider_config(request: Request):
         "fast_llm_api_key_set": bool(settings.fast_llm_api_key),
         "updated_at": None,
         "providers": [
-            {"id": "openai", "name": "OpenAI", "models": ["gpt-5.2", "gpt-5.1", "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]},
-            {"id": "google", "name": "Google Gemini", "models": ["gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]},
-            {"id": "anthropic", "name": "Anthropic Claude", "models": ["claude-3-5-sonnet-latest", "claude-3-opus-latest", "claude-3-haiku-20240307"]},
+            {"id": "openai", "name": "OpenAI", "models": ["gpt-5.2-pro", "gpt-5.2", "gpt-5.1", "gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o", "gpt-4o-mini", "o4-mini", "o3", "o3-mini", "o1", "o1-pro", "gpt-4-turbo", "gpt-3.5-turbo"]},
+            {"id": "google", "name": "Google Gemini", "models": ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-exp", "gemini-2.0-flash-lite", "gemini-1.5-pro", "gemini-1.5-flash", "gemini-pro"]},
+            {"id": "anthropic", "name": "Anthropic Claude", "models": ["claude-sonnet-4-20250514", "claude-3-7-sonnet-latest", "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest", "claude-3-haiku-20240307"]},
             {"id": "ollama", "name": "Ollama (Local)", "models": []},
         ],
     }

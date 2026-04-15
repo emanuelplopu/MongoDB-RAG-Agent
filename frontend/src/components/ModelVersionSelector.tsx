@@ -70,7 +70,12 @@ const ModelVersionSelector: React.FC<ModelVersionSelectorProps> = ({
       })
       setModels(response.models)
     } catch (err: any) {
-      setError(err.message || 'Failed to load models')
+      const isNetworkError = err.message === 'Network Error' || err.code === 'ERR_NETWORK' || !err.response
+      if (isNetworkError) {
+        setError('Cannot connect to the backend server. Please ensure the backend is running and try again.')
+      } else {
+        setError(err.response?.data?.detail || err.message || 'Failed to load models')
+      }
     } finally {
       setLoading(false)
     }

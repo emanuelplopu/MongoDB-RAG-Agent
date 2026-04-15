@@ -64,7 +64,7 @@ OPENAI_MODELS: Dict[str, ModelVersion] = {
         version="5.2",
         release_date=datetime(2025, 1, 15),
         context_window=200000,
-        max_output_tokens=8192,
+        max_output_tokens=16384,
         capabilities=[
             ModelCapability.TEXT_GENERATION,
             ModelCapability.MULTIMODAL,
@@ -74,13 +74,28 @@ OPENAI_MODELS: Dict[str, ModelVersion] = {
         ],
         pricing_input=3.00,
         pricing_output=10.00,
-        parameter_mapping={
-            "max_tokens": "max_completion_tokens"
-        },
-        default_parameters={
-            "temperature": 0.7,
-            "top_p": 1.0
-        }
+        parameter_mapping={"max_tokens": "max_completion_tokens"},
+        default_parameters={"temperature": 0.7, "top_p": 1.0}
+    ),
+    "gpt-5.2-pro": ModelVersion(
+        id="gpt-5.2-pro",
+        name="GPT-5.2 Pro",
+        provider="openai",
+        type=ModelType.CHAT,
+        version="5.2-pro",
+        release_date=datetime(2025, 2, 1),
+        context_window=200000,
+        max_output_tokens=32768,
+        capabilities=[
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.MULTIMODAL,
+            ModelCapability.REASONING,
+            ModelCapability.CODE_GENERATION,
+            ModelCapability.FUNCTION_CALLING
+        ],
+        pricing_input=10.00,
+        pricing_output=30.00,
+        parameter_mapping={"max_tokens": "max_completion_tokens"},
     ),
     "gpt-5.1": ModelVersion(
         id="gpt-5.1",
@@ -90,7 +105,7 @@ OPENAI_MODELS: Dict[str, ModelVersion] = {
         version="5.1",
         release_date=datetime(2024, 12, 1),
         context_window=200000,
-        max_output_tokens=8192,
+        max_output_tokens=16384,
         capabilities=[
             ModelCapability.TEXT_GENERATION,
             ModelCapability.MULTIMODAL,
@@ -100,9 +115,7 @@ OPENAI_MODELS: Dict[str, ModelVersion] = {
         ],
         pricing_input=2.50,
         pricing_output=7.50,
-        parameter_mapping={
-            "max_tokens": "max_completion_tokens"
-        }
+        parameter_mapping={"max_tokens": "max_completion_tokens"}
     ),
     "gpt-5": ModelVersion(
         id="gpt-5",
@@ -112,20 +125,96 @@ OPENAI_MODELS: Dict[str, ModelVersion] = {
         version="5.0",
         release_date=datetime(2024, 10, 1),
         context_window=128000,
-        max_output_tokens=4096,
+        max_output_tokens=8192,
         capabilities=[
             ModelCapability.TEXT_GENERATION,
             ModelCapability.MULTIMODAL,
             ModelCapability.REASONING,
-            ModelCapability.CODE_GENERATION
+            ModelCapability.CODE_GENERATION,
+            ModelCapability.FUNCTION_CALLING
         ],
         pricing_input=1.50,
         pricing_output=5.00,
-        parameter_mapping={
-            "max_tokens": "max_completion_tokens"
-        }
+        parameter_mapping={"max_tokens": "max_completion_tokens"}
     ),
-    
+    "gpt-5-mini": ModelVersion(
+        id="gpt-5-mini",
+        name="GPT-5 Mini",
+        provider="openai",
+        type=ModelType.CHAT,
+        version="5-mini",
+        release_date=datetime(2024, 11, 1),
+        context_window=128000,
+        max_output_tokens=8192,
+        capabilities=[
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.MULTIMODAL,
+            ModelCapability.CODE_GENERATION,
+            ModelCapability.FUNCTION_CALLING
+        ],
+        pricing_input=0.50,
+        pricing_output=1.50,
+        parameter_mapping={"max_tokens": "max_completion_tokens"}
+    ),
+
+    # GPT-4.1 Series
+    "gpt-4.1": ModelVersion(
+        id="gpt-4.1",
+        name="GPT-4.1",
+        provider="openai",
+        type=ModelType.CHAT,
+        version="4.1",
+        release_date=datetime(2025, 4, 14),
+        context_window=1047576,
+        max_output_tokens=32768,
+        capabilities=[
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.MULTIMODAL,
+            ModelCapability.CODE_GENERATION,
+            ModelCapability.FUNCTION_CALLING
+        ],
+        pricing_input=2.00,
+        pricing_output=8.00,
+        parameter_mapping={"max_tokens": "max_completion_tokens"}
+    ),
+    "gpt-4.1-mini": ModelVersion(
+        id="gpt-4.1-mini",
+        name="GPT-4.1 Mini",
+        provider="openai",
+        type=ModelType.CHAT,
+        version="4.1-mini",
+        release_date=datetime(2025, 4, 14),
+        context_window=1047576,
+        max_output_tokens=32768,
+        capabilities=[
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.MULTIMODAL,
+            ModelCapability.CODE_GENERATION,
+            ModelCapability.FUNCTION_CALLING
+        ],
+        pricing_input=0.40,
+        pricing_output=1.60,
+        parameter_mapping={"max_tokens": "max_completion_tokens"}
+    ),
+    "gpt-4.1-nano": ModelVersion(
+        id="gpt-4.1-nano",
+        name="GPT-4.1 Nano",
+        provider="openai",
+        type=ModelType.CHAT,
+        version="4.1-nano",
+        release_date=datetime(2025, 4, 14),
+        context_window=1047576,
+        max_output_tokens=32768,
+        capabilities=[
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.CODE_GENERATION,
+            ModelCapability.FUNCTION_CALLING
+        ],
+        pricing_input=0.10,
+        pricing_output=0.40,
+        parameter_mapping={"max_tokens": "max_completion_tokens"}
+    ),
+
     # GPT-4o Series
     "gpt-4o": ModelVersion(
         id="gpt-4o",
@@ -135,15 +224,16 @@ OPENAI_MODELS: Dict[str, ModelVersion] = {
         version="4o",
         release_date=datetime(2024, 5, 13),
         context_window=128000,
-        max_output_tokens=4096,
+        max_output_tokens=16384,
         capabilities=[
             ModelCapability.TEXT_GENERATION,
             ModelCapability.MULTIMODAL,
             ModelCapability.CODE_GENERATION,
             ModelCapability.FUNCTION_CALLING
         ],
-        pricing_input=5.00,
-        pricing_output=15.00
+        pricing_input=2.50,
+        pricing_output=10.00,
+        parameter_mapping={"max_tokens": "max_completion_tokens"}
     ),
     "gpt-4o-mini": ModelVersion(
         id="gpt-4o-mini",
@@ -160,11 +250,111 @@ OPENAI_MODELS: Dict[str, ModelVersion] = {
             ModelCapability.CODE_GENERATION,
             ModelCapability.FUNCTION_CALLING
         ],
-        pricing_input=0.150,
-        pricing_output=0.600
+        pricing_input=0.15,
+        pricing_output=0.60,
+        parameter_mapping={"max_tokens": "max_completion_tokens"}
     ),
-    
+
     # O-Series Reasoning Models
+    "o4-mini": ModelVersion(
+        id="o4-mini",
+        name="O4 Mini",
+        provider="openai",
+        type=ModelType.CHAT,
+        version="o4-mini",
+        release_date=datetime(2025, 4, 16),
+        context_window=200000,
+        max_output_tokens=100000,
+        capabilities=[
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.MULTIMODAL,
+            ModelCapability.REASONING,
+            ModelCapability.CODE_GENERATION,
+            ModelCapability.FUNCTION_CALLING
+        ],
+        pricing_input=1.10,
+        pricing_output=4.40,
+        parameter_mapping={"max_tokens": "max_completion_tokens"}
+    ),
+    "o3": ModelVersion(
+        id="o3",
+        name="O3",
+        provider="openai",
+        type=ModelType.CHAT,
+        version="o3",
+        release_date=datetime(2025, 4, 16),
+        context_window=200000,
+        max_output_tokens=100000,
+        capabilities=[
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.MULTIMODAL,
+            ModelCapability.REASONING,
+            ModelCapability.CODE_GENERATION,
+            ModelCapability.FUNCTION_CALLING
+        ],
+        pricing_input=10.00,
+        pricing_output=40.00,
+        parameter_mapping={"max_tokens": "max_completion_tokens"}
+    ),
+    "o3-mini": ModelVersion(
+        id="o3-mini",
+        name="O3 Mini",
+        provider="openai",
+        type=ModelType.CHAT,
+        version="o3-mini",
+        release_date=datetime(2025, 1, 31),
+        context_window=200000,
+        max_output_tokens=100000,
+        capabilities=[
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.REASONING,
+            ModelCapability.CODE_GENERATION,
+            ModelCapability.FUNCTION_CALLING
+        ],
+        pricing_input=1.10,
+        pricing_output=4.40,
+        parameter_mapping={"max_tokens": "max_completion_tokens"}
+    ),
+    "o1": ModelVersion(
+        id="o1",
+        name="O1",
+        provider="openai",
+        type=ModelType.CHAT,
+        version="o1",
+        release_date=datetime(2024, 12, 17),
+        context_window=200000,
+        max_output_tokens=100000,
+        capabilities=[
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.MULTIMODAL,
+            ModelCapability.REASONING,
+            ModelCapability.CODE_GENERATION,
+            ModelCapability.FUNCTION_CALLING
+        ],
+        pricing_input=15.00,
+        pricing_output=60.00,
+        parameter_mapping={"max_tokens": "max_completion_tokens"}
+    ),
+    "o1-pro": ModelVersion(
+        id="o1-pro",
+        name="O1 Pro",
+        provider="openai",
+        type=ModelType.CHAT,
+        version="o1-pro",
+        release_date=datetime(2025, 3, 19),
+        context_window=200000,
+        max_output_tokens=100000,
+        capabilities=[
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.MULTIMODAL,
+            ModelCapability.REASONING,
+            ModelCapability.CODE_GENERATION,
+            ModelCapability.FUNCTION_CALLING
+        ],
+        pricing_input=150.00,
+        pricing_output=600.00,
+        parameter_mapping={"max_tokens": "max_completion_tokens"}
+    ),
     "o1-preview": ModelVersion(
         id="o1-preview",
         name="O1 Preview",
@@ -181,9 +371,8 @@ OPENAI_MODELS: Dict[str, ModelVersion] = {
         ],
         pricing_input=15.00,
         pricing_output=60.00,
-        parameter_mapping={
-            "max_tokens": "max_completion_tokens"
-        }
+        parameter_mapping={"max_tokens": "max_completion_tokens"},
+        is_deprecated=True
     ),
     "o1-mini": ModelVersion(
         id="o1-mini",
@@ -201,11 +390,10 @@ OPENAI_MODELS: Dict[str, ModelVersion] = {
         ],
         pricing_input=3.00,
         pricing_output=12.00,
-        parameter_mapping={
-            "max_tokens": "max_completion_tokens"
-        }
+        parameter_mapping={"max_tokens": "max_completion_tokens"},
+        is_deprecated=True
     ),
-    
+
     # Legacy GPT-4 Models
     "gpt-4-turbo": ModelVersion(
         id="gpt-4-turbo",
@@ -242,7 +430,7 @@ OPENAI_MODELS: Dict[str, ModelVersion] = {
         pricing_output=60.00,
         is_deprecated=True
     ),
-    
+
     # GPT-3.5 Models
     "gpt-3.5-turbo": ModelVersion(
         id="gpt-3.5-turbo",
@@ -258,9 +446,10 @@ OPENAI_MODELS: Dict[str, ModelVersion] = {
             ModelCapability.CODE_GENERATION
         ],
         pricing_input=0.50,
-        pricing_output=1.50
+        pricing_output=1.50,
+        is_deprecated=True
     ),
-    
+
     # Embedding Models
     "text-embedding-3-small": ModelVersion(
         id="text-embedding-3-small",
@@ -293,12 +482,77 @@ OPENAI_MODELS: Dict[str, ModelVersion] = {
 
 # ==================== Google Gemini Models ====================
 GOOGLE_MODELS: Dict[str, ModelVersion] = {
+    # Gemini 2.5 Series
+    "gemini-2.5-pro": ModelVersion(
+        id="gemini-2.5-pro",
+        name="Gemini 2.5 Pro",
+        provider="google",
+        type=ModelType.CHAT,
+        version="2.5-pro",
+        release_date=datetime(2025, 3, 25),
+        context_window=1048576,
+        max_output_tokens=65536,
+        capabilities=[
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.MULTIMODAL,
+            ModelCapability.AUDIO_INPUT,
+            ModelCapability.REASONING,
+            ModelCapability.CODE_GENERATION,
+            ModelCapability.FUNCTION_CALLING
+        ],
+        pricing_input=1.25,
+        pricing_output=10.00,
+        is_experimental=True
+    ),
+    "gemini-2.5-flash": ModelVersion(
+        id="gemini-2.5-flash",
+        name="Gemini 2.5 Flash",
+        provider="google",
+        type=ModelType.CHAT,
+        version="2.5-flash",
+        release_date=datetime(2025, 4, 17),
+        context_window=1048576,
+        max_output_tokens=65536,
+        capabilities=[
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.MULTIMODAL,
+            ModelCapability.AUDIO_INPUT,
+            ModelCapability.REASONING,
+            ModelCapability.CODE_GENERATION,
+            ModelCapability.FUNCTION_CALLING
+        ],
+        pricing_input=0.15,
+        pricing_output=0.60,
+        is_experimental=True
+    ),
+
+    # Gemini 2.0 Series
+    "gemini-2.0-flash": ModelVersion(
+        id="gemini-2.0-flash",
+        name="Gemini 2.0 Flash",
+        provider="google",
+        type=ModelType.CHAT,
+        version="2.0-flash",
+        release_date=datetime(2025, 2, 25),
+        context_window=1048576,
+        max_output_tokens=8192,
+        capabilities=[
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.MULTIMODAL,
+            ModelCapability.AUDIO_INPUT,
+            ModelCapability.AUDIO_OUTPUT,
+            ModelCapability.CODE_GENERATION,
+            ModelCapability.FUNCTION_CALLING
+        ],
+        pricing_input=0.10,
+        pricing_output=0.40
+    ),
     "gemini-2.0-flash-exp": ModelVersion(
         id="gemini-2.0-flash-exp",
         name="Gemini 2.0 Flash Experimental",
         provider="google",
         type=ModelType.CHAT,
-        version="2.0-flash",
+        version="2.0-flash-exp",
         release_date=datetime(2024, 12, 1),
         context_window=1048576,
         max_output_tokens=8192,
@@ -312,8 +566,28 @@ GOOGLE_MODELS: Dict[str, ModelVersion] = {
             ModelCapability.FUNCTION_CALLING
         ],
         pricing_input=0.15,
-        pricing_output=0.60
+        pricing_output=0.60,
+        is_experimental=True
     ),
+    "gemini-2.0-flash-lite": ModelVersion(
+        id="gemini-2.0-flash-lite",
+        name="Gemini 2.0 Flash Lite",
+        provider="google",
+        type=ModelType.CHAT,
+        version="2.0-flash-lite",
+        release_date=datetime(2025, 2, 25),
+        context_window=1048576,
+        max_output_tokens=8192,
+        capabilities=[
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.MULTIMODAL,
+            ModelCapability.CODE_GENERATION,
+        ],
+        pricing_input=0.075,
+        pricing_output=0.30
+    ),
+
+    # Gemini 1.5 Series
     "gemini-1.5-flash": ModelVersion(
         id="gemini-1.5-flash",
         name="Gemini 1.5 Flash",
@@ -329,8 +603,8 @@ GOOGLE_MODELS: Dict[str, ModelVersion] = {
             ModelCapability.CODE_GENERATION,
             ModelCapability.FUNCTION_CALLING
         ],
-        pricing_input=0.35,
-        pricing_output=1.05
+        pricing_input=0.075,
+        pricing_output=0.30
     ),
     "gemini-1.5-pro": ModelVersion(
         id="gemini-1.5-pro",
@@ -351,6 +625,8 @@ GOOGLE_MODELS: Dict[str, ModelVersion] = {
         pricing_input=1.25,
         pricing_output=5.00
     ),
+
+    # Legacy
     "gemini-pro": ModelVersion(
         id="gemini-pro",
         name="Gemini Pro",
@@ -368,6 +644,8 @@ GOOGLE_MODELS: Dict[str, ModelVersion] = {
         pricing_output=1.50,
         is_deprecated=True
     ),
+
+    # Embedding
     "text-embedding-004": ModelVersion(
         id="text-embedding-004",
         name="Text Embedding 004",
@@ -381,11 +659,68 @@ GOOGLE_MODELS: Dict[str, ModelVersion] = {
         pricing_input=0.025,
         pricing_output=None
     ),
+    "text-embedding-005": ModelVersion(
+        id="text-embedding-005",
+        name="Text Embedding 005",
+        provider="google",
+        type=ModelType.EMBEDDING,
+        version="005",
+        release_date=datetime(2025, 1, 1),
+        context_window=2048,
+        max_output_tokens=768,
+        capabilities=[ModelCapability.TEXT_GENERATION],
+        pricing_input=0.025,
+        pricing_output=None
+    ),
 }
 
 
 # ==================== Anthropic Claude Models ====================
 ANTHROPIC_MODELS: Dict[str, ModelVersion] = {
+    # Claude 4 Series
+    "claude-sonnet-4-20250514": ModelVersion(
+        id="claude-sonnet-4-20250514",
+        name="Claude Sonnet 4",
+        provider="anthropic",
+        type=ModelType.CHAT,
+        version="sonnet-4",
+        release_date=datetime(2025, 5, 14),
+        context_window=200000,
+        max_output_tokens=16384,
+        capabilities=[
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.MULTIMODAL,
+            ModelCapability.REASONING,
+            ModelCapability.CODE_GENERATION,
+            ModelCapability.FUNCTION_CALLING
+        ],
+        pricing_input=3.00,
+        pricing_output=15.00,
+        is_experimental=True
+    ),
+
+    # Claude 3.7 Series
+    "claude-3-7-sonnet-latest": ModelVersion(
+        id="claude-3-7-sonnet-latest",
+        name="Claude 3.7 Sonnet (Latest)",
+        provider="anthropic",
+        type=ModelType.CHAT,
+        version="3.7-sonnet",
+        release_date=datetime(2025, 2, 24),
+        context_window=200000,
+        max_output_tokens=16384,
+        capabilities=[
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.MULTIMODAL,
+            ModelCapability.REASONING,
+            ModelCapability.CODE_GENERATION,
+            ModelCapability.FUNCTION_CALLING
+        ],
+        pricing_input=3.00,
+        pricing_output=15.00
+    ),
+
+    # Claude 3.5 Series
     "claude-3-5-sonnet-latest": ModelVersion(
         id="claude-3-5-sonnet-latest",
         name="Claude 3.5 Sonnet (Latest)",
@@ -405,6 +740,45 @@ ANTHROPIC_MODELS: Dict[str, ModelVersion] = {
         pricing_input=3.00,
         pricing_output=15.00
     ),
+    "claude-3-5-sonnet-20241022": ModelVersion(
+        id="claude-3-5-sonnet-20241022",
+        name="Claude 3.5 Sonnet (Oct 2024)",
+        provider="anthropic",
+        type=ModelType.CHAT,
+        version="3.5-sonnet-oct",
+        release_date=datetime(2024, 10, 22),
+        context_window=200000,
+        max_output_tokens=8192,
+        capabilities=[
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.MULTIMODAL,
+            ModelCapability.REASONING,
+            ModelCapability.CODE_GENERATION,
+            ModelCapability.FUNCTION_CALLING
+        ],
+        pricing_input=3.00,
+        pricing_output=15.00
+    ),
+    "claude-3-5-haiku-latest": ModelVersion(
+        id="claude-3-5-haiku-latest",
+        name="Claude 3.5 Haiku (Latest)",
+        provider="anthropic",
+        type=ModelType.CHAT,
+        version="3.5-haiku",
+        release_date=datetime(2024, 10, 22),
+        context_window=200000,
+        max_output_tokens=8192,
+        capabilities=[
+            ModelCapability.TEXT_GENERATION,
+            ModelCapability.MULTIMODAL,
+            ModelCapability.CODE_GENERATION,
+            ModelCapability.FUNCTION_CALLING
+        ],
+        pricing_input=0.80,
+        pricing_output=4.00
+    ),
+
+    # Claude 3 Series
     "claude-3-opus-latest": ModelVersion(
         id="claude-3-opus-latest",
         name="Claude 3 Opus (Latest)",
@@ -440,6 +814,8 @@ ANTHROPIC_MODELS: Dict[str, ModelVersion] = {
         pricing_input=0.25,
         pricing_output=1.25
     ),
+
+    # Legacy
     "claude-2.1": ModelVersion(
         id="claude-2.1",
         name="Claude 2.1",
@@ -522,15 +898,15 @@ def is_model_compatible_with_parameter(model_id: str, param_name: str) -> bool:
     model = get_model_by_id(model_id)
     if not model:
         return False
-    
+
     # Check if parameter needs mapping
     if param_name in model.parameter_mapping:
         return True
-    
+
     # Check default parameters
     if param_name in model.default_parameters:
         return True
-    
+
     # Assume compatibility for standard parameters
     standard_params = ["temperature", "top_p", "frequency_penalty", "presence_penalty"]
     return param_name in standard_params

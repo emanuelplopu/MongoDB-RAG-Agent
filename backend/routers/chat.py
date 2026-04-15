@@ -444,7 +444,11 @@ Remember: You have access to the user's company documents. Search them! Multiple
             }
             
             # Check if this is a newer OpenAI model
-            if "gpt-5" in llm_model.lower() or "gpt-4o" in llm_model.lower():
+            model_lower = llm_model.lower()
+            needs_max_completion_tokens = any(prefix in model_lower for prefix in [
+                "gpt-5", "gpt-4o", "gpt-4.1", "o1", "o3", "o4"
+            ])
+            if needs_max_completion_tokens:
                 llm_params["max_completion_tokens"] = 2000
             else:
                 llm_params["max_tokens"] = 2000

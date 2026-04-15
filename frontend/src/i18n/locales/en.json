@@ -116,7 +116,8 @@
     "backups": "Backup & Restore",
     "theme": "Theme",
     "signOut": "Log out",
-    "signIn": "Sign in"
+    "signIn": "Sign in",
+    "knowledgeProfiles": "Knowledge Profiles"
   },
   "sidebar": {
     "newChat": "New chat",
@@ -137,7 +138,13 @@
     "deselectAll": "Deselect All",
     "moveToProject": "Move to Project",
     "unfiled": "Unfiled (no project)",
-    "noProjects": "No projects yet"
+    "noProjects": "No projects yet",
+    "searchDocuments": "Search / Find Documents",
+    "searchChats": "Search Chats",
+    "datenimport": "Datenimport",
+    "collapse": "Collapse sidebar",
+    "expand": "Expand sidebar",
+    "home": "Home"
   },
   "warnings": {
     "missingBothIndexes": "Search indexes missing! Vector and text search will not work until indexes are created.",
@@ -196,6 +203,8 @@
     "signUpTitle": "Create a new account",
     "name": "Name",
     "namePlaceholder": "Your name",
+    "titlePrefix": "Title (before)",
+    "titleSuffix": "Title (after)",
     "email": "Email",
     "emailPlaceholder": "you@example.com",
     "password": "Password",
@@ -220,6 +229,8 @@
       "evening": "Good evening"
     },
     "overview": "Here's an overview of your knowledge base activity",
+    "askAnything": "Ask anything",
+    "whereToBegin": "Where should we begin?",
     "failedToLoad": "Failed to load some dashboard data",
     "quickActions": {
       "newChat": "New Chat",

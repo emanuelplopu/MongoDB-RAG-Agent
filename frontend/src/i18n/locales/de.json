@@ -116,7 +116,8 @@
     "backups": "Sicherung & Wiederherstellung",
     "theme": "Design",
     "signOut": "Abmelden",
-    "signIn": "Anmelden"
+    "signIn": "Anmelden",
+    "knowledgeProfiles": "Wissensprofile"
   },
   "sidebar": {
     "newChat": "Neuer Chat",
@@ -137,7 +138,13 @@
     "deselectAll": "Alle abwählen",
     "moveToProject": "In Projekt verschieben",
     "unfiled": "Ohne Projekt",
-    "noProjects": "Noch keine Projekte"
+    "noProjects": "Noch keine Projekte",
+    "searchDocuments": "Suche / Dokumente finden",
+    "searchChats": "Chats durchsuchen",
+    "datenimport": "Datenimport",
+    "collapse": "Seitenleiste einklappen",
+    "expand": "Seitenleiste ausklappen",
+    "home": "Startseite"
   },
   "warnings": {
     "missingBothIndexes": "Suchindizes fehlen! Vektor- und Volltextsuche funktionieren erst nach Erstellung der Indizes.",
@@ -196,6 +203,8 @@
     "signUpTitle": "Neues Konto erstellen",
     "name": "Name",
     "namePlaceholder": "Ihr Name",
+    "titlePrefix": "Titel (davor)",
+    "titleSuffix": "Titel (danach)",
     "email": "E-Mail",
     "emailPlaceholder": "sie@beispiel.de",
     "password": "Passwort",
@@ -220,6 +229,8 @@
       "evening": "Guten Abend"
     },
     "overview": "Übersicht Ihrer Wissensbasis-Aktivitäten",
+    "askAnything": "Fragen Sie etwas",
+    "whereToBegin": "Womit sollen wir beginnen?",
     "failedToLoad": "Einige Dashboard-Daten konnten nicht geladen werden",
     "quickActions": {
       "newChat": "Neuer Chat",

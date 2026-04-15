@@ -13,6 +13,8 @@ export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
+  const [titlePrefix, setTitlePrefix] = useState('')
+  const [titleSuffix, setTitleSuffix] = useState('')
   const [error, setError] = useState('')
   const [errorId, setErrorId] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -36,7 +38,7 @@ export default function LoginPage() {
           setIsLoading(false)
           return
         }
-        await register(email, name, password)
+        await register(email, name, password, titlePrefix || undefined, titleSuffix || undefined)
       }
       navigate('/dashboard')
     } catch (err: any) {
@@ -95,6 +97,33 @@ export default function LoginPage() {
                   placeholder={t('login.namePlaceholder')}
                   required={!isLogin}
                 />
+                {/* Optional title fields */}
+                <div className="grid grid-cols-2 gap-3 mt-3">
+                  <div>
+                    <label className="block text-xs text-secondary dark:text-gray-400 mb-1">
+                      {t('login.titlePrefix', 'Title (before)')}
+                    </label>
+                    <input
+                      type="text"
+                      value={titlePrefix}
+                      onChange={(e) => setTitlePrefix(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
+                      placeholder="Mag., Dr., RA"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-secondary dark:text-gray-400 mb-1">
+                      {t('login.titleSuffix', 'Title (after)')}
+                    </label>
+                    <input
+                      type="text"
+                      value={titleSuffix}
+                      onChange={(e) => setTitleSuffix(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
+                      placeholder="Rechtsanwältin, LL.M."
+                    />
+                  </div>
+                </div>
               </div>
             )}
 

@@ -1614,6 +1614,8 @@ export interface User {
   id: string
   email: string
   name: string
+  title_prefix?: string | null
+  title_suffix?: string | null
   created_at: string
   is_active: boolean
   is_admin: boolean
@@ -1627,6 +1629,8 @@ export interface LoginRequest {
 export interface RegisterRequest {
   email: string
   name: string
+  title_prefix?: string
+  title_suffix?: string
   password: string
 }
 
@@ -1644,6 +1648,8 @@ export interface UserListItem {
   id: string
   email: string
   name: string
+  title_prefix?: string | null
+  title_suffix?: string | null
   is_active: boolean
   is_admin: boolean
   created_at: string
@@ -1665,6 +1671,8 @@ export interface SetAccessRequest {
 export interface CreateUserRequest {
   email: string
   name: string
+  title_prefix?: string
+  title_suffix?: string
   password: string
   is_admin?: boolean
 }
@@ -1672,6 +1680,8 @@ export interface CreateUserRequest {
 export interface UpdateUserRequest {
   name?: string
   email?: string
+  title_prefix?: string
+  title_suffix?: string
   is_admin?: boolean
   new_password?: string
 }
@@ -1697,7 +1707,7 @@ export const authApi = {
     return response.data
   },
 
-  updateMe: async (data: { name?: string }): Promise<{ success: boolean }> => {
+  updateMe: async (data: { name?: string; title_prefix?: string; title_suffix?: string }): Promise<{ success: boolean }> => {
     const response = await api.put('/auth/me', data)
     return response.data
   },

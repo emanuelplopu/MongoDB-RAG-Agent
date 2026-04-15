@@ -32,7 +32,7 @@ export interface MockAuthContextValue {
   isAuthenticated: boolean
   sessionExpired: boolean
   login: (email: string, password: string) => Promise<void>
-  register: (email: string, name: string, password: string) => Promise<void>
+  register: (email: string, name: string, password: string, titlePrefix?: string, titleSuffix?: string) => Promise<void>
   logout: () => Promise<void>
   refreshUser: () => Promise<void>
   dismissSessionExpired: () => void
