@@ -67,6 +67,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ffmpeg \
+    antiword \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 

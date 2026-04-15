@@ -649,10 +649,11 @@ class DocumentIngestionPipeline:
         extensions = {
             ".md", ".markdown", ".txt",  # Text formats
             ".pdf",  # PDF
-            ".docx", ".doc",  # Word
+            ".docx", ".doc", ".wbk",  # Word (incl. backup)
             ".pptx", ".ppt",  # PowerPoint
             ".xlsx", ".xls",  # Excel
             ".html", ".htm",  # HTML
+            ".msg",  # Outlook email
             ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",  # Images
             ".mp3", ".wav", ".m4a", ".flac",  # Audio formats
             ".mp4", ".avi", ".mkv", ".mov", ".webm",  # Video formats
@@ -705,9 +706,10 @@ class DocumentIngestionPipeline:
             '.html': 2, '.htm': 2,
             # Office documents - medium
             '.pdf': 3,
-            '.docx': 4, '.doc': 4,
+            '.docx': 4, '.doc': 4, '.wbk': 4,
             '.xlsx': 5, '.xls': 5,
             '.pptx': 6, '.ppt': 6,
+            '.msg': 4,  # Outlook email - similar priority to Office docs
             # Images - can need OCR
             '.png': 7, '.jpg': 7, '.jpeg': 7, '.gif': 7, '.webp': 7, '.bmp': 7, '.svg': 7,
             # Audio - requires transcription
@@ -760,15 +762,88 @@ class DocumentIngestionPipeline:
         """
         file_ext = os.path.splitext(file_path)[1].lower()
 
+        # Treat .wbk (Word backup) as .doc
+        if file_ext == '.wbk':
+            file_ext = '.doc'
+
+        # Outlook .msg files - extract email content
+        if file_ext == '.msg':
+            return self._read_msg_file(file_path)
+
+        # Legacy .doc files - use antiword (Docling doesn't support .doc)
+        if file_ext == '.doc':
+            return self._read_doc_file(file_path)
+
         # Audio formats - transcribe with Whisper ASR
         audio_formats = ['.mp3', '.wav', '.m4a', '.flac']
         if file_ext in audio_formats:
             # Returns tuple: (markdown_content, docling_document)
             return self._transcribe_audio(file_path)
 
+        # Image formats - convert via Docling with OCR
+        image_formats = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']
+        if file_ext in image_formats:
+            try:
+                logger.info(
+                    f"Processing image with OCR via Docling: "
+                    f"{os.path.basename(file_path)}"
+                )
+                
+                from docling.document_converter import DocumentConverter, ImageFormatOption
+                from docling.datamodel.pipeline_options import PdfPipelineOptions
+                from docling.datamodel.base_models import InputFormat
+                
+                # Configure OCR pipeline for images
+                pipeline_options = PdfPipelineOptions()
+                pipeline_options.do_ocr = True
+                
+                # Get effective device for acceleration
+                device = get_effective_device()
+                if device in ["cuda", "mps"]:
+                    pipeline_options.accelerator_options = {"device": device}
+                
+                format_options = {
+                    InputFormat.IMAGE: ImageFormatOption(
+                        pipeline_options=pipeline_options
+                    )
+                }
+                
+                converter = DocumentConverter(format_options=format_options)
+                result = converter.convert(file_path)
+                
+                markdown_content = result.document.export_to_markdown()
+                
+                if markdown_content and len(markdown_content.strip()) > 10:
+                    logger.info(
+                        f"Successfully extracted {len(markdown_content)} chars from image "
+                        f"via OCR: {os.path.basename(file_path)}"
+                    )
+                    return (markdown_content, result.document)
+                else:
+                    logger.warning(
+                        f"OCR produced minimal content for image: "
+                        f"{os.path.basename(file_path)}"
+                    )
+                    return (
+                        f"[Image: {os.path.basename(file_path)} - OCR extracted minimal text]",
+                        None
+                    )
+            except ImportError as e:
+                logger.warning(f"Docling image support not available: {e}")
+                return (
+                    f"[Image: {os.path.basename(file_path)} - OCR not available]",
+                    None
+                )
+            except Exception as e:
+                logger.error(f"Failed to OCR image {file_path}: {e}")
+                return (
+                    f"[Image: {os.path.basename(file_path)} - OCR failed: {str(e)}]",
+                    None
+                )
+
         # Docling-supported formats (convert to markdown)
         docling_formats = [
-            '.pdf', '.docx', '.doc', '.pptx', '.ppt',
+            '.pdf', '.docx', '.pptx', '.ppt',
             '.xlsx', '.xls', '.html', '.htm',
             '.md', '.markdown'  # Markdown files for HybridChunker
         ]
@@ -816,6 +891,141 @@ class DocumentIngestionPipeline:
                 # Try with different encoding
                 with open(file_path, 'r', encoding='latin-1') as f:
                     return (f.read(), None)
+
+    def _read_doc_file(self, file_path: str) -> tuple[str, Optional[Any]]:
+        """
+        Extract text content from legacy .doc files using antiword.
+        
+        Docling does not support the legacy .doc binary format (only .docx).
+        This method uses the antiword command-line tool as a reliable fallback.
+        
+        Args:
+            file_path: Path to the .doc file
+            
+        Returns:
+            Tuple of (text_content, None)
+        """
+        import subprocess
+        import shutil
+        
+        basename = os.path.basename(file_path)
+        
+        # Try antiword first (best quality for .doc)
+        if shutil.which('antiword'):
+            try:
+                result = subprocess.run(
+                    ['antiword', '-w', '0', file_path],
+                    capture_output=True, text=True, timeout=60
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    logger.info(f"Successfully extracted .doc with antiword: {basename}")
+                    return (result.stdout.strip(), None)
+                else:
+                    logger.warning(
+                        f"antiword returned empty or failed for {basename}: "
+                        f"{result.stderr.strip()}"
+                    )
+            except subprocess.TimeoutExpired:
+                logger.warning(f"antiword timed out for {basename}")
+            except Exception as e:
+                logger.warning(f"antiword failed for {basename}: {e}")
+        else:
+            logger.warning(
+                "antiword not installed. Legacy .doc extraction will be limited. "
+                "Install with: apt-get install antiword"
+            )
+        
+        # Fallback: try reading as text (works for some .doc files that are actually RTF/text)
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                # Check if content looks like binary garbage
+                printable_ratio = sum(1 for c in content[:1000] if c.isprintable() or c.isspace()) / max(len(content[:1000]), 1)
+                if printable_ratio > 0.8:
+                    logger.info(f"Extracted .doc as text (text-like content): {basename}")
+                    return (content, None)
+                else:
+                    logger.warning(f"Skipping .doc with binary content (not readable as text): {basename}")
+                    return (f"[Skipped: {basename} - legacy .doc format requires antiword]", None)
+        except UnicodeDecodeError:
+            logger.warning(f"Cannot read .doc as text: {basename}")
+            return (f"[Skipped: {basename} - legacy .doc format requires antiword]", None)
+
+    def _read_msg_file(self, file_path: str) -> tuple[str, Optional[Any]]:
+        """
+        Extract text content from Outlook .msg email files.
+        
+        Extracts subject, sender, date, recipients, and body text.
+        Attachments are listed by name but not recursively processed.
+        
+        Args:
+            file_path: Path to the .msg file
+            
+        Returns:
+            Tuple of (markdown_content, None)
+        """
+        try:
+            import extract_msg
+            
+            msg = extract_msg.Message(file_path)
+            
+            parts = []
+            
+            # Email header metadata
+            if msg.subject:
+                parts.append(f"# {msg.subject}")
+            
+            header_lines = []
+            if msg.sender:
+                header_lines.append(f"**From:** {msg.sender}")
+            if msg.to:
+                header_lines.append(f"**To:** {msg.to}")
+            if msg.cc:
+                header_lines.append(f"**CC:** {msg.cc}")
+            if msg.date:
+                header_lines.append(f"**Date:** {msg.date}")
+            
+            if header_lines:
+                parts.append("\n".join(header_lines))
+                parts.append("---")
+            
+            # Email body
+            body = msg.body
+            if body:
+                parts.append(body.strip())
+            else:
+                # Try HTML body as fallback
+                html_body = msg.htmlBody
+                if html_body:
+                    # Basic HTML stripping - Docling can handle HTML properly
+                    # but for .msg we just need the text
+                    import re
+                    text = re.sub(r'<[^>]+>', ' ', html_body if isinstance(html_body, str) else html_body.decode('utf-8', errors='replace'))
+                    text = re.sub(r'\s+', ' ', text).strip()
+                    parts.append(text)
+            
+            # List attachments
+            if msg.attachments:
+                parts.append("\n---\n**Attachments:**")
+                for att in msg.attachments:
+                    att_name = getattr(att, 'longFilename', None) or getattr(att, 'shortFilename', None) or 'unnamed'
+                    parts.append(f"- {att_name}")
+            
+            msg.close()
+            
+            content = "\n\n".join(parts)
+            if not content.strip():
+                content = f"[Empty email: {os.path.basename(file_path)}]"
+            
+            logger.info(f"Successfully extracted email: {os.path.basename(file_path)}")
+            return (content, None)
+            
+        except ImportError:
+            logger.error("extract-msg package not installed. Install with: pip install extract-msg")
+            return (f"[Error: extract-msg package required for .msg files]", None)
+        except Exception as e:
+            logger.error(f"Failed to extract .msg file {file_path}: {e}")
+            return (f"[Error: Could not read email {os.path.basename(file_path)}: {e}]", None)
 
     def _transcribe_audio(self, file_path: str) -> tuple[str, Optional[Any]]:
         """

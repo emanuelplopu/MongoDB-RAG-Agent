@@ -1,4 +1,4 @@
-active_profile: parhelion
+active_profile: test-law
 profiles:
   default:
     name: Default

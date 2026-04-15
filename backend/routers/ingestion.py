@@ -348,9 +348,10 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
     try:
         patterns = [
             "*.md", "*.markdown", "*.txt",
-            "*.pdf", "*.docx", "*.doc",
+            "*.pdf", "*.docx", "*.doc", "*.wbk",
             "*.pptx", "*.ppt", "*.xlsx", "*.xls",
             "*.html", "*.htm",
+            "*.msg",
             "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.bmp",
             "*.mp3", "*.wav", "*.m4a", "*.flac",
             "*.mp4", "*.avi", "*.mkv", "*.mov", "*.webm",
@@ -561,8 +562,9 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
             type_priority = {
                 "txt": 1, "md": 1, "markdown": 1,
                 "html": 2, "htm": 2,
-                "pdf": 3, "docx": 4, "doc": 4,
+                "pdf": 3, "docx": 4, "doc": 4, "wbk": 4,
                 "xlsx": 5, "xls": 5, "pptx": 6, "ppt": 6,
+                "msg": 4,
                 "png": 7, "jpg": 7, "jpeg": 7, "gif": 7, "webp": 7, "bmp": 7,
                 "mp3": 8, "wav": 8, "m4a": 8, "flac": 8,
                 "mp4": 9, "avi": 9, "mkv": 9, "mov": 9, "webm": 9
@@ -1422,9 +1424,10 @@ async def get_pending_files(
         # Supported file patterns
         patterns = [
             "*.md", "*.markdown", "*.txt",
-            "*.pdf", "*.docx", "*.doc",
+            "*.pdf", "*.docx", "*.doc", "*.wbk",
             "*.pptx", "*.ppt", "*.xlsx", "*.xls",
             "*.html", "*.htm",
+            "*.msg",
             "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.bmp",
             "*.mp3", "*.wav", "*.m4a", "*.flac",
             "*.mp4", "*.avi", "*.mkv", "*.mov", "*.webm",
@@ -1489,8 +1492,9 @@ async def get_pending_files(
             type_priority = {
                 "txt": 1, "md": 1, "markdown": 1,
                 "html": 2, "htm": 2,
-                "pdf": 3, "docx": 4, "doc": 4,
+                "pdf": 3, "docx": 4, "doc": 4, "wbk": 4,
                 "xlsx": 5, "xls": 5, "pptx": 6, "ppt": 6,
+                "msg": 4,
                 "png": 7, "jpg": 7, "jpeg": 7, "gif": 7, "webp": 7, "bmp": 7,
                 "mp3": 8, "wav": 8, "m4a": 8, "flac": 8,
                 "mp4": 9, "avi": 9, "mkv": 9, "mov": 9, "webm": 9

@@ -475,9 +475,7 @@ async def _run_ingestion_job(job: Dict[str, Any], db):
     # Clear logs and add handler
     _ingestion_logs.clear()
     root_logger = logging.getLogger()
-    src_logger = logging.getLogger("src")
     root_logger.addHandler(_log_handler)
-    src_logger.addHandler(_log_handler)
     
     try:
         # Create config based on file types
@@ -600,7 +598,6 @@ async def _run_ingestion_job(job: Dict[str, Any], db):
         ingestion_router._current_job_id = None
         ingestion_router._current_job_state = None
         root_logger.removeHandler(_log_handler)
-        src_logger.removeHandler(_log_handler)
 
 
 # ============== Scheduled Jobs ==============
