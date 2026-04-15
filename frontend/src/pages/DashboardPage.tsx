@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   PaperAirplaneIcon,
@@ -18,6 +17,7 @@ import {
 } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 import { useChatSidebar } from '../contexts/ChatSidebarContext'
+import { useLocalizedNavigate } from '../components/LocalizedLink'
 import { useLocalStorage, STORAGE_KEYS } from '../hooks/useLocalStorage'
 
 // Agent mode configuration (same as ChatPageNew)
@@ -46,7 +46,7 @@ export default function DashboardPage() {
   const { user, isLoading: authLoading } = useAuth()
   const { setSessions, setCurrentSession, setPendingMessage } = useChatSidebar()
   const { t } = useTranslation()
-  const navigate = useNavigate()
+  const navigate = useLocalizedNavigate()
 
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<AttachmentInfo[]>([])

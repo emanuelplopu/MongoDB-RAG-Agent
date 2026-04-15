@@ -36,6 +36,7 @@ import {
 import { useChatSidebar } from '../contexts/ChatSidebarContext'
 import { useAuth } from '../contexts/AuthContext'
 import { useToast } from '../contexts/ToastContext'
+import { useTranslation } from 'react-i18next'
 import { useLocalStorage, STORAGE_KEYS } from '../hooks/useLocalStorage'
 import { useKeyboardShortcuts, useEscapeKey } from '../hooks/useKeyboardShortcuts'
 import FederatedAgentPanel from '../components/FederatedAgentPanel'
@@ -94,6 +95,9 @@ export default function ChatPage() {
   
   // Get current user for error message handling
   const { user } = useAuth()
+  
+  // Get current language for agent response language
+  const { i18n } = useTranslation()
 
   // Local state
   const [input, setInput] = useState('')
@@ -206,31 +210,6 @@ export default function ChatPage() {
     }
   }, [liveTrace?.startTime])
 
-  // Pick up pending message from dashboard transition
-  const pendingHandled = useRef(false)
-  useEffect(() => {
-    if (pendingMessage && currentSession && !pendingHandled.current) {
-      pendingHandled.current = true
-      const msg = pendingMessage
-      const atts = pendingAttachments
-      setPendingMessage(null)
-
-      // Set the input and attachments, then trigger submit
-      setInput(msg)
-      if (atts && atts.length > 0) {
-        setAttachments(atts)
-        setAttachmentTokens(atts.reduce((sum: number, a: any) => sum + (a.token_estimate || 0), 0))
-      }
-
-      // Use a microtask to trigger submit after state updates
-      setTimeout(() => {
-        const form = document.querySelector('form')
-        if (form) {
-          form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }))
-        }
-      }, 100)
-    }
-  }, [pendingMessage, currentSession, pendingAttachments, setPendingMessage])
 
   // Change model for current session
   const handleChangeModel = async (modelId: string) => {
@@ -323,10 +302,9 @@ export default function ChatPage() {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   }
 
-  // Send message
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!input.trim() || isLoading) return
+  // Send message (core logic, can be called directly or via form submit)
+  const sendMessage = useCallback(async (messageText: string, messageAtts?: AttachmentInfo[]) => {
+    if (!messageText.trim() || isLoading) return
 
     // Create session if needed
     let session = currentSession
@@ -336,8 +314,8 @@ export default function ChatPage() {
       setCurrentSession(session)
     }
 
-    const messageContent = input.trim()
-    const messageAttachments = attachments.length > 0 ? [...attachments] : undefined
+    const messageContent = messageText.trim()
+    const messageAttachments = messageAtts && messageAtts.length > 0 ? [...messageAtts] : undefined
     setInput('')
     setAttachments([])
     setAttachmentTokens(0)
@@ -383,7 +361,7 @@ export default function ChatPage() {
       streamAbortRef.current = sessionsApi.sendMessageStream(
         sessionId,
         messageContent,
-        { attachments: messageAttachments, agent_mode: agentMode },
+        { attachments: messageAttachments, agent_mode: agentMode, language: i18n.language },
         {
           onStart: () => {
             // Reset accumulated data
@@ -467,6 +445,7 @@ export default function ChatPage() {
         const response = await sessionsApi.sendMessage(session.id, messageContent, {
           attachments: messageAttachments,
           agent_mode: agentMode,
+          language: i18n.language,
         })
         
         // Update session with real messages and title if provided
@@ -518,7 +497,27 @@ export default function ChatPage() {
         setIsLoading(false)
       }
     }
+  }, [currentSession, isLoading, agentMode, useStreaming, user?.is_admin])
+
+  // Form submit handler
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    sendMessage(input, attachments.length > 0 ? attachments : undefined)
   }
+
+  // Pick up pending message from dashboard transition
+  const pendingHandled = useRef(false)
+  useEffect(() => {
+    if (pendingMessage && currentSession && !pendingHandled.current) {
+      pendingHandled.current = true
+      const msg = pendingMessage
+      const atts = pendingAttachments
+      setPendingMessage(null)
+
+      // Directly call sendMessage with the pending content
+      sendMessage(msg, atts && atts.length > 0 ? atts : undefined)
+    }
+  }, [pendingMessage, currentSession, pendingAttachments, setPendingMessage, sendMessage])
 
   // Handle textarea auto-resize
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -531,7 +530,7 @@ export default function ChatPage() {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      handleSubmit(e)
+      sendMessage(input, attachments.length > 0 ? attachments : undefined)
     }
   }
 
@@ -553,15 +552,11 @@ export default function ChatPage() {
   // Retry last failed message
   const handleRetry = useCallback(() => {
     if (!lastFailedMessage || isLoading) return
+    const msg = lastFailedMessage
     setError(null)
-    setInput(lastFailedMessage)
     setLastFailedMessage(null)
-    // Trigger submit after state update
-    setTimeout(() => {
-      const form = document.querySelector('form')
-      form?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }))
-    }, 100)
-  }, [lastFailedMessage, isLoading])
+    sendMessage(msg)
+  }, [lastFailedMessage, isLoading, sendMessage])
 
   // Regenerate last assistant response
   const handleRegenerate = useCallback(async () => {
@@ -591,13 +586,8 @@ export default function ChatPage() {
     })
     
     // Resend the last user message
-    setInput(lastUserMessage.content)
-    // Small delay to allow state update, then submit
-    setTimeout(() => {
-      const form = document.querySelector('form')
-      form?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }))
-    }, 100)
-  }, [currentSession, isLoading, setCurrentSession])
+    sendMessage(lastUserMessage.content, lastUserMessage.attachments)
+  }, [currentSession, isLoading, setCurrentSession, sendMessage])
 
   // Check if last message was from assistant (for showing regenerate button)
   const canRegenerate = currentSession?.messages && 
@@ -606,7 +596,7 @@ export default function ChatPage() {
     !isLoading
 
   return (
-    <div className="flex h-[calc(100vh-0px)] lg:h-screen flex-col bg-white dark:bg-gray-800">
+    <div className="flex h-full flex-col bg-background dark:bg-gray-800">
       {currentSession ? (
         <>
           {/* Header */}
@@ -626,7 +616,7 @@ export default function ChatPage() {
                   <ChevronDownIcon className="h-4 w-4 text-secondary" />
                 </button>
                 {showModelSelector && (
-                  <div className="absolute right-0 mt-1 w-80 max-h-96 overflow-y-auto bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-surface-variant dark:border-gray-600 z-50">
+                  <div className="absolute right-0 mt-1 w-80 max-h-96 overflow-y-auto bg-white dark:bg-gray-900 rounded-xl shadow-xl border border-gray-200 dark:border-gray-600 z-50">
                     <div className="p-2">
                       <div className="text-xs font-medium text-secondary dark:text-gray-400 px-2 py-1 uppercase">
                         Select Model
@@ -637,7 +627,7 @@ export default function ChatPage() {
                           <button
                             key={model.id}
                             onClick={() => handleChangeModel(model.id)}
-                            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left hover:bg-surface-variant dark:hover:bg-gray-700 ${
+                            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left hover:bg-gray-100 dark:hover:bg-gray-700 ${
                               currentSession.model === model.id ? 'bg-primary-50 dark:bg-primary-900/30' : ''
                             }`}
                           >
@@ -664,7 +654,7 @@ export default function ChatPage() {
                   <ChevronDownIcon className="h-4 w-4" />
                 </button>
                 {showAgentModeSelector && (
-                  <div className="absolute right-0 mt-1 w-80 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-surface-variant dark:border-gray-600 z-50">
+                  <div className="absolute right-0 mt-1 w-80 bg-white dark:bg-gray-900 rounded-xl shadow-xl border border-gray-200 dark:border-gray-600 z-50">
                     <div className="p-2">
                       <div className="text-xs font-medium text-secondary dark:text-gray-400 px-2 py-1 uppercase flex items-center gap-1">
                         Agent Mode
@@ -682,7 +672,7 @@ export default function ChatPage() {
                             setAgentMode(mode)
                             setShowAgentModeSelector(false)
                           }}
-                          className={`w-full flex flex-col px-3 py-2 rounded-lg text-left hover:bg-surface-variant dark:hover:bg-gray-700 ${
+                          className={`w-full flex flex-col px-3 py-2 rounded-lg text-left hover:bg-gray-100 dark:hover:bg-gray-700 ${
                             agentMode === mode ? 'bg-primary-50 dark:bg-primary-900/30' : ''
                           }`}
                         >
@@ -723,7 +713,7 @@ export default function ChatPage() {
                   <Cog6ToothIcon className="h-5 w-5" />
                 </button>
                 {showSettingsInfo && (
-                  <div className="absolute right-0 mt-1 w-96 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-surface-variant dark:border-gray-600 z-50">
+                  <div className="absolute right-0 mt-1 w-96 bg-white dark:bg-gray-900 rounded-xl shadow-xl border border-gray-200 dark:border-gray-600 z-50">
                     <div className="p-3">
                       <div className="flex items-center gap-2 mb-3">
                         <Cog6ToothIcon className="h-4 w-4 text-primary" />

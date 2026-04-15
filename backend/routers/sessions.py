@@ -319,6 +319,7 @@ class SendMessageRequest(BaseModel):
     attachments: Optional[List[AttachmentInfo]] = None  # File attachments for multimodal
     agent_mode: Optional[str] = None  # "auto", "thinking", "fast" - overrides session default
     strategy_id: Optional[str] = None  # Strategy to use for this message (A/B testing)
+    language: Optional[str] = None  # UI language code (e.g. "en", "de") - agent responds in this language
 
 
 class CreateFolderRequest(BaseModel):
@@ -933,7 +934,8 @@ async def send_message(
             conversation_history=conversation_history,
             active_profile_key=active_profile_key,
             active_profile_database=active_profile_database,
-            accessible_profile_keys=[active_profile_key] if active_profile_key else None
+            accessible_profile_keys=[active_profile_key] if active_profile_key else None,
+            language=msg_request.language
         )
     except Exception as e:
         logger.error(
@@ -1228,7 +1230,8 @@ async def send_message_stream(
                         active_profile_key=active_profile_key,
                         active_profile_database=active_profile_database,
                         accessible_profile_keys=[active_profile_key] if active_profile_key else None,
-                        on_event=on_event
+                        on_event=on_event,
+                        language=msg_request.language
                     )
                     response_holder['text'] = response_text
                     response_holder['trace'] = trace

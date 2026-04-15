@@ -42,7 +42,7 @@ profiles:
     cloud_sources: []
   test-law:
     name: Test Law
-    description: Test law documents from D:/test-law
+    description: Test law documents from D:/Test_data
     documents_folders:
     - /app/mounts/test-law
     database: rag_test_law

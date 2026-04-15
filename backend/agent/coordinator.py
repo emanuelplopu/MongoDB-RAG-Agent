@@ -191,7 +191,8 @@ class FederatedAgent:
         active_profile_key: Optional[str] = None,
         active_profile_database: Optional[str] = None,
         accessible_profile_keys: Optional[List[str]] = None,
-        on_event: Optional[EventCallback] = None
+        on_event: Optional[EventCallback] = None,
+        language: Optional[str] = None
     ) -> Tuple[str, AgentTrace]:
         """Process a user message through the orchestrator-worker pipeline.
         
@@ -205,6 +206,7 @@ class FederatedAgent:
             active_profile_database: Database of the active profile
             accessible_profile_keys: List of profile keys user has access to
             on_event: Optional callback for streaming events
+            language: UI language code (e.g. "en", "de") for response language
         
         Returns:
             Tuple of (response text, AgentTrace)
@@ -228,7 +230,8 @@ class FederatedAgent:
                 active_profile_key=active_profile_key,
                 active_profile_database=active_profile_database,
                 accessible_profile_keys=accessible_profile_keys,
-                on_event=on_event
+                on_event=on_event,
+                language=language
             )
         else:
             response = await self._process_fast(
@@ -238,7 +241,8 @@ class FederatedAgent:
                 active_profile_key=active_profile_key,
                 active_profile_database=active_profile_database,
                 accessible_profile_keys=accessible_profile_keys,
-                on_event=on_event
+                on_event=on_event,
+                language=language
             )
         
         # Finalize trace - use add methods to properly accumulate timing and token stats
@@ -259,7 +263,8 @@ class FederatedAgent:
         active_profile_key: Optional[str],
         active_profile_database: Optional[str],
         accessible_profile_keys: Optional[List[str]],
-        on_event: Optional[EventCallback] = None
+        on_event: Optional[EventCallback] = None,
+        language: Optional[str] = None
     ) -> str:
         """Process with full orchestrator-worker flow.
         
@@ -497,18 +502,29 @@ class FederatedAgent:
             for r in all_results:
                 sources_searched.update(r.sources_searched)
             
-            response = (
-                f"I searched through the available sources ({', '.join(sources_searched) or 'profile, cloud, personal'}) "
-                f"but did not find relevant information about your query.\n\n"
-                f"**What I searched for:** {plan.intent_summary if plan else user_message[:100]}\n\n"
-                f"**Suggestions:**\n"
-                f"- Check if documents about this topic have been ingested\n"
-                f"- Try rephrasing your question with different keywords\n"
-                f"- If searching for external information, web search may be rate-limited"
-            )
+            if language and language.lower() == "de":
+                response = (
+                    f"Ich habe die verfügbaren Quellen durchsucht ({', '.join(sources_searched) or 'Profil, Cloud, Persönlich'}) "
+                    f"aber keine relevanten Informationen zu Ihrer Anfrage gefunden.\n\n"
+                    f"**Wonach ich gesucht habe:** {plan.intent_summary if plan else user_message[:100]}\n\n"
+                    f"**Vorschläge:**\n"
+                    f"- Prüfen Sie, ob Dokumente zu diesem Thema aufgenommen wurden\n"
+                    f"- Versuchen Sie, Ihre Frage mit anderen Schlüsselwörtern umzuformulieren\n"
+                    f"- Bei der Suche nach externen Informationen kann die Websuche eingeschränkt sein"
+                )
+            else:
+                response = (
+                    f"I searched through the available sources ({', '.join(sources_searched) or 'profile, cloud, personal'}) "
+                    f"but did not find relevant information about your query.\n\n"
+                    f"**What I searched for:** {plan.intent_summary if plan else user_message[:100]}\n\n"
+                    f"**Suggestions:**\n"
+                    f"- Check if documents about this topic have been ingested\n"
+                    f"- Try rephrasing your question with different keywords\n"
+                    f"- If searching for external information, web search may be rate-limited"
+                )
             logger.info("Returning 'no relevant results' response instead of synthesizing from irrelevant data")
         else:
-            response = await self.orchestrator.synthesize(user_message, filtered_results if filtered_results else all_results)
+            response = await self.orchestrator.synthesize(user_message, filtered_results if filtered_results else all_results, language=language)
         
         # Log synthesis result for debugging
         logger.info(f"Synthesize completed, response length: {len(response) if response else 0}")
@@ -534,7 +550,8 @@ class FederatedAgent:
         active_profile_key: Optional[str],
         active_profile_database: Optional[str],
         accessible_profile_keys: Optional[List[str]],
-        on_event: Optional[EventCallback] = None
+        on_event: Optional[EventCallback] = None,
+        language: Optional[str] = None
     ) -> str:
         """Process with fast single-model approach.
         
@@ -626,7 +643,7 @@ class FederatedAgent:
         # Generate response using fast model
         await emit_event('phase', {'phase': 'synthesize', 'status': 'started'})
         synth_start = time.time()
-        response = await self._generate_fast_response(user_message, results)
+        response = await self._generate_fast_response(user_message, results, language=language)
         await emit_event('orchestrator_step', {
             'phase': 'synthesize',
             'reasoning': 'Fast response generation from search results',
@@ -660,13 +677,15 @@ class FederatedAgent:
     async def _generate_fast_response(
         self,
         user_message: str,
-        results: List[WorkerResult]
+        results: List[WorkerResult],
+        language: Optional[str] = None
     ) -> str:
         """Generate response using fast model.
         
         Args:
             user_message: User's message
             results: Search results
+            language: UI language code for response language
         
         Returns:
             Response text
@@ -690,6 +709,12 @@ class FederatedAgent:
             user_message=user_message,
             context=context
         )
+        
+        # Inject language instruction if non-English language is specified
+        if language and language.lower() != "en":
+            lang_names = {"de": "German", "fr": "French", "es": "Spanish", "it": "Italian", "pt": "Portuguese", "nl": "Dutch"}
+            lang_name = lang_names.get(language.lower(), language)
+            prompt += f"\n\n**IMPORTANT: You MUST write your entire response in {lang_name}. The user's interface is set to {lang_name} and the question was asked in {lang_name}. Respond ONLY in {lang_name}.**"
         
         try:
             # Use the correct model string and API key based on provider

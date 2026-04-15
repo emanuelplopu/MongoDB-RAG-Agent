@@ -1376,6 +1376,7 @@ export const sessionsApi = {
       attachments?: AttachmentInfo[]
       agent_mode?: 'auto' | 'thinking' | 'fast'
       strategy_id?: string  // Strategy for A/B testing
+      language?: string  // UI language code (e.g. "en", "de")
     }
   ): Promise<SendMessageResponse> => {
     const response = await api.post(`/sessions/${sessionId}/messages`, {
@@ -1386,6 +1387,7 @@ export const sessionsApi = {
       attachments: options?.attachments || null,
       agent_mode: options?.agent_mode || null,
       strategy_id: options?.strategy_id || null,
+      language: options?.language || null,
     })
     return response.data
   },
@@ -1398,6 +1400,7 @@ export const sessionsApi = {
       attachments?: AttachmentInfo[]
       agent_mode?: 'auto' | 'thinking' | 'fast'
       strategy_id?: string  // Strategy for A/B testing
+      language?: string  // UI language code (e.g. "en", "de")
     },
     callbacks?: {
       onStart?: (data: { mode: string; models: { orchestrator: string; worker: string } }) => void
@@ -1461,6 +1464,7 @@ export const sessionsApi = {
             attachments: options?.attachments || null,
             agent_mode: options?.agent_mode || null,
             strategy_id: options?.strategy_id || null,
+            language: options?.language || null,
           }),
           signal: abortController.signal,
         })

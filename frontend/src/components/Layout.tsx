@@ -213,11 +213,11 @@ export default function Layout() {
     return sessionList.filter(s => (s.title || '').toLowerCase().includes(q))
   }
 
-  // Check if we're on the chat page
-  const isOnChatPage = location.pathname.startsWith('/chat')
+  // Check if we're on the chat page (handles language prefix: /en/chat, /de/chat, /chat)
+  const isOnChatPage = /\/chat(\/|$)/.test(location.pathname)
   
   // Check if we're on the dashboard page
-  const isOnDashboardPage = location.pathname === '/dashboard'
+  const isOnDashboardPage = /\/dashboard(\/|$)/.test(location.pathname)
 
   // Get page title for non-chat pages
   const getPageTitle = () => {
@@ -361,7 +361,7 @@ export default function Layout() {
                   {showMoveMenu && (
                     <>
                       <div className="fixed inset-0 z-30" onClick={() => setShowMoveMenu(false)} />
-                      <div className="absolute left-0 right-0 top-full mt-1 z-40 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-surface-variant dark:border-gray-600 py-1 max-h-48 overflow-y-auto">
+                      <div className="absolute left-0 right-0 top-full mt-1 z-40 bg-white dark:bg-gray-800 rounded-lg shadow-2xl border border-gray-200 dark:border-gray-600 py-1 max-h-48 overflow-y-auto">
                         <button
                           onClick={() => { moveSelectedToFolder(null); setShowMoveMenu(false) }}
                           className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-surface-variant dark:hover:bg-gray-700 text-secondary dark:text-gray-400"
@@ -697,7 +697,7 @@ export default function Layout() {
       <div className="flex-shrink-0 border-t border-surface-variant dark:border-gray-700 p-3" ref={userMenuRef}>
         {/* User Menu Dropdown (appears above the button) */}
         {userMenuOpen && (
-          <div className="absolute bottom-20 left-3 right-3 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-surface-variant dark:border-gray-600 py-2 z-50 max-h-[70vh] overflow-y-auto">
+          <div className="absolute bottom-20 left-3 right-3 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-600 py-2 z-50 max-h-[70vh] overflow-y-auto">
             {/* User Info */}
             {isAuthenticated && user && (
               <div className="px-4 py-2 border-b border-surface-variant dark:border-gray-700">
@@ -725,7 +725,7 @@ export default function Layout() {
                     className={`w-full flex items-center gap-3 px-4 py-2 text-sm transition-colors ${
                       isActive
                         ? 'bg-primary-100 dark:bg-primary-900/50 text-primary-700 dark:text-primary-300'
-                        : 'text-secondary dark:text-gray-400 hover:bg-surface-variant dark:hover:bg-gray-700'
+                        : 'text-secondary dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
                     }`}
                   >
                     <item.icon className="h-5 w-5" />
@@ -742,7 +742,7 @@ export default function Layout() {
                     className={`w-full flex items-center justify-between px-4 py-2 text-sm transition-colors ${
                       location.pathname.startsWith('/system')
                         ? 'bg-primary-100 dark:bg-primary-900/50 text-primary-700 dark:text-primary-300'
-                        : 'text-secondary dark:text-gray-400 hover:bg-surface-variant dark:hover:bg-gray-700'
+                        : 'text-secondary dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
                     }`}
                   >
                     <div className="flex items-center gap-3">
@@ -963,7 +963,7 @@ export default function Layout() {
                     <ChevronDownIcon className="h-3 w-3 text-secondary" />
                   </button>
                   {profilesDropdownOpen && (
-                    <div className="absolute right-0 mt-1 w-64 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-surface-variant dark:border-gray-600 py-2 z-50">
+                    <div className="absolute right-0 mt-1 w-64 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-600 py-2 z-50">
                       <div className="px-3 py-1.5 text-xs font-medium text-secondary dark:text-gray-500 uppercase">
                         {t('nav.knowledgeProfiles')}
                       </div>
@@ -974,7 +974,7 @@ export default function Layout() {
                           className={`w-full flex items-center gap-3 px-3 py-2 text-sm transition-colors ${
                             key === profilesData.active_profile
                               ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300'
-                              : 'text-primary-900 dark:text-gray-300 hover:bg-surface-variant dark:hover:bg-gray-700'
+                              : 'text-primary-900 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
                           }`}
                         >
                           <FolderIcon className={`h-4 w-4 ${key === profilesData.active_profile ? 'text-primary' : 'text-secondary'}`} />
@@ -1000,7 +1000,7 @@ export default function Layout() {
         </div>
 
         {/* Page content */}
-        <main className={isOnChatPage || isOnDashboardPage ? (isOnDashboardPage ? '' : '') : 'py-6 px-4 sm:px-6 lg:px-8'}>
+        <main className={isOnChatPage || isOnDashboardPage ? 'h-[calc(100vh-3.5rem)]' : 'py-6 px-4 sm:px-6 lg:px-8'}>
           <Outlet />
         </main>
       </div>
@@ -1013,7 +1013,7 @@ export default function Layout() {
             onClick={() => setContextMenu(null)}
           />
           <div
-            className="fixed z-50 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-surface-variant dark:border-gray-600 py-1 min-w-[160px]"
+            className="fixed z-50 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-600 py-1 min-w-[160px]"
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
             {(() => {
@@ -1023,7 +1023,7 @@ export default function Layout() {
                 <>
                   <button
                     onClick={() => handleTogglePin(session.id, session.is_pinned)}
-                    className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-surface-variant dark:hover:bg-gray-700 dark:text-gray-200"
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-200"
                   >
                     {session.is_pinned ? (
                       <>
@@ -1043,7 +1043,7 @@ export default function Layout() {
                       setEditingTitleValue(session.title)
                       setContextMenu(null)
                     }}
-                    className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-surface-variant dark:hover:bg-gray-700 dark:text-gray-200"
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-200"
                   >
                     <PencilIcon className="h-4 w-4" />
                     {t('sidebar.rename')}

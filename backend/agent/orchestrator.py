@@ -572,13 +572,15 @@ class Orchestrator:
     async def synthesize(
         self,
         user_message: str,
-        all_results: List[WorkerResult]
+        all_results: List[WorkerResult],
+        language: Optional[str] = None
     ) -> str:
         """Phase 4: Generate final answer.
         
         Args:
             user_message: Original user message
             all_results: All results from all iterations
+            language: UI language code (e.g. "en", "de") for response language
         
         Returns:
             Final answer string
@@ -638,6 +640,12 @@ class Orchestrator:
             user_message=user_message,
             all_results=results_str
         )
+        
+        # Inject language instruction if non-English language is specified
+        if language and language.lower() != "en":
+            lang_names = {"de": "German", "fr": "French", "es": "Spanish", "it": "Italian", "pt": "Portuguese", "nl": "Dutch"}
+            lang_name = lang_names.get(language.lower(), language)
+            prompt += f"\n\n**CRITICAL LANGUAGE REQUIREMENT: You MUST write your entire response in {lang_name}. The user's interface is set to {lang_name} and the question was asked in {lang_name}. All text, headings, explanations, and summaries must be in {lang_name}. Only keep proper nouns, document titles, and citation references in their original language.**"
         
         try:
             result = await self._call_llm(prompt, OrchestratorPhase.SYNTHESIZE, expect_json=False)
