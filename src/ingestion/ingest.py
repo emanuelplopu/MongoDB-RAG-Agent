@@ -1470,6 +1470,51 @@ class DocumentIngestionPipeline:
 
         return metadata
 
+    async def _delete_existing_document(self, source: str) -> int:
+        """
+        Delete existing document and its chunks by source path.
+        
+        This prevents duplicate documents when re-ingesting the same file.
+        Chunks are deleted first to respect foreign key relationships.
+        
+        Args:
+            source: Document source path to match against
+            
+        Returns:
+            Number of documents deleted (0 or 1)
+        """
+        documents_collection = self.db[
+            self.settings.mongodb_collection_documents
+        ]
+        chunks_collection = self.db[self.settings.mongodb_collection_chunks]
+        
+        # Find existing document(s) with this source
+        existing_docs = []
+        cursor = documents_collection.find({"source": source}, {"_id": 1})
+        async for doc in cursor:
+            existing_docs.append(doc["_id"])
+        
+        if not existing_docs:
+            return 0
+        
+        # Delete chunks for these documents first
+        chunks_result = await chunks_collection.delete_many(
+            {"document_id": {"$in": existing_docs}}
+        )
+        
+        # Delete the document(s)
+        docs_result = await documents_collection.delete_many(
+            {"_id": {"$in": existing_docs}}
+        )
+        
+        logger.info(
+            f"Replaced existing document '{source}': "
+            f"deleted {docs_result.deleted_count} doc(s), "
+            f"{chunks_result.deleted_count} chunk(s)"
+        )
+        
+        return docs_result.deleted_count
+
     async def _save_to_mongodb(
         self,
         title: str,
@@ -1481,6 +1526,9 @@ class DocumentIngestionPipeline:
     ) -> str:
         """
         Save document and chunks to MongoDB.
+        
+        Always deletes any existing document with the same source path
+        before inserting, preventing duplicates regardless of ingestion mode.
 
         Args:
             title: Document title
@@ -1501,6 +1549,9 @@ class DocumentIngestionPipeline:
             self.settings.mongodb_collection_documents
         ]
         chunks_collection = self.db[self.settings.mongodb_collection_chunks]
+
+        # Delete any existing document with the same source to prevent duplicates
+        await self._delete_existing_document(source)
 
         # Insert document
         document_dict = {

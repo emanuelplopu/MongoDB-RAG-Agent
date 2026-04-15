@@ -324,7 +324,9 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
     profile_key = config.get("profile", "") if config else ""
     
     # Initialize file registry service if db is available
-    registry_service = FileRegistryService(db) if db else None
+    # db may be a DatabaseManager wrapper - extract raw database for service
+    raw_db = db.db if hasattr(db, 'db') else db
+    registry_service = FileRegistryService(raw_db) if raw_db else None
     
     # Helper to update discovery progress
     def update_discovery(folders_scanned=None, total_folders=None, files_found=None, 

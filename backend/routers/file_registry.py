@@ -24,7 +24,7 @@ async def get_registry_stats(
     
     Returns counts of files in each classification category.
     """
-    db = request.app.state.db
+    db = request.app.state.db.db
     registry_service = FileRegistryService(db)
     
     stats = await registry_service.get_registry_stats(profile_key)
@@ -43,7 +43,7 @@ async def list_files(
     """
     List files in the registry with optional filters.
     """
-    db = request.app.state.db
+    db = request.app.state.db.db
     registry_service = FileRegistryService(db)
     
     # Validate classification if provided
@@ -82,7 +82,7 @@ async def reclassify_file(
     
     Use this to correct misclassified files or to mark files for retry.
     """
-    db = request.app.state.db
+    db = request.app.state.db.db
     registry_service = FileRegistryService(db)
     
     # Validate classification

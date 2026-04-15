@@ -383,6 +383,26 @@ class Orchestrator:
         if not tasks:
             tasks = self._create_default_tasks(analysis)
         
+        # Safety net: ensure at least one document search task exists
+        # The LLM planner might create only web search tasks, but we should
+        # always check ingested documents too
+        doc_search_types = {TaskType.SEARCH_PROFILE, TaskType.SEARCH_CLOUD, 
+                          TaskType.SEARCH_PERSONAL, TaskType.SEARCH_ALL}
+        has_doc_search = any(t.type in doc_search_types for t in tasks)
+        
+        if not has_doc_search:
+            primary_query = analysis.get("search_queries", {}).get(
+                "primary", analysis.get("intent_summary", "")
+            )
+            logger.info("No document search tasks in plan - adding SEARCH_ALL as safety net")
+            tasks.append(TaskDefinition(
+                id="safety_doc_search",
+                type=TaskType.SEARCH_ALL,
+                query=primary_query,
+                priority=1,
+                max_results=10
+            ))
+        
         return AgentPlan(
             intent_summary=result.get("intent_summary", analysis.get("intent_summary", "")),
             reasoning=result.get("reasoning", ""),
@@ -394,6 +414,11 @@ class Orchestrator:
     
     def _create_default_tasks(self, analysis: Dict[str, Any]) -> List[TaskDefinition]:
         """Create default search tasks based on analysis when planning fails.
+        
+        IMPORTANT: Always includes at least one document search task to check
+        ingested documents, regardless of source_priority. This prevents the 
+        common issue where the LLM classifies a query as "web" but the answer
+        is actually in the user's ingested documents.
         
         Args:
             analysis: The analysis result
@@ -425,6 +450,17 @@ class Orchestrator:
             max_results=10
         ))
         
+        # ALWAYS include a document search if the primary task is web-only
+        # This ensures ingested documents are always consulted
+        if primary_type == TaskType.WEB_SEARCH:
+            tasks.append(TaskDefinition(
+                id="default_doc_search",
+                type=TaskType.SEARCH_ALL,
+                query=primary_query,
+                priority=1,
+                max_results=10
+            ))
+        
         # Add alternative query search if available
         if alternatives and len(alternatives) > 0:
             tasks.append(TaskDefinition(
@@ -437,13 +473,15 @@ class Orchestrator:
         
         # Add web search for complex queries or external entities
         if analysis.get("requires_multi_hop") or source_priority == "web":
-            tasks.append(TaskDefinition(
-                id="default_web",
-                type=TaskType.WEB_SEARCH,
-                query=primary_query,
-                priority=3,
-                max_results=5
-            ))
+            # Only add web search if not already the primary task
+            if primary_type != TaskType.WEB_SEARCH:
+                tasks.append(TaskDefinition(
+                    id="default_web",
+                    type=TaskType.WEB_SEARCH,
+                    query=primary_query,
+                    priority=3,
+                    max_results=5
+                ))
         
         return tasks
     

@@ -889,10 +889,14 @@ async def send_message(
     except ValueError:
         agent_mode = AgentMode.AUTO
     
-    # Configure federated agent
+    # Configure federated agent - use session model as orchestrator model
+    # The user selects their model in the chat UI, stored in the session document
+    orchestrator_model = session_model if session_model else settings.orchestrator_model
+    logger.info(f"Agent config: orchestrator_model={orchestrator_model} (session_model={session_model}, default={settings.orchestrator_model})")
+    
     config = AgentModeConfig(
         mode=agent_mode,
-        orchestrator_model=settings.orchestrator_model,
+        orchestrator_model=orchestrator_model,
         worker_model=settings.worker_model,
         max_iterations=settings.agent_max_iterations,
         parallel_workers=settings.agent_parallel_workers
@@ -1169,10 +1173,13 @@ async def send_message_stream(
             except ValueError:
                 agent_mode = AgentMode.AUTO
             
-            # Configure agent
+            # Configure agent - use session model as orchestrator model
+            orchestrator_model = session_model if session_model else settings.orchestrator_model
+            logger.info(f"Stream agent config: orchestrator_model={orchestrator_model} (session_model={session_model})")
+            
             config = AgentModeConfig(
                 mode=agent_mode,
-                orchestrator_model=settings.orchestrator_model,
+                orchestrator_model=orchestrator_model,
                 worker_model=settings.worker_model,
                 max_iterations=settings.agent_max_iterations,
                 parallel_workers=settings.agent_parallel_workers
@@ -1181,7 +1188,7 @@ async def send_message_stream(
             agent = FederatedAgent(config=config, strategy_id=msg_request.strategy_id)
             
             # Send initial event
-            yield f"data: {json.dumps({'type': 'start', 'mode': agent_mode_str, 'models': {'orchestrator': settings.orchestrator_model, 'worker': settings.worker_model}})}\n\n"
+            yield f"data: {json.dumps({'type': 'start', 'mode': agent_mode_str, 'models': {'orchestrator': orchestrator_model, 'worker': settings.worker_model}})}\n\n"
             
             # Create event queue for real-time streaming
             event_queue: asyncio.Queue = asyncio.Queue()
