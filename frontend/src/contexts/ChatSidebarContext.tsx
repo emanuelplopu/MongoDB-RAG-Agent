@@ -10,6 +10,7 @@ import {
   ApiError,
 } from '../api/client'
 import { useAuth } from './AuthContext'
+import { useUserPreferences } from './UserPreferencesContext'
 
 // Local storage keys
 const STORAGE_KEYS = {
@@ -81,6 +82,7 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
   const location = useLocation()
   const { user, isLoading: isAuthLoading } = useAuth()
+  const { preferences } = useUserPreferences()
 
   // State
   const [sessions, setSessions] = useState<ChatSession[]>([])
@@ -174,7 +176,12 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
   // Create new session
   const handleNewChat = useCallback(async (folderId?: string) => {
     try {
-      const session = await sessionsApi.create({ folder_id: folderId })
+      const createData: { folder_id?: string; model?: string } = { folder_id: folderId }
+      // Use user's preferred default model if set
+      if (preferences.defaultModel) {
+        createData.model = preferences.defaultModel
+      }
+      const session = await sessionsApi.create(createData)
       setSessions(prev => [session, ...prev])
       setCurrentSession(session)
       // Navigate to chat if not already there
@@ -184,7 +191,7 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.error('Failed to create session:', err)
     }
-  }, [navigate, location.pathname])
+  }, [navigate, location.pathname, preferences.defaultModel])
 
   // Select session
   const handleSelectSession = useCallback(async (sessionId: string) => {

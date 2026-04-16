@@ -29,6 +29,18 @@ vi.mock('./AuthContext', () => ({
   }),
 }))
 
+vi.mock('./UserPreferencesContext', () => ({
+  useUserPreferences: () => ({
+    preferences: { defaultModel: '' },
+    setPreference: vi.fn(),
+    setPreferences: vi.fn(),
+    resetPreferences: vi.fn(),
+    resetPreference: vi.fn(),
+    isDefault: vi.fn(() => true),
+    applyFromSync: vi.fn(),
+  }),
+}))
+
 // Mock api/client
 vi.mock('../api/client', () => ({
   sessionsApi: {

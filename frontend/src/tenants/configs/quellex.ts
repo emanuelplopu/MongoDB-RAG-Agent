@@ -6,6 +6,7 @@ export const quellexConfig: TenantConfig = {
     appName: 'Quellex',
     tagline: 'Ihr Kanzleiwissen. Schnell gefunden.',
     logoUrl: '/tenants/quellex/assets/quellex-logo.png',
+    iconUrl: '/tenants/quellex/assets/quellex-q-icon.png',
     faviconUrl: '/tenants/quellex/assets/quellex-q-icon.png',
   },
   theme: {

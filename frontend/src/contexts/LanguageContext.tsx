@@ -2,10 +2,14 @@ import { createContext, useContext, useEffect, ReactNode, useCallback } from 're
 import { useNavigate, useLocation, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { supportedLanguages, SupportedLanguage } from '../i18n'
+import { useOptionalSettingsSync, SETTINGS_SYNCED_EVENT } from './SettingsSyncContext'
+import { UserPreferencesSync } from '../api/client'
 
 interface LanguageContextType {
   language: SupportedLanguage
   setLanguage: (lang: SupportedLanguage) => void
+  /** Apply language from synced preferences (no DB write back) */
+  applyLanguage: (lang: SupportedLanguage) => void
   supportedLanguages: readonly SupportedLanguage[]
 }
 
@@ -16,6 +20,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
   const location = useLocation()
   const { lang } = useParams<{ lang?: string }>()
+  const settingsSync = useOptionalSettingsSync()
 
   // Get current language from URL or fallback to i18n language
   const getCurrentLanguage = useCallback((): SupportedLanguage => {
@@ -39,6 +44,21 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     }
   }, [language, i18n])
 
+  // Navigate to path with new language prefix
+  const navigateToLang = useCallback((newLang: SupportedLanguage) => {
+    const currentPath = location.pathname
+    const pathParts = currentPath.split('/')
+    
+    if (supportedLanguages.includes(pathParts[1] as SupportedLanguage)) {
+      pathParts[1] = newLang
+    } else {
+      pathParts.splice(1, 0, newLang)
+    }
+    
+    const newPath = pathParts.join('/') || `/${newLang}`
+    navigate(newPath + location.search + location.hash, { replace: true })
+  }, [location, navigate])
+
   const setLanguage = useCallback((newLang: SupportedLanguage) => {
     if (newLang === language) return
 
@@ -47,24 +67,36 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('i18nextLng', newLang)
 
     // Update URL with new language
-    const currentPath = location.pathname
-    const pathParts = currentPath.split('/')
-    
-    // Check if current path has a language prefix
-    if (supportedLanguages.includes(pathParts[1] as SupportedLanguage)) {
-      // Replace existing language prefix
-      pathParts[1] = newLang
-    } else {
-      // Add language prefix
-      pathParts.splice(1, 0, newLang)
+    navigateToLang(newLang)
+
+    // Sync to DB
+    settingsSync?.syncPreference({ language: newLang })
+  }, [language, navigateToLang, i18n, settingsSync])
+
+  // Apply language from DB sync (no DB write back to avoid loop)
+  const applyLanguage = useCallback((newLang: SupportedLanguage) => {
+    if (newLang === language) return
+    if (!supportedLanguages.includes(newLang)) return
+
+    i18n.changeLanguage(newLang)
+    localStorage.setItem('i18nextLng', newLang)
+    navigateToLang(newLang)
+  }, [language, navigateToLang, i18n])
+
+  // Listen for settings synced from DB
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const prefs = (e as CustomEvent<UserPreferencesSync>).detail
+      if (prefs?.language && supportedLanguages.includes(prefs.language as SupportedLanguage)) {
+        applyLanguage(prefs.language as SupportedLanguage)
+      }
     }
-    
-    const newPath = pathParts.join('/') || `/${newLang}`
-    navigate(newPath + location.search + location.hash, { replace: true })
-  }, [language, location, navigate, i18n])
+    window.addEventListener(SETTINGS_SYNCED_EVENT, handler)
+    return () => window.removeEventListener(SETTINGS_SYNCED_EVENT, handler)
+  }, [applyLanguage])
 
   return (
-    <LanguageContext.Provider value={{ language, setLanguage, supportedLanguages }}>
+    <LanguageContext.Provider value={{ language, setLanguage, applyLanguage, supportedLanguages }}>
       {children}
     </LanguageContext.Provider>
   )

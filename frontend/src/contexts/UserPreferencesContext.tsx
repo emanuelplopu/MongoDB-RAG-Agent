@@ -3,11 +3,16 @@
  * Persists settings to localStorage with automatic sync
  */
 
-import { createContext, useContext, useCallback, useMemo, ReactNode } from 'react'
+import { createContext, useContext, useCallback, useMemo, useEffect, ReactNode } from 'react'
 import { useLocalStorage } from '../hooks/useLocalStorage'
+import { useOptionalSettingsSync, SETTINGS_SYNCED_EVENT } from './SettingsSyncContext'
+import { UserPreferencesSync } from '../api/client'
 
 // User preferences interface
 interface UserPreferences {
+  // Model settings
+  defaultModel: string
+  
   // Search settings
   defaultSearchType: 'hybrid' | 'semantic' | 'text'
   defaultMatchCount: number
@@ -39,6 +44,9 @@ interface UserPreferences {
 
 // Default preferences
 const defaultPreferences: UserPreferences = {
+  // Model settings
+  defaultModel: '',  // Empty means use system default
+  
   // Search settings
   defaultSearchType: 'hybrid',
   defaultMatchCount: 10,
@@ -76,6 +84,8 @@ interface UserPreferencesContextType {
   resetPreferences: () => void
   resetPreference: <K extends keyof UserPreferences>(key: K) => void
   isDefault: <K extends keyof UserPreferences>(key: K) => boolean
+  /** Apply preferences from DB sync (no DB write back) */
+  applyFromSync: (syncPrefs: UserPreferencesSync) => void
 }
 
 const UserPreferencesContext = createContext<UserPreferencesContextType | null>(null)
@@ -91,6 +101,34 @@ export function UserPreferencesProvider({ children }: UserPreferencesProviderPro
     STORAGE_KEY,
     defaultPreferences
   )
+  const settingsSync = useOptionalSettingsSync()
+
+  // Map from DB snake_case keys to local camelCase keys
+  const syncKeyMap: Record<string, keyof UserPreferences> = {
+    default_model: 'defaultModel',
+    default_search_type: 'defaultSearchType',
+    default_match_count: 'defaultMatchCount',
+    ui_density: 'uiDensity',
+    items_per_page: 'itemsPerPage',
+    show_line_numbers: 'showLineNumbers',
+    code_theme: 'codeTheme',
+    streaming_enabled: 'streamingEnabled',
+    show_timestamps: 'showTimestamps',
+    message_grouping: 'messageGrouping',
+    enter_to_send: 'enterToSend',
+    sound_enabled: 'soundEnabled',
+    notifications_enabled: 'notificationsEnabled',
+    show_toast_duration: 'showToastDuration',
+    developer_mode: 'developerMode',
+    experimental_features: 'experimentalFeatures',
+    auto_save_enabled: 'autoSaveEnabled',
+    auto_save_interval: 'autoSaveInterval',
+  }
+
+  // Reverse map: camelCase to snake_case
+  const reverseSyncKeyMap: Record<string, string> = Object.fromEntries(
+    Object.entries(syncKeyMap).map(([k, v]) => [v, k])
+  )
 
   const setPreference = useCallback(<K extends keyof UserPreferences>(
     key: K,
@@ -100,14 +138,32 @@ export function UserPreferencesProvider({ children }: UserPreferencesProviderPro
       ...prev,
       [key]: value,
     }))
-  }, [setPreferencesState])
+    // Sync to DB
+    const dbKey = reverseSyncKeyMap[key as string]
+    if (dbKey && settingsSync) {
+      settingsSync.syncPreference({ [dbKey]: value } as Partial<UserPreferencesSync>)
+    }
+  }, [setPreferencesState, settingsSync, reverseSyncKeyMap])
 
   const setPreferences = useCallback((updates: Partial<UserPreferences>) => {
     setPreferencesState(prev => ({
       ...prev,
       ...updates,
     }))
-  }, [setPreferencesState])
+    // Sync all updated keys to DB
+    if (settingsSync) {
+      const dbUpdates: Partial<UserPreferencesSync> = {}
+      for (const [key, value] of Object.entries(updates)) {
+        const dbKey = reverseSyncKeyMap[key]
+        if (dbKey) {
+          (dbUpdates as any)[dbKey] = value
+        }
+      }
+      if (Object.keys(dbUpdates).length > 0) {
+        settingsSync.syncPreference(dbUpdates)
+      }
+    }
+  }, [setPreferencesState, settingsSync, reverseSyncKeyMap])
 
   const resetPreferences = useCallback(() => {
     setPreferencesState(defaultPreferences)
@@ -124,6 +180,32 @@ export function UserPreferencesProvider({ children }: UserPreferencesProviderPro
     return preferences[key] === defaultPreferences[key]
   }, [preferences])
 
+  // Apply preferences from DB sync (no DB write back to avoid loop)
+  const applyFromSync = useCallback((syncPrefs: UserPreferencesSync) => {
+    setPreferencesState(prev => {
+      const updated = { ...prev }
+      for (const [dbKey, localKey] of Object.entries(syncKeyMap)) {
+        const value = (syncPrefs as any)[dbKey]
+        if (value !== null && value !== undefined) {
+          (updated as any)[localKey] = value
+        }
+      }
+      return updated
+    })
+  }, [setPreferencesState, syncKeyMap])
+
+  // Listen for settings synced from DB
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const prefs = (e as CustomEvent<UserPreferencesSync>).detail
+      if (prefs) {
+        applyFromSync(prefs)
+      }
+    }
+    window.addEventListener(SETTINGS_SYNCED_EVENT, handler)
+    return () => window.removeEventListener(SETTINGS_SYNCED_EVENT, handler)
+  }, [applyFromSync])
+
   const value = useMemo(() => ({
     preferences,
     setPreference,
@@ -131,7 +213,8 @@ export function UserPreferencesProvider({ children }: UserPreferencesProviderPro
     resetPreferences,
     resetPreference,
     isDefault,
-  }), [preferences, setPreference, setPreferences, resetPreferences, resetPreference, isDefault])
+    applyFromSync,
+  }), [preferences, setPreference, setPreferences, resetPreferences, resetPreference, isDefault, applyFromSync])
 
   return (
     <UserPreferencesContext.Provider value={value}>

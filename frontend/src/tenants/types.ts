@@ -25,6 +25,7 @@ export interface TenantBranding {
   appName: string
   tagline: string
   logoUrl?: string           // Path to logo SVG/PNG in public/tenants/{id}/
+  iconUrl?: string           // Path to small icon (used in collapsed sidebar, etc.)
   faviconUrl?: string        // Path to favicon
 }
 

@@ -60,6 +60,35 @@ class User(BaseModel):
     is_admin: bool = False
 
 
+class UserPreferences(BaseModel):
+    """User preferences synced across devices."""
+    language: Optional[str] = None  # e.g. "en", "de"
+    theme: Optional[str] = None  # "light", "dark", "system"
+    default_model: Optional[str] = None  # e.g. "gpt-4.1", "gpt-4o"
+    # Search settings
+    default_search_type: Optional[str] = None
+    default_match_count: Optional[int] = None
+    # Display settings
+    ui_density: Optional[str] = None
+    items_per_page: Optional[int] = None
+    show_line_numbers: Optional[bool] = None
+    code_theme: Optional[str] = None
+    # Chat settings
+    streaming_enabled: Optional[bool] = None
+    show_timestamps: Optional[bool] = None
+    message_grouping: Optional[bool] = None
+    enter_to_send: Optional[bool] = None
+    # Notifications
+    sound_enabled: Optional[bool] = None
+    notifications_enabled: Optional[bool] = None
+    show_toast_duration: Optional[int] = None
+    # Advanced
+    developer_mode: Optional[bool] = None
+    experimental_features: Optional[bool] = None
+    auto_save_enabled: Optional[bool] = None
+    auto_save_interval: Optional[int] = None
+
+
 class UserResponse(BaseModel):
     """User response (without password)."""
     id: str
@@ -70,6 +99,7 @@ class UserResponse(BaseModel):
     created_at: datetime
     is_active: bool
     is_admin: bool = False
+    preferences: Optional[UserPreferences] = None
 
 
 class RegisterRequest(BaseModel):
@@ -259,7 +289,8 @@ async def get_current_user(
         title_suffix=user_doc.get("title_suffix"),
         created_at=user_doc["created_at"],
         is_active=user_doc.get("is_active", True),
-        is_admin=user_doc.get("is_admin", False)
+        is_admin=user_doc.get("is_admin", False),
+        preferences=UserPreferences(**user_doc["preferences"]) if user_doc.get("preferences") else None
     )
 
 
@@ -366,7 +397,8 @@ async def register(request: Request, reg_request: RegisterRequest):
         title_suffix=user.title_suffix,
         created_at=user.created_at,
         is_active=user.is_active,
-        is_admin=user.is_admin
+        is_admin=user.is_admin,
+        preferences=None  # New user, no preferences yet
     )
     
     return TokenResponse(
@@ -415,7 +447,8 @@ async def login(request: Request, login_request: LoginRequest):
         title_suffix=user_doc.get("title_suffix"),
         created_at=user_doc["created_at"],
         is_active=user_doc.get("is_active", True),
-        is_admin=user_doc.get("is_admin", False)
+        is_admin=user_doc.get("is_admin", False),
+        preferences=UserPreferences(**user_doc["preferences"]) if user_doc.get("preferences") else None
     )
     
     return TokenResponse(
@@ -500,6 +533,53 @@ async def change_password(
     )
     
     return {"success": True}
+
+
+# ============== User Preferences ==============
+
+@router.get("/me/preferences", response_model=UserPreferences)
+async def get_preferences(
+    request: Request,
+    user: UserResponse = Depends(require_auth)
+):
+    """Get current user preferences."""
+    collection = await get_users_collection(request)
+    user_doc = await collection.find_one({"_id": user.id})
+    if not user_doc or not user_doc.get("preferences"):
+        return UserPreferences()
+    return UserPreferences(**user_doc["preferences"])
+
+
+@router.put("/me/preferences")
+async def update_preferences(
+    request: Request,
+    preferences: UserPreferences,
+    user: UserResponse = Depends(require_auth)
+):
+    """Update current user preferences (partial merge).
+    
+    Only non-null fields are updated, allowing partial updates.
+    Preferences are stored in the user document for cross-device sync.
+    """
+    collection = await get_users_collection(request)
+    
+    # Get existing preferences
+    user_doc = await collection.find_one({"_id": user.id})
+    existing = user_doc.get("preferences", {}) if user_doc else {}
+    
+    # Merge: only update fields that are explicitly provided (not None)
+    update_data = preferences.model_dump(exclude_none=True)
+    existing.update(update_data)
+    
+    await collection.update_one(
+        {"_id": user.id},
+        {"$set": {
+            "preferences": existing,
+            "updated_at": datetime.now()
+        }}
+    )
+    
+    return {"success": True, "preferences": existing}
 
 
 # ============== Admin Endpoints ==============

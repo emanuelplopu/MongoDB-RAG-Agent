@@ -36,6 +36,7 @@ import {
 import { useChatSidebar } from '../contexts/ChatSidebarContext'
 import { useAuth } from '../contexts/AuthContext'
 import { useToast } from '../contexts/ToastContext'
+import { useUserPreferences } from '../contexts/UserPreferencesContext'
 import { useTranslation } from 'react-i18next'
 import { useLocalStorage, STORAGE_KEYS } from '../hooks/useLocalStorage'
 import { useKeyboardShortcuts, useEscapeKey } from '../hooks/useKeyboardShortcuts'
@@ -86,6 +87,7 @@ export default function ChatPage() {
   
   // Get current user for error message handling
   const { user } = useAuth()
+  const { preferences, setPreference } = useUserPreferences()
   
   // Get current language for agent response language
   const { t, i18n } = useTranslation()
@@ -614,6 +616,7 @@ export default function ChatPage() {
                       </div>
                       {models.slice(0, 20).map(model => {
                         const pricing = getPricing(model.id)
+                        const isDefault = preferences.defaultModel === model.id
                         return (
                           <button
                             key={model.id}
@@ -622,13 +625,36 @@ export default function ChatPage() {
                               currentSession.model === model.id ? 'bg-primary-50 dark:bg-primary-900/30' : ''
                             }`}
                           >
-                            <span className="text-sm dark:text-gray-200">{model.id}</span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-sm dark:text-gray-200">{model.id}</span>
+                              {isDefault && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary-100 dark:bg-primary-900/50 text-primary-600 dark:text-primary-400 font-medium">
+                                  default
+                                </span>
+                              )}
+                            </div>
                             <span className="text-xs text-secondary dark:text-gray-400">
                               ${pricing.output}/1M out
                             </span>
                           </button>
                         )
                       })}
+                      {/* Set as default option */}
+                      {currentSession.model && currentSession.model !== preferences.defaultModel && (
+                        <div className="border-t border-gray-200 dark:border-gray-700 mt-1 pt-1">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setPreference('defaultModel', currentSession.model)
+                              setShowModelSelector(false)
+                            }}
+                            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left text-xs text-secondary dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                          >
+                            <CheckCircleIcon className="h-3.5 w-3.5" />
+                            Set "{currentSession.model}" as default for new chats
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

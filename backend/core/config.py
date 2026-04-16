@@ -35,7 +35,7 @@ class BackendSettings(BaseSettings):
     # LLM Settings (Primary/Orchestrator)
     llm_provider: str = Field(default="openai")
     llm_api_key: str = Field(default="")
-    llm_model: str = Field(default="gpt-4o")
+    llm_model: str = Field(default="gpt-4.1")
     llm_base_url: str = Field(default="https://api.openai.com/v1")
     
     # Provider-specific API Keys
@@ -74,7 +74,7 @@ class BackendSettings(BaseSettings):
     
     # Orchestrator Model (thinking/planning model)
     orchestrator_model: str = Field(
-        default="gpt-4o",
+        default="gpt-4.1",
         description="Model for orchestrator (planning, evaluation, synthesis)"
     )
     orchestrator_provider: str = Field(

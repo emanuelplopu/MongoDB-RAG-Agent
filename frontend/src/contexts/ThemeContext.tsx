@@ -1,10 +1,14 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
+import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react'
+import { useOptionalSettingsSync, SETTINGS_SYNCED_EVENT } from './SettingsSyncContext'
+import { UserPreferencesSync } from '../api/client'
 
 type Theme = 'light' | 'dark' | 'system'
 
 interface ThemeContextType {
   theme: Theme
   setTheme: (theme: Theme) => void
+  /** Apply theme from synced preferences (no DB write back) */
+  applyTheme: (theme: Theme) => void
   resolvedTheme: 'light' | 'dark'
 }
 
@@ -20,6 +24,8 @@ function getSystemTheme(): 'light' | 'dark' {
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
+  const settingsSync = useOptionalSettingsSync()
+
   const [theme, setThemeState] = useState<Theme>(() => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem(STORAGE_KEY) as Theme | null
@@ -35,10 +41,30 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return theme
   })
 
-  const setTheme = (newTheme: Theme) => {
+  const setTheme = useCallback((newTheme: Theme) => {
     setThemeState(newTheme)
     localStorage.setItem(STORAGE_KEY, newTheme)
-  }
+    // Sync to DB
+    settingsSync?.syncPreference({ theme: newTheme })
+  }, [settingsSync])
+
+  // Apply theme from DB sync (no DB write back to avoid loop)
+  const applyTheme = useCallback((newTheme: Theme) => {
+    setThemeState(newTheme)
+    localStorage.setItem(STORAGE_KEY, newTheme)
+  }, [])
+
+  // Listen for settings synced from DB
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const prefs = (e as CustomEvent<UserPreferencesSync>).detail
+      if (prefs?.theme && ['light', 'dark', 'system'].includes(prefs.theme)) {
+        applyTheme(prefs.theme as Theme)
+      }
+    }
+    window.addEventListener(SETTINGS_SYNCED_EVENT, handler)
+    return () => window.removeEventListener(SETTINGS_SYNCED_EVENT, handler)
+  }, [applyTheme])
 
   // Update resolved theme when theme changes or system preference changes
   useEffect(() => {
@@ -75,7 +101,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [resolvedTheme])
 
   return (
-    <ThemeContext.Provider value={{ theme, setTheme, resolvedTheme }}>
+    <ThemeContext.Provider value={{ theme, setTheme, applyTheme, resolvedTheme }}>
       {children}
     </ThemeContext.Provider>
   )

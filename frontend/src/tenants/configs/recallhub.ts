@@ -6,6 +6,7 @@ export const recallhubConfig: TenantConfig = {
     appName: 'RecallHub',
     tagline: 'Your intelligent knowledge base',
     logoUrl: '/tenants/recallhub/logo.svg',
+    iconUrl: '/tenants/recallhub/favicon.svg',
     faviconUrl: '/tenants/recallhub/favicon.svg',
   },
   theme: {

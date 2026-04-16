@@ -45,6 +45,18 @@ vi.mock('./components/Layout', async () => {
 // Mock contexts
 vi.mock('./contexts/AuthContext', () => ({
   AuthProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  useAuth: () => ({ isAuthenticated: false, user: null, isLoading: false }),
+}))
+
+vi.mock('./contexts/SettingsSyncContext', () => ({
+  SettingsSyncProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  useOptionalSettingsSync: () => null,
+  SETTINGS_SYNCED_EVENT: 'settings:synced',
+}))
+
+vi.mock('./contexts/ThemeContext', () => ({
+  ThemeProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  useTheme: () => ({ theme: 'system', setTheme: () => {}, applyTheme: () => {}, resolvedTheme: 'light' }),
 }))
 
 vi.mock('./contexts/ChatSidebarContext', () => ({

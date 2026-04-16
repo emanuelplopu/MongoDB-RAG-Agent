@@ -76,12 +76,28 @@ const systemMenuItems = [
   { nameKey: 'nav.backups', href: '/system/backups', icon: CloudArrowUpIcon },
 ]
 
-// Q Logo SVG component
-function QLogo({ className = 'h-8 w-8' }: { className?: string }) {
+// Tenant Icon component - uses tenant iconUrl with fallback to Q letter
+function TenantIcon({ className = 'h-8 w-8' }: { className?: string }) {
+  const { tenant } = useTenant()
+  const [imgFailed, setImgFailed] = useState(false)
+
+  if (tenant.branding.iconUrl && !imgFailed) {
+    return (
+      <img
+        src={tenant.branding.iconUrl}
+        alt={tenant.branding.appName}
+        className={`${className} object-contain rounded-lg`}
+        onError={() => setImgFailed(true)}
+      />
+    )
+  }
+
   return (
     <svg className={className} viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
       <rect width="32" height="32" rx="8" className="fill-primary" />
-      <text x="16" y="22" textAnchor="middle" className="fill-white" style={{ fontSize: '18px', fontWeight: 700, fontFamily: 'system-ui, sans-serif' }}>Q</text>
+      <text x="16" y="22" textAnchor="middle" className="fill-white" style={{ fontSize: '18px', fontWeight: 700, fontFamily: 'system-ui, sans-serif' }}>
+        {tenant.branding.appName.charAt(0)}
+      </text>
     </svg>
   )
 }
@@ -221,7 +237,7 @@ export default function Layout() {
 
   // Get page title for non-chat pages
   const getPageTitle = () => {
-    if (isOnDashboardPage) return t('nav.dashboard')
+    if (isOnDashboardPage) return tenant.branding.appName
     if (isOnChatPage) return t('nav.chat')
     const item = baseMenuItems.find(n => !n.exact && location.pathname.startsWith(n.href))
     return item ? t(item.nameKey) : t('nav.chat')
@@ -420,7 +436,7 @@ export default function Layout() {
                 className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors flex-shrink-0"
                 title={t('sidebar.home')}
               >
-                <QLogo className="h-7 w-7" />
+                <TenantIcon className="h-7 w-7" />
               </LocalizedLink>
               <button
                 onClick={() => handleNewChat()}
@@ -697,7 +713,11 @@ export default function Layout() {
       <div className="flex-shrink-0 border-t border-surface-variant dark:border-gray-700 p-3" ref={userMenuRef}>
         {/* User Menu Dropdown (appears above the button) */}
         {userMenuOpen && (
-          <div className="absolute bottom-20 left-3 right-3 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-600 py-2 z-50 max-h-[70vh] overflow-y-auto">
+          <div
+            className="absolute bottom-20 left-3 right-3 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-600 py-2 z-50 max-h-[70vh] overflow-y-auto"
+            onMouseDown={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+          >
             {/* User Info */}
             {isAuthenticated && user && (
               <div className="px-4 py-2 border-b border-surface-variant dark:border-gray-700">
@@ -830,7 +850,7 @@ export default function Layout() {
             {isAuthenticated && user ? (
               user.name.charAt(0).toUpperCase()
             ) : (
-              <QLogo className="h-5 w-5" />
+              <TenantIcon className="h-5 w-5" />
             )}
           </div>
           <div className="flex-1 text-left min-w-0">
@@ -890,35 +910,83 @@ export default function Layout() {
       {/* Desktop sidebar - collapsible */}
       <div
         className={`hidden lg:fixed lg:inset-y-0 lg:flex lg:flex-col transition-all duration-300 ease-in-out z-40 ${
-          desktopSidebarVisible ? 'lg:w-72' : 'lg:w-0'
+          desktopSidebarVisible ? 'lg:w-72' : 'lg:w-14'
         }`}
         onMouseEnter={() => { if (desktopSidebarCollapsed) setSidebarHovered(true) }}
         onMouseLeave={() => { if (desktopSidebarCollapsed) setSidebarHovered(false) }}
       >
+        {/* Expanded sidebar content */}
         <div className={`flex grow flex-col bg-surface dark:bg-gray-800 shadow-elevation-1 transition-all duration-300 ${
-          desktopSidebarVisible ? 'w-72 opacity-100' : 'w-0 opacity-0 overflow-hidden'
+          desktopSidebarVisible ? 'w-72 opacity-100' : 'w-0 opacity-0 overflow-hidden pointer-events-none absolute'
         }`}>
           <SidebarContent />
         </div>
+
+        {/* Collapsed icon column */}
+        {desktopSidebarCollapsed && !sidebarHovered && (
+          <div className="flex flex-col h-full w-14 bg-surface dark:bg-gray-800 shadow-elevation-1 items-center py-3 gap-1">
+            {/* Tenant Icon */}
+            <LocalizedLink
+              to="/dashboard"
+              className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors mb-1"
+              title={tenant.branding.appName}
+            >
+              <TenantIcon className="h-7 w-7" />
+            </LocalizedLink>
+
+            {/* New Chat */}
+            <button
+              onClick={() => handleNewChat()}
+              className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-primary-900 dark:text-gray-200"
+              title={t('sidebar.newChat')}
+            >
+              <PencilSquareIcon className="h-5 w-5" />
+            </button>
+
+            {/* Search Documents */}
+            <LocalizedLink
+              to="/search"
+              className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-secondary dark:text-gray-400"
+              title={t('sidebar.searchDocuments')}
+            >
+              <MagnifyingGlassIcon className="h-5 w-5" />
+            </LocalizedLink>
+
+            {/* Documents */}
+            <LocalizedLink
+              to="/documents"
+              className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-secondary dark:text-gray-400"
+              title={t('nav.documents')}
+            >
+              <DocumentTextIcon className="h-5 w-5" />
+            </LocalizedLink>
+
+            {/* Chat */}
+            <LocalizedLink
+              to="/chat"
+              className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-secondary dark:text-gray-400"
+              title={t('nav.chat')}
+            >
+              <ChatBubbleLeftRightIcon className="h-5 w-5" />
+            </LocalizedLink>
+
+            {/* Spacer */}
+            <div className="flex-1" />
+
+            {/* Expand button */}
+            <button
+              onClick={() => setDesktopSidebarCollapsed(false)}
+              className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-secondary dark:text-gray-400"
+              title={t('sidebar.expand')}
+            >
+              <Bars3Icon className="h-5 w-5" />
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Collapsed sidebar toggle - shown when sidebar is collapsed */}
-      {desktopSidebarCollapsed && !sidebarHovered && (
-        <div
-          className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:flex lg:items-start lg:pt-3 lg:pl-3 z-30 group"
-        >
-          <button
-            onClick={() => setDesktopSidebarCollapsed(false)}
-            className="flex items-center justify-center w-9 h-9 rounded-lg text-secondary dark:text-gray-400 hover:bg-surface-variant dark:hover:bg-gray-700 opacity-0 group-hover:opacity-100 transition-all duration-200 bg-surface dark:bg-gray-800 shadow-sm"
-            title={t('sidebar.expand')}
-          >
-            <Bars3Icon className="h-5 w-5" />
-          </button>
-        </div>
-      )}
-
       {/* Main content */}
-      <div className={`transition-all duration-300 ${desktopSidebarVisible ? 'lg:pl-72' : 'lg:pl-0'}`}>
+      <div className={`transition-all duration-300 ${desktopSidebarVisible ? 'lg:pl-72' : 'lg:pl-14'}`}>
         {/* Desktop Header Bar */}
         <div className="sticky top-0 z-30 flex h-14 items-center gap-x-4 bg-surface/95 dark:bg-gray-800/95 px-4 shadow-sm backdrop-blur">
           {/* Mobile menu button */}
@@ -938,7 +1006,7 @@ export default function Layout() {
               onClick={() => setDesktopSidebarCollapsed(false)}
               title={t('sidebar.expand')}
             >
-              <Bars3Icon className="h-6 w-6" />
+              <ChevronRightIcon className="h-5 w-5" />
             </button>
           )}
 

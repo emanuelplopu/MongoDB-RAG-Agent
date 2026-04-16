@@ -1614,6 +1614,29 @@ export const sessionsApi = {
 
 // ============== Auth Types ==============
 
+export interface UserPreferencesSync {
+  language?: string | null
+  theme?: string | null
+  default_model?: string | null
+  default_search_type?: string | null
+  default_match_count?: number | null
+  ui_density?: string | null
+  items_per_page?: number | null
+  show_line_numbers?: boolean | null
+  code_theme?: string | null
+  streaming_enabled?: boolean | null
+  show_timestamps?: boolean | null
+  message_grouping?: boolean | null
+  enter_to_send?: boolean | null
+  sound_enabled?: boolean | null
+  notifications_enabled?: boolean | null
+  show_toast_duration?: number | null
+  developer_mode?: boolean | null
+  experimental_features?: boolean | null
+  auto_save_enabled?: boolean | null
+  auto_save_interval?: number | null
+}
+
 export interface User {
   id: string
   email: string
@@ -1623,6 +1646,7 @@ export interface User {
   created_at: string
   is_active: boolean
   is_admin: boolean
+  preferences?: UserPreferencesSync | null
 }
 
 export interface LoginRequest {
@@ -1758,6 +1782,17 @@ export const authApi = {
 
   deleteUser: async (userId: string): Promise<{ success: boolean; message: string }> => {
     const response = await api.delete(`/auth/users/${userId}`)
+    return response.data
+  },
+
+  // Preferences sync
+  getPreferences: async (): Promise<UserPreferencesSync> => {
+    const response = await api.get('/auth/me/preferences')
+    return response.data
+  },
+
+  updatePreferences: async (prefs: UserPreferencesSync): Promise<{ success: boolean; preferences: UserPreferencesSync }> => {
+    const response = await api.put('/auth/me/preferences', prefs)
     return response.data
   },
 }

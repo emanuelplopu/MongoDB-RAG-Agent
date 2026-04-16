@@ -1,9 +1,11 @@
 import { Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom'
-import { AuthProvider } from './contexts/AuthContext'
+import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ChatSidebarProvider } from './contexts/ChatSidebarContext'
 import { LanguageProvider } from './contexts/LanguageContext'
+import { ThemeProvider } from './contexts/ThemeContext'
 import { ToastProvider } from './contexts/ToastContext'
 import { UserPreferencesProvider } from './contexts/UserPreferencesContext'
+import { SettingsSyncProvider } from './contexts/SettingsSyncContext'
 import { supportedLanguages, SupportedLanguage } from './i18n'
 import Layout from './components/Layout'
 import ChatPageNew from './pages/ChatPageNew'
@@ -74,15 +76,31 @@ function LanguageValidation({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+// Wrapper that provides SettingsSyncProvider with auth state and coordinates preference application
+function SyncedProviders({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated } = useAuth()
+
+  return (
+    <SettingsSyncProvider isAuthenticated={isAuthenticated}>
+      <ThemeProvider>
+        <LanguageProvider>
+          <UserPreferencesProvider>
+            {children}
+          </UserPreferencesProvider>
+        </LanguageProvider>
+      </ThemeProvider>
+    </SettingsSyncProvider>
+  )
+}
+
 // App routes wrapped with language provider
 function AppRoutes() {
   return (
     <ToastProvider>
-      <LanguageProvider>
-        <AuthProvider>
-          <UserPreferencesProvider>
-            <ChatSidebarProvider>
-              <Routes>
+      <AuthProvider>
+        <SyncedProviders>
+          <ChatSidebarProvider>
+            <Routes>
               {/* Root redirects to language-prefixed path */}
               <Route path="/" element={<LanguageRedirect />} />
             
@@ -145,10 +163,9 @@ function AppRoutes() {
             {/* Catch-all for unknown routes */}
               <Route path="*" element={<NotFoundPage />} />
             </Routes>
-            </ChatSidebarProvider>
-          </UserPreferencesProvider>
-        </AuthProvider>
-      </LanguageProvider>
+          </ChatSidebarProvider>
+        </SyncedProviders>
+      </AuthProvider>
     </ToastProvider>
   )
 }
