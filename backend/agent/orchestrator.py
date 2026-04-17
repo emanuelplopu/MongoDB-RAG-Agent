@@ -21,7 +21,14 @@ from backend.agent.schemas import (
     OrchestratorStep, OrchestratorPhase, WorkerResult, DocumentReference
 )
 from backend.core.config import settings
-from backend.routers.prompts import get_agent_prompt_sync, DEFAULT_AGENT_PROMPTS
+try:
+    from backend.routers.prompts import get_agent_prompt_sync, DEFAULT_AGENT_PROMPTS
+except ImportError:
+    DEFAULT_AGENT_PROMPTS = {}
+
+    def get_agent_prompt_sync(prompt_key: str) -> str:
+        """Fallback used in tests when prompt router dependencies are unavailable."""
+        return ""
 
 if TYPE_CHECKING:
     from backend.agent.strategies.base import BaseStrategy

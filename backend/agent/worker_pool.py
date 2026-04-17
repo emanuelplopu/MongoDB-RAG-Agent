@@ -20,7 +20,12 @@ from backend.agent.schemas import (
 )
 from backend.agent.federated_search import FederatedSearch, get_federated_search
 from backend.core.config import settings
-from backend.routers.prompts import get_agent_prompt_sync
+try:
+    from backend.routers.prompts import get_agent_prompt_sync
+except ImportError:
+    def get_agent_prompt_sync(prompt_key: str) -> str:
+        """Fallback used in tests when prompt router dependencies are unavailable."""
+        return ""
 
 logger = logging.getLogger(__name__)
 

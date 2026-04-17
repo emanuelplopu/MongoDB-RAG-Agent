@@ -59,8 +59,25 @@ vi.mock('./contexts/ThemeContext', () => ({
   useTheme: () => ({ theme: 'system', setTheme: () => {}, applyTheme: () => {}, resolvedTheme: 'light' }),
 }))
 
+vi.mock('./contexts/LanguageContext', () => ({
+  LanguageProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  useLanguage: () => ({ language: 'en', setLanguage: vi.fn(), applyLanguage: vi.fn(), supportedLanguages: ['en', 'de'] }),
+}))
+
+vi.mock('./contexts/UserPreferencesContext', () => ({
+  UserPreferencesProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}))
+
+vi.mock('./contexts/ToastContext', () => ({
+  ToastProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}))
+
 vi.mock('./contexts/ChatSidebarContext', () => ({
   ChatSidebarProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}))
+
+vi.mock('./components/FeatureGuard', () => ({
+  default: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
 
 const renderApp = (initialRoute = '/') => {
@@ -183,9 +200,9 @@ describe('App', () => {
       expect(screen.getByTestId('api-docs-page')).toBeInTheDocument()
     })
 
-    it('should render not found page for unknown routes', () => {
+    it('should render landing page for unknown routes after language redirect', () => {
       renderApp('/unknown-route')
-      expect(screen.getByTestId('not-found-page')).toBeInTheDocument()
+      expect(screen.getByTestId('landing-page')).toBeInTheDocument()
     })
   })
 

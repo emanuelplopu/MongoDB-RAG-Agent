@@ -9,6 +9,60 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { Layout } from './Layout'
 import { mockUser } from '../test/test-utils'
 
+const translations: Record<string, string> = {
+  'sidebar.newChat': 'New chat',
+  'sidebar.projects': 'Projects',
+  'sidebar.newProject': 'New project',
+  'sidebar.noChats': 'No chats yet',
+  'sidebar.searchDocuments': 'Search documents',
+  'sidebar.searchChats': 'Search chats',
+  'sidebar.editChats': 'Edit chats',
+  'sidebar.collapse': 'Collapse',
+  'sidebar.expand': 'Expand',
+  'sidebar.moveToProject': 'Move to project',
+  'sidebar.unfiled': 'Unfiled',
+  'sidebar.noProjects': 'No projects yet',
+  'sidebar.deselectAll': 'Deselect All',
+  'sidebar.folderName': 'Folder name',
+  'sidebar.yourChats': 'Your chats',
+  'sidebar.pinned': 'Pinned',
+  'sidebar.selectAll': 'Select All',
+  'common.cancel': 'Clear',
+  'common.selected': 'selected',
+  'sidebar.archive': 'Archive',
+  'common.delete': 'Delete',
+  'nav.dashboard': 'Home',
+  'sidebar.home': 'Home',
+  'nav.chat': 'Chat',
+  'nav.search': 'Search',
+  'nav.documents': 'Documents',
+  'nav.archivedChats': 'Archived Chats',
+  'nav.cloudSources': 'Cloud Sources',
+  'nav.emailCloudConfig': 'Email Cloud Config',
+  'nav.apiDocs': 'API Docs',
+  'nav.profiles': 'Profiles',
+  'nav.system': 'System',
+  'nav.status': 'Status',
+  'nav.searchIndexes': 'Search Indexes',
+  'nav.ingestion': 'Ingestion',
+  'nav.configuration': 'Configuration',
+  'nav.users': 'Users',
+  'nav.prompts': 'Prompts',
+  'nav.apiKeys': 'API Keys',
+  'nav.strategies': 'Strategies',
+  'nav.backups': 'Backups',
+  'nav.signOut': 'Log out',
+  'nav.signIn': 'Sign in',
+  'nav.theme': 'Theme',
+  'common.loading': 'Loading...',
+}
+
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string, fallback?: string) => translations[key] ?? fallback ?? key,
+  }),
+}))
+
 // Mock data
 const mockSessions = [
   { id: 'session-1', title: 'Test Chat 1', is_pinned: false, folder_id: null, created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' },
@@ -72,10 +126,78 @@ vi.mock('../contexts/ThemeContext', () => ({
   ThemeProvider: ({ children }: { children: React.ReactNode }) => children,
 }))
 
+vi.mock('../contexts/TenantContext', () => ({
+  useTenant: () => ({
+    tenant: {
+      branding: {
+        appName: 'RecallHub',
+        iconUrl: null,
+      },
+      features: {
+        showCloudSources: true,
+        showEmailConfig: true,
+        showProfiles: true,
+        showApiDocs: true,
+        showStrategies: true,
+        showEmbeddingBenchmark: true,
+        showBackups: true,
+      },
+    },
+  }),
+}))
+
 // Mock ThemeToggle component
 vi.mock('./ThemeToggle', () => ({
   default: () => <button data-testid="theme-toggle">Toggle Theme</button>,
 }))
+
+vi.mock('./ThemeSwitcher', () => ({
+  default: () => <div>Theme Switcher</div>,
+}))
+
+vi.mock('./LanguageSwitcher', () => ({
+  default: () => <div>Language Switcher</div>,
+}))
+
+vi.mock('./ConnectionStatus', () => ({
+  default: () => <div>Connected</div>,
+}))
+
+vi.mock('./CommandPalette', () => ({
+  default: () => null,
+  useCommandPalette: () => ({
+    isOpen: false,
+    open: vi.fn(),
+    close: vi.fn(),
+    toggle: vi.fn(),
+  }),
+}))
+
+vi.mock('./SidebarWarningToast', () => ({
+  default: () => null,
+}))
+
+vi.mock('./LocalizedLink', () => ({
+  LocalizedLink: ({ children, to }: { children: React.ReactNode; to: string }) => <a href={to}>{children}</a>,
+  useLocalizedNavigate: () => vi.fn(),
+}))
+
+vi.mock('../api/client', async () => {
+  const actual = await vi.importActual('../api/client')
+  return {
+    ...actual,
+    indexesApi: {
+      getDashboard: vi.fn().mockResolvedValue({ indexes: [] }),
+    },
+    profilesApi: {
+      list: vi.fn().mockResolvedValue({
+        profiles: [],
+        active_profile: null,
+      }),
+      switch: vi.fn().mockResolvedValue(undefined),
+    },
+  }
+})
 
 // Mock ChatSidebarContext
 vi.mock('../contexts/ChatSidebarContext', () => ({
@@ -249,8 +371,8 @@ describe('Layout', () => {
       const user = userEvent.setup()
       renderWithRouter('/chat')
       
-      const newChatButtons = screen.getAllByText('New chat')
-      await user.click(newChatButtons[0])
+      const newChatButtons = screen.getAllByRole('button', { name: 'New chat' })
+      await user.click(newChatButtons[newChatButtons.length - 1])
       
       expect(mockHandleNewChat).toHaveBeenCalled()
     })
@@ -262,7 +384,7 @@ describe('Layout', () => {
       mockState.selectedSessions = new Set(['session-1'])
       renderWithRouter('/chat')
       
-      expect(screen.getAllByText('1 selected').length).toBeGreaterThan(0)
+      expect(screen.getAllByText(/1\s+selected/).length).toBeGreaterThan(0)
       expect(screen.getAllByText('Select All').length).toBeGreaterThan(0)
       expect(screen.getAllByText('Clear').length).toBeGreaterThan(0)
     })

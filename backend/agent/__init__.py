@@ -1,14 +1,8 @@
 """Federated Agent System - Orchestrator-Worker Architecture.
 
-This module implements a two-tier agentic system:
-- Orchestrator: High-level thinking model (GPT-5.1) for planning and synthesis
-- Workers: Fast execution models (Gemini Flash) for parallel tool execution
-
-Key components:
-- FederatedSearch: Multi-database search with access control
-- Orchestrator: Plans, evaluates, and synthesizes
-- WorkerPool: Parallel task execution
-- FederatedAgent: Main coordinator
+This package keeps schema imports light-weight and lazily resolves the heavier
+runtime components so test modules can import schemas without pulling in every
+optional provider dependency at import time.
 """
 
 from backend.agent.schemas import (
@@ -36,11 +30,6 @@ from backend.agent.schemas import (
     AgentMode,
 )
 
-from backend.agent.federated_search import FederatedSearch
-from backend.agent.orchestrator import Orchestrator
-from backend.agent.worker_pool import WorkerPool
-from backend.agent.coordinator import FederatedAgent
-
 __all__ = [
     # Schemas
     "DataSource",
@@ -66,3 +55,20 @@ __all__ = [
     "WorkerPool",
     "FederatedAgent",
 ]
+
+
+def __getattr__(name: str):
+    """Lazily import heavy runtime components on demand."""
+    if name == "FederatedSearch":
+        from backend.agent.federated_search import FederatedSearch
+        return FederatedSearch
+    if name == "Orchestrator":
+        from backend.agent.orchestrator import Orchestrator
+        return Orchestrator
+    if name == "WorkerPool":
+        from backend.agent.worker_pool import WorkerPool
+        return WorkerPool
+    if name == "FederatedAgent":
+        from backend.agent.coordinator import FederatedAgent
+        return FederatedAgent
+    raise AttributeError(f"module 'backend.agent' has no attribute {name!r}")

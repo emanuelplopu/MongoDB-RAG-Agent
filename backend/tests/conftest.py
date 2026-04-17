@@ -5,12 +5,27 @@ Pytest fixtures and configuration for testing the FastAPI backend.
 """
 
 import asyncio
+import sys
+from types import ModuleType, SimpleNamespace
 from typing import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 from httpx import AsyncClient, ASGITransport
+
+
+if "litellm" not in sys.modules:
+    litellm_stub = ModuleType("litellm")
+
+    async def _unexpected_acompletion(*args, **kwargs):
+        """Fail fast if a test accidentally depends on a real LiteLLM call."""
+        raise RuntimeError("litellm.acompletion was called without a test stub")
+
+    litellm_stub.acompletion = _unexpected_acompletion
+    litellm_stub.completion = _unexpected_acompletion
+    litellm_stub.ModelResponse = SimpleNamespace
+    sys.modules["litellm"] = litellm_stub
 
 # Test configuration
 TEST_MONGODB_URI = "mongodb://localhost:27017/?directConnection=true"

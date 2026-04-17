@@ -8,15 +8,60 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import LoginPage from './LoginPage'
 
+const translations: Record<string, string> = {
+  'common.appName': 'RecallHub',
+  'login.signInTitle': 'Sign in to your account',
+  'login.signUpTitle': 'Create a new account',
+  'login.email': 'Email',
+  'login.emailPlaceholder': 'you@example.com',
+  'login.password': 'Password',
+  'login.passwordPlaceholder': '••••••••',
+  'login.signIn': 'Sign in',
+  'login.signingIn': 'Signing in...',
+  'login.createAccount': 'Create account',
+  'login.creatingAccount': 'Creating account...',
+  'login.name': 'Name',
+  'login.namePlaceholder': 'Your name',
+  'login.nameRequired': 'Name is required',
+  'login.noAccount': "Don't have an account? Sign up",
+  'login.hasAccount': 'Already have an account? Sign in',
+  'login.continueWithout': 'Continue without account',
+  'login.invalidCredentials': 'Invalid email or password. Please try again.',
+  'login.serverError': 'Server error. Please try again later.',
+  'login.authFailed': 'Authentication failed',
+  'login.errorId': 'Error ID',
+}
+
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string, fallback?: string) => translations[key] ?? fallback ?? key,
+  }),
+}))
+
 // Mock navigate
 const mockNavigate = vi.fn()
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual('react-router-dom')
   return {
     ...actual,
-    useNavigate: () => mockNavigate,
   }
 })
+
+vi.mock('../components/LocalizedLink', () => ({
+  useLocalizedNavigate: () => mockNavigate,
+}))
+
+vi.mock('../components/TenantLogo', () => ({
+  default: () => <div>Tenant Logo</div>,
+}))
+
+vi.mock('../components/ThemeSwitcher', () => ({
+  default: () => <div>Theme Switcher</div>,
+}))
+
+vi.mock('../components/LanguageSwitcher', () => ({
+  default: () => <div>Language Switcher</div>,
+}))
 
 // Mock login and register functions
 const mockLogin = vi.fn()
@@ -131,7 +176,7 @@ describe('LoginPage', () => {
       
       await waitFor(() => {
         expect(mockLogin).toHaveBeenCalledWith('test@example.com', 'password123')
-        expect(mockNavigate).toHaveBeenCalledWith('/')
+        expect(mockNavigate).toHaveBeenCalledWith('/dashboard')
       })
     })
 
@@ -180,8 +225,8 @@ describe('LoginPage', () => {
       await user.click(screen.getByRole('button', { name: 'Create account' }))
       
       await waitFor(() => {
-        expect(mockRegister).toHaveBeenCalledWith('test@example.com', 'Test User', 'password123')
-        expect(mockNavigate).toHaveBeenCalledWith('/')
+        expect(mockRegister).toHaveBeenCalledWith('test@example.com', 'Test User', 'password123', undefined, undefined)
+        expect(mockNavigate).toHaveBeenCalledWith('/dashboard')
       })
     })
 
@@ -265,7 +310,7 @@ describe('LoginPage', () => {
       await user.click(screen.getByRole('button', { name: 'Sign in' }))
       
       await waitFor(() => {
-        expect(screen.getByText('Unable to connect to the server. Please try again later.')).toBeInTheDocument()
+        expect(screen.getByText('Server error. Please try again later.')).toBeInTheDocument()
       })
     })
   })
