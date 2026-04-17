@@ -302,7 +302,11 @@ export default function ChatPage() {
     // Create session if needed
     let session = currentSession
     if (!session) {
-      session = await sessionsApi.create()
+      const createData: { model?: string } = {}
+      if (preferences.defaultModel) {
+        createData.model = preferences.defaultModel
+      }
+      session = await sessionsApi.create(createData)
       setSessions(prev => [session!, ...prev])
       setCurrentSession(session)
     }

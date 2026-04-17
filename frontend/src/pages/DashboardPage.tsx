@@ -17,6 +17,7 @@ import {
 } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 import { useChatSidebar } from '../contexts/ChatSidebarContext'
+import { useUserPreferences } from '../contexts/UserPreferencesContext'
 import { useLocalizedNavigate } from '../components/LocalizedLink'
 import { useLocalStorage, STORAGE_KEYS } from '../hooks/useLocalStorage'
 
@@ -45,6 +46,7 @@ const AGENT_MODES = {
 export default function DashboardPage() {
   const { user, isLoading: authLoading } = useAuth()
   const { setSessions, setCurrentSession, setPendingMessage } = useChatSidebar()
+  const { preferences } = useUserPreferences()
   const { t } = useTranslation()
   const navigate = useLocalizedNavigate()
 
@@ -153,8 +155,12 @@ export default function DashboardPage() {
 
     setIsSubmitting(true)
     try {
-      // Create a new session
-      const session = await sessionsApi.create()
+      // Create a new session with user's preferred model
+      const createData: { model?: string } = {}
+      if (preferences.defaultModel) {
+        createData.model = preferences.defaultModel
+      }
+      const session = await sessionsApi.create(createData)
       setSessions((prev: any) => [session, ...prev])
       setCurrentSession(session)
 

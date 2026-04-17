@@ -64,7 +64,7 @@ class UserPreferences(BaseModel):
     """User preferences synced across devices."""
     language: Optional[str] = None  # e.g. "en", "de"
     theme: Optional[str] = None  # "light", "dark", "system"
-    default_model: Optional[str] = None  # e.g. "gpt-4.1", "gpt-4o"
+    default_model: Optional[str] = None  # e.g. "gpt-5.2", "gpt-4o"
     # Search settings
     default_search_type: Optional[str] = None
     default_match_count: Optional[int] = None

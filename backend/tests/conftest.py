@@ -69,7 +69,7 @@ def mock_settings():
         mongodb_database=TEST_DATABASE,
         llm_provider="openai",
         llm_api_key="test-key",
-        llm_model="gpt-4.1-mini",
+        llm_model="gpt-5.2",
         embedding_provider="openai",
         embedding_api_key="test-key",
         embedding_model="text-embedding-3-small",

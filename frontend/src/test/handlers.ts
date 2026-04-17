@@ -46,7 +46,7 @@ const mockChatResponse = {
   conversation_id: 'conv_abc123',
   sources: [],
   search_performed: true,
-  model: 'gpt-4.1-mini',
+  model: 'gpt-5.2',
   processing_time_ms: 500,
 }
 
@@ -72,7 +72,7 @@ const mockSystemStats = {
   },
   config: {
     llm_provider: 'openai',
-    llm_model: 'gpt-4.1-mini',
+    llm_model: 'gpt-5.2',
     embedding_provider: 'openai',
     embedding_model: 'text-embedding-3-small',
     embedding_dimension: 1536,
