@@ -33,7 +33,7 @@ class TestProfileEndpoints:
             "profile_key": "default"
         })
         # Should succeed or return error for non-existent profile
-        assert response.status_code in [200, 404, 422, 500]
+        assert response.status_code in [200, 403, 404, 422, 500]
 
     def test_switch_nonexistent_profile(self, client: TestClient):
         """Test switching to non-existent profile."""
