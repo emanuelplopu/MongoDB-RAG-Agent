@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router-dom'
 import { http, HttpResponse } from 'msw'
@@ -24,7 +24,10 @@ const renderWithRouter = (ui: React.ReactElement) => {
 
 // Start MSW server before tests
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
-afterEach(() => server.resetHandlers())
+afterEach(() => {
+  cleanup()
+  server.resetHandlers()
+})
 afterAll(() => server.close())
 
 

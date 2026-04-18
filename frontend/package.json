@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "node ./scripts/prepare-coverage.mjs && vitest run --coverage"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

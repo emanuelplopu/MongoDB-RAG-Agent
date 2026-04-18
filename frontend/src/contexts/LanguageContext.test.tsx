@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { vi } from 'vitest'
 
@@ -118,12 +118,16 @@ describe('LanguageContext', () => {
       </MemoryRouter>
     )
 
-    window.dispatchEvent(new CustomEvent('settings:synced', { detail: { language: 'de' } }))
+    act(() => {
+      window.dispatchEvent(new CustomEvent('settings:synced', { detail: { language: 'de' } }))
+    })
 
     await waitFor(() => {
       expect(changeLanguageMock).toHaveBeenCalledWith('de')
     })
     expect(syncPreferenceMock).not.toHaveBeenCalled()
-    expect(screen.getByTestId('location')).toHaveTextContent('/de')
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent('/de')
+    })
   })
 })

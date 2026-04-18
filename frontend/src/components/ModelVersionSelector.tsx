@@ -104,6 +104,11 @@ const ModelVersionSelector: React.FC<ModelVersionSelectorProps> = ({
     if (selectedType !== 'all') {
       filtered = filtered.filter(model => model.type === selectedType)
     }
+
+    // Apply deprecated toggle client-side so the current list responds immediately
+    if (!showDeprecated) {
+      filtered = filtered.filter(model => !model.is_deprecated)
+    }
     
     // Apply sorting
     filtered.sort((a, b) => {
