@@ -159,6 +159,7 @@ export const STORAGE_KEYS = {
   // Chat
   CHAT_DRAFT: 'chat_draft_',
   CHAT_AGENT_MODE: 'chat_agent_mode',
+  CHAT_VIEW_MODE: 'chat_view_mode',
   
   // Search
   SEARCH_QUERY: 'search_query',

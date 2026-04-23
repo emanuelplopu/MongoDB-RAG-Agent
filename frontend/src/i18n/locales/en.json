@@ -1383,6 +1383,47 @@
       "browse_web": "Browse Web"
     }
   },
+  "viewToggle": {
+    "adminView": "Admin View",
+    "userView": "User View"
+  },
+  "userView": {
+    "phases": {
+      "starting": "Getting started...",
+      "analyze": "Understanding your question...",
+      "plan": "Planning search strategy...",
+      "executing": "Searching through your documents...",
+      "evaluate": "Reviewing what was found...",
+      "synthesize": "Writing your answer..."
+    },
+    "docsFoundSoFar": "Found {{count}} document(s) so far",
+    "seconds": "{{count}}s",
+    "researchSummary": "Research Summary",
+    "docsFound": "{{count}} document(s) found",
+    "searchesPerformed": "Searches performed",
+    "sourcesFound": "Sources found",
+    "searchDetails": "Search details",
+    "foundResults": "found {{count}} result(s)",
+    "noResults": "no results",
+    "searched": "Searched",
+    "relevanceHigh": "High relevance",
+    "relevanceGood": "Good relevance",
+    "relevancePartial": "Partial relevance",
+    "searchType": {
+      "search_profile": "Your documents",
+      "search_cloud": "Cloud storage",
+      "search_personal": "Personal files",
+      "search_all": "All sources",
+      "web_search": "Web search",
+      "browse_web": "Website"
+    },
+    "toolType": {
+      "browse_web": "Browsed a website",
+      "default": "Ran analysis"
+    },
+    "toolSuccess": "Completed",
+    "toolFailed": "Failed"
+  },
   "systemPage": {
     "title": "System Management",
     "subtitle": "Monitor and manage your RAG system",

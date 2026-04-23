@@ -1383,6 +1383,47 @@
       "browse_web": "Web durchsuchen"
     }
   },
+  "viewToggle": {
+    "adminView": "Admin-Ansicht",
+    "userView": "Benutzer-Ansicht"
+  },
+  "userView": {
+    "phases": {
+      "starting": "Wird gestartet...",
+      "analyze": "Ihre Frage wird analysiert...",
+      "plan": "Suchstrategie wird geplant...",
+      "executing": "Ihre Dokumente werden durchsucht...",
+      "evaluate": "Ergebnisse werden ausgewertet...",
+      "synthesize": "Ihre Antwort wird erstellt..."
+    },
+    "docsFoundSoFar": "{{count}} Dokument(e) bisher gefunden",
+    "seconds": "{{count}}s",
+    "researchSummary": "Recherche-Zusammenfassung",
+    "docsFound": "{{count}} Dokument(e) gefunden",
+    "searchesPerformed": "Durchgeführte Suchen",
+    "sourcesFound": "Gefundene Quellen",
+    "searchDetails": "Suchdetails",
+    "foundResults": "{{count}} Ergebnis(se) gefunden",
+    "noResults": "keine Ergebnisse",
+    "searched": "Durchsucht",
+    "relevanceHigh": "Hohe Relevanz",
+    "relevanceGood": "Gute Relevanz",
+    "relevancePartial": "Teilweise relevant",
+    "searchType": {
+      "search_profile": "Ihre Dokumente",
+      "search_cloud": "Cloud-Speicher",
+      "search_personal": "Persönliche Dateien",
+      "search_all": "Alle Quellen",
+      "web_search": "Websuche",
+      "browse_web": "Webseite"
+    },
+    "toolType": {
+      "browse_web": "Webseite durchsucht",
+      "default": "Analyse durchgeführt"
+    },
+    "toolSuccess": "Abgeschlossen",
+    "toolFailed": "Fehlgeschlagen"
+  },
   "systemPage": {
     "title": "Systemverwaltung",
     "subtitle": "Überwachen und verwalten Sie Ihr RAG-System",

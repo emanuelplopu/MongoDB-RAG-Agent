@@ -41,6 +41,9 @@ import { useTranslation } from 'react-i18next'
 import { useLocalStorage, STORAGE_KEYS } from '../hooks/useLocalStorage'
 import { useKeyboardShortcuts, useEscapeKey } from '../hooks/useKeyboardShortcuts'
 import FederatedAgentPanel from '../components/FederatedAgentPanel'
+import SimplifiedAgentPanel from '../components/SimplifiedAgentPanel'
+import SimplifiedThinkingPanel from '../components/SimplifiedThinkingPanel'
+import SimplifiedLiveTrace from '../components/SimplifiedLiveTrace'
 import MarkdownRenderer from '../components/MarkdownRenderer'
 
 // Format cost for display
@@ -101,6 +104,10 @@ export default function ChatPage() {
   
   // Persist agent mode selection
   const [agentMode, setAgentMode] = useLocalStorage<'auto' | 'thinking' | 'fast'>(STORAGE_KEYS.CHAT_AGENT_MODE, 'auto')
+  
+  // View mode: admin (developer detail) vs user (simplified)
+  const [viewMode, setViewMode] = useLocalStorage<'admin' | 'user'>(STORAGE_KEYS.CHAT_VIEW_MODE, 'admin')
+  const effectiveView = user?.is_admin ? viewMode : 'user'
   
   const [showSettingsInfo, setShowSettingsInfo] = useState(false)
   const [attachments, setAttachments] = useState<AttachmentInfo[]>([])
@@ -807,8 +814,34 @@ export default function ChatPage() {
                 )}
               </div>
 
-              {/* Session Stats */}
-              {(currentSession.stats?.total_tokens ?? 0) > 0 && (
+              {/* Admin/User View Toggle - only for admins */}
+              {user?.is_admin && (
+                <div className="flex items-center bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5">
+                  <button
+                    onClick={() => setViewMode('admin')}
+                    className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                      effectiveView === 'admin'
+                        ? 'bg-white dark:bg-gray-700 text-primary-700 dark:text-primary-300 shadow-sm'
+                        : 'text-secondary dark:text-gray-400 hover:text-primary-600 dark:hover:text-gray-300'
+                    }`}
+                  >
+                    {t('viewToggle.adminView')}
+                  </button>
+                  <button
+                    onClick={() => setViewMode('user')}
+                    className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                      effectiveView === 'user'
+                        ? 'bg-white dark:bg-gray-700 text-primary-700 dark:text-primary-300 shadow-sm'
+                        : 'text-secondary dark:text-gray-400 hover:text-primary-600 dark:hover:text-gray-300'
+                    }`}
+                  >
+                    {t('viewToggle.userView')}
+                  </button>
+                </div>
+              )}
+
+              {/* Session Stats - admin only */}
+              {effectiveView === 'admin' && (currentSession.stats?.total_tokens ?? 0) > 0 && (
                 <div className="flex items-center gap-3 text-xs text-secondary dark:text-gray-400">
                   <span className="flex items-center gap-1">
                     <DocumentTextIcon className="h-4 w-4" />
@@ -830,6 +863,7 @@ export default function ChatPage() {
                 <MessageBubble
                   key={message.id}
                   message={message}
+                  viewMode={effectiveView}
                 />
               ))}
               {isLoading && (
@@ -839,6 +873,7 @@ export default function ChatPage() {
                   </div>
                   <div className="flex-1">
                     {liveTrace ? (
+                      effectiveView === 'admin' ? (
                       <div className="bg-surface dark:bg-gray-700/50 rounded-xl p-3 space-y-2">
                         {/* Live Agent Progress Header */}
                         <div className="flex items-center justify-between">
@@ -907,6 +942,13 @@ export default function ChatPage() {
                           </button>
                         </div>
                       </div>
+                      ) : (
+                        <SimplifiedLiveTrace
+                          liveTrace={liveTrace}
+                          elapsedTime={elapsedTime}
+                          onStop={handleStopGeneration}
+                        />
+                      )
                     ) : (
                       <div className="flex items-center justify-between py-4">
                         <div className="flex space-x-2">
@@ -1086,7 +1128,7 @@ export default function ChatPage() {
 }
 
 // Message Bubble Component
-function MessageBubble({ message }: { message: SessionMessage }) {
+function MessageBubble({ message, viewMode }: { message: SessionMessage; viewMode: 'admin' | 'user' }) {
   const isUser = message.role === 'user'
   const [documentIds, setDocumentIds] = useState<Record<string, string>>({})
   const [loadingDocs, setLoadingDocs] = useState(false)
@@ -1219,6 +1261,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
         
         {/* Thinking Panel - Shows search and tool operations */}
         {message.thinking && ((message.thinking.search?.operations?.length ?? 0) > 0 || (message.thinking.tool_calls?.length ?? 0) > 0) && (
+          viewMode === 'admin' ? (
           <div className="mt-2">
             <button
               onClick={() => setShowThinking(!showThinking)}
@@ -1391,11 +1434,16 @@ function MessageBubble({ message }: { message: SessionMessage }) {
               </div>
             )}
           </div>
+          ) : (
+            <SimplifiedThinkingPanel thinking={message.thinking} />
+          )
         )}
         
-        {/* Federated Agent Panel - New orchestrator-worker trace */}
+        {/* Federated Agent Panel - orchestrator-worker trace */}
         {message.agent_trace && (
-          <FederatedAgentPanel trace={message.agent_trace} />
+          viewMode === 'admin'
+            ? <FederatedAgentPanel trace={message.agent_trace} />
+            : <SimplifiedAgentPanel trace={message.agent_trace} />
         )}
         
         {/* Sources */}
@@ -1414,7 +1462,7 @@ function MessageBubble({ message }: { message: SessionMessage }) {
                 >
                   <DocumentTextIcon className="h-2 w-2 text-primary-500 flex-shrink-0" />
                   <span className="text-primary-600 dark:text-primary-300 truncate max-w-[80px]">{source.title}</span>
-                  <span className="text-secondary dark:text-gray-400 ml-0.5">{Math.round(source.relevance * 100)}%</span>
+                  {viewMode === 'admin' && <span className="text-secondary dark:text-gray-400 ml-0.5">{Math.round(source.relevance * 100)}%</span>}
                 </span>
               )
               
@@ -1429,8 +1477,8 @@ function MessageBubble({ message }: { message: SessionMessage }) {
           </div>
         )}
         
-        {/* Stats */}
-        {message.stats && (
+        {/* Stats - admin only (tokens, throughput, latency, cost are developer metrics) */}
+        {viewMode === 'admin' && message.stats && (
           <div className="mt-2 flex items-center gap-3 text-xs text-secondary dark:text-gray-400">
             <span className="flex items-center gap-1">
               <DocumentTextIcon className="h-3 w-3" />
