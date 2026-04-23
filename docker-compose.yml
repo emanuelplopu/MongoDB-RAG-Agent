@@ -203,6 +203,9 @@ services:
       # Tenant
       - TENANT_ID=quellex
       
+      # Tool Gating - Quellex is fully offline, no web tools
+      - TENANT_DISABLED_TOOLS=web_search,browse_web
+      
       # Profile (overrides profiles.yaml active_profile)
       - ACTIVE_PROFILE=test-law
       

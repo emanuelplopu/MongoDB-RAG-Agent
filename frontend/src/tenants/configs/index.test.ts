@@ -11,8 +11,10 @@ describe('tenant configs', () => {
     expect(tenantConfigs.quellex).toBe(quellexConfig)
     expect(recallhubConfig.branding.appName).toBe('RecallHub')
     expect(recallhubConfig.features.showEmbeddingBenchmark).toBe(true)
+    expect(recallhubConfig.features.showWebSearch).toBe(true)
     expect(quellexConfig.branding.appName).toBe('Quellex')
     expect(quellexConfig.features.landingPageVariant).toBe('quellex')
+    expect(quellexConfig.features.showWebSearch).toBe(false)
     expect(quellexConfig.content.i18nOverrides.de['chatPage.assistantTitle']).toBe('Quellex-Assistent')
   })
 

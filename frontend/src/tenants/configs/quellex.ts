@@ -79,6 +79,7 @@ export const quellexConfig: TenantConfig = {
     showEmbeddingBenchmark: false,
     showBackups: true,
     showApiDocs: false,
+    showWebSearch: false,
     landingPageVariant: 'quellex',
   },
   content: {

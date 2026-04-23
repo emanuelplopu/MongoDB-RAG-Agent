@@ -25,6 +25,7 @@ from backend.agent.worker_pool import WorkerPool
 from backend.agent.federated_search import FederatedSearch, get_federated_search
 from backend.agent.strategies.base import BaseStrategy
 from backend.agent.strategies.registry import StrategyRegistry
+from backend.agent.tool_gate import ToolGate
 from backend.core.config import settings
 try:
     from backend.routers.prompts import get_agent_prompt_sync
@@ -333,6 +334,13 @@ class FederatedAgent:
             } for s in available_sources]
         )
         self.trace.initial_plan = plan
+        
+        # Filter out disabled tools from the plan (defense in depth)
+        original_count = len(plan.tasks)
+        plan.tasks = ToolGate.filter_tasks(plan.tasks)
+        if len(plan.tasks) < original_count:
+            logger.info(f"ToolGate: Filtered plan from {original_count} to {len(plan.tasks)} tasks")
+        
         logger.info(f"Plan: {len(plan.tasks)} tasks, strategy: {plan.strategy}")
         plan_tokens = self.orchestrator.steps[-1].tokens_used if self.orchestrator.steps else 0
         await emit_event('orchestrator_step', {
@@ -597,14 +605,16 @@ class FederatedAgent:
         ]
         
         # Add web search for questions that might need external info
-        question_words = ["what is", "who is", "how to", "why", "when", "where"]
-        if any(w in user_message.lower() for w in question_words):
-            tasks.append(TaskDefinition(
-                id="web_search",
-                type=TaskType.WEB_SEARCH,
-                query=user_message,
-                max_results=5
-            ))
+        # Only if web_search is enabled for this tenant
+        if ToolGate.is_enabled("web_search"):
+            question_words = ["what is", "who is", "how to", "why", "when", "where"]
+            if any(w in user_message.lower() for w in question_words):
+                tasks.append(TaskDefinition(
+                    id="web_search",
+                    type=TaskType.WEB_SEARCH,
+                    query=user_message,
+                    max_results=5
+                ))
         
         # Execute tasks with callback
         async def on_task_complete(task_id: str, result: WorkerResult, step: 'WorkerStep'):

@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from backend.models.schemas import ChatRequest, ChatResponse, SearchType
 from backend.core.config import settings
 from backend.tools.browser_tool import browse_url, BrowserToolResult
+from backend.agent.tool_gate import ToolGate
 
 logger = logging.getLogger(__name__)
 
@@ -357,6 +358,10 @@ async def generate_response(message: str, context: str, conversation_history: li
     if context and context != "No relevant documents found.":
         all_context_parts.append(context)
     
+    # Filter tools based on tenant configuration
+    active_tools_schema = ToolGate.get_enabled_tools_schema(TOOLS_SCHEMA)
+    web_tools_enabled = ToolGate.is_enabled("web_search") or ToolGate.is_enabled("browse_web")
+    
     # System prompt with tool instructions
     system_prompt = """You are a helpful AI assistant with access to tools. You MUST use these tools to answer questions - NEVER respond without using tools first.
 
@@ -368,13 +373,22 @@ Search internal documents using hybrid search (vector + text). The knowledge bas
 - Start with broad context queries, then get specific
 - If a search returns no results, TRY DIFFERENT TERMS - don't give up!
 - When user says "my company" - search for company info, organization, business, etc.
-
+"""
+    
+    # Only include web tool descriptions if they are enabled for this tenant
+    if ToolGate.is_enabled("browse_web"):
+        system_prompt += """
 ### 2. browse_web  
 Fetch and read content from a web URL. Use when you have a specific URL to visit.
-
+"""
+    
+    if ToolGate.is_enabled("web_search"):
+        system_prompt += """
 ### 3. web_search
 Search the web using Brave Search to find URLs.
+"""
 
+    system_prompt += """
 ## CRITICAL RULES:
 
 ### Rule 1: NEVER give advice without searching first
@@ -397,7 +411,10 @@ When user asks "go step by step":
 1. Search for each piece of information separately
 2. Use multiple tool calls in sequence
 3. Gather all info before responding
+"""
 
+    if web_tools_enabled:
+        system_prompt += """
 ## Example - User asks: "find the owner of our accounting company"
 DO THIS:
 1. search_knowledge_base("company organization name") - find company name
@@ -407,7 +424,13 @@ DO THIS:
 5. browse_web("[company website]/about") - check their website
 
 DO NOT: Explain what the user should do. Actually DO the searches.
+"""
+    else:
+        system_prompt += """
+## IMPORTANT: This is an offline system. You can ONLY search the internal knowledge base. Do NOT suggest visiting websites or searching the internet. All answers must come from the ingested documents.
+"""
 
+    system_prompt += """
 Remember: You have access to the user's company documents. Search them! Multiple times! With different queries!"""
     
     # Build messages
@@ -430,13 +453,13 @@ Remember: You have access to the user's company documents. Search them! Multiple
         
         try:
             # Call LLM with tools
-            logger.info(f"Calling LLM: model={llm_model}, iteration={iteration}, tools={len(TOOLS_SCHEMA)} defined")
+            logger.info(f"Calling LLM: model={llm_model}, iteration={iteration}, tools={len(active_tools_schema)} enabled")
             
             # Handle newer OpenAI models that require max_completion_tokens
             llm_params = {
                 "model": llm_model,
                 "messages": messages,
-                "tools": TOOLS_SCHEMA,
+                "tools": active_tools_schema,
                 "tool_choice": "auto",
                 "temperature": 0.7,
                 "api_key": settings.llm_api_key,

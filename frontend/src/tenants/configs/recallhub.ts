@@ -72,6 +72,7 @@ export const recallhubConfig: TenantConfig = {
     showEmbeddingBenchmark: true,
     showBackups: true,
     showApiDocs: true,
+    showWebSearch: true,
     landingPageVariant: 'default',
   },
   content: {

@@ -63,6 +63,7 @@ export interface TenantFeatures {
   showEmbeddingBenchmark: boolean
   showBackups: boolean
   showApiDocs: boolean
+  showWebSearch: boolean
   landingPageVariant: 'default' | 'minimal' | 'professional' | 'quellex'
 }
 

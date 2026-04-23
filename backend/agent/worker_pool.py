@@ -19,6 +19,7 @@ from backend.agent.schemas import (
     DocumentReference, WebReference, ResultQuality
 )
 from backend.agent.federated_search import FederatedSearch, get_federated_search
+from backend.agent.tool_gate import ToolGate
 from backend.core.config import settings
 try:
     from backend.routers.prompts import get_agent_prompt_sync
@@ -200,6 +201,20 @@ class WorkerPool:
         Returns:
             WorkerResult
         """
+        # Last line of defense: reject disabled task types
+        task_type_val = task.type.value if hasattr(task.type, 'value') else str(task.type)
+        if not ToolGate.is_enabled(task_type_val):
+            logger.warning(f"ToolGate: Blocked disabled task {task.id} (type={task_type_val})")
+            return WorkerResult(
+                task_id=task.id,
+                task_type=task.type,
+                query=task.query,
+                success=False,
+                error=f"Tool '{task_type_val}' is disabled for this tenant",
+                result_quality=ResultQuality.EMPTY,
+                duration_ms=0.0,
+            )
+        
         start_time = time.time()
         documents = []
         web_links = []

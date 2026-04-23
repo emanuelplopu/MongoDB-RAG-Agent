@@ -20,6 +20,7 @@ from backend.agent.schemas import (
     TaskDefinition, TaskType, AgentPlan, EvaluationDecision,
     OrchestratorStep, OrchestratorPhase, WorkerResult, DocumentReference
 )
+from backend.agent.tool_gate import ToolGate
 from backend.core.config import settings
 try:
     from backend.routers.prompts import get_agent_prompt_sync, DEFAULT_AGENT_PROMPTS
@@ -355,10 +356,17 @@ class Orchestrator:
             for s in available_sources
         ])
         
+        # Build the list of allowed task types for this tenant
+        enabled_types = ToolGate.get_enabled_task_types()
+        enabled_types_str = ", ".join(enabled_types)
+        
         prompt = self._get_prompt("plan").format(
             analysis=json.dumps(analysis, indent=2),
             available_sources=sources_str
         )
+        
+        # Inject tool availability constraint into the prompt
+        prompt += f"\n\n**IMPORTANT: You may ONLY use these task types: [{enabled_types_str}]. Do NOT create tasks with any other type.**"
         
         result = await self._call_llm(prompt, OrchestratorPhase.PLAN)
         
@@ -393,6 +401,14 @@ class Orchestrator:
         # If no tasks were created, create smart default tasks based on analysis
         if not tasks:
             tasks = self._create_default_tasks(analysis)
+        
+        # Defense in depth: filter out any disabled task types the LLM may have planned
+        tasks = ToolGate.filter_tasks(tasks)
+        
+        # If filtering removed everything, re-create defaults
+        if not tasks:
+            tasks = self._create_default_tasks(analysis)
+            tasks = ToolGate.filter_tasks(tasks)
         
         # Safety net: ensure at least one document search task exists
         # The LLM planner might create only web search tasks, but we should
@@ -562,6 +578,9 @@ class Orchestrator:
                 follow_up_tasks.append(task)
             except Exception as e:
                 logger.warning(f"Failed to parse follow-up task: {e}")
+        
+        # Filter out disabled task types from follow-up tasks
+        follow_up_tasks = ToolGate.filter_tasks(follow_up_tasks)
         
         # Determine phase
         phase = "initial" if iteration == 1 else ("refinement" if iteration == 2 else "final")
