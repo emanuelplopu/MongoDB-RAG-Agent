@@ -8,6 +8,10 @@
  *
  * Hides orchestrator steps, worker execution details, token counts, costs,
  * raw JSON inputs, and internal reasoning.
+ *
+ * Filters:
+ * - Removes zero-result search steps (user doesn't have that data source)
+ * - Hides internal processing tasks (refine_query, summarize)
  */
 
 import { useState } from 'react'
@@ -27,6 +31,9 @@ interface SimplifiedAgentPanelProps {
   trace: FederatedAgentTrace
 }
 
+/** Internal task types that normal users should never see. */
+const INTERNAL_TASK_TYPES = new Set(['refine_query', 'summarize'])
+
 /**
  * Map a raw similarity score (0-1) to a human-readable relevance label.
  */
@@ -42,6 +49,7 @@ function getRelevanceLabel(score: number, t: (key: string) => string): { label: 
 
 export default function SimplifiedAgentPanel({ trace }: SimplifiedAgentPanelProps) {
   const [expanded, setExpanded] = useState(false)
+  const [docsVisible, setDocsVisible] = useState(5)
   const { t } = useTranslation()
 
   const totalDocs = trace.sources?.documents?.length ?? 0
@@ -49,16 +57,29 @@ export default function SimplifiedAgentPanel({ trace }: SimplifiedAgentPanelProp
   const totalMs = trace.timing?.total_ms ?? 0
   const workerSteps = trace.worker_steps ?? []
 
-  // Aggregate search descriptions from worker steps
-  const searches = workerSteps.map((step) => {
-    const docCount = (step.documents ?? []).length
-    const linkCount = (step.web_links ?? []).length
-    return {
-      label: t(`userView.searchType.${step.task_type}`, { defaultValue: step.task_type }),
-      resultCount: docCount + linkCount,
-      success: step.success,
-    }
-  })
+  // Build search descriptions from worker steps:
+  // - Skip internal processing tasks (refine_query, summarize)
+  // - Skip search steps with zero results (user doesn't have that data source)
+  const searches = workerSteps
+    .filter((step) => {
+      if (INTERNAL_TASK_TYPES.has(step.task_type)) return false
+      const docCount = (step.documents ?? []).length
+      const linkCount = (step.web_links ?? []).length
+      if (docCount + linkCount === 0) return false
+      return true
+    })
+    .map((step) => {
+      const docCount = (step.documents ?? []).length
+      const linkCount = (step.web_links ?? []).length
+      return {
+        label: t(`userView.searchType.${step.task_type}`, { defaultValue: step.task_type }),
+        resultCount: docCount + linkCount,
+        success: step.success,
+      }
+    })
+
+  const allDocuments = trace.sources?.documents ?? []
+  const remainingDocs = totalDocs - docsVisible
 
   return (
     <div className="mt-2">
@@ -101,9 +122,7 @@ export default function SimplifiedAgentPanel({ trace }: SimplifiedAgentPanelProp
                   )}
                   <span>{search.label}</span>
                   <span className="text-[10px] text-secondary dark:text-gray-500">
-                    &mdash; {search.resultCount > 0
-                      ? t('userView.foundResults', { count: search.resultCount })
-                      : t('userView.noResults')}
+                    &mdash; {t('userView.foundResults', { count: search.resultCount })}
                   </span>
                 </div>
               ))}
@@ -116,7 +135,7 @@ export default function SimplifiedAgentPanel({ trace }: SimplifiedAgentPanelProp
               <span className="text-[10px] font-medium text-secondary dark:text-gray-500">
                 {t('userView.sourcesFound')} ({totalDocs})
               </span>
-              {(trace.sources?.documents ?? []).slice(0, 5).map((doc, idx) => {
+              {allDocuments.slice(0, docsVisible).map((doc, idx) => {
                 const rel = getRelevanceLabel(doc.score ?? 0, t)
                 return (
                   <div
@@ -142,10 +161,13 @@ export default function SimplifiedAgentPanel({ trace }: SimplifiedAgentPanelProp
                   </div>
                 )
               })}
-              {totalDocs > 5 && (
-                <span className="text-[10px] text-secondary dark:text-gray-500">
-                  +{totalDocs - 5} {t('agentPanel.moreDocuments', { count: totalDocs - 5 })}
-                </span>
+              {remainingDocs > 0 && (
+                <button
+                  onClick={() => setDocsVisible((prev) => prev + 10)}
+                  className="text-[10px] text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300 hover:underline cursor-pointer transition-colors"
+                >
+                  +{remainingDocs} {t('userView.showMore', { count: remainingDocs })}
+                </button>
               )}
             </div>
           )}

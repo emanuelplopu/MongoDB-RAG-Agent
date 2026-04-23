@@ -167,6 +167,19 @@ export default function Layout() {
     localStorage.setItem('recallhub_sidebar_collapsed', String(desktopSidebarCollapsed))
   }, [desktopSidebarCollapsed])
 
+  // Listen for sidebar control events dispatched from ChatPageNew
+  useEffect(() => {
+    const handleOpenMobileSidebar = () => setSidebarOpen(true)
+    const handleToggleDesktopSidebar = () => setDesktopSidebarCollapsed(prev => !prev)
+
+    window.addEventListener('open-mobile-sidebar', handleOpenMobileSidebar)
+    window.addEventListener('toggle-desktop-sidebar', handleToggleDesktopSidebar)
+    return () => {
+      window.removeEventListener('open-mobile-sidebar', handleOpenMobileSidebar)
+      window.removeEventListener('toggle-desktop-sidebar', handleToggleDesktopSidebar)
+    }
+  }, [])
+
   // Fetch profiles for header dropdown
   const fetchProfiles = useCallback(async () => {
     try {
@@ -987,7 +1000,8 @@ export default function Layout() {
 
       {/* Main content */}
       <div className={`transition-all duration-300 ${desktopSidebarVisible ? 'lg:pl-72' : 'lg:pl-14'}`}>
-        {/* Desktop Header Bar */}
+        {/* Desktop Header Bar - hidden on chat page (merged into ChatPageNew header) */}
+        {!isOnChatPage && (
         <div className="sticky top-0 z-30 flex h-14 items-center gap-x-4 bg-surface/95 dark:bg-gray-800/95 px-4 shadow-sm backdrop-blur">
           {/* Mobile menu button */}
           <button
@@ -1066,9 +1080,10 @@ export default function Layout() {
             </div>
           </div>
         </div>
+        )}
 
         {/* Page content */}
-        <main className={isOnChatPage || isOnDashboardPage ? 'h-[calc(100vh-3.5rem)]' : 'py-6 px-4 sm:px-6 lg:px-8'}>
+        <main className={isOnChatPage ? 'h-screen' : isOnDashboardPage ? 'h-[calc(100vh-3.5rem)]' : 'py-6 px-4 sm:px-6 lg:px-8'}>
           <Outlet />
         </main>
       </div>

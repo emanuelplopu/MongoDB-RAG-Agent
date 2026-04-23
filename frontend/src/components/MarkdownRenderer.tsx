@@ -4,6 +4,7 @@
  */
 
 import { ReactNode, useState, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import { ClipboardIcon, ClipboardDocumentCheckIcon } from '@heroicons/react/24/outline'
 
@@ -130,6 +131,8 @@ export default function MarkdownRenderer({
   content, 
   className = '',
 }: MarkdownRendererProps) {
+  const navigate = useNavigate()
+
   return (
     <ReactMarkdown
       className={`prose prose-sm max-w-none dark:prose-invert overflow-x-auto ${className}`}
@@ -157,6 +160,24 @@ export default function MarkdownRenderer({
         // Custom link handling
         a({ node, children, href, ...props }) {
           const isExternal = href?.startsWith('http')
+          const isInternal = href?.startsWith('/')
+
+          if (isInternal) {
+            return (
+              <a
+                href={href}
+                onClick={(e) => {
+                  e.preventDefault()
+                  navigate(href!)
+                }}
+                className="text-primary-600 dark:text-primary-400 hover:underline"
+                {...props}
+              >
+                {children}
+              </a>
+            )
+          }
+
           return (
             <a
               href={href}

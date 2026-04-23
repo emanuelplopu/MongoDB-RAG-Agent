@@ -1415,12 +1415,17 @@
       "search_personal": "Persönliche Dateien",
       "search_all": "Alle Quellen",
       "web_search": "Websuche",
-      "browse_web": "Webseite"
+      "browse_web": "Webseite",
+      "refine_query": "Suche verfeinern",
+      "summarize": "Ergebnisse zusammenfassen"
     },
     "toolType": {
       "browse_web": "Webseite durchsucht",
+      "refine_query": "Suchanfrage verfeinert",
+      "summarize": "Ergebnisse zusammengefasst",
       "default": "Analyse durchgeführt"
     },
+    "showMore": "{{count}} weitere anzeigen",
     "toolSuccess": "Abgeschlossen",
     "toolFailed": "Fehlgeschlagen"
   },

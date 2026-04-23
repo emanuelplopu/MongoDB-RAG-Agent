@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import {
   PaperAirplaneIcon,
@@ -25,6 +25,7 @@ import {
   ClipboardDocumentCheckIcon,
   StopIcon,
   ArrowPathIcon,
+  Bars3Icon,
 } from '@heroicons/react/24/outline'
 import {
   sessionsApi,
@@ -604,13 +605,29 @@ export default function ChatPage() {
       {currentSession ? (
         <>
           {/* Header */}
-          <div className="flex items-center justify-between px-6 py-3 premium-header-bar flex-shrink-0">
-            <h2 className="font-display font-semibold text-primary-900 dark:text-gray-100 truncate max-w-md">
-              {currentSession.title || t('chat.newChat')}
-            </h2>
+          <div className="flex items-center justify-between px-4 py-3 premium-header-bar flex-shrink-0">
+            <div className="flex items-center gap-2 min-w-0">
+              {/* Mobile sidebar toggle */}
+              <button
+                className="p-1.5 text-secondary dark:text-gray-400 hover:text-primary transition-colors lg:hidden flex-shrink-0"
+                onClick={() => window.dispatchEvent(new Event('open-mobile-sidebar'))}
+              >
+                <Bars3Icon className="h-5 w-5" />
+              </button>
+              {/* Desktop sidebar toggle */}
+              <button
+                className="hidden lg:block p-1.5 text-secondary dark:text-gray-400 hover:text-primary transition-colors flex-shrink-0"
+                onClick={() => window.dispatchEvent(new Event('toggle-desktop-sidebar'))}
+              >
+                <Bars3Icon className="h-5 w-5" />
+              </button>
+              <h2 className="font-display font-semibold text-primary-900 dark:text-gray-100 truncate max-w-md">
+                {currentSession.title || t('chat.newChat')}
+              </h2>
+            </div>
             <div className="flex items-center gap-3">
-              {/* Model Selector */}
-              <div className="relative">
+              {/* Model Selector - admin only */}
+              {user?.is_admin && (<div className="relative">
                 <button
                   onClick={() => setShowModelSelector(!showModelSelector)}
                   className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-variant dark:bg-gray-700 hover:bg-surface dark:hover:bg-gray-600 text-sm transition-colors"
@@ -669,7 +686,7 @@ export default function ChatPage() {
                     </div>
                   </div>
                 )}
-              </div>
+              </div>)}
 
               {/* Agent Mode Selector */}
               <div className="relative">
@@ -1135,7 +1152,7 @@ function MessageBubble({ message, viewMode }: { message: SessionMessage; viewMod
   const [showThinking, setShowThinking] = useState(false)
   const [copied, setCopied] = useState(false)
   const toast = useToast()
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
 
   // Copy message content to clipboard
   const handleCopy = useCallback(async () => {
@@ -1184,6 +1201,26 @@ function MessageBubble({ message, viewMode }: { message: SessionMessage; viewMod
       loadDocIds()
     }
   }, [message.sources])
+
+  // Process message content: replace [Source: "title"] with clickable markdown links
+  const processedContent = useMemo(() => {
+    if (!message.content) return message.content
+    return message.content.replace(
+      /\[Source:\s*"([^"]+)"\]/g,
+      (_match: string, title: string) => {
+        const matchingSource = message.sources?.find(
+          (s) => s.title === title || s.source === title
+        )
+        if (matchingSource) {
+          const docId = documentIds[matchingSource.source]
+          if (docId) {
+            return `[${title}](/${i18n.language}/documents/${docId})`
+          }
+        }
+        return `**${title}**`
+      }
+    )
+  }, [message.content, message.sources, documentIds, i18n.language])
 
   return (
     <div className={`flex gap-4 ${isUser ? 'flex-row-reverse' : ''} group min-w-0`}>
@@ -1250,8 +1287,8 @@ function MessageBubble({ message, viewMode }: { message: SessionMessage; viewMod
             <p className="whitespace-pre-wrap break-words">{message.content}</p>
           ) : (
             <div className="prose prose-sm max-w-none dark:prose-invert overflow-hidden break-words">
-              {message.content ? (
-                <MarkdownRenderer content={message.content} />
+              {processedContent ? (
+                <MarkdownRenderer content={processedContent} />
               ) : (
                 <p className="text-gray-500 italic">{t('chatPage.loadingResponse')}</p>
               )}

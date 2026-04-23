@@ -1415,12 +1415,17 @@
       "search_personal": "Personal files",
       "search_all": "All sources",
       "web_search": "Web search",
-      "browse_web": "Website"
+      "browse_web": "Website",
+      "refine_query": "Refining search",
+      "summarize": "Summarizing results"
     },
     "toolType": {
       "browse_web": "Browsed a website",
+      "refine_query": "Refined the search query",
+      "summarize": "Summarized findings",
       "default": "Ran analysis"
     },
+    "showMore": "Show {{count}} more",
     "toolSuccess": "Completed",
     "toolFailed": "Failed"
   },
