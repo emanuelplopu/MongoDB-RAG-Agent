@@ -96,14 +96,14 @@ export default function DeveloperDocsPage() {
     : []
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-background dark:bg-gray-900">
       {/* Header */}
-      <div className="bg-white dark:bg-gray-800 shadow">
+      <div className="bg-surface dark:bg-gray-800 shadow">
         <div className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+          <h1 className="text-3xl font-display font-bold text-primary-900 dark:text-white">
             {t('devDocsPage.title')}
           </h1>
-          <p className="mt-2 text-gray-600 dark:text-gray-400">
+          <p className="mt-2 text-primary-700 dark:text-gray-400">
             {t('devDocsPage.subtitle')}
           </p>
         </div>

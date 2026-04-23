@@ -80,7 +80,7 @@ export default function SearchPage() {
   return (
     <div className="space-y-6">
       {/* Search form */}
-      <div className="rounded-3xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+      <div className="rounded-3xl bg-surface dark:bg-gray-800 p-6 premium-input-surface">
         <form onSubmit={handleSearch} className="space-y-4">
           <div className="relative">
             <MagnifyingGlassIcon className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-secondary" />

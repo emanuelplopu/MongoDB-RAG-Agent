@@ -95,10 +95,10 @@ export default function LandingPage() {
             <div className="flex justify-center mb-6">
               <TenantLogo size="lg" />
             </div>
-            <h1 className="text-4xl sm:text-5xl font-bold text-primary-900 dark:text-white mb-4">
+            <h1 className="text-4xl sm:text-5xl font-display font-bold text-primary-900 dark:text-white mb-4">
               {t('common.appName')}
             </h1>
-            <p className="text-xl text-secondary dark:text-gray-400 mb-10">
+            <p className="text-xl text-primary-700 dark:text-gray-400 mb-10">
               {t('landing.subtitle')}
             </p>
             {isAuthenticated ? (
@@ -161,14 +161,14 @@ export default function LandingPage() {
               <TenantLogo size="lg" />
             </div>
 
-            <h1 className={`font-bold text-primary-900 dark:text-white mb-6 ${isProfessional ? 'text-3xl sm:text-4xl lg:text-5xl' : 'text-4xl sm:text-5xl lg:text-6xl'}`}>
+            <h1 className={`font-display font-bold text-primary-900 dark:text-white mb-6 ${isProfessional ? 'text-3xl sm:text-4xl lg:text-5xl' : 'text-4xl sm:text-5xl lg:text-6xl'}`}>
               {t('landing.welcomeTo')}{' '}
               <span className={isProfessional ? 'text-primary' : 'text-gradient-brand'}>
                 {t('common.appName')}
               </span>
             </h1>
 
-            <p className="text-xl text-secondary dark:text-gray-400 max-w-3xl mx-auto mb-10">
+            <p className="text-xl text-primary-700 dark:text-gray-400 max-w-3xl mx-auto mb-10">
               {t('landing.subtitle')}
             </p>
 
@@ -217,10 +217,10 @@ export default function LandingPage() {
       {/* Features Section */}
       <div className={`max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 ${isProfessional ? 'py-16' : 'py-20'}`}>
         <div className="text-center mb-16">
-          <h2 className="text-3xl sm:text-4xl font-bold text-primary-900 dark:text-white mb-4">
+          <h2 className="text-3xl sm:text-4xl font-display font-bold text-primary-900 dark:text-white mb-4">
             {t('landing.featuresTitle')}
           </h2>
-          <p className="text-lg text-secondary dark:text-gray-400 max-w-2xl mx-auto">
+          <p className="text-lg text-primary-700 dark:text-gray-400 max-w-2xl mx-auto">
             {t('landing.featuresSubtitle')}
           </p>
         </div>
@@ -258,7 +258,7 @@ export default function LandingPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
           <div className="grid lg:grid-cols-2 gap-12 items-center">
             <div>
-              <h2 className="text-3xl font-bold text-primary-900 dark:text-white mb-6">
+              <h2 className="text-3xl font-display font-bold text-primary-900 dark:text-white mb-6">
                 {t('landing.benefitsTitle')}
               </h2>
               <p className="text-lg text-secondary dark:text-gray-400 mb-8">

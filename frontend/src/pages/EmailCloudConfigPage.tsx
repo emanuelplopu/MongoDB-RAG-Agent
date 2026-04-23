@@ -503,11 +503,11 @@ export default function EmailCloudConfigPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-primary-900 dark:text-white flex items-center gap-3">
+          <h1 className="text-2xl font-display font-bold text-primary-900 dark:text-white flex items-center gap-3">
             <EnvelopeIcon className="h-7 w-7" />
             {t('emailConfigPage.title')}
           </h1>
-          <p className="mt-1 text-secondary dark:text-gray-400">
+          <p className="mt-1 text-primary-700 dark:text-gray-400">
             {t('emailConfigPage.subtitle')}
           </p>
         </div>

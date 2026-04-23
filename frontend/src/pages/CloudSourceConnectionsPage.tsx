@@ -224,10 +224,10 @@ export default function CloudSourceConnectionsPage() {
             <div className="flex items-center gap-3">
               <span className="text-3xl">{PROVIDER_ICONS[selectedConnection.provider]}</span>
               <div>
-                <h1 className="text-2xl font-bold text-primary-900 dark:text-gray-100">
+                <h1 className="text-2xl font-display font-bold text-primary-900 dark:text-gray-100">
                   {selectedConnection.display_name}
                 </h1>
-                <p className="text-secondary dark:text-gray-400 capitalize">
+                <p className="text-primary-700 dark:text-gray-400 capitalize">
                   {selectedConnection.provider.replace('_', ' ')}
                 </p>
               </div>
@@ -493,10 +493,10 @@ export default function CloudSourceConnectionsPage() {
             <ArrowLeftIcon className="h-5 w-5 text-primary-900 dark:text-gray-200" />
           </Link>
           <div>
-            <h1 className="text-2xl font-bold text-primary-900 dark:text-gray-100">
+            <h1 className="text-2xl font-display font-bold text-primary-900 dark:text-gray-100">
               {t('cloudConnectionsPage.title')}
             </h1>
-            <p className="text-secondary dark:text-gray-400 mt-1">
+            <p className="text-primary-700 dark:text-gray-400 mt-1">
               {t('cloudConnectionsPage.subtitle')}
             </p>
           </div>

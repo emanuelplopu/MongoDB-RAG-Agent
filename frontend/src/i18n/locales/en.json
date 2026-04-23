@@ -289,10 +289,10 @@
       }
     },
     "suggestions": {
-      "summarize": "Summarize my documents",
-      "findDocument": "Find a specific document",
-      "compare": "Compare two topics",
-      "explain": "Explain a concept"
+      "summarize": "Search my files for...",
+      "findDocument": "Find all mentions of...",
+      "compare": "What are the main takeaways from...?",
+      "explain": "What are the deadlines mentioned in...?"
     },
     "time": {
       "justNow": "Just now",

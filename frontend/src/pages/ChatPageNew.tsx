@@ -597,8 +597,8 @@ export default function ChatPage() {
       {currentSession ? (
         <>
           {/* Header */}
-          <div className="flex items-center justify-between px-6 py-3 border-b border-surface-variant dark:border-gray-700 flex-shrink-0">
-            <h2 className="font-semibold text-primary-900 dark:text-gray-100 truncate max-w-md">
+          <div className="flex items-center justify-between px-6 py-3 premium-header-bar flex-shrink-0">
+            <h2 className="font-display font-semibold text-primary-900 dark:text-gray-100 truncate max-w-md">
               {currentSession.title || t('chat.newChat')}
             </h2>
             <div className="flex items-center gap-3">
@@ -615,7 +615,7 @@ export default function ChatPage() {
                 {showModelSelector && (
                   <div className="absolute right-0 mt-1 w-80 max-h-96 overflow-y-auto bg-white dark:bg-gray-900 rounded-xl shadow-xl border border-gray-200 dark:border-gray-600 z-50">
                     <div className="p-2">
-                      <div className="text-xs font-medium text-secondary dark:text-gray-400 px-2 py-1 uppercase">
+                      <div className="text-xs font-medium text-primary-600 dark:text-primary-400 px-2 py-1 uppercase">
                         {t('chatPage.selectModel')}
                       </div>
                       {models.slice(0, 20).map(model => {
@@ -677,7 +677,7 @@ export default function ChatPage() {
                 {showAgentModeSelector && (
                   <div className="absolute right-0 mt-1 w-80 bg-white dark:bg-gray-900 rounded-xl shadow-xl border border-gray-200 dark:border-gray-600 z-50">
                     <div className="p-2">
-                      <div className="text-xs font-medium text-secondary dark:text-gray-400 px-2 py-1 uppercase flex items-center gap-1">
+                      <div className="text-xs font-medium text-primary-600 dark:text-primary-400 px-2 py-1 uppercase flex items-center gap-1">
                         {t('chatPage.agentMode')}
                         <div className="group relative inline-block">
                           <InformationCircleIcon className="h-3.5 w-3.5 cursor-help" />
@@ -932,7 +932,8 @@ export default function ChatPage() {
 
           {/* Regenerate button - shown after last assistant message */}
           {canRegenerate && (
-            <div className="border-t border-surface-variant dark:border-gray-700 px-6 py-2 flex-shrink-0">
+            <div className="px-6 py-2 flex-shrink-0">
+              <div className="premium-divider mb-2" />
               <div className="max-w-3xl mx-auto flex justify-center">
                 <button
                   onClick={handleRegenerate}
@@ -946,7 +947,8 @@ export default function ChatPage() {
           )}
 
           {/* Input */}
-          <div className="border-t border-surface-variant dark:border-gray-700 px-6 py-4 flex-shrink-0">
+          <div className="px-6 py-4 flex-shrink-0">
+            <div className="premium-divider mb-4" />
             {/* Error Message */}
             {error && (
               <div className="max-w-3xl mx-auto mb-3">
@@ -1015,7 +1017,7 @@ export default function ChatPage() {
                   )}
                 </div>
               )}
-              <div className="relative flex items-end gap-2 bg-surface-variant dark:bg-gray-700 rounded-2xl p-2">
+              <div className="relative flex items-end gap-2 bg-surface dark:bg-gray-700 rounded-2xl p-2 premium-input-surface">
                 {/* File input (hidden) */}
                 <input
                   ref={fileInputRef}
@@ -1064,10 +1066,10 @@ export default function ChatPage() {
           <div className="rounded-3xl bg-primary-100 dark:bg-primary-900/50 p-8 mb-6">
             <ChatBubbleLeftRightIcon className="h-16 w-16 text-primary" />
           </div>
-          <h2 className="text-2xl font-semibold text-primary-900 dark:text-gray-100 mb-3">
+          <h2 className="text-2xl font-display font-semibold text-primary-900 dark:text-gray-100 mb-3">
             {t('chatPage.assistantTitle')}
           </h2>
-          <p className="text-secondary dark:text-gray-400 max-w-md mb-6">
+          <p className="text-primary-700 dark:text-gray-400 max-w-md mb-6">
             {t('chatPage.emptyStateDesc')}
           </p>
           <button

@@ -289,10 +289,10 @@
       }
     },
     "suggestions": {
-      "summarize": "Meine Dokumente zusammenfassen",
-      "findDocument": "Ein bestimmtes Dokument finden",
-      "compare": "Zwei Themen vergleichen",
-      "explain": "Ein Konzept erklären"
+      "summarize": "In meinen Dateien suchen nach...",
+      "findDocument": "Alle Erwähnungen von ... finden",
+      "compare": "Was sind die wichtigsten Erkenntnisse aus...?",
+      "explain": "Welche Fristen werden erwähnt in...?"
     },
     "time": {
       "justNow": "Gerade eben",

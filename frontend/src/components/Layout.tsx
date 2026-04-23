@@ -529,7 +529,7 @@ export default function Layout() {
 
       {/* Folders Section (Projects) */}
       <div className="px-3 flex-shrink-0">
-        <div className="text-xs font-medium text-secondary dark:text-gray-500 uppercase tracking-wider px-2 py-2">
+        <div className="text-xs font-medium text-primary-600 dark:text-primary-400 uppercase tracking-wider px-2 py-2">
           {t('sidebar.projects')}
         </div>
         
@@ -632,7 +632,7 @@ export default function Layout() {
       </div>
 
       {/* Divider */}
-      <div className="mx-3 my-2 border-t border-surface-variant dark:border-gray-700" />
+      <div className="mx-3 my-2 premium-divider" />
 
       {/* Scrollable Chat List */}
       <div className="flex-1 overflow-y-auto px-3">
@@ -645,7 +645,7 @@ export default function Layout() {
             {/* Pinned Sessions */}
             {filterSessions(pinnedSessions).length > 0 && (
               <div className="mb-2">
-                <div className="px-2 py-1 text-xs font-medium text-secondary dark:text-gray-500 uppercase tracking-wider">
+                <div className="px-2 py-1 text-xs font-medium text-primary-600 dark:text-primary-400 uppercase tracking-wider">
                   {t('sidebar.pinned')}
                 </div>
                 {filterSessions(pinnedSessions).map(session => (
@@ -674,7 +674,7 @@ export default function Layout() {
             {/* Your Chats */}
             {filterSessions(sessionsByFolder.get(null) || []).length > 0 && (
               <div>
-                <div className="px-2 py-1 text-xs font-medium text-secondary dark:text-gray-500 uppercase tracking-wider">
+                <div className="px-2 py-1 text-xs font-medium text-primary-600 dark:text-primary-400 uppercase tracking-wider">
                   {t('sidebar.yourChats')}
                 </div>
                 {filterSessions(sessionsByFolder.get(null) || []).map(session => (

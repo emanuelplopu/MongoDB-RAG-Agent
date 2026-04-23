@@ -112,15 +112,15 @@ export default function ArchivedChatsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-6">
+    <div className="min-h-screen bg-background dark:bg-gray-900 p-6">
       <div className="max-w-5xl mx-auto">
         {/* Header */}
         <div className="mb-6">
           <div className="flex items-center gap-3">
             <ArchiveBoxIcon className="h-8 w-8 text-amber-600" />
             <div>
-              <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{t('archivedChatsPage.title')}</h1>
-              <p className="text-gray-600 dark:text-gray-400">
+              <h1 className="text-2xl font-display font-bold text-primary-900 dark:text-white">{t('archivedChatsPage.title')}</h1>
+              <p className="text-primary-700 dark:text-gray-400">
                 {t('archivedChatsPage.subtitle')}
               </p>
             </div>
@@ -136,7 +136,7 @@ export default function ArchivedChatsPage() {
         )}
 
         {/* Actions bar */}
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-4 bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-4 bg-surface dark:bg-gray-800 p-4 rounded-lg shadow">
           <div className="flex items-center gap-3">
             <button
               onClick={loadArchivedSessions}

@@ -78,18 +78,18 @@ export default function EmptyState({
   return (
     <div className={`flex flex-col items-center justify-center text-center ${sizes.container} ${className}`}>
       {/* Icon */}
-      <div className={`${sizes.iconBg} bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center mb-4`}>
-        {customIcon || <Icon className={`${sizes.icon} text-gray-400 dark:text-gray-500`} />}
+      <div className={`${sizes.iconBg} bg-surface-variant dark:bg-gray-800 rounded-full flex items-center justify-center mb-4`}>
+        {customIcon || <Icon className={`${sizes.icon} text-secondary dark:text-gray-500`} />}
       </div>
       
       {/* Title */}
-      <h3 className={`${sizes.title} font-semibold text-gray-900 dark:text-gray-100 mb-2`}>
+      <h3 className={`${sizes.title} font-display font-semibold text-primary-900 dark:text-gray-100 mb-2`}>
         {title}
       </h3>
       
       {/* Description */}
       {description && (
-        <p className={`${sizes.description} text-gray-500 dark:text-gray-400 max-w-md mb-6`}>
+        <p className={`${sizes.description} text-primary-700 dark:text-gray-400 max-w-md mb-6`}>
           {description}
         </p>
       )}
@@ -109,7 +109,7 @@ export default function EmptyState({
           {secondaryAction && (
             <button
               onClick={secondaryAction.onClick}
-              className="inline-flex items-center justify-center px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-xl hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+              className="inline-flex items-center justify-center px-4 py-2 text-primary-700 dark:text-gray-300 bg-surface-variant dark:bg-gray-700 rounded-xl hover:bg-primary-100 dark:hover:bg-gray-600 transition-colors"
             >
               {secondaryAction.label}
             </button>
@@ -212,10 +212,10 @@ export function LoadingPlaceholder({
 }) {
   return (
     <div className={`flex flex-col items-center justify-center py-12 ${className}`}>
-      <div className="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center mb-4">
+      <div className="w-16 h-16 bg-surface-variant dark:bg-gray-800 rounded-full flex items-center justify-center mb-4">
         <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
       </div>
-      <p className="text-gray-500 dark:text-gray-400">{message}</p>
+      <p className="text-primary-700 dark:text-gray-400">{message}</p>
     </div>
   )
 }

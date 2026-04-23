@@ -49,8 +49,8 @@ export default function SystemPage() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-200">{t('systemPage.title')}</h2>
-        <p className="text-sm text-secondary dark:text-gray-400">
+        <h2 className="text-xl font-display font-semibold text-primary-900 dark:text-gray-200">{t('systemPage.title')}</h2>
+        <p className="text-sm text-primary-700 dark:text-gray-400">
           {t('systemPage.subtitle')}
         </p>
       </div>

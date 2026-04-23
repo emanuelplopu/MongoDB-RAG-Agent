@@ -120,10 +120,10 @@ export default function ChatPage() {
             <div className="rounded-3xl bg-primary-100 dark:bg-primary-900/50 p-6 mb-6">
               <DocumentTextIcon className="h-12 w-12 text-primary" />
             </div>
-            <h2 className="text-2xl font-semibold text-primary-900 dark:text-primary-200 mb-2">
+            <h2 className="text-2xl font-display font-semibold text-primary-900 dark:text-primary-200 mb-2">
               RecallHub Assistant
             </h2>
-            <p className="text-secondary dark:text-gray-400 max-w-md">
+            <p className="text-primary-700 dark:text-gray-400 max-w-md">
               Ask questions about your documents. I'll search through your knowledge base to find relevant information.
             </p>
           </div>

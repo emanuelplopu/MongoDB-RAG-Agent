@@ -435,7 +435,7 @@ export default function DocumentsPage() {
       {!sidebarCollapsed && (
         <div className="w-64 flex-shrink-0 flex flex-col bg-surface dark:bg-gray-800 rounded-2xl shadow-elevation-1 overflow-hidden">
           {/* Sidebar Header */}
-          <div className="p-3 border-b border-surface-variant dark:border-gray-700 flex items-center justify-between">
+          <div className="p-3 premium-header-bar flex items-center justify-between">
             <h3 className="text-sm font-semibold text-primary-900 dark:text-gray-200">{t('documentsPage.folders')}</h3>
             <button
               onClick={() => setSidebarCollapsed(true)}
@@ -488,7 +488,7 @@ export default function DocumentsPage() {
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0 bg-surface dark:bg-gray-800 rounded-2xl shadow-elevation-1 overflow-hidden">
         {/* Toolbar */}
-        <div className="p-3 border-b border-surface-variant dark:border-gray-700">
+        <div className="p-3 premium-header-bar">
           <div className="flex items-center gap-3">
             {/* Collapse toggle */}
             {sidebarCollapsed && (
@@ -873,7 +873,8 @@ export default function DocumentsPage() {
 
         {/* Pagination */}
         {totalPages > 1 && (
-          <div className="px-3 py-2 border-t border-surface-variant dark:border-gray-700 flex items-center justify-end gap-2">
+          <div className="px-3 py-2 flex items-center justify-end gap-2">
+            <div className="premium-divider mb-2" />
             <button
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page === 1}

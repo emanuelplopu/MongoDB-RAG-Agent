@@ -75,8 +75,8 @@ export default function LoginPage() {
           <div className="inline-flex items-center justify-center mb-4">
             <TenantLogo size="md" />
           </div>
-          <h1 className="text-2xl font-bold text-primary-900 dark:text-white">{t('common.appName')}</h1>
-          <p className="text-secondary dark:text-gray-400 mt-2">
+          <h1 className="text-2xl font-display font-bold text-primary-900 dark:text-white">{t('common.appName')}</h1>
+          <p className="text-primary-700 dark:text-gray-400 mt-2">
             {isLogin ? t('login.signInTitle') : t('login.signUpTitle')}
           </p>
         </div>

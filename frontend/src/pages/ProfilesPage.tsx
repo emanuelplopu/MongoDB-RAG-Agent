@@ -220,8 +220,8 @@ export default function ProfilesPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-200">{t('profiles.title')}</h2>
-          <p className="text-sm text-secondary dark:text-gray-400">
+          <h2 className="text-xl font-display font-semibold text-primary-900 dark:text-gray-200">{t('profiles.title')}</h2>
+          <p className="text-sm text-primary-700 dark:text-gray-400">
             {t('profiles.subtitle')}
           </p>
         </div>
@@ -384,11 +384,11 @@ export default function ProfilesPage() {
               <table className="min-w-full border-collapse">
                 <thead>
                   <tr>
-                    <th className="sticky left-0 bg-surface dark:bg-gray-800 px-4 py-3 text-left text-xs font-semibold text-secondary dark:text-gray-400 uppercase tracking-wider border-b border-surface-variant dark:border-gray-700">
+                    <th className="sticky left-0 bg-surface dark:bg-gray-800 px-4 py-3 text-left text-xs font-semibold text-primary-600 dark:text-primary-400 uppercase tracking-wider border-b border-surface-variant dark:border-gray-700">
                       Profile / User
                     </th>
                     {accessMatrix.users.filter(u => !u.is_admin).map((u) => (
-                      <th key={u.id} className="px-4 py-3 text-center text-xs font-semibold text-secondary dark:text-gray-400 uppercase tracking-wider border-b border-surface-variant dark:border-gray-700 min-w-[120px]">
+                      <th key={u.id} className="px-4 py-3 text-center text-xs font-semibold text-primary-600 dark:text-primary-400 uppercase tracking-wider border-b border-surface-variant dark:border-gray-700 min-w-[120px]">
                         <div className="truncate max-w-[120px]" title={u.email}>
                           {u.name}
                         </div>

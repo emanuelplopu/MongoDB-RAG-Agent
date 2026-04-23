@@ -126,8 +126,8 @@ export default function CloudSourcesPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-primary-900 dark:text-gray-100">{t('cloudSourcesPage.title')}</h1>
-          <p className="text-secondary dark:text-gray-400 mt-1">
+          <h1 className="text-2xl font-display font-bold text-primary-900 dark:text-gray-100">{t('cloudSourcesPage.title')}</h1>
+          <p className="text-primary-700 dark:text-gray-400 mt-1">
             {t('cloudSourcesPage.subtitle')}
           </p>
         </div>

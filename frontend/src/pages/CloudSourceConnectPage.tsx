@@ -301,7 +301,7 @@ export default function CloudSourceConnectPage() {
         <div className="flex items-center gap-3">
           <span className="text-3xl">{PROVIDER_ICONS[provider.provider_type]}</span>
           <div>
-            <h1 className="text-2xl font-bold text-primary-900 dark:text-gray-100">
+            <h1 className="text-2xl font-display font-bold text-primary-900 dark:text-gray-100">
               {t('cloudConnectPage.connectProvider', { provider: provider.display_name })}
             </h1>
             <p className="text-secondary dark:text-gray-400">{provider.description}</p>

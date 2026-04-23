@@ -7,9 +7,9 @@ import {
   DocumentTextIcon,
   SparklesIcon,
   ArrowPathIcon,
-  BoltIcon,
+  MagnifyingGlassIcon,
   ChevronDownIcon,
-  InformationCircleIcon,
+  ClockIcon,
 } from '@heroicons/react/24/outline'
 import {
   sessionsApi,
@@ -193,10 +193,10 @@ export default function DashboardPage() {
       <div className="w-full max-w-3xl flex flex-col items-center">
         {/* Greeting */}
         <div className="mb-8 text-center">
-          <h1 className="text-3xl sm:text-4xl font-semibold text-primary-900 dark:text-gray-100 mb-2">
+          <h1 className="text-3xl sm:text-4xl font-display font-semibold text-primary-900 dark:text-gray-100 mb-2">
             {getGreeting()}, {user?.name?.split(' ')[0] || 'there'}
           </h1>
-          <p className="text-lg text-secondary dark:text-gray-400">
+          <p className="text-lg text-primary-700 dark:text-gray-400">
             {t('dashboard.whereToBegin')}
           </p>
         </div>
@@ -249,7 +249,7 @@ export default function DashboardPage() {
             )}
 
             {/* Main input container */}
-            <div className="relative flex flex-col bg-surface dark:bg-gray-800 rounded-2xl shadow-elevation-2 border border-surface-variant dark:border-gray-700">
+            <div className="relative flex flex-col bg-surface dark:bg-gray-800 rounded-2xl premium-input-surface">
               <div className="flex items-end gap-2 p-3">
                 {/* File input (hidden) */}
                 <input
@@ -346,10 +346,10 @@ export default function DashboardPage() {
         {/* Suggestion chips */}
         <div className="flex flex-wrap gap-2 mt-6 justify-center">
           {[
-            { icon: <SparklesIcon className="h-4 w-4" />, text: t('dashboard.suggestions.summarize') },
+            { icon: <MagnifyingGlassIcon className="h-4 w-4" />, text: t('dashboard.suggestions.summarize') },
             { icon: <DocumentTextIcon className="h-4 w-4" />, text: t('dashboard.suggestions.findDocument') },
-            { icon: <BoltIcon className="h-4 w-4" />, text: t('dashboard.suggestions.compare') },
-            { icon: <InformationCircleIcon className="h-4 w-4" />, text: t('dashboard.suggestions.explain') },
+            { icon: <SparklesIcon className="h-4 w-4" />, text: t('dashboard.suggestions.compare') },
+            { icon: <ClockIcon className="h-4 w-4" />, text: t('dashboard.suggestions.explain') },
           ].map((chip, i) => (
             <button
               key={i}
@@ -357,7 +357,7 @@ export default function DashboardPage() {
                 setInput(chip.text)
                 inputRef.current?.focus()
               }}
-              className="flex items-center gap-2 px-4 py-2 rounded-full border border-surface-variant dark:border-gray-700 bg-surface dark:bg-gray-800 text-sm text-secondary dark:text-gray-400 hover:text-primary-900 dark:hover:text-gray-100 hover:border-primary-300 dark:hover:border-gray-500 transition-colors"
+              className="flex items-center gap-2 px-4 py-2 rounded-full bg-surface dark:bg-gray-800 text-sm text-primary-700 dark:text-gray-400 hover:text-primary-900 dark:hover:text-gray-100 premium-chip"
             >
               {chip.icon}
               {chip.text}

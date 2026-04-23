@@ -2,7 +2,7 @@
 
 from pydantic_settings import BaseSettings
 from pydantic import Field
-from typing import List
+from typing import List, Set
 import os
 
 
@@ -207,6 +207,12 @@ class BackendSettings(BaseSettings):
         description="MongoDB database for Airbyte to write synced data"
     )
     
+    # Tool Gating (per-tenant)
+    tenant_disabled_tools: str = Field(
+        default="",
+        description="Comma-separated list of TaskType values to disable for this tenant instance (e.g. 'web_search,browse_web')"
+    )
+    
     # Web Search Settings (Brave Search API)
     brave_search_api_key: str = Field(
         default="BSALIxHlOobIdrJfmAgRPO1Y7RkkktH",
@@ -217,6 +223,16 @@ class BackendSettings(BaseSettings):
     def brave_api_key(self) -> str:
         """Alias for brave_search_api_key for compatibility."""
         return self.brave_search_api_key
+    
+    def get_disabled_tools(self) -> Set[str]:
+        """Parse tenant_disabled_tools into a set of disabled tool names.
+        
+        Returns:
+            Set of disabled tool type strings (e.g. {'web_search', 'browse_web'})
+        """
+        if not self.tenant_disabled_tools or not self.tenant_disabled_tools.strip():
+            return set()
+        return {t.strip().lower() for t in self.tenant_disabled_tools.split(",") if t.strip()}
     
     def get_api_key_for_provider(self, provider: str) -> str:
         """Get the API key for a specific provider.

@@ -19,13 +19,13 @@ export default function NotFoundPage() {
         <div className="mx-auto mb-6 w-24 h-24 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
           <ExclamationTriangleIcon className="h-12 w-12 text-red-500" />
         </div>
-        <h1 className="text-6xl font-bold text-primary-900 dark:text-gray-100 mb-4">
+        <h1 className="text-6xl font-display font-bold text-primary-900 dark:text-gray-100 mb-4">
           404
         </h1>
-        <h2 className="text-2xl font-semibold text-primary-700 dark:text-gray-300 mb-4">
+        <h2 className="text-2xl font-display font-semibold text-primary-700 dark:text-gray-300 mb-4">
           {t('errors.notFound.title')}
         </h2>
-        <p className="text-secondary dark:text-gray-400 mb-8 max-w-md mx-auto">
+        <p className="text-primary-700 dark:text-gray-400 mb-8 max-w-md mx-auto">
           {t('errors.notFound.message')}
         </p>
         <LocalizedLink

@@ -239,6 +239,89 @@ body {
   animation: quellex-slide-up 0.6s ease-out forwards;
 }
 
+/* ========================================
+   Premium Surface Utilities (tenant-aware)
+   Uses existing CSS variable system so styling adapts per tenant.
+   ======================================== */
+
+/* Refined input container: warm inset shadow + subtle primary border accent */
+.premium-input-surface {
+  box-shadow:
+    0 2px 12px -4px rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--color-surface-variant);
+  transition: box-shadow 0.3s ease, border-color 0.3s ease;
+}
+.premium-input-surface:focus-within {
+  border-color: var(--color-primary);
+  box-shadow:
+    0 4px 16px -4px rgba(0, 0, 0, 0.1),
+    0 0 0 3px color-mix(in srgb, var(--color-primary) 12%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.dark .premium-input-surface {
+  box-shadow:
+    0 2px 12px -4px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  border-color: #374151;
+}
+.dark .premium-input-surface:focus-within {
+  border-color: var(--color-primary);
+  box-shadow:
+    0 4px 16px -4px rgba(0, 0, 0, 0.4),
+    0 0 0 3px color-mix(in srgb, var(--color-primary) 15%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+/* Subtle card with primary tint for interactive elements */
+.premium-chip {
+  border: 1px solid var(--color-surface-variant);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  transition: all 0.25s ease;
+}
+.premium-chip:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 40%, var(--color-surface-variant));
+  box-shadow:
+    0 2px 8px -2px color-mix(in srgb, var(--color-primary) 15%, transparent),
+    0 1px 3px rgba(0, 0, 0, 0.06);
+  transform: translateY(-1px);
+}
+
+.dark .premium-chip {
+  border-color: #374151;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.dark .premium-chip:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 35%, #374151);
+  box-shadow: 0 2px 8px -2px color-mix(in srgb, var(--color-primary) 15%, transparent);
+}
+
+/* Premium header bar with subtle gradient underline */
+.premium-header-bar {
+  border-bottom: 1px solid var(--color-surface-variant);
+  background: linear-gradient(
+    to bottom,
+    var(--color-background),
+    color-mix(in srgb, var(--color-surface-variant) 40%, var(--color-background))
+  );
+}
+.dark .premium-header-bar {
+  border-bottom-color: #374151;
+  background: linear-gradient(to bottom, #1f2937, #1a2332);
+}
+
+/* Section divider using tenant gradient colors */
+.premium-divider {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--color-primary) 18%, transparent),
+    transparent
+  );
+}
+
 /* Chat message animations */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(10px); }

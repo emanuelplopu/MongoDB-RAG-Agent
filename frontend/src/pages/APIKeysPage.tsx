@@ -100,12 +100,12 @@ export default function APIKeysPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-6">
+    <div className="min-h-screen bg-background dark:bg-gray-900 p-6">
       <div className="max-w-5xl mx-auto">
         {/* Header */}
         <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{t('apiKeys.title')}</h1>
-          <p className="text-gray-600 dark:text-gray-400 mt-1">
+          <h1 className="text-2xl font-display font-bold text-primary-900 dark:text-white">{t('apiKeys.title')}</h1>
+          <p className="text-primary-700 dark:text-gray-400 mt-1">
             {t('apiKeys.subtitle')}
           </p>
         </div>
@@ -163,7 +163,7 @@ export default function APIKeysPage() {
           </button>
           <button
             onClick={loadKeys}
-            className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
+            className="px-4 py-2 text-secondary dark:text-gray-400 hover:text-primary dark:hover:text-gray-200"
           >
             {t('common.refresh')}
           </button>
@@ -184,31 +184,31 @@ export default function APIKeysPage() {
         </div>
 
         {/* Keys Table */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
-          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-            <thead className="bg-gray-50 dark:bg-gray-700">
+        <div className="bg-surface dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+          <table className="min-w-full divide-y divide-surface-variant dark:divide-gray-700">
+            <thead className="bg-surface-variant dark:bg-gray-700">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                <th className="px-6 py-3 text-left text-xs font-medium text-primary-600 dark:text-primary-400 uppercase tracking-wider">
                   {t('apiKeys.name')}
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                <th className="px-6 py-3 text-left text-xs font-medium text-primary-600 dark:text-primary-400 uppercase tracking-wider">
                   {t('apiKeys.key')}
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                <th className="px-6 py-3 text-left text-xs font-medium text-primary-600 dark:text-primary-400 uppercase tracking-wider">
                   {t('apiKeys.createdAt')}
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                <th className="px-6 py-3 text-left text-xs font-medium text-primary-600 dark:text-primary-400 uppercase tracking-wider">
                   {t('apiKeys.lastUsed')}
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                <th className="px-6 py-3 text-left text-xs font-medium text-primary-600 dark:text-primary-400 uppercase tracking-wider">
                   {t('apiKeys.status')}
                 </th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                <th className="px-6 py-3 text-right text-xs font-medium text-primary-600 dark:text-primary-400 uppercase tracking-wider">
                   {t('common.actions')}
                 </th>
               </tr>
             </thead>
-            <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+            <tbody className="bg-surface dark:bg-gray-800 divide-y divide-surface-variant dark:divide-gray-700">
               {loading ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-8 text-center text-gray-500 dark:text-gray-400">
