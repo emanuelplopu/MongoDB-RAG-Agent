@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   MagnifyingGlassIcon,
   DocumentTextIcon,
@@ -35,6 +36,7 @@ function QuellexLogo({ size = 'default' }: { size?: 'small' | 'default' | 'large
 
 // ─── Mock Interface Card ────────────────────────────────────
 function MockInterface() {
+  const { t } = useTranslation()
   const documents = [
     { name: 'Urteil OGH 3Ob42/24k', date: '14.03.2026', relevance: 98 },
     { name: 'Beschluss LG Wien 27Cg12/25', date: '02.01.2026', relevance: 94 },
@@ -47,19 +49,19 @@ function MockInterface() {
       {/* Watermark */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
         <span className="text-primary-900/[0.12] dark:text-white/[0.12] text-3xl font-serif-display font-bold tracking-[0.25em] rotate-[-18deg] select-none uppercase">
-          MUSTER
+          {t('quellexLanding.watermark')}
         </span>
       </div>
       {/* Header */}
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-surface-variant/25 dark:border-gray-700/25 bg-surface-variant/10 dark:bg-gray-800/30">
         <img src={`${ASSETS}/quellex-q-icon.png`} alt="Q" className="w-[21px] h-[21px] object-contain" />
-        <span className="text-xs text-secondary dark:text-gray-400">Quellex — Aktensuche</span>
+        <span className="text-xs text-secondary dark:text-gray-400">{t('quellexLanding.headerTitle')}</span>
       </div>
       {/* Search bar */}
       <div className="p-3 border-b border-surface-variant/15 dark:border-gray-700/15">
         <div className="flex items-center gap-2 bg-surface-variant/40 dark:bg-gray-700/40 rounded-lg px-3 py-2 border border-surface-variant/10 dark:border-gray-600/10">
           <MagnifyingGlassIcon className="w-4 h-4 text-secondary dark:text-gray-400" />
-          <span className="text-sm text-secondary dark:text-gray-400">Schadenersatz bei Vertragsverletzung...</span>
+          <span className="text-sm text-secondary dark:text-gray-400">{t('quellexLanding.searchPlaceholder')}</span>
         </div>
       </div>
       {/* Document list */}
@@ -97,14 +99,15 @@ function MockInterface() {
 
 // ─── Trust Bar ──────────────────────────────────────────────
 const trustBadgeIcons = [MagnifyingGlassIcon, LockClosedIcon, EyeIcon, ShieldCheckIcon, CloudIcon]
-const trustBadgeLabels = ['Eigene Unterlagen', 'Lokal & Privat', 'Nur lesbar', 'Quellenangabe', 'Keine Cloud-Pflicht']
+const trustBadgeLabelKeys = ['trustOwn', 'trustLocal', 'trustReadOnly', 'trustAttribution', 'trustNoCloud']
 
 function TrustBar() {
+  const { t } = useTranslation()
   return (
     <div className="py-10 px-6 sm:px-10 lg:px-16">
       <div className="quellex-section-divider mb-10" />
       <div className="flex flex-wrap justify-center gap-3 sm:gap-4 quellex-reveal">
-        {trustBadgeLabels.map((label, i) => {
+        {trustBadgeLabelKeys.map((key, i) => {
           const Icon = trustBadgeIcons[i]
           return (
             <div
@@ -112,7 +115,7 @@ function TrustBar() {
               className={`flex items-center gap-2.5 px-5 py-2.5 rounded-full border border-quellex-gold quellex-glass-surface quellex-card-shadow hover:quellex-card-hover-shadow hover:-translate-y-0.5 transition-all duration-300 quellex-reveal-delay-${Math.min(i, 3)}`}
             >
               <Icon className="w-4 h-4 text-quellex-gold shrink-0" />
-              <span className="text-xs sm:text-sm font-medium text-primary-900 dark:text-white whitespace-nowrap">{label}</span>
+              <span className="text-xs sm:text-sm font-medium text-primary-900 dark:text-white whitespace-nowrap">{t(`quellexLanding.${key}`)}</span>
             </div>
           )
         })}
@@ -123,31 +126,24 @@ function TrustBar() {
 
 // ─── Differentiation Section ────────────────────────────────
 const diffIcons = [FolderOpenIcon, EyeIcon, Squares2X2Icon, ShieldCheckIcon]
-const diffCards = [
-  { title: 'In Ihren Unterlagen zuhause', text: 'Quellex arbeitet direkt mit Ihren vorhandenen Akten, Ordnern und Netzlaufwerken — ohne Import oder Upload.' },
-  { title: 'Klar und nachvollziehbar', text: 'Jedes Ergebnis zeigt die exakte Quellenangabe mit Seitenzahl, Absatz und Textausschnitt. Keine Blackbox.' },
-  { title: 'Strukturiert im Kanzleialltag', text: 'Nahtlose Integration in bestehende Arbeitsabläufe — ohne neue Tools, ohne Umgewöhnung.' },
-  { title: 'Lokal und vertraulich', text: 'Alle Daten bleiben auf Ihrer Infrastruktur. Kein Cloud-Zwang, keine externen Server, volle Kontrolle.' },
-]
+const diffCardKeys = ['diffCard1', 'diffCard2', 'diffCard3', 'diffCard4']
 
 function DifferentiationSection() {
+  const { t } = useTranslation()
   return (
     <div className="py-10 px-6 sm:px-10 lg:px-16">
       <div className="max-w-3xl mx-auto text-center mb-12 quellex-reveal">
         <span className="text-xs font-semibold uppercase tracking-widest text-quellex-teal mb-4 block">
-          Warum Quellex
+          {t('quellexLanding.whyQuellex')}
         </span>
         <blockquote className="sm:text-2xl lg:text-3xl font-bold text-primary-900 dark:text-white leading-tight italic text-xl font-serif-quote">
-          „Nicht in fremden Datenbanken oder allgemeinen Quellen suchen,{' '}
-          <span className="text-quellex-gold">
-            sondern dort, wo Ihre Kanzlei tatsächlich arbeitet – in Ihren eigenen Akten, Ordnern und Netzlaufwerken."
-          </span>
+          {t('quellexLanding.quoteText')}
         </blockquote>
-        <p className="mt-4 text-sm text-secondary dark:text-gray-400 font-medium">— Caroline Fischerlehner</p>
+        <p className="mt-4 text-sm text-secondary dark:text-gray-400 font-medium">{t('quellexLanding.quoteAttribution')}</p>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 max-w-4xl mx-auto">
-        {diffCards.map((card, i) => {
+        {diffCardKeys.map((key, i) => {
           const Icon = diffIcons[i]
           return (
             <div
@@ -157,8 +153,8 @@ function DifferentiationSection() {
               <div className="w-10 h-10 rounded-lg bg-surface-variant/40 dark:bg-gray-700/40 flex items-center justify-center mb-4 border border-quellex-gold group-hover:bg-surface-variant/60 dark:group-hover:bg-gray-700/60 transition-all duration-300">
                 <Icon className="w-5 h-5 text-quellex-gold group-hover:text-quellex-gold-light transition-colors duration-300" />
               </div>
-              <h3 className="text-base font-semibold text-primary-900 dark:text-white mb-2">{card.title}</h3>
-              <p className="text-sm text-secondary dark:text-gray-400 leading-relaxed">{card.text}</p>
+              <h3 className="text-base font-semibold text-primary-900 dark:text-white mb-2">{t(`quellexLanding.${key}Title`)}</h3>
+              <p className="text-sm text-secondary dark:text-gray-400 leading-relaxed">{t(`quellexLanding.${key}Text`)}</p>
             </div>
           )
         })}
@@ -169,6 +165,7 @@ function DifferentiationSection() {
 
 // ─── Feature Highlights ─────────────────────────────────────
 function SnippetMockup() {
+  const { t } = useTranslation()
   const mockResults = [
     { file: 'Urteil OGH 5Ob18/25', page: 'S. 4, Abs. 2', snippet: 'Die gesetzliche Gewährleistungsfrist beträgt bei beweglichen Sachen...' },
     { file: 'Mandant Steiner – Vertrag', page: 'S. 12, §7', snippet: 'Der Verkäufer haftet für Mängel gemäß §922 ABGB mit einer Frist von...' },
@@ -178,12 +175,12 @@ function SnippetMockup() {
     <div className="quellex-glass-surface rounded-xl overflow-hidden quellex-card-shadow hover:quellex-card-hover-shadow hover:-translate-y-1 transition-all duration-400 w-full max-w-lg">
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-surface-variant/25 dark:border-gray-700/25 bg-surface-variant/10 dark:bg-gray-800/30">
         <img src={`${ASSETS}/quellex-q-icon.png`} alt="Q" className="w-[18px] h-[18px] object-contain" />
-        <span className="text-xs text-secondary dark:text-gray-400">Quellex — Quellenangabe</span>
+        <span className="text-xs text-secondary dark:text-gray-400">{t('quellexLanding.snippetTitle')}</span>
       </div>
       <div className="p-4 space-y-3">
         <div className="flex items-center gap-2 bg-surface-variant/40 dark:bg-gray-700/40 rounded-lg px-3 py-2 border border-surface-variant/10 dark:border-gray-600/10">
           <MagnifyingGlassIcon className="w-4 h-4 text-secondary dark:text-gray-400" />
-          <span className="text-sm text-secondary dark:text-gray-400">Gewährleistungsfrist Kaufvertrag</span>
+          <span className="text-sm text-secondary dark:text-gray-400">{t('quellexLanding.snippetQuery')}</span>
         </div>
         {mockResults.map((r, i) => (
           <div key={i} className="rounded-lg border border-surface-variant/15 dark:border-gray-700/15 p-3 bg-surface-variant/5 dark:bg-gray-800/20 hover:bg-surface-variant/15 dark:hover:bg-gray-700/20 transition-colors duration-200">
@@ -202,11 +199,12 @@ function SnippetMockup() {
 }
 
 function OcrMockup() {
+  const { t } = useTranslation()
   return (
     <div className="quellex-glass-surface rounded-xl overflow-hidden quellex-card-shadow hover:quellex-card-hover-shadow hover:-translate-y-1 transition-all duration-400 w-full max-w-lg">
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-surface-variant/25 dark:border-gray-700/25 bg-surface-variant/10 dark:bg-gray-800/30">
         <img src={`${ASSETS}/quellex-q-icon.png`} alt="Q" className="w-[18px] h-[18px] object-contain" />
-        <span className="text-xs text-secondary dark:text-gray-400">Quellex — OCR Verarbeitung</span>
+        <span className="text-xs text-secondary dark:text-gray-400">{t('quellexLanding.ocrTitle')}</span>
       </div>
       <div className="p-4">
         <div className="flex gap-4">
@@ -214,7 +212,7 @@ function OcrMockup() {
           <div className="flex-1 rounded-lg border border-surface-variant/15 dark:border-gray-700/15 p-3 bg-surface-variant/5 dark:bg-gray-800/20">
             <div className="flex items-center gap-2 mb-3">
               <DocumentTextIcon className="w-3.5 h-3.5 text-secondary dark:text-gray-400" />
-              <span className="text-xs text-secondary dark:text-gray-400">Scan_1998_Akt47.pdf</span>
+              <span className="text-xs text-secondary dark:text-gray-400">{t('quellexLanding.ocrFilename')}</span>
             </div>
             <div className="space-y-2 opacity-50">
               <div className="h-2 bg-surface-variant/50 dark:bg-gray-600/50 rounded w-full" />
@@ -232,7 +230,7 @@ function OcrMockup() {
           <div className="flex-1 rounded-lg border p-3 bg-surface-variant/5 dark:bg-gray-800/20" style={{ borderColor: 'hsl(43 65% 52% / 0.15)' }}>
             <div className="flex items-center gap-2 mb-3">
               <DocumentTextIcon className="w-3.5 h-3.5 text-quellex-gold" />
-              <span className="text-xs text-quellex-gold">Erkannter Text</span>
+              <span className="text-xs text-quellex-gold">{t('quellexLanding.ocrRecognized')}</span>
             </div>
             <div className="space-y-1.5">
               <p className="text-xs text-secondary dark:text-gray-400 leading-relaxed">
@@ -245,7 +243,7 @@ function OcrMockup() {
         </div>
         <div className="mt-3 flex items-center gap-2">
           <div className="w-2 h-2 rounded-full" style={{ background: 'hsl(180 100% 32%)' }} />
-          <span className="text-xs text-quellex-teal">OCR-Qualität: 97.3% — durchsuchbar</span>
+          <span className="text-xs text-quellex-teal">{t('quellexLanding.ocrQuality')}</span>
         </div>
       </div>
     </div>
@@ -253,6 +251,7 @@ function OcrMockup() {
 }
 
 function FeatureHighlights() {
+  const { t } = useTranslation()
   return (
     <div className="py-10 px-6 sm:px-10 lg:px-16 space-y-14">
       <div className="quellex-section-divider" />
@@ -260,12 +259,12 @@ function FeatureHighlights() {
       {/* Snippet feature */}
       <div className="flex flex-col lg:flex-row items-center gap-10 lg:gap-16 max-w-5xl mx-auto">
         <div className="flex-1 space-y-4 text-center lg:text-left quellex-reveal">
-          <span className="text-xs font-semibold uppercase tracking-widest text-quellex-teal mb-4 block">Präzise Ergebnisse</span>
+          <span className="text-xs font-semibold uppercase tracking-widest text-quellex-teal mb-4 block">{t('quellexLanding.preciseResults')}</span>
           <h3 className="font-serif-display text-2xl sm:text-3xl font-bold text-primary-900 dark:text-white">
-            <span className="text-quellex-gold">Quellenangabe</span>
+            <span className="text-quellex-gold">{t('quellexLanding.attributionFeature')}</span>
           </h3>
           <p className="text-sm sm:text-base text-secondary dark:text-gray-400 leading-relaxed max-w-md mx-auto lg:mx-0">
-            Quellex zeigt nicht nur, wo etwas gefunden wurde — sondern genau den relevanten Textabschnitt mit Seitenzahl und Absatz. So bewerten Sie Treffer sofort, ohne jedes Dokument einzeln öffnen zu müssen.
+            {t('quellexLanding.attributionDesc')}
           </p>
         </div>
         <div className="flex-1 w-full flex justify-center quellex-reveal quellex-reveal-delay-2">
@@ -276,12 +275,12 @@ function FeatureHighlights() {
       {/* OCR feature */}
       <div className="flex flex-col lg:flex-row-reverse items-center gap-10 lg:gap-16 max-w-5xl mx-auto">
         <div className="flex-1 space-y-4 text-center lg:text-left quellex-reveal">
-          <span className="text-xs font-semibold uppercase tracking-widest text-quellex-teal mb-4 block">Altbestände erschließen</span>
+          <span className="text-xs font-semibold uppercase tracking-widest text-quellex-teal mb-4 block">{t('quellexLanding.legacyRecords')}</span>
           <h3 className="font-serif-display text-2xl sm:text-3xl font-bold text-primary-900 dark:text-white">
-            OCR für <span className="text-quellex-gold">Altakten</span>
+            {t('quellexLanding.ocrFeature')}
           </h3>
           <p className="text-sm sm:text-base text-secondary dark:text-gray-400 leading-relaxed max-w-md mx-auto lg:mx-0">
-            Gescannte Dokumente, alte PDFs ohne Textebene? Quellex erkennt Text automatisch per OCR — und macht auch jahrzehntealte Akten durchsuchbar. Direkt auf Ihrem Server, ohne Datenabfluss.
+            {t('quellexLanding.ocrDesc')}
           </p>
         </div>
         <div className="flex-1 w-full flex justify-center quellex-reveal quellex-reveal-delay-2">
@@ -300,14 +299,14 @@ const teamMembers = [
 ]
 
 function TeamSection() {
+  const { t } = useTranslation()
   return (
     <div className="py-10 px-6 sm:px-10 lg:px-16">
       <div className="quellex-section-divider mb-16" />
       <div className="max-w-3xl mx-auto text-center mb-12 quellex-reveal">
-        <span className="text-xs font-semibold uppercase tracking-widest text-quellex-teal mb-4 block">Das Team</span>
+        <span className="text-xs font-semibold uppercase tracking-widest text-quellex-teal mb-4 block">{t('quellexLanding.teamSection')}</span>
         <h2 className="font-serif-display text-2xl sm:text-3xl lg:text-4xl font-bold text-primary-900 dark:text-white leading-tight">
-          Hinter Quellex stehen{' '}
-          <span className="text-quellex-gold">Recht, Produkt und KI-Architektur.</span>
+          {t('quellexLanding.teamHeading')}
         </h2>
       </div>
 
@@ -345,9 +344,9 @@ function TeamSection() {
 
       {/* Extended Team */}
       <div className="max-w-4xl mx-auto mt-16 text-center quellex-reveal">
-        <span className="text-xs font-semibold uppercase tracking-widest text-quellex-teal mb-4 block">Weiteres Team</span>
+        <span className="text-xs font-semibold uppercase tracking-widest text-quellex-teal mb-4 block">{t('quellexLanding.extendedTeam')}</span>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mt-6">
-          {['Software Architekt', 'UI/UX Designer', 'Grafiker', 'Front-End Entwickler', 'Back-End Entwickler', 'Test/QA Engineer'].map((role, i) => (
+          {['roleArchitect', 'roleDesigner', 'roleGraphic', 'roleFrontend', 'roleBackend', 'roleQa'].map((key, i) => (
             <div
               key={i}
               className="quellex-glass-surface-strong rounded-xl border quellex-card-shadow p-4 flex flex-col items-center gap-3"
@@ -356,7 +355,7 @@ function TeamSection() {
               <div className="w-11 h-11 rounded-full flex items-center justify-center" style={{ background: 'hsl(43 65% 52% / 0.1)', border: '1px solid hsl(43 65% 52% / 0.2)' }}>
                 <Squares2X2Icon className="w-5 h-5 text-quellex-gold" />
               </div>
-              <p className="text-xs font-semibold text-quellex-gold leading-tight text-center">{role}</p>
+              <p className="text-xs font-semibold text-quellex-gold leading-tight text-center">{t(`quellexLanding.${key}`)}</p>
             </div>
           ))}
         </div>
@@ -367,23 +366,23 @@ function TeamSection() {
 
 // ─── Closing CTA ────────────────────────────────────────────
 function ClosingCTA() {
+  const { t } = useTranslation()
   return (
     <div className="py-12 px-6 sm:px-10 lg:px-16">
       <div className="quellex-section-divider mb-16" />
       <div className="max-w-2xl mx-auto text-center space-y-8 quellex-reveal">
         <h2 className="font-serif-display text-2xl sm:text-3xl lg:text-4xl font-bold text-primary-900 dark:text-white leading-tight">
-          Bereit, Ihr Kanzleiwissen{' '}
-          <span className="text-quellex-gold">endlich nutzbar zu machen?</span>
+          {t('quellexLanding.ctaHeading')}
         </h2>
         <p className="text-sm sm:text-base text-secondary dark:text-gray-400 leading-relaxed max-w-lg mx-auto">
-          Vereinbaren Sie gerne eine persönliche Vorführung oder starten Sie mit einem unverbindlichen technischen Erstcheck Ihrer Infrastruktur.
+          {t('quellexLanding.ctaDesc')}
         </p>
         <div className="flex justify-center pt-2">
           <LocalizedLink
             to="/login"
             className="inline-flex items-center justify-center px-10 py-3 h-12 rounded-xl bg-quellex-gold text-white font-semibold text-sm quellex-gold-glow hover:quellex-gold-glow-hover hover:-translate-y-0.5 active:translate-y-0 transition-all duration-300"
           >
-            Persönliche Demo buchen
+            {t('quellexLanding.bookDemo')}
           </LocalizedLink>
         </div>
       </div>
@@ -395,6 +394,7 @@ function ClosingCTA() {
 // MAIN PAGE
 // ═══════════════════════════════════════════════════════════════
 export default function QuellexLandingPage() {
+  const { t } = useTranslation()
   const { isAuthenticated } = useAuth()
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [activeSection, setActiveSection] = useState('overview')
@@ -436,9 +436,9 @@ export default function QuellexLandingPage() {
   }, [])
 
   const navLinks = [
-    { label: 'Funktionalität', id: 'features' },
-    { label: 'Kernteam', id: 'team' },
-    { label: 'Kontakt', id: 'contact' },
+    { label: t('quellexLanding.navFeatures'), id: 'features' },
+    { label: t('quellexLanding.navTeam'), id: 'team' },
+    { label: t('quellexLanding.navContact'), id: 'contact' },
   ]
 
   const scrollToSection = (id: string) => {
@@ -493,7 +493,7 @@ export default function QuellexLandingPage() {
             to="/login"
             className="hidden lg:inline-flex items-center justify-center px-4 py-1.5 rounded-lg bg-quellex-gold text-white font-semibold text-xs quellex-gold-glow hover:quellex-gold-glow-hover hover:-translate-y-0.5 transition-all duration-300"
           >
-            Demo anfordern
+            {t('quellexLanding.requestDemo')}
           </LocalizedLink>
           {/* Mobile hamburger */}
           <button
@@ -514,7 +514,7 @@ export default function QuellexLandingPage() {
               <XMarkIcon className="w-5 h-5" />
             </button>
             <button onClick={() => scrollToSection('overview')} className="text-sm text-left text-secondary dark:text-gray-400 hover:text-quellex-gold py-2">
-              Overview
+              {t('quellexLanding.navOverview')}
             </button>
             {navLinks.map((link) => (
               <button
@@ -529,7 +529,7 @@ export default function QuellexLandingPage() {
               to="/login"
               className="mt-4 inline-flex items-center justify-center px-4 py-2 rounded-lg bg-quellex-gold text-white font-semibold text-xs"
             >
-              Demo anfordern
+              {t('quellexLanding.requestDemo')}
             </LocalizedLink>
           </div>
         </>
@@ -558,22 +558,22 @@ export default function QuellexLandingPage() {
                 />
               </h1>
               <p className="text-base sm:text-lg text-secondary dark:text-gray-400 leading-relaxed max-w-lg mx-auto lg:mx-0 text-center whitespace-pre-wrap">
-                Quellex durchsucht Ihre eigenen Akten, Ordner und Netzlaufwerke — sorgfältig, lokal und mit voller Nachvollziehbarkeit.
+                {t('quellexLanding.heroSubtitle')}
               </p>
               <div className="flex flex-col sm:flex-row gap-3 justify-center">
                 <LocalizedLink
                   to={heroCtaLink}
                   className="inline-flex items-center justify-center px-8 py-3 rounded-xl bg-quellex-gold text-white font-semibold text-sm quellex-gold-glow hover:quellex-gold-glow-hover hover:-translate-y-0.5 active:translate-y-0 transition-all duration-300"
                 >
-                  Persönliche Demo buchen
+                  {t('quellexLanding.bookDemo')}
                 </LocalizedLink>
               </div>
               {/* Trust badges */}
               <div className="flex items-center gap-6 pt-4 justify-center lg:justify-start">
                 {[
-                  { label: '100% lokal', info: 'Alle Daten bleiben auf Ihrer Infrastruktur' },
-                  { label: 'DSGVO-konform', info: 'Vollständig datenschutzkonform nach EU-Recht' },
-                  { label: 'Made in Austria', info: 'Entwickelt und gehostet in Österreich' },
+                  { label: t('quellexLanding.trustFullyLocal'), info: t('quellexLanding.trustFullyLocalInfo') },
+                  { label: t('quellexLanding.trustGdpr'), info: t('quellexLanding.trustGdprInfo') },
+                  { label: t('quellexLanding.trustMadeInAustria'), info: t('quellexLanding.trustMadeInAustriaInfo') },
                 ].map((item) => (
                   <div key={item.label} className="group relative flex items-center gap-2 cursor-default">
                     <div className="w-2 h-2 rounded-full" style={{ background: 'hsl(180 100% 32%)' }} />
@@ -625,9 +625,9 @@ export default function QuellexLandingPage() {
 
       {/* ─── FOOTER ─── */}
       <footer className="px-6 sm:px-10 lg:px-16 py-6 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between text-center sm:text-left" style={{ borderTop: '1px solid hsl(var(--quellex-border) / 0.15)', background: 'hsl(var(--quellex-navy-surface) / 0.05)' }}>
-        <span className="text-xs text-secondary dark:text-gray-400">© 2026 Quellex · Wien, Österreich</span>
+        <span className="text-xs text-secondary dark:text-gray-400">{t('quellexLanding.footerCopyright')}</span>
         <div className="flex items-center justify-center sm:justify-end gap-4">
-          <span className="text-xs text-secondary dark:text-gray-400 hidden sm:block">Für österreichische Rechtsanwaltskanzleien</span>
+          <span className="text-xs text-secondary dark:text-gray-400 hidden sm:block">{t('quellexLanding.footerTagline')}</span>
         </div>
       </footer>
     </div>

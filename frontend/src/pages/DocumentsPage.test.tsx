@@ -279,6 +279,48 @@ describe('DocumentsPage', () => {
     })
   })
 
+  it('cycles sort state, refreshes data, and toggles the folder sidebar', async () => {
+    const user = userEvent.setup()
+    getMetadataRebuildStatusMock.mockResolvedValue({ status: null, running: false })
+    listMock.mockResolvedValue(listResponse(rootDocuments))
+
+    renderPage()
+
+    expect(await screen.findByText('Quarterly Report')).toBeInTheDocument()
+
+    await user.click(screen.getAllByText('Name')[1])
+    await waitFor(() => {
+      expect(listMock).toHaveBeenLastCalledWith(1, 50, undefined, undefined, true, 'name', 'desc')
+    })
+
+    await user.click(screen.getAllByText('Name')[1])
+    await waitFor(() => {
+      expect(listMock).toHaveBeenLastCalledWith(1, 50, undefined, undefined, true, 'name', 'asc')
+    })
+    expect(screen.getByTitle('Sort ascending')).toBeInTheDocument()
+
+    await user.click(screen.getByTitle('Sort ascending'))
+    await waitFor(() => {
+      expect(listMock).toHaveBeenLastCalledWith(1, 50, undefined, undefined, true, 'name', 'desc')
+    })
+
+    await user.click(screen.getByTitle('Refresh'))
+    await waitFor(() => {
+      expect(getFoldersMock).toHaveBeenCalledTimes(2)
+      expect(listMock.mock.calls.length).toBeGreaterThan(3)
+    })
+
+    const collapseButton = screen
+      .getByText('Folders')
+      .parentElement?.querySelector('button') as HTMLButtonElement | null
+    expect(collapseButton).not.toBeNull()
+    await user.click(collapseButton!)
+
+    expect(screen.getByTitle('Show folders')).toBeInTheDocument()
+    await user.click(screen.getByTitle('Show folders'))
+    expect(screen.getByText('Folders')).toBeInTheDocument()
+  })
+
   it('shows an error banner when document loading fails', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     listMock.mockRejectedValue(new Error('boom'))

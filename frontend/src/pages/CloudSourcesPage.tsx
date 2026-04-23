@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import {
   CloudIcon,
   PlusIcon,
@@ -34,8 +35,8 @@ const PROVIDER_ICONS: Record<CloudProviderType, string> = {
   email_outlook: '📨',
 }
 
-function formatRelativeTime(dateString?: string): string {
-  if (!dateString) return 'Never'
+function formatRelativeTime(dateString: string | undefined, t: (key: string, opts?: any) => string): string {
+  if (!dateString) return t('cloudSourcesPage.timeNever')
   const date = new Date(dateString)
   const now = new Date()
   const diff = now.getTime() - date.getTime()
@@ -44,15 +45,16 @@ function formatRelativeTime(dateString?: string): string {
   const hours = Math.floor(diff / 3600000)
   const days = Math.floor(diff / 86400000)
   
-  if (minutes < 1) return 'Just now'
-  if (minutes < 60) return `${minutes}m ago`
-  if (hours < 24) return `${hours}h ago`
-  if (days < 7) return `${days}d ago`
+  if (minutes < 1) return t('cloudSourcesPage.timeJustNow')
+  if (minutes < 60) return t('cloudSourcesPage.timeMinutesAgo', { count: minutes })
+  if (hours < 24) return t('cloudSourcesPage.timeHoursAgo', { count: hours })
+  if (days < 7) return t('cloudSourcesPage.timeDaysAgo', { count: days })
   return date.toLocaleDateString()
 }
 
 export default function CloudSourcesPage() {
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const { user, isLoading: authLoading } = useAuth()
   
   const [dashboard, setDashboard] = useState<CloudSourcesDashboard | null>(null)
@@ -124,9 +126,9 @@ export default function CloudSourcesPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-primary-900 dark:text-gray-100">Cloud Sources</h1>
+          <h1 className="text-2xl font-bold text-primary-900 dark:text-gray-100">{t('cloudSourcesPage.title')}</h1>
           <p className="text-secondary dark:text-gray-400 mt-1">
-            Connect and sync documents from cloud storage and collaboration platforms
+            {t('cloudSourcesPage.subtitle')}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -143,7 +145,7 @@ export default function CloudSourcesPage() {
             className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-white hover:bg-primary-700"
           >
             <PlusIcon className="h-5 w-5" />
-            Add Source
+            {t('cloudSourcesPage.addSource')}
           </button>
         </div>
       </div>
@@ -170,7 +172,7 @@ export default function CloudSourcesPage() {
                 <p className="text-2xl font-bold text-primary-900 dark:text-gray-100">
                   {dashboard.total_connections}
                 </p>
-                <p className="text-sm text-secondary dark:text-gray-400">Connections</p>
+                <p className="text-sm text-secondary dark:text-gray-400">{t('cloudSourcesPage.connections')}</p>
               </div>
             </div>
           </div>
@@ -184,7 +186,7 @@ export default function CloudSourcesPage() {
                 <p className="text-2xl font-bold text-primary-900 dark:text-gray-100">
                   {dashboard.total_sync_configs}
                 </p>
-                <p className="text-sm text-secondary dark:text-gray-400">Sync Configs</p>
+                <p className="text-sm text-secondary dark:text-gray-400">{t('cloudSourcesPage.syncConfigs')}</p>
               </div>
             </div>
           </div>
@@ -198,7 +200,7 @@ export default function CloudSourcesPage() {
                 <p className="text-2xl font-bold text-primary-900 dark:text-gray-100">
                   {dashboard.total_files_indexed.toLocaleString()}
                 </p>
-                <p className="text-sm text-secondary dark:text-gray-400">Files Indexed</p>
+                <p className="text-sm text-secondary dark:text-gray-400">{t('cloudSourcesPage.filesIndexed')}</p>
               </div>
             </div>
           </div>
@@ -212,7 +214,7 @@ export default function CloudSourcesPage() {
                 <p className="text-2xl font-bold text-primary-900 dark:text-gray-100">
                   {dashboard.active_jobs}
                 </p>
-                <p className="text-sm text-secondary dark:text-gray-400">Active Syncs</p>
+                <p className="text-sm text-secondary dark:text-gray-400">{t('cloudSourcesPage.activeSyncs')}</p>
               </div>
             </div>
           </div>
@@ -225,14 +227,14 @@ export default function CloudSourcesPage() {
           <div className="flex items-center gap-3">
             <CloudIcon className="h-5 w-5 text-primary" />
             <h2 className="text-lg font-semibold text-primary-900 dark:text-gray-100">
-              Connected Sources
+              {t('cloudSourcesPage.connectedSources')}
             </h2>
           </div>
           <button
             onClick={() => navigate('/cloud-sources/connections')}
             className="text-sm text-primary hover:text-primary-700"
           >
-            Manage All →
+            {t('cloudSourcesPage.manageAll')}
           </button>
         </div>
         
@@ -268,13 +270,13 @@ export default function CloudSourcesPage() {
                 <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700">
                   <div className="grid grid-cols-2 gap-2 text-sm">
                     <div>
-                      <p className="text-secondary dark:text-gray-400">Files</p>
+                      <p className="text-secondary dark:text-gray-400">{t('cloudSourcesPage.files')}</p>
                       <p className="font-medium text-primary-900 dark:text-gray-100">
                         {source.total_files_indexed.toLocaleString()}
                       </p>
                     </div>
                     <div>
-                      <p className="text-secondary dark:text-gray-400">Syncs</p>
+                      <p className="text-secondary dark:text-gray-400">{t('cloudSourcesPage.syncs')}</p>
                       <p className="font-medium text-primary-900 dark:text-gray-100">
                         {source.sync_configs_count}
                       </p>
@@ -282,9 +284,9 @@ export default function CloudSourcesPage() {
                   </div>
                   
                   <div className="mt-2 flex items-center justify-between text-xs text-secondary dark:text-gray-400">
-                    <span>Last sync: {formatRelativeTime(source.last_sync_at)}</span>
+                    <span>{t('cloudSourcesPage.lastSync', { time: formatRelativeTime(source.last_sync_at, t) })}</span>
                     {source.next_sync_at && (
-                      <span>Next: {formatRelativeTime(source.next_sync_at)}</span>
+                      <span>{t('cloudSourcesPage.nextSync', { time: formatRelativeTime(source.next_sync_at, t) })}</span>
                     )}
                   </div>
                 </div>
@@ -295,14 +297,14 @@ export default function CloudSourcesPage() {
           <div className="text-center py-8">
             <CloudIcon className="h-12 w-12 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
             <p className="text-secondary dark:text-gray-400 mb-4">
-              No cloud sources connected yet
+              {t('cloudSourcesPage.noSources')}
             </p>
             <button
               onClick={() => setShowAddSource(true)}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-white hover:bg-primary-700"
             >
               <PlusIcon className="h-5 w-5" />
-              Connect Your First Source
+              {t('cloudSourcesPage.connectFirst')}
             </button>
           </div>
         )}
@@ -314,7 +316,7 @@ export default function CloudSourcesPage() {
           <div className="flex items-center gap-3 mb-4">
             <ExclamationTriangleIcon className="h-5 w-5 text-red-500" />
             <h2 className="text-lg font-semibold text-primary-900 dark:text-gray-100">
-              Recent Errors
+              {t('cloudSourcesPage.recentErrors')}
             </h2>
           </div>
           
@@ -328,7 +330,7 @@ export default function CloudSourcesPage() {
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-red-700 dark:text-red-400">{error.message}</p>
                   <p className="text-xs text-red-500 dark:text-red-500 mt-1">
-                    {error.file_path} • {formatRelativeTime(error.timestamp)}
+                    {error.file_path} • {formatRelativeTime(error.timestamp, t)}
                   </p>
                 </div>
               </div>
@@ -344,7 +346,7 @@ export default function CloudSourcesPage() {
             <div className="p-6 border-b border-gray-200 dark:border-gray-700">
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-100">
-                  Add Cloud Source
+                  {t('cloudSourcesPage.addCloudSource')}
                 </h2>
                 <button
                   onClick={() => setShowAddSource(false)}
@@ -354,7 +356,7 @@ export default function CloudSourcesPage() {
                 </button>
               </div>
               <p className="text-secondary dark:text-gray-400 mt-1">
-                Connect a cloud storage or collaboration platform to index documents
+                {t('cloudSourcesPage.addCloudSourceDesc')}
               </p>
             </div>
             
@@ -380,12 +382,12 @@ export default function CloudSourcesPage() {
                       <div className="flex items-center gap-2 mt-2">
                         {provider.supports_delta_sync && (
                           <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-400">
-                            Delta Sync
+                            {t('cloudSourcesPage.deltaSyncBadge')}
                           </span>
                         )}
                         {provider.supported_auth_types.includes('oauth2') && (
                           <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-400">
-                            OAuth
+                            {t('cloudSourcesPage.oauthBadge')}
                           </span>
                         )}
                       </div>

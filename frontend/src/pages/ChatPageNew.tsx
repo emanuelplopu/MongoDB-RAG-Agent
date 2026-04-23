@@ -388,7 +388,7 @@ export default function ChatPage() {
             const assistantMessage: SessionMessage = {
               id: 'msg-' + Date.now(),
               role: 'assistant',
-              content: response.content || '(No response content received)',
+              content: response.content || t('chatPage.noResponseContent'),
               timestamp: new Date().toISOString(),
               sources: response.sources,
               stats: {
@@ -599,7 +599,7 @@ export default function ChatPage() {
           {/* Header */}
           <div className="flex items-center justify-between px-6 py-3 border-b border-surface-variant dark:border-gray-700 flex-shrink-0">
             <h2 className="font-semibold text-primary-900 dark:text-gray-100 truncate max-w-md">
-              {currentSession.title || 'New Chat'}
+              {currentSession.title || t('chat.newChat')}
             </h2>
             <div className="flex items-center gap-3">
               {/* Model Selector */}
@@ -616,7 +616,7 @@ export default function ChatPage() {
                   <div className="absolute right-0 mt-1 w-80 max-h-96 overflow-y-auto bg-white dark:bg-gray-900 rounded-xl shadow-xl border border-gray-200 dark:border-gray-600 z-50">
                     <div className="p-2">
                       <div className="text-xs font-medium text-secondary dark:text-gray-400 px-2 py-1 uppercase">
-                        Select Model
+                        {t('chatPage.selectModel')}
                       </div>
                       {models.slice(0, 20).map(model => {
                         const pricing = getPricing(model.id)
@@ -633,7 +633,7 @@ export default function ChatPage() {
                               <span className="text-sm dark:text-gray-200">{model.id}</span>
                               {isDefault && (
                                 <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary-100 dark:bg-primary-900/50 text-primary-600 dark:text-primary-400 font-medium">
-                                  default
+                                  {t('chatPage.defaultBadge')}
                                 </span>
                               )}
                             </div>
@@ -655,7 +655,7 @@ export default function ChatPage() {
                             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left text-xs text-secondary dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
                           >
                             <CheckCircleIcon className="h-3.5 w-3.5" />
-                            Set "{currentSession.model}" as default for new chats
+                            {t('chatPage.setAsDefault', { model: currentSession.model })}
                           </button>
                         </div>
                       )}
@@ -714,7 +714,7 @@ export default function ChatPage() {
                         <div className="flex items-start gap-2">
                           <InformationCircleIcon className="h-4 w-4 text-primary flex-shrink-0 mt-0.5" />
                           <div className="text-[10px] text-secondary dark:text-gray-400">
-                            <strong className="text-primary-700 dark:text-primary-300">Current: {t(`chatPage.modes.${agentMode}.label`)}</strong>
+                            <strong className="text-primary-700 dark:text-primary-300">{t('chatPage.currentMode')} {t(`chatPage.modes.${agentMode}.label`)}</strong>
                             <p className="mt-1">{t(`chatPage.modes.${agentMode}.details`)}</p>
                           </div>
                         </div>
@@ -1010,7 +1010,7 @@ export default function ChatPage() {
                   ))}
                   {attachmentTokens > 0 && (
                     <div className="flex items-center px-2 text-xs text-secondary dark:text-gray-400">
-                      Total: ~{attachmentTokens.toLocaleString()} tokens
+                      {t('chatPage.totalTokens', { tokens: attachmentTokens.toLocaleString() })}
                     </div>
                   )}
                 </div>
@@ -1030,7 +1030,7 @@ export default function ChatPage() {
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   className="flex h-10 w-10 items-center justify-center rounded-xl hover:bg-surface dark:hover:bg-gray-600 text-secondary hover:text-primary transition-colors flex-shrink-0"
-                  title="Attach files"
+                  title={t('chatPage.attachFiles')}
                 >
                   <PaperClipIcon className="h-5 w-5" />
                 </button>

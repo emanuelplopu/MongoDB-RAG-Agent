@@ -1,17 +1,19 @@
 import { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from 'react'
 import { authApi, User, setAuthToken, clearAuthToken, getAuthToken } from '../api/client'
-import SessionExpiredModal from '../components/SessionExpiredModal'
 
 interface AuthContextType {
   user: User | null
   isLoading: boolean
   isAuthenticated: boolean
   sessionExpired: boolean
+  showSessionModal: boolean
   login: (email: string, password: string) => Promise<void>
   register: (email: string, name: string, password: string, titlePrefix?: string, titleSuffix?: string) => Promise<void>
   logout: () => Promise<void>
   refreshUser: () => Promise<void>
   dismissSessionExpired: () => void
+  closeSessionModal: () => void
+  continueAsGuest: () => void
 }
 
 const AuthContext = createContext<AuthContextType | null>(null)
@@ -173,21 +175,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isLoading,
     isAuthenticated: !!user,
     sessionExpired,
+    showSessionModal,
     login,
     register,
     logout,
     refreshUser,
     dismissSessionExpired,
+    closeSessionModal: () => setShowSessionModal(false),
+    continueAsGuest: handleContinueAsGuest,
   }
 
   return (
     <AuthContext.Provider value={value}>
       {children}
-      <SessionExpiredModal
-        isOpen={showSessionModal}
-        onClose={() => setShowSessionModal(false)}
-        onContinueAsGuest={handleContinueAsGuest}
-      />
     </AuthContext.Provider>
   )
 }

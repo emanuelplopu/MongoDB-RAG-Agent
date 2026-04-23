@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { sessionsApi, ChatSession } from '../api/client'
 import { ArchiveBoxIcon, ArrowPathIcon, TrashIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline'
 
 export default function ArchivedChatsPage() {
+  const { t } = useTranslation()
   const [sessions, setSessions] = useState<ChatSession[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -20,7 +22,7 @@ export default function ArchivedChatsPage() {
       setSessions(data.sessions)
       setError(null)
     } catch (err) {
-      setError('Failed to load archived chats')
+      setError(t('archivedChatsPage.loadFailed'))
       console.error(err)
     } finally {
       setLoading(false)
@@ -55,7 +57,7 @@ export default function ArchivedChatsPage() {
       setSessions(prev => prev.filter(s => !ids.includes(s.id)))
       setSelectedIds(new Set())
     } catch (err) {
-      setError('Failed to restore chats')
+      setError(t('archivedChatsPage.restoreFailed'))
       console.error(err)
     } finally {
       setOperating(false)
@@ -64,7 +66,7 @@ export default function ArchivedChatsPage() {
 
   const handlePermanentDelete = async (ids: string[]) => {
     if (ids.length === 0) return
-    if (!confirm(`Permanently delete ${ids.length} chat(s)? This cannot be undone.`)) {
+    if (!confirm(t('archivedChatsPage.confirmDelete', { count: ids.length }))) {
       return
     }
     try {
@@ -73,7 +75,7 @@ export default function ArchivedChatsPage() {
       setSessions(prev => prev.filter(s => !ids.includes(s.id)))
       setSelectedIds(new Set())
     } catch (err) {
-      setError('Failed to delete chats')
+      setError(t('archivedChatsPage.deleteFailed'))
       console.error(err)
     } finally {
       setOperating(false)
@@ -93,13 +95,13 @@ export default function ArchivedChatsPage() {
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
     } catch (err) {
-      setError('Failed to export chat')
+      setError(t('archivedChatsPage.exportFailed'))
       console.error(err)
     }
   }
 
   const formatDate = (dateStr: string | undefined) => {
-    if (!dateStr) return 'Unknown'
+    if (!dateStr) return t('archivedChatsPage.dateUnknown')
     return new Date(dateStr).toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'short',
@@ -117,9 +119,9 @@ export default function ArchivedChatsPage() {
           <div className="flex items-center gap-3">
             <ArchiveBoxIcon className="h-8 w-8 text-amber-600" />
             <div>
-              <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Archived Chats</h1>
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{t('archivedChatsPage.title')}</h1>
               <p className="text-gray-600 dark:text-gray-400">
-                Restore, download, or permanently delete archived conversations
+                {t('archivedChatsPage.subtitle')}
               </p>
             </div>
           </div>
@@ -150,14 +152,14 @@ export default function ArchivedChatsPage() {
                   onClick={selectAll}
                   className="px-3 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
                 >
-                  Select All
+                  {t('archivedChatsPage.selectAll')}
                 </button>
                 {selectedIds.size > 0 && (
                   <button
                     onClick={clearSelection}
                     className="px-3 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
                   >
-                    Clear ({selectedIds.size})
+                    {t('archivedChatsPage.clearCount', { count: selectedIds.size })}
                   </button>
                 )}
               </>
@@ -172,7 +174,7 @@ export default function ArchivedChatsPage() {
                 className="px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2"
               >
                 <ArrowPathIcon className="h-4 w-4" />
-                Restore ({selectedIds.size})
+                {t('archivedChatsPage.restoreCount', { count: selectedIds.size })}
               </button>
               <button
                 onClick={() => handlePermanentDelete(Array.from(selectedIds))}
@@ -180,7 +182,7 @@ export default function ArchivedChatsPage() {
                 className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
               >
                 <TrashIcon className="h-4 w-4" />
-                Delete Forever ({selectedIds.size})
+                {t('archivedChatsPage.deleteForeverCount', { count: selectedIds.size })}
               </button>
             </div>
           )}
@@ -195,8 +197,8 @@ export default function ArchivedChatsPage() {
           ) : sessions.length === 0 ? (
             <div className="py-12 text-center text-gray-500 dark:text-gray-400">
               <ArchiveBoxIcon className="h-12 w-12 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
-              <p>No archived chats</p>
-              <p className="text-sm mt-1">Archived conversations will appear here</p>
+              <p>{t('archivedChatsPage.noChats')}</p>
+              <p className="text-sm mt-1">{t('archivedChatsPage.noChatsDesc')}</p>
             </div>
           ) : (
             <div className="divide-y divide-gray-200 dark:divide-gray-700">
@@ -216,13 +218,13 @@ export default function ArchivedChatsPage() {
                   
                   <div className="flex-1 min-w-0">
                     <h3 className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                      {session.title || 'Untitled Chat'}
+                      {session.title || t('archivedChatsPage.untitledChat')}
                     </h3>
                     <div className="text-xs text-gray-500 dark:text-gray-400 mt-1 flex items-center gap-4">
-                      <span>Archived: {formatDate(session.archived_at)}</span>
-                      <span>Created: {formatDate(session.created_at)}</span>
+                      <span>{t('archivedChatsPage.archivedAt', { date: formatDate(session.archived_at) })}</span>
+                      <span>{t('archivedChatsPage.createdAt', { date: formatDate(session.created_at) })}</span>
                       {session.stats && (
-                        <span>{session.stats.total_messages || 0} messages</span>
+                        <span>{t('archivedChatsPage.messagesCount', { count: session.stats.total_messages || 0 })}</span>
                       )}
                     </div>
                   </div>
@@ -231,7 +233,7 @@ export default function ArchivedChatsPage() {
                     <button
                       onClick={() => handleExport(session.id)}
                       className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
-                      title="Download"
+                      title={t('archivedChatsPage.download')}
                     >
                       <ArrowDownTrayIcon className="h-5 w-5" />
                     </button>
@@ -239,7 +241,7 @@ export default function ArchivedChatsPage() {
                       onClick={() => handleRestore([session.id])}
                       disabled={operating}
                       className="p-2 text-green-600 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg disabled:opacity-50"
-                      title="Restore"
+                      title={t('archivedChatsPage.restore')}
                     >
                       <ArrowPathIcon className="h-5 w-5" />
                     </button>
@@ -247,7 +249,7 @@ export default function ArchivedChatsPage() {
                       onClick={() => handlePermanentDelete([session.id])}
                       disabled={operating}
                       className="p-2 text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg disabled:opacity-50"
-                      title="Delete Forever"
+                      title={t('archivedChatsPage.deleteForever')}
                     >
                       <TrashIcon className="h-5 w-5" />
                     </button>
@@ -260,12 +262,12 @@ export default function ArchivedChatsPage() {
 
         {/* Info box */}
         <div className="mt-6 p-4 bg-amber-50 dark:bg-amber-900/20 rounded-lg">
-          <h3 className="font-semibold text-amber-800 dark:text-amber-200 mb-2">About Archived Chats</h3>
+          <h3 className="font-semibold text-amber-800 dark:text-amber-200 mb-2">{t('archivedChatsPage.aboutTitle')}</h3>
           <ul className="text-sm text-amber-700 dark:text-amber-300 space-y-1">
-            <li>• Archived chats are removed from your main chat list</li>
-            <li>• You can restore them at any time to continue the conversation</li>
-            <li>• Download exports include full message history</li>
-            <li>• Deleting forever is permanent and cannot be undone</li>
+            <li>• {t('archivedChatsPage.aboutBullet1')}</li>
+            <li>• {t('archivedChatsPage.aboutBullet2')}</li>
+            <li>• {t('archivedChatsPage.aboutBullet3')}</li>
+            <li>• {t('archivedChatsPage.aboutBullet4')}</li>
           </ul>
         </div>
       </div>

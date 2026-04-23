@@ -254,7 +254,7 @@ services:
     environment:
       - BACKEND_HOST=backend-quellex
       - SERVER_DOMAINS=test-0-8-7.quellex.at
-      - API_DOMAIN=api.test-0-8-7.quellex.at
+      - API_DOMAIN=test-0-8-7.quellex.at
     depends_on:
       - backend-quellex
     networks:

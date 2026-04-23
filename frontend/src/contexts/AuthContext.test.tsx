@@ -63,6 +63,7 @@ function TestConsumer({ onAuthChange }: { onAuthChange?: (auth: ReturnType<typeo
       <div data-testid="user-status">{auth.isAuthenticated ? 'authenticated' : 'guest'}</div>
       <div data-testid="user-name">{auth.user?.name || 'no-user'}</div>
       <div data-testid="loading">{auth.isLoading ? 'loading' : 'ready'}</div>
+      <div data-testid="session-expired">{String(auth.sessionExpired)}</div>
       <button data-testid="login-btn" onClick={handleLogin}>
         Login
       </button>
@@ -71,6 +72,12 @@ function TestConsumer({ onAuthChange }: { onAuthChange?: (auth: ReturnType<typeo
       </button>
       <button data-testid="register-btn" onClick={handleRegister}>
         Register
+      </button>
+      <button data-testid="refresh-btn" onClick={() => void auth.refreshUser()}>
+        Refresh
+      </button>
+      <button data-testid="dismiss-expired-btn" onClick={() => auth.dismissSessionExpired()}>
+        Dismiss Expired
       </button>
     </div>
   )
@@ -157,6 +164,45 @@ describe('AuthContext', () => {
         expect(clearAuthToken).toHaveBeenCalled()
         expect(screen.getByTestId('user-status')).toHaveTextContent('guest')
       })
+    })
+
+    it('should skip rapid focus and visibility revalidation until the validation interval has passed', async () => {
+      let currentTime = new Date('2026-04-19T12:00:00Z').getTime()
+      const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => currentTime)
+
+      const mockUser = { id: '1', email: 'test@test.com', name: 'Test', is_admin: false, is_active: true, created_at: '' }
+      vi.mocked(getAuthToken).mockReturnValue('valid-token')
+      vi.mocked(authApi.getMe).mockResolvedValue(mockUser)
+
+      renderWithProviders(<TestConsumer />)
+
+      await waitFor(() => {
+        expect(screen.getByTestId('user-status')).toHaveTextContent('authenticated')
+        expect(authApi.getMe).toHaveBeenCalledTimes(1)
+      })
+
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        value: 'visible',
+      })
+
+      await act(async () => {
+        window.dispatchEvent(new Event('focus'))
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
+
+      expect(authApi.getMe).toHaveBeenCalledTimes(1)
+
+      await act(async () => {
+        currentTime = new Date('2026-04-19T12:06:00Z').getTime()
+        window.dispatchEvent(new Event('focus'))
+      })
+
+      await waitFor(() => {
+        expect(authApi.getMe).toHaveBeenCalledTimes(2)
+      })
+
+      dateNowSpy.mockRestore()
     })
   })
 
@@ -305,7 +351,98 @@ describe('AuthContext', () => {
       await waitFor(() => {
         expect(clearAuthToken).toHaveBeenCalled()
         expect(screen.getByTestId('user-status')).toHaveTextContent('guest')
+        expect(screen.getByTestId('session-expired')).toHaveTextContent('true')
+        expect(screen.getByTestId('session-expired-modal')).toBeInTheDocument()
       })
+    })
+
+    it('should refresh the current user successfully', async () => {
+      const user = userEvent.setup()
+      const initialUser = { id: '1', email: 'test@test.com', name: 'Test', is_admin: false, is_active: true, created_at: '' }
+      const refreshedUser = { ...initialUser, name: 'Updated User' }
+      vi.mocked(getAuthToken).mockReturnValue('valid-token')
+      vi.mocked(authApi.getMe)
+        .mockResolvedValueOnce(initialUser)
+        .mockResolvedValueOnce(refreshedUser)
+
+      renderWithProviders(<TestConsumer />)
+
+      await waitFor(() => {
+        expect(screen.getByTestId('user-name')).toHaveTextContent('Test')
+      })
+
+      await user.click(screen.getByTestId('refresh-btn'))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('user-name')).toHaveTextContent('Updated User')
+      })
+    })
+
+    it('should show the session modal when refreshUser fails after login and allow dismissing it', async () => {
+      const user = userEvent.setup()
+      const initialUser = { id: '1', email: 'test@test.com', name: 'Test', is_admin: false, is_active: true, created_at: '' }
+      vi.mocked(getAuthToken).mockReturnValue('valid-token')
+      vi.mocked(authApi.getMe)
+        .mockResolvedValueOnce(initialUser)
+        .mockRejectedValueOnce(new Error('Unauthorized'))
+
+      renderWithProviders(<TestConsumer />)
+
+      await waitFor(() => {
+        expect(screen.getByTestId('user-status')).toHaveTextContent('authenticated')
+      })
+
+      await user.click(screen.getByTestId('refresh-btn'))
+
+      await waitFor(() => {
+        expect(clearAuthToken).toHaveBeenCalled()
+        expect(screen.getByTestId('session-expired')).toHaveTextContent('true')
+        expect(screen.getByTestId('session-expired-modal')).toBeInTheDocument()
+      })
+
+      await user.click(screen.getByText('Close'))
+      expect(screen.queryByTestId('session-expired-modal')).not.toBeInTheDocument()
+
+      await user.click(screen.getByTestId('dismiss-expired-btn'))
+      expect(screen.getByTestId('session-expired')).toHaveTextContent('false')
+    })
+
+    it('should continue as guest from the session expired modal', async () => {
+      const user = userEvent.setup()
+      const initialUser = { id: '1', email: 'test@test.com', name: 'Test', is_admin: false, is_active: true, created_at: '' }
+      vi.mocked(getAuthToken).mockReturnValue('valid-token')
+      vi.mocked(authApi.getMe).mockResolvedValue(initialUser)
+
+      renderWithProviders(<TestConsumer />)
+
+      await waitFor(() => {
+        expect(screen.getByTestId('user-status')).toHaveTextContent('authenticated')
+      })
+
+      await act(async () => {
+        window.dispatchEvent(new Event('auth:unauthorized'))
+      })
+
+      expect(screen.getByTestId('session-expired-modal')).toBeInTheDocument()
+      await user.click(screen.getByText('Continue as Guest'))
+
+      expect(screen.queryByTestId('session-expired-modal')).not.toBeInTheDocument()
+      expect(screen.getByTestId('session-expired')).toHaveTextContent('false')
+    })
+
+    it('should ignore unauthorized events when no authenticated user was previously loaded', async () => {
+      renderWithProviders(<TestConsumer />)
+
+      await waitFor(() => {
+        expect(screen.getByTestId('user-status')).toHaveTextContent('guest')
+      })
+
+      await act(async () => {
+        window.dispatchEvent(new Event('auth:unauthorized'))
+      })
+
+      expect(screen.getByTestId('session-expired')).toHaveTextContent('false')
+      expect(screen.queryByTestId('session-expired-modal')).not.toBeInTheDocument()
     })
   })
 })

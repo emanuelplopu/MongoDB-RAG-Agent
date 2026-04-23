@@ -25,7 +25,7 @@ let preferencesState: {
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => {
+    t: (key: string, params?: Record<string, string>) => {
       const translations: Record<string, string> = {
         'dashboard.greeting.morning': 'Good morning',
         'dashboard.greeting.afternoon': 'Good afternoon',
@@ -38,6 +38,14 @@ vi.mock('react-i18next', () => ({
         'dashboard.suggestions.explain': 'Explain the latest results',
         'common.send': 'Send',
         'common.newLine': 'New line',
+        'chatPage.modes.auto.label': 'Auto',
+        'chatPage.modes.auto.description': 'Automatically chooses mode based on query complexity',
+        'chatPage.modes.thinking.label': 'Thinking',
+        'chatPage.modes.thinking.description': 'Full orchestrator-worker pipeline for complex questions',
+        'chatPage.modes.fast.label': 'Fast',
+        'chatPage.modes.fast.description': 'Direct search without orchestration for quick answers',
+        'chatPage.attachFiles': 'Attach files',
+        'chatPage.totalTokens': `Total: ~${params?.tokens ?? ''} tokens`,
       }
       return translations[key] ?? key
     },

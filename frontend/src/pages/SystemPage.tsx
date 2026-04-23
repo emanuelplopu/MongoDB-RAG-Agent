@@ -8,48 +8,20 @@ import {
   BeakerIcon,
 } from '@heroicons/react/24/outline'
 import { useAuth } from '../contexts/AuthContext'
+import { useTranslation } from 'react-i18next'
 
 // System page now serves as a hub to the 4 specialized pages
 const systemPages = [
-  {
-    name: 'Status',
-    description: 'System overview with KPIs and metrics per profile',
-    href: '/system/status',
-    icon: ChartBarIcon,
-    color: 'bg-blue-500',
-  },
-  {
-    name: 'Search Indexes',
-    description: 'Index metrics, response times, and optimization suggestions',
-    href: '/system/indexes',
-    icon: MagnifyingGlassCircleIcon,
-    color: 'bg-green-500',
-  },
-  {
-    name: 'Ingestion',
-    description: 'Queue management, scheduled updates, and selective ingestion',
-    href: '/system/ingestion',
-    icon: ArrowPathIcon,
-    color: 'bg-purple-500',
-  },
-  {
-    name: 'Configuration',
-    description: 'Per-profile config, offline mode, and local LLM management',
-    href: '/system/config',
-    icon: WrenchScrewdriverIcon,
-    color: 'bg-orange-500',
-  },
-  {
-    name: 'Embedding Benchmark',
-    description: 'Compare embedding providers (OpenAI, Ollama, vLLM)',
-    href: '/system/benchmark',
-    icon: BeakerIcon,
-    color: 'bg-cyan-500',
-  },
+  { key: 'status', href: '/system/status', icon: ChartBarIcon, color: 'bg-blue-500' },
+  { key: 'indexes', href: '/system/indexes', icon: MagnifyingGlassCircleIcon, color: 'bg-green-500' },
+  { key: 'ingestion', href: '/system/ingestion', icon: ArrowPathIcon, color: 'bg-purple-500' },
+  { key: 'config', href: '/system/config', icon: WrenchScrewdriverIcon, color: 'bg-orange-500' },
+  { key: 'benchmark', href: '/system/benchmark', icon: BeakerIcon, color: 'bg-cyan-500' },
 ]
 
 export default function SystemPage() {
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const { user, isLoading: authLoading } = useAuth()
   
   // Admin-only access check
@@ -77,9 +49,9 @@ export default function SystemPage() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-200">System Management</h2>
+        <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-200">{t('systemPage.title')}</h2>
         <p className="text-sm text-secondary dark:text-gray-400">
-          Monitor and manage your RAG system
+          {t('systemPage.subtitle')}
         </p>
       </div>
 
@@ -87,7 +59,7 @@ export default function SystemPage() {
       <div className="grid gap-6 md:grid-cols-2">
         {systemPages.map((page) => (
           <button
-            key={page.name}
+            key={page.key}
             onClick={() => navigate(page.href)}
             className="flex items-start gap-4 rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1 text-left transition-all hover:shadow-elevation-2 hover:scale-[1.02]"
           >
@@ -96,10 +68,10 @@ export default function SystemPage() {
             </div>
             <div className="flex-1">
               <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">
-                {page.name}
+                {t(`systemPage.pages.${page.key}.name`)}
               </h3>
               <p className="text-sm text-secondary dark:text-gray-400 mt-1">
-                {page.description}
+                {t(`systemPage.pages.${page.key}.desc`)}
               </p>
             </div>
           </button>

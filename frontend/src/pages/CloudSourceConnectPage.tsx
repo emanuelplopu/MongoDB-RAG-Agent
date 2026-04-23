@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import {
   ArrowLeftIcon,
   ArrowPathIcon,
@@ -169,6 +170,7 @@ const PROVIDER_FIELDS: Partial<Record<CloudProviderType, FormField[]>> = {
 
 export default function CloudSourceConnectPage() {
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const { providerType } = useParams<{ providerType: string }>()
   const { user, isLoading: authLoading } = useAuth()
 
@@ -269,16 +271,16 @@ export default function CloudSourceConnectPage() {
       <div className="text-center py-12">
         <CloudIcon className="h-16 w-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
         <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-100 mb-2">
-          Provider Not Found
+          {t('cloudConnectPage.providerNotFound')}
         </h2>
         <p className="text-secondary dark:text-gray-400 mb-6">
-          The requested provider could not be found.
+          {t('cloudConnectPage.providerNotFoundDesc')}
         </p>
         <button
           onClick={() => navigate('/cloud-sources')}
           className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-primary text-white hover:bg-primary-700"
         >
-          Back to Cloud Sources
+          {t('cloudConnectPage.backToSources')}
         </button>
       </div>
     )
@@ -300,7 +302,7 @@ export default function CloudSourceConnectPage() {
           <span className="text-3xl">{PROVIDER_ICONS[provider.provider_type]}</span>
           <div>
             <h1 className="text-2xl font-bold text-primary-900 dark:text-gray-100">
-              Connect {provider.display_name}
+              {t('cloudConnectPage.connectProvider', { provider: provider.display_name })}
             </h1>
             <p className="text-secondary dark:text-gray-400">{provider.description}</p>
           </div>
@@ -351,7 +353,7 @@ export default function CloudSourceConnectPage() {
           {/* Display Name */}
           <div>
             <label className="block text-sm font-medium text-primary-900 dark:text-gray-100 mb-2">
-              Connection Name <span className="text-red-500">*</span>
+              {t('cloudConnectPage.connectionName')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
@@ -362,7 +364,7 @@ export default function CloudSourceConnectPage() {
               className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 focus:ring-2 focus:ring-primary focus:border-transparent"
             />
             <p className="text-xs text-secondary dark:text-gray-400 mt-1">
-              A friendly name to identify this connection
+              {t('cloudConnectPage.connectionNameHelp')}
             </p>
           </div>
 
@@ -411,7 +413,7 @@ export default function CloudSourceConnectPage() {
           {provider.setup_instructions && (
             <div className="rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-4">
               <h3 className="text-sm font-medium text-blue-800 dark:text-blue-300 mb-2">
-                Setup Instructions
+                {t('cloudConnectPage.setupInstructions')}
               </h3>
               <p className="text-sm text-blue-700 dark:text-blue-400 whitespace-pre-line">
                 {provider.setup_instructions}
@@ -423,7 +425,7 @@ export default function CloudSourceConnectPage() {
                   rel="noopener noreferrer"
                   className="inline-block mt-2 text-sm text-blue-600 dark:text-blue-400 hover:underline"
                 >
-                  View Documentation →
+                  {t('cloudConnectPage.viewDocs')}
                 </a>
               )}
             </div>
@@ -434,8 +436,7 @@ export default function CloudSourceConnectPage() {
             <LockClosedIcon className="h-5 w-5 text-gray-400 flex-shrink-0 mt-0.5" />
             <div>
               <p className="text-sm text-secondary dark:text-gray-400">
-                Your credentials are encrypted and stored securely. We never share your credentials
-                with third parties.
+                {t('cloudConnectPage.securityNote')}
               </p>
             </div>
           </div>
@@ -455,7 +456,7 @@ export default function CloudSourceConnectPage() {
               className="px-6 py-3 rounded-xl bg-primary text-white hover:bg-primary-700 disabled:opacity-50 flex items-center gap-2"
             >
               {isSubmitting && <ArrowPathIcon className="h-5 w-5 animate-spin" />}
-              {isSubmitting ? 'Connecting...' : 'Connect'}
+              {isSubmitting ? t('cloudConnectPage.connecting') : t('cloudConnectPage.connect')}
             </button>
           </div>
         </form>

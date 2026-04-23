@@ -146,8 +146,10 @@ ingress:
   - service: http_status:404
 "@
 
-$systemConfig | Out-File -FilePath "$systemConfigDir\config.yml" -Encoding utf8 -Force
-Write-Success "Created system config at $systemConfigDir\config.yml"
+# Write UTF-8 without BOM (cloudflared's Go YAML parser rejects BOM)
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText("$systemConfigDir\config.yml", $systemConfig, $utf8NoBom)
+Write-Success "Created system config at $systemConfigDir\config.yml (UTF-8 no BOM)"
 
 # Step 3: Configure service recovery options
 Write-Header "Configuring Service Recovery"

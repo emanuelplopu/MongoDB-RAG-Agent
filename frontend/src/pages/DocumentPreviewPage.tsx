@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import {
   ArrowLeftIcon,
   FolderOpenIcon,
@@ -31,6 +32,7 @@ function formatDate(dateStr?: string): string {
 
 function ChunkCard({ chunk, index }: { chunk: DocumentChunk; index: number }) {
   const [expanded, setExpanded] = useState(false)
+  const { t } = useTranslation()
 
   return (
     <div className="border border-surface-variant dark:border-gray-700 rounded-xl overflow-hidden">
@@ -45,16 +47,16 @@ function ChunkCard({ chunk, index }: { chunk: DocumentChunk; index: number }) {
             <ChevronRightIcon className="h-4 w-4 text-secondary" />
           )}
           <span className="font-medium text-primary-900 dark:text-primary-200">
-            Chunk {index + 1}
+            {t('docPreviewPage.chunkNumber', { number: index + 1 })}
           </span>
           {chunk.token_count && (
             <span className="text-xs text-secondary bg-white dark:bg-gray-700 px-2 py-1 rounded-full">
-              {chunk.token_count} tokens
+              {t('docPreviewPage.tokensCount', { count: chunk.token_count })}
             </span>
           )}
           {chunk.has_embedding && (
             <span className="text-xs text-secondary-700 dark:text-secondary-400 bg-secondary-100 dark:bg-secondary-900/30 px-2 py-1 rounded-full">
-              Embedded ({chunk.embedding_dimensions}d)
+              {t('docPreviewPage.embedded', { dims: chunk.embedding_dimensions })}
             </span>
           )}
         </div>
@@ -66,7 +68,7 @@ function ChunkCard({ chunk, index }: { chunk: DocumentChunk; index: number }) {
           </pre>
           {Object.keys(chunk.metadata).length > 0 && (
             <div className="mt-3 pt-3 border-t border-surface-variant dark:border-gray-700">
-              <p className="text-xs font-medium text-secondary mb-2">Metadata:</p>
+              <p className="text-xs font-medium text-secondary mb-2">{t('docPreviewPage.metadata')}</p>
               <pre className="text-xs text-secondary bg-gray-50 dark:bg-gray-800 p-2 rounded overflow-x-auto">
                 {JSON.stringify(chunk.metadata, null, 2)}
               </pre>
@@ -81,6 +83,7 @@ function ChunkCard({ chunk, index }: { chunk: DocumentChunk; index: number }) {
 export default function DocumentPreviewPage() {
   const { documentId } = useParams<{ documentId: string }>()
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const [doc, setDoc] = useState<DocumentFullInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -128,7 +131,7 @@ export default function DocumentPreviewPage() {
         }
       } catch (err) {
         console.error('Error fetching document:', err)
-        setError('Failed to load document details')
+        setError(t('docPreviewPage.failedToLoad'))
       } finally {
         setLoading(false)
       }
@@ -165,7 +168,7 @@ export default function DocumentPreviewPage() {
         setExplorerMessage(result.message)
       }
     } catch (err) {
-      setExplorerMessage('Failed to open file explorer')
+      setExplorerMessage(t('docPreviewPage.failedExplorer'))
     } finally {
       setOpeningExplorer(false)
     }
@@ -212,12 +215,12 @@ export default function DocumentPreviewPage() {
     return (
       <div className="text-center py-12">
         <DocumentTextIcon className="h-12 w-12 text-secondary mx-auto mb-4" />
-        <p className="text-secondary">{error || 'Document not found'}</p>
+        <p className="text-secondary">{error || t('docPreviewPage.notFound')}</p>
         <button
           onClick={() => navigate(-1)}
           className="mt-4 text-primary hover:underline"
         >
-          Go back
+          {t('docPreviewPage.goBack')}
         </button>
       </div>
     )
@@ -247,7 +250,7 @@ export default function DocumentPreviewPage() {
         {cloudSourceInfo?.is_cloud_source && (
           <div className="flex items-center gap-2 px-3 py-2 bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 rounded-xl text-sm">
             <CloudIcon className="h-4 w-4" />
-            <span>Cloud Source: {cloudSourceInfo.provider?.replace('_', ' ')}</span>
+            <span>{t('docPreviewPage.cloudSource', { provider: cloudSourceInfo.provider?.replace('_', ' ') })}</span>
           </div>
         )}
         
@@ -259,12 +262,12 @@ export default function DocumentPreviewPage() {
           {cloudSourceInfo?.is_cloud_source ? (
             <>
               <ArrowTopRightOnSquareIcon className="h-5 w-5" />
-              {openingExplorer ? 'Opening...' : 'Open in Cloud Provider'}
+              {openingExplorer ? t('docPreviewPage.opening') : t('docPreviewPage.openInCloud')}
             </>
           ) : (
             <>
               <FolderOpenIcon className="h-5 w-5" />
-              {openingExplorer ? 'Opening...' : 'Open in Explorer'}
+              {openingExplorer ? t('docPreviewPage.opening') : t('docPreviewPage.openInExplorer')}
             </>
           )}
         </button>
@@ -273,14 +276,14 @@ export default function DocumentPreviewPage() {
           className="flex items-center gap-2 px-4 py-2 bg-surface-variant dark:bg-gray-700 text-primary-900 dark:text-primary-200 rounded-xl hover:bg-primary-100 dark:hover:bg-gray-600 transition-colors"
         >
           <EyeIcon className="h-5 w-5" />
-          {cloudSourceInfo?.is_cloud_source ? 'Open Here (Cached)' : 'Open Preview'}
+          {cloudSourceInfo?.is_cloud_source ? t('docPreviewPage.openCached') : t('docPreviewPage.openPreview')}
         </button>
         <Link
           to="/documents"
           className="flex items-center gap-2 px-4 py-2 bg-surface-variant dark:bg-gray-700 text-primary-900 dark:text-primary-200 rounded-xl hover:bg-primary-100 dark:hover:bg-gray-600 transition-colors"
         >
           <DocumentIcon className="h-5 w-5" />
-          All Documents
+          {t('docPreviewPage.allDocuments')}
         </Link>
       </div>
 
@@ -309,7 +312,7 @@ export default function DocumentPreviewPage() {
               }}
               className="mt-2 px-3 py-1 bg-primary-200 dark:bg-primary-800 hover:bg-primary-300 dark:hover:bg-primary-700 rounded-lg text-xs font-medium transition-colors"
             >
-              Copy Path
+              {t('docPreviewPage.copyPath')}
             </button>
           )}
         </div>
@@ -321,29 +324,29 @@ export default function DocumentPreviewPage() {
         <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm">
           <div className="flex items-center gap-2 mb-3">
             <DocumentIcon className="h-5 w-5 text-primary" />
-            <h3 className="font-medium text-primary-900 dark:text-primary-200">File Info</h3>
+            <h3 className="font-medium text-primary-900 dark:text-primary-200">{t('docPreviewPage.fileInfo')}</h3>
           </div>
           <dl className="space-y-2 text-sm">
             <div className="flex justify-between">
-              <dt className="text-secondary">Status:</dt>
+              <dt className="text-secondary">{t('docPreviewPage.statusLabel')}</dt>
               <dd className={doc.file_exists ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
-                {doc.file_exists ? 'Available' : 'Not Found'}
+                {doc.file_exists ? t('docPreviewPage.available') : t('docPreviewPage.notFoundStatus')}
               </dd>
             </div>
             {doc.file_stats && (
               <>
                 <div className="flex justify-between">
-                  <dt className="text-secondary">Size:</dt>
+                  <dt className="text-secondary">{t('docPreviewPage.size')}</dt>
                   <dd className="text-primary-900 dark:text-gray-300">{formatBytes(doc.file_stats.size_bytes)}</dd>
                 </div>
                 <div className="flex justify-between">
-                  <dt className="text-secondary">Type:</dt>
+                  <dt className="text-secondary">{t('docPreviewPage.type')}</dt>
                   <dd className="text-primary-900 dark:text-gray-300">{doc.file_stats.extension || 'Unknown'}</dd>
                 </div>
               </>
             )}
             <div className="flex justify-between">
-              <dt className="text-secondary">Content Length:</dt>
+              <dt className="text-secondary">{t('docPreviewPage.contentLength')}</dt>
               <dd className="text-primary-900 dark:text-gray-300">{doc.content_length.toLocaleString()} chars</dd>
             </div>
           </dl>
@@ -353,25 +356,25 @@ export default function DocumentPreviewPage() {
         <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm">
           <div className="flex items-center gap-2 mb-3">
             <CubeIcon className="h-5 w-5 text-primary" />
-            <h3 className="font-medium text-primary-900 dark:text-primary-200">Chunks (Semantic)</h3>
+            <h3 className="font-medium text-primary-900 dark:text-primary-200">{t('docPreviewPage.chunksSemantic')}</h3>
           </div>
           <dl className="space-y-2 text-sm">
             <div className="flex justify-between">
-              <dt className="text-secondary">Total Chunks:</dt>
+              <dt className="text-secondary">{t('docPreviewPage.totalChunks')}</dt>
               <dd className="text-primary-900 dark:text-gray-300">{doc.chunks_count}</dd>
             </div>
             <div className="flex justify-between">
-              <dt className="text-secondary">Total Tokens:</dt>
+              <dt className="text-secondary">{t('docPreviewPage.totalTokens')}</dt>
               <dd className="text-primary-900 dark:text-gray-300">{doc.total_tokens.toLocaleString()}</dd>
             </div>
             <div className="flex justify-between">
-              <dt className="text-secondary">Avg Tokens/Chunk:</dt>
+              <dt className="text-secondary">{t('docPreviewPage.avgTokensChunk')}</dt>
               <dd className="text-primary-900 dark:text-gray-300">
                 {doc.chunks_count > 0 ? Math.round(doc.total_tokens / doc.chunks_count) : 0}
               </dd>
             </div>
             <div className="flex justify-between">
-              <dt className="text-secondary">Embeddings:</dt>
+              <dt className="text-secondary">{t('docPreviewPage.embeddings')}</dt>
               <dd className="text-secondary dark:text-secondary-400">
                 {doc.chunks.filter(c => c.has_embedding).length}/{doc.chunks_count}
               </dd>
@@ -383,16 +386,16 @@ export default function DocumentPreviewPage() {
         <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm">
           <div className="flex items-center gap-2 mb-3">
             <ClockIcon className="h-5 w-5 text-primary" />
-            <h3 className="font-medium text-primary-900 dark:text-primary-200">Timestamps</h3>
+            <h3 className="font-medium text-primary-900 dark:text-primary-200">{t('docPreviewPage.timestamps')}</h3>
           </div>
           <dl className="space-y-2 text-sm">
             <div className="flex justify-between">
-              <dt className="text-secondary">Ingested:</dt>
+              <dt className="text-secondary">{t('docPreviewPage.ingested')}</dt>
               <dd className="text-primary-900 dark:text-gray-300">{formatDate(doc.created_at)}</dd>
             </div>
             {doc.metadata.ingestion_date !== undefined && doc.metadata.ingestion_date !== null && (
               <div className="flex justify-between">
-                <dt className="text-secondary">Ingestion Date:</dt>
+                <dt className="text-secondary">{t('docPreviewPage.ingestionDate')}</dt>
                 <dd className="text-primary-900 dark:text-gray-300 text-xs">
                   {String(doc.metadata.ingestion_date).split('T')[0]}
                 </dd>
@@ -406,14 +409,14 @@ export default function DocumentPreviewPage() {
       {(doc.file_path || cloudSourceInfo?.remote_path) && (
         <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm">
           <h3 className="font-medium text-primary-900 dark:text-primary-200 mb-2">
-            {cloudSourceInfo?.is_cloud_source ? 'Cloud Path' : 'File Path'}
+            {cloudSourceInfo?.is_cloud_source ? t('docPreviewPage.cloudPath') : t('docPreviewPage.filePath')}
           </h3>
           <code className="block text-sm bg-gray-50 dark:bg-gray-900 p-3 rounded-lg text-secondary overflow-x-auto">
             {cloudSourceInfo?.is_cloud_source ? cloudSourceInfo.remote_path : doc.file_path}
           </code>
           {cloudSourceInfo?.is_cloud_source && cloudSourceInfo.is_cached && (
             <p className="text-xs text-secondary dark:text-secondary-400 mt-2">
-              ✓ Cached locally for preview
+              {t('docPreviewPage.cachedLocally')}
             </p>
           )}
         </div>
@@ -422,7 +425,7 @@ export default function DocumentPreviewPage() {
       {/* Document Metadata */}
       {Object.keys(doc.metadata).length > 0 && (
         <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm">
-          <h3 className="font-medium text-primary-900 dark:text-primary-200 mb-3">Document Metadata</h3>
+          <h3 className="font-medium text-primary-900 dark:text-primary-200 mb-3">{t('docPreviewPage.documentMetadata')}</h3>
           <pre className="text-sm bg-gray-50 dark:bg-gray-900 p-3 rounded-lg text-secondary overflow-x-auto">
             {JSON.stringify(doc.metadata, null, 2)}
           </pre>
@@ -432,17 +435,17 @@ export default function DocumentPreviewPage() {
       {/* Raw Content Preview */}
       <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="font-medium text-primary-900 dark:text-primary-200">Document Content (Text)</h3>
+          <h3 className="font-medium text-primary-900 dark:text-primary-200">{t('docPreviewPage.documentContent')}</h3>
           <button
             onClick={() => setShowContent(!showContent)}
             className="text-sm text-primary hover:underline"
           >
-            {showContent ? 'Hide' : 'Show'} Content
+            {showContent ? t('docPreviewPage.hide') : t('docPreviewPage.show')} Content
           </button>
         </div>
         {showContent && (
           <pre className="text-sm bg-gray-50 dark:bg-gray-900 p-4 rounded-lg text-primary-900 dark:text-gray-300 whitespace-pre-wrap overflow-x-auto max-h-96">
-            {doc.content || 'No content available'}
+            {doc.content || t('docPreviewPage.noContent')}
           </pre>
         )}
       </div>
@@ -450,7 +453,7 @@ export default function DocumentPreviewPage() {
       {/* Chunks Section */}
       <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm">
         <h3 className="font-medium text-primary-900 dark:text-primary-200 mb-4">
-          Chunks ({doc.chunks_count})
+          {t('docPreviewPage.chunksCount', { count: doc.chunks_count })}
         </h3>
         <div className="space-y-3">
           {doc.chunks.map((chunk, index) => (

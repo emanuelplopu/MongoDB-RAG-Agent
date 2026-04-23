@@ -8,6 +8,7 @@ import { UserPreferencesProvider } from './contexts/UserPreferencesContext'
 import { SettingsSyncProvider } from './contexts/SettingsSyncContext'
 import { supportedLanguages, SupportedLanguage } from './i18n'
 import Layout from './components/Layout'
+import SessionExpiredModal from './components/SessionExpiredModal'
 import ChatPageNew from './pages/ChatPageNew'
 import DashboardPage from './pages/DashboardPage'
 import LandingPage from './pages/LandingPage'
@@ -78,7 +79,7 @@ function LanguageValidation({ children }: { children: React.ReactNode }) {
 
 // Wrapper that provides SettingsSyncProvider with auth state and coordinates preference application
 function SyncedProviders({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useAuth()
+  const { isAuthenticated, showSessionModal, closeSessionModal, continueAsGuest } = useAuth()
 
   return (
     <SettingsSyncProvider isAuthenticated={isAuthenticated}>
@@ -87,6 +88,11 @@ function SyncedProviders({ children }: { children: React.ReactNode }) {
           <UserPreferencesProvider>
             {children}
           </UserPreferencesProvider>
+          <SessionExpiredModal
+            isOpen={showSessionModal}
+            onClose={closeSessionModal}
+            onContinueAsGuest={continueAsGuest}
+          />
         </LanguageProvider>
       </ThemeProvider>
     </SettingsSyncProvider>

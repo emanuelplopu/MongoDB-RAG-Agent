@@ -21,24 +21,18 @@ import { useUserPreferences } from '../contexts/UserPreferencesContext'
 import { useLocalizedNavigate } from '../components/LocalizedLink'
 import { useLocalStorage, STORAGE_KEYS } from '../hooks/useLocalStorage'
 
-// Agent mode configuration (same as ChatPageNew)
-const AGENT_MODES = {
+// Agent mode configuration (same as ChatPageNew) – only non-translatable properties
+const AGENT_MODES_CONFIG = {
   auto: {
-    label: 'Auto',
     icon: '🔄',
-    description: 'Automatically chooses mode based on query complexity',
     color: 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300',
   },
   thinking: {
-    label: 'Thinking',
     icon: '🧠',
-    description: 'Full orchestrator-worker pipeline for complex questions',
     color: 'bg-secondary-100 dark:bg-secondary-900/40 text-secondary-700 dark:text-secondary-300',
   },
   fast: {
-    label: 'Fast',
     icon: '⚡',
-    description: 'Direct search without orchestration for quick answers',
     color: 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300',
   },
 } as const
@@ -191,7 +185,7 @@ export default function DashboardPage() {
     )
   }
 
-  const currentMode = AGENT_MODES[agentMode]
+  const currentMode = AGENT_MODES_CONFIG[agentMode]
 
   return (
     <div className="flex flex-col items-center justify-center h-full px-4">
@@ -248,7 +242,7 @@ export default function DashboardPage() {
                 ))}
                 {attachmentTokens > 0 && (
                   <div className="flex items-center px-2 text-xs text-secondary dark:text-gray-400">
-                    Total: ~{attachmentTokens.toLocaleString()} tokens
+                    {t('chatPage.totalTokens', { tokens: attachmentTokens.toLocaleString() })}
                   </div>
                 )}
               </div>
@@ -271,7 +265,7 @@ export default function DashboardPage() {
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   className="flex h-10 w-10 items-center justify-center rounded-xl hover:bg-surface-variant dark:hover:bg-gray-700 text-secondary hover:text-primary transition-colors flex-shrink-0"
-                  title="Attach files"
+                  title={t('chatPage.attachFiles')}
                 >
                   <PaperClipIcon className="h-5 w-5" />
                 </button>
@@ -312,28 +306,28 @@ export default function DashboardPage() {
                     className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${currentMode.color} hover:opacity-80`}
                   >
                     <span>{currentMode.icon}</span>
-                    <span>{currentMode.label}</span>
+                    <span>{t(`chatPage.modes.${agentMode}.label`)}</span>
                     <ChevronDownIcon className="h-3 w-3" />
                   </button>
 
                   {showAgentModeSelector && (
                     <div className="absolute bottom-full left-0 mb-2 w-64 bg-surface dark:bg-gray-800 rounded-xl shadow-elevation-3 border border-surface-variant dark:border-gray-700 py-1 z-50">
-                      {Object.entries(AGENT_MODES).map(([key, mode]) => (
+                      {(Object.keys(AGENT_MODES_CONFIG) as Array<'auto' | 'thinking' | 'fast'>).map((key) => (
                         <button
                           key={key}
                           type="button"
                           onClick={() => {
-                            setAgentMode(key as 'auto' | 'thinking' | 'fast')
+                            setAgentMode(key)
                             setShowAgentModeSelector(false)
                           }}
                           className={`w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors ${
                             agentMode === key ? 'bg-surface-variant dark:bg-gray-700' : ''
                           }`}
                         >
-                          <span className="text-lg">{mode.icon}</span>
+                          <span className="text-lg">{AGENT_MODES_CONFIG[key].icon}</span>
                           <div>
-                            <p className="text-sm font-medium text-primary-900 dark:text-gray-100">{mode.label}</p>
-                            <p className="text-xs text-secondary dark:text-gray-400">{mode.description}</p>
+                            <p className="text-sm font-medium text-primary-900 dark:text-gray-100">{t(`chatPage.modes.${key}.label`)}</p>
+                            <p className="text-xs text-secondary dark:text-gray-400">{t(`chatPage.modes.${key}.description`)}</p>
                           </div>
                         </button>
                       ))}

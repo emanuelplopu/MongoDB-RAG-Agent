@@ -100,6 +100,11 @@ export const quellexConfig: TenantConfig = {
         'landing.benefitsSubtitle': 'Quellex is designed with legal professionals in mind. Host it on your own infrastructure, maintain full control of your data, and integrate seamlessly with your existing tools.',
         'chatPage.assistantTitle': 'Quellex Assistant',
         'chatPage.emptyStateDesc': 'Ask questions about your documents. I\'ll search through your knowledge base to find relevant information.',
+        // Dashboard suggestion prompts (tenant-specific)
+        'dashboard.suggestions.summarize': 'Analyze contract',
+        'dashboard.suggestions.findDocument': 'Find precedent',
+        'dashboard.suggestions.compare': 'Compare clauses',
+        'dashboard.suggestions.explain': 'Summarize ruling',
       },
       de: {
         'common.appName': 'Quellex',
@@ -118,6 +123,11 @@ export const quellexConfig: TenantConfig = {
         'landing.benefitsSubtitle': 'Quellex wurde für juristische Fachkräfte konzipiert. Hosten Sie auf Ihrer eigenen Infrastruktur, behalten Sie die volle Kontrolle über Ihre Daten und integrieren Sie nahtlos in bestehende Tools.',
         'chatPage.assistantTitle': 'Quellex-Assistent',
         'chatPage.emptyStateDesc': 'Stellen Sie Fragen zu Ihren Dokumenten. Ich durchsuche Ihre Wissensbasis, um relevante Informationen zu finden.',
+        // Dashboard suggestion prompts (tenant-specific)
+        'dashboard.suggestions.summarize': 'Vertrag analysieren',
+        'dashboard.suggestions.findDocument': 'Präzedenzfall finden',
+        'dashboard.suggestions.compare': 'Klauseln vergleichen',
+        'dashboard.suggestions.explain': 'Urteil zusammenfassen',
       },
     },
   },

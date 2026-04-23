@@ -7,6 +7,15 @@ import { render, screen, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ThemeProvider, useTheme } from './ThemeContext'
 
+const syncPreferenceMock = vi.fn()
+
+vi.mock('./SettingsSyncContext', () => ({
+  SETTINGS_SYNCED_EVENT: 'settings:synced',
+  useOptionalSettingsSync: () => ({
+    syncPreference: syncPreferenceMock,
+  }),
+}))
+
 // Mock localStorage
 const localStorageMock = {
   getItem: vi.fn(),
@@ -42,7 +51,7 @@ Object.defineProperty(window, 'matchMedia', {
 
 // Test consumer component
 function TestConsumer() {
-  const { theme, setTheme, resolvedTheme } = useTheme()
+  const { theme, setTheme, applyTheme, resolvedTheme } = useTheme()
   
   return (
     <div>
@@ -51,6 +60,7 @@ function TestConsumer() {
       <button data-testid="set-light" onClick={() => setTheme('light')}>Light</button>
       <button data-testid="set-dark" onClick={() => setTheme('dark')}>Dark</button>
       <button data-testid="set-system" onClick={() => setTheme('system')}>System</button>
+      <button data-testid="apply-dark" onClick={() => applyTheme('dark')}>Apply Dark</button>
     </div>
   )
 }
@@ -62,6 +72,7 @@ describe('ThemeContext', () => {
     currentMatches = false
     localStorageMock.getItem.mockReturnValue(null)
     localStorageMock.setItem.mockClear()
+    syncPreferenceMock.mockReset()
     document.documentElement.classList.remove('dark')
     
     // Reset matchMedia to default implementation
@@ -153,6 +164,7 @@ describe('ThemeContext', () => {
       expect(screen.getByTestId('theme')).toHaveTextContent('light')
       expect(screen.getByTestId('resolved-theme')).toHaveTextContent('light')
       expect(localStorageMock.setItem).toHaveBeenCalledWith('theme-preference', 'light')
+      expect(syncPreferenceMock).toHaveBeenCalledWith({ theme: 'light' })
     })
 
     it('should switch to dark theme', async () => {
@@ -170,6 +182,7 @@ describe('ThemeContext', () => {
       expect(screen.getByTestId('theme')).toHaveTextContent('dark')
       expect(screen.getByTestId('resolved-theme')).toHaveTextContent('dark')
       expect(localStorageMock.setItem).toHaveBeenCalledWith('theme-preference', 'dark')
+      expect(syncPreferenceMock).toHaveBeenCalledWith({ theme: 'dark' })
     })
 
     it('should switch to system theme', async () => {
@@ -186,6 +199,7 @@ describe('ThemeContext', () => {
       
       expect(screen.getByTestId('theme')).toHaveTextContent('system')
       expect(localStorageMock.setItem).toHaveBeenCalledWith('theme-preference', 'system')
+      expect(syncPreferenceMock).toHaveBeenCalledWith({ theme: 'system' })
     })
   })
 
@@ -245,6 +259,54 @@ describe('ThemeContext', () => {
       })
       
       expect(screen.getByTestId('resolved-theme')).toHaveTextContent('dark')
+    })
+  })
+
+  describe('Synced theme application', () => {
+    it('should apply a theme directly without syncing back', async () => {
+      const user = userEvent.setup()
+
+      render(
+        <ThemeProvider>
+          <TestConsumer />
+        </ThemeProvider>
+      )
+
+      await user.click(screen.getByTestId('apply-dark'))
+
+      expect(screen.getByTestId('theme')).toHaveTextContent('dark')
+      expect(screen.getByTestId('resolved-theme')).toHaveTextContent('dark')
+      expect(localStorageMock.setItem).toHaveBeenCalledWith('theme-preference', 'dark')
+      expect(syncPreferenceMock).not.toHaveBeenCalled()
+    })
+
+    it('should apply a synced theme event and ignore invalid synced values', async () => {
+      render(
+        <ThemeProvider>
+          <TestConsumer />
+        </ThemeProvider>
+      )
+
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent('settings:synced', {
+            detail: { theme: 'dark' },
+          })
+        )
+      })
+
+      expect(screen.getByTestId('theme')).toHaveTextContent('dark')
+      expect(screen.getByTestId('resolved-theme')).toHaveTextContent('dark')
+
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent('settings:synced', {
+            detail: { theme: 'sepia' },
+          })
+        )
+      })
+
+      expect(screen.getByTestId('theme')).toHaveTextContent('dark')
     })
   })
 })

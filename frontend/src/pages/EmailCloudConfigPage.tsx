@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '../contexts/AuthContext'
 import {
   EnvelopeIcon,
@@ -175,6 +176,7 @@ function validateConfigForm(fields: ConfigField[], form: Record<string, string>)
 export default function EmailCloudConfigPage() {
   // Get current user from auth context
   const { user } = useAuth()
+  const { t } = useTranslation()
   
   // Generate user-specific database name from user's name
   const userDatabase = useMemo(() => {
@@ -503,10 +505,10 @@ export default function EmailCloudConfigPage() {
         <div>
           <h1 className="text-2xl font-bold text-primary-900 dark:text-white flex items-center gap-3">
             <EnvelopeIcon className="h-7 w-7" />
-            Email & Cloud Source Configuration
+            {t('emailConfigPage.title')}
           </h1>
           <p className="mt-1 text-secondary dark:text-gray-400">
-            Configure email accounts and cloud storage for RAG knowledge ingestion
+            {t('emailConfigPage.subtitle')}
           </p>
         </div>
         <button
@@ -523,7 +525,7 @@ export default function EmailCloudConfigPage() {
         <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 flex items-start gap-3">
           <XCircleIcon className="h-5 w-5 text-red-500 mt-0.5" />
           <div>
-            <p className="text-red-700 dark:text-red-300 font-medium">Error</p>
+            <p className="text-red-700 dark:text-red-300 font-medium">{t('emailConfigPage.errorLabel')}</p>
             <p className="text-red-600 dark:text-red-400 text-sm">{error}</p>
           </div>
           <button onClick={() => setError(null)} className="ml-auto text-red-500 hover:text-red-700">
@@ -546,31 +548,31 @@ export default function EmailCloudConfigPage() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-primary-900 dark:text-white flex items-center gap-2">
               <ServerStackIcon className="h-5 w-5" />
-              MongoDB Connection
+              {t('emailConfigPage.mongoConnection')}
             </h2>
             <span className={`px-2 py-1 rounded-full text-xs font-medium ${
               mongoTestResult?.connected
                 ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
                 : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
             }`}>
-              {mongoTestResult?.connected ? 'Connected' : 'Disconnected'}
+              {mongoTestResult?.connected ? t('emailConfigPage.connected') : t('emailConfigPage.disconnected')}
             </span>
           </div>
           
           {mongoTestResult?.connected ? (
             <div className="space-y-2 text-sm">
               <p className="text-secondary dark:text-gray-400">
-                <span className="font-medium">Server:</span> {mongoTestResult.uri_host}
+                <span className="font-medium">{t('emailConfigPage.server')}</span> {mongoTestResult.uri_host}
               </p>
               <p className="text-secondary dark:text-gray-400">
-                <span className="font-medium">Version:</span> {mongoTestResult.server_version}
+                <span className="font-medium">{t('emailConfigPage.version')}</span> {mongoTestResult.server_version}
               </p>
               <p className="text-secondary dark:text-gray-400">
-                <span className="font-medium">Database:</span> {mongoTestResult.current_database}
+                <span className="font-medium">{t('emailConfigPage.database')}</span> {mongoTestResult.current_database}
               </p>
             </div>
           ) : (
-            <p className="text-red-500 text-sm">{mongoTestResult?.error || 'Connection failed'}</p>
+            <p className="text-red-500 text-sm">{mongoTestResult?.error || t('emailConfigPage.connectionFailed')}</p>
           )}
           
           <button
@@ -583,7 +585,7 @@ export default function EmailCloudConfigPage() {
             ) : (
               <BeakerIcon className="h-4 w-4" />
             )}
-            Test Connection
+            {t('emailConfigPage.testConnection')}
           </button>
         </div>
 
@@ -592,7 +594,7 @@ export default function EmailCloudConfigPage() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-primary-900 dark:text-white flex items-center gap-2">
               <Cog6ToothIcon className="h-5 w-5" />
-              Airbyte Integration
+              {t('emailConfigPage.airbyteIntegration')}
             </h2>
             <span className={`px-2 py-1 rounded-full text-xs font-medium ${
               airbyteStatus?.available
@@ -601,14 +603,14 @@ export default function EmailCloudConfigPage() {
                   ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
                   : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-400'
             }`}>
-              {airbyteStatus?.available ? 'Available' : airbyteStatus?.enabled ? 'Unavailable' : 'Disabled'}
+              {airbyteStatus?.available ? t('emailConfigPage.airbyteAvailable') : airbyteStatus?.enabled ? t('emailConfigPage.airbyteUnavailable') : t('emailConfigPage.airbyteDisabled')}
             </span>
           </div>
           
           {airbyteStatus?.available ? (
             <div className="space-y-2 text-sm">
               <p className="text-secondary dark:text-gray-400">
-                <span className="font-medium">API:</span> {airbyteStatus.api_url}
+                <span className="font-medium">{t('emailConfigPage.api')}</span> {airbyteStatus.api_url}
               </p>
               {airbyteStatus.webapp_url && (
                 <a 
@@ -617,17 +619,17 @@ export default function EmailCloudConfigPage() {
                   rel="noopener noreferrer"
                   className="text-primary hover:underline"
                 >
-                  Open Airbyte UI →
+                  {t('emailConfigPage.openAirbyteUi')}
                 </a>
               )}
             </div>
           ) : (
             <div className="text-sm">
               <p className="text-yellow-600 dark:text-yellow-400">
-                {airbyteStatus?.message || 'Airbyte is not running'}
+                {airbyteStatus?.message || t('emailConfigPage.airbyteNotRunning')}
               </p>
               <p className="text-secondary dark:text-gray-500 mt-2">
-                Email syncing via Gmail/Outlook requires Airbyte to be running.
+                {t('emailConfigPage.airbyteRequired')}
               </p>
             </div>
           )}
@@ -640,7 +642,7 @@ export default function EmailCloudConfigPage() {
           <div>
             <h2 className="text-lg font-semibold text-primary-900 dark:text-white flex items-center gap-2">
               <ServerStackIcon className="h-5 w-5" />
-              Your Personal Database
+              {t('emailConfigPage.personalDb')}
             </h2>
             <p className="text-sm text-secondary dark:text-gray-400 mt-1">
               <code className="bg-surface-variant dark:bg-gray-700 px-2 py-0.5 rounded text-xs font-mono">{userDatabase}</code>
@@ -661,7 +663,7 @@ export default function EmailCloudConfigPage() {
           <div className="space-y-4">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="bg-surface-variant dark:bg-gray-700 rounded-lg p-4">
-                <p className="text-xs text-secondary dark:text-gray-400 uppercase">Exists</p>
+                <p className="text-xs text-secondary dark:text-gray-400 uppercase">{t('emailConfigPage.exists')}</p>
                 <p className="text-lg font-semibold mt-1 flex items-center gap-2">
                   {databaseStatus.exists ? (
                     <><CheckCircleIcon className="h-5 w-5 text-green-500" /> Yes</>
@@ -671,15 +673,15 @@ export default function EmailCloudConfigPage() {
                 </p>
               </div>
               <div className="bg-surface-variant dark:bg-gray-700 rounded-lg p-4">
-                <p className="text-xs text-secondary dark:text-gray-400 uppercase">Collections</p>
+                <p className="text-xs text-secondary dark:text-gray-400 uppercase">{t('emailConfigPage.collections')}</p>
                 <p className="text-lg font-semibold mt-1">{databaseStatus.collections.length}</p>
               </div>
               <div className="bg-surface-variant dark:bg-gray-700 rounded-lg p-4">
-                <p className="text-xs text-secondary dark:text-gray-400 uppercase">Documents</p>
+                <p className="text-xs text-secondary dark:text-gray-400 uppercase">{t('emailConfigPage.documentsLabel')}</p>
                 <p className="text-lg font-semibold mt-1">{databaseStatus.documents_count.toLocaleString()}</p>
               </div>
               <div className="bg-surface-variant dark:bg-gray-700 rounded-lg p-4">
-                <p className="text-xs text-secondary dark:text-gray-400 uppercase">Chunks</p>
+                <p className="text-xs text-secondary dark:text-gray-400 uppercase">{t('emailConfigPage.chunks')}</p>
                 <p className="text-lg font-semibold mt-1">{databaseStatus.chunks_count.toLocaleString()}</p>
               </div>
             </div>
@@ -689,11 +691,11 @@ export default function EmailCloudConfigPage() {
                 <div className="flex items-start gap-3">
                   <ExclamationTriangleIcon className="h-5 w-5 text-yellow-500 mt-0.5" />
                   <div className="flex-1">
-                    <p className="text-yellow-700 dark:text-yellow-300 font-medium">Database Setup Required</p>
+                    <p className="text-yellow-700 dark:text-yellow-300 font-medium">{t('emailConfigPage.dbSetupRequired')}</p>
                     <p className="text-yellow-600 dark:text-yellow-400 text-sm mt-1">
                       {!databaseStatus.exists 
-                        ? 'The database does not exist yet.'
-                        : 'Required collections are missing.'}
+                        ? t('emailConfigPage.dbNotExists')
+                        : t('emailConfigPage.collectionsMissing')}
                     </p>
                     <button
                       onClick={createDatabase}
@@ -705,7 +707,7 @@ export default function EmailCloudConfigPage() {
                       ) : (
                         <PlusIcon className="h-4 w-4" />
                       )}
-                      Create Database & Collections
+                      {t('emailConfigPage.createDbCollections')}
                     </button>
                   </div>
                 </div>
@@ -714,13 +716,13 @@ export default function EmailCloudConfigPage() {
               <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4 flex items-center gap-3">
                 <CheckCircleIcon className="h-5 w-5 text-green-500" />
                 <p className="text-green-700 dark:text-green-300">
-                  Database is properly configured and ready for email/cloud ingestion.
+                  {t('emailConfigPage.dbReady')}
                 </p>
               </div>
             )}
           </div>
         ) : (
-          <p className="text-secondary dark:text-gray-400">Loading database status...</p>
+          <p className="text-secondary dark:text-gray-400">{t('emailConfigPage.loadingDbStatus')}</p>
         )}
       </div>
 
@@ -728,7 +730,7 @@ export default function EmailCloudConfigPage() {
       {configuredSources.length > 0 && (
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-md p-6 border border-surface-variant dark:border-gray-700">
           <h2 className="text-lg font-semibold text-primary-900 dark:text-white mb-4">
-            Configured Sources ({configuredSources.length})
+            {t('emailConfigPage.configuredSources', { count: configuredSources.length })}
           </h2>
           <div className="space-y-3">
             {configuredSources.map(source => (
@@ -771,7 +773,7 @@ export default function EmailCloudConfigPage() {
                     onClick={() => triggerSync(source.connection_id)}
                     disabled={triggeringSyncId === source.connection_id || !source.enabled}
                     className="p-2 text-primary hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded-lg disabled:opacity-50"
-                    title="Trigger sync"
+                    title={t('emailConfigPage.triggerSync')}
                   >
                     {triggeringSyncId === source.connection_id ? (
                       <ArrowPathIcon className="h-4 w-4 animate-spin" />
@@ -785,7 +787,7 @@ export default function EmailCloudConfigPage() {
                       if (provider) openConfigModal(emailProviders.includes(provider as EmailProvider) ? 'email' : 'cloud', provider, source)
                     }}
                     className="p-2 text-secondary hover:bg-surface-variant dark:hover:bg-gray-600 rounded-lg"
-                    title="Edit configuration"
+                    title={t('emailConfigPage.editConfig')}
                   >
                     <PencilIcon className="h-4 w-4" />
                   </button>
@@ -793,7 +795,7 @@ export default function EmailCloudConfigPage() {
                     onClick={() => removeSource(source.connection_id)}
                     disabled={removingSource === source.connection_id}
                     className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg disabled:opacity-50"
-                    title="Remove source"
+                    title={t('emailConfigPage.removeSource')}
                   >
                     {removingSource === source.connection_id ? (
                       <ArrowPathIcon className="h-4 w-4 animate-spin" />
@@ -812,7 +814,7 @@ export default function EmailCloudConfigPage() {
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-md p-6 border border-surface-variant dark:border-gray-700">
         <h2 className="text-lg font-semibold text-primary-900 dark:text-white mb-4 flex items-center gap-2">
           <EnvelopeIcon className="h-5 w-5" />
-          Email Providers
+          {t('emailConfigPage.emailProviders')}
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {emailProviders.map(provider => (
@@ -832,7 +834,7 @@ export default function EmailCloudConfigPage() {
               {provider.requires_airbyte && !airbyteStatus?.available ? (
                 <div className="flex items-center gap-2 text-xs text-yellow-600 dark:text-yellow-400">
                   <ExclamationTriangleIcon className="h-4 w-4" />
-                  Requires Airbyte
+                  {t('emailConfigPage.requiresAirbyte')}
                 </div>
               ) : (
                 <button
@@ -840,7 +842,7 @@ export default function EmailCloudConfigPage() {
                   className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-600"
                 >
                   <PlusIcon className="h-4 w-4" />
-                  Add {provider.display_name}
+                  {t('emailConfigPage.addProvider', { provider: provider.display_name })}
                 </button>
               )}
             </div>
@@ -852,7 +854,7 @@ export default function EmailCloudConfigPage() {
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-md p-6 border border-surface-variant dark:border-gray-700">
         <h2 className="text-lg font-semibold text-primary-900 dark:text-white mb-4 flex items-center gap-2">
           <CloudIcon className="h-5 w-5" />
-          Cloud Storage Providers
+          {t('emailConfigPage.cloudStorageProviders')}
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {cloudProviders.map(provider => (
@@ -866,7 +868,7 @@ export default function EmailCloudConfigPage() {
                   <h3 className="font-medium text-primary-900 dark:text-white">{provider.display_name}</h3>
                   <p className="text-xs text-secondary dark:text-gray-400">
                     {provider.auth_type}
-                    {provider.supports_multiple && ' • Multiple accounts'}
+                    {provider.supports_multiple && ` • ${t('emailConfigPage.multipleAccounts')}`}
                   </p>
                 </div>
               </div>
@@ -875,7 +877,7 @@ export default function EmailCloudConfigPage() {
               {provider.requires_airbyte && !airbyteStatus?.available ? (
                 <div className="flex items-center gap-2 text-xs text-yellow-600 dark:text-yellow-400">
                   <ExclamationTriangleIcon className="h-4 w-4" />
-                  Requires Airbyte
+                  {t('emailConfigPage.requiresAirbyte')}
                 </div>
               ) : (
                 <button
@@ -883,7 +885,7 @@ export default function EmailCloudConfigPage() {
                   className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-600"
                 >
                   <PlusIcon className="h-4 w-4" />
-                  Add {provider.display_name}
+                  {t('emailConfigPage.addProvider', { provider: provider.display_name })}
                 </button>
               )}
             </div>
@@ -896,19 +898,19 @@ export default function EmailCloudConfigPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-md w-full mx-4 p-6">
             <h2 className="text-lg font-semibold text-primary-900 dark:text-white mb-4">
-              Configure {selectedProvider.display_name}
+              {t('emailConfigPage.configureProvider', { provider: selectedProvider.display_name })}
             </h2>
             
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-secondary dark:text-gray-300 mb-1">
-                  Display Name
+                  {t('emailConfigPage.displayName')}
                 </label>
                 <input
                   type="text"
                   value={configDisplayName}
                   onChange={e => setConfigDisplayName(e.target.value)}
-                  placeholder="e.g., My Work Email"
+                  placeholder={t('emailConfigPage.displayNamePlaceholder')}
                   className="w-full px-3 py-2 border border-surface-variant dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-primary-900 dark:text-white"
                 />
               </div>
@@ -927,7 +929,7 @@ export default function EmailCloudConfigPage() {
                         onChange={e => setConfigForm({ ...configForm, [field.name]: e.target.checked ? 'true' : 'false' })}
                         className="rounded border-gray-300"
                       />
-                      <span className="text-sm text-secondary dark:text-gray-400">Enable</span>
+                      <span className="text-sm text-secondary dark:text-gray-400">{t('emailConfigPage.enableCheckbox')}</span>
                     </label>
                   ) : (
                     <input
@@ -945,7 +947,7 @@ export default function EmailCloudConfigPage() {
               {selectedProvider.auth_type === 'oauth2' && (
                 <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
                   <p className="text-sm text-blue-700 dark:text-blue-300">
-                    OAuth authentication: You will be redirected to {selectedProvider.display_name} to authorize access.
+                    {t('emailConfigPage.oauthMessage', { provider: selectedProvider.display_name })}
                   </p>
                 </div>
               )}
@@ -957,7 +959,7 @@ export default function EmailCloudConfigPage() {
                 <div className="flex items-start gap-2">
                   <InformationCircleIcon className="h-5 w-5 text-red-500 mt-0.5" />
                   <div>
-                    <p className="text-sm font-medium text-red-700 dark:text-red-300">Please fix the following:</p>
+                    <p className="text-sm font-medium text-red-700 dark:text-red-300">{t('emailConfigPage.validationHeader')}</p>
                     <ul className="mt-1 text-sm text-red-600 dark:text-red-400 list-disc list-inside">
                       {validationErrors.map((err, i) => <li key={i}>{err}</li>)}
                     </ul>
@@ -980,7 +982,7 @@ export default function EmailCloudConfigPage() {
                 className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-600 disabled:opacity-50 flex items-center gap-2"
               >
                 {savingConfig && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
-                {editingSourceId ? 'Update' : 'Save'} Configuration
+                {editingSourceId ? t('emailConfigPage.update') : t('emailConfigPage.save')} {t('emailConfigPage.configuration')}
               </button>
             </div>
           </div>

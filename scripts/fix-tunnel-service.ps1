@@ -108,8 +108,10 @@ ingress:
   - service: http_status:404
 "@
 
-$systemConfigContent | Out-File -FilePath $systemConfig -Encoding utf8 -Force
-Write-Success "Created system config at $systemConfig"
+# Write UTF-8 without BOM (cloudflared's Go YAML parser rejects BOM)
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($systemConfig, $systemConfigContent, $utf8NoBom)
+Write-Success "Created system config at $systemConfig (UTF-8 no BOM)"
 
 Write-Header "Step 3: Reinstalling Service"
 

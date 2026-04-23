@@ -35,10 +35,16 @@ param(
 )
 
 # Configuration - Multi-Domain Tenant Mapping
-# Each entry maps a production domain to its local frontend/backend ports
+# Each entry maps a production domain to its local frontend/backend ports.
+#
+# SubdomainsOK: Controls whether api.DOMAIN and www.DOMAIN DNS records are created.
+#   $true  = Root-level domain (e.g. recallhub.app) → Cloudflare cert covers *.recallhub.app
+#   $false = Already a subdomain (e.g. test-0-8-7.quellex.at) → *.test-0-8-7.quellex.at has NO cert
+#            In this case, nginx reverse proxy handles /api/ routing internally and no
+#            separate api.* or www.* DNS records are created.
 $DOMAINS = @(
-    @{ Domain = "recallhub.app";          Zone = "recallhub.app"; FrontendPort = 11080; BackendPort = 11000; Tenant = "RecallHub" },
-    @{ Domain = "test-0-8-7.quellex.at";  Zone = "quellex.at";    FrontendPort = 11081; BackendPort = 11001; Tenant = "Quellex" }
+    @{ Domain = "recallhub.app";          Zone = "recallhub.app"; FrontendPort = 11080; BackendPort = 11000; Tenant = "RecallHub"; SubdomainsOK = $true },
+    @{ Domain = "test-0-8-7.quellex.at";  Zone = "quellex.at";    FrontendPort = 11081; BackendPort = 11001; Tenant = "Quellex";   SubdomainsOK = $false }
 )
 $PRIMARY_DOMAIN = "recallhub.app"  # Used for tunnel naming and primary references
 $TUNNEL_NAME = "recallhub-tunnel"
@@ -615,8 +621,11 @@ function New-TunnelConfig {
         $fePort = $domainConfig.FrontendPort
         $bePort = $domainConfig.BackendPort
         $tenant = $domainConfig.Tenant
+        $subOK = $domainConfig.SubdomainsOK
         
-        $ingressRules += @"
+        if ($subOK) {
+            # Root-level domain: add api.* and www.* subdomains (cert covers *.domain)
+            $ingressRules += @"
 
   # $tenant - $domain
   - hostname: api.$domain
@@ -636,6 +645,19 @@ function New-TunnelConfig {
     originRequest:
       noTLSVerify: true
 "@
+        } else {
+            # Nested subdomain: only route the base domain to frontend (nginx proxies /api/)
+            # No api.* or www.* because Cloudflare Universal SSL cannot issue certs for
+            # 2nd-level wildcard subdomains (e.g. *.test-0-8-7.quellex.at)
+            $ingressRules += @"
+
+  # $tenant - $domain (nginx-proxied API, no api.*/www.* subdomains)
+  - hostname: $domain
+    service: http://localhost:$fePort
+    originRequest:
+      noTLSVerify: true
+"@
+        }
     }
     
     $config = @"
@@ -655,7 +677,9 @@ ingress:$ingressRules
   - service: http_status:404
 "@
 
-    $config | Out-File -FilePath $CONFIG_FILE -Encoding utf8 -Force
+    # Write UTF-8 without BOM (cloudflared's Go YAML parser rejects BOM)
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($CONFIG_FILE, $config, $utf8NoBom)
     Write-Success "Configuration saved to $CONFIG_FILE"
     
     return $true
@@ -677,8 +701,12 @@ function Start-FullSetup {
         $t = $domainConfig.Tenant
         Write-Host "  $t :" -ForegroundColor Cyan
         Write-Host "    https://$d (Frontend, port $($domainConfig.FrontendPort))" -ForegroundColor Green
-        Write-Host "    https://www.$d (Frontend)" -ForegroundColor Green
-        Write-Host "    https://api.$d (Backend API, port $($domainConfig.BackendPort))" -ForegroundColor Green
+        if ($domainConfig.SubdomainsOK) {
+            Write-Host "    https://www.$d (Frontend)" -ForegroundColor Green
+            Write-Host "    https://api.$d (Backend API, port $($domainConfig.BackendPort))" -ForegroundColor Green
+        } else {
+            Write-Host "    (API proxied via nginx on same domain)" -ForegroundColor DarkGray
+        }
     }
     Write-Host ""
     
@@ -787,7 +815,13 @@ function Start-FullSetup {
             if ($zoneId) {
                 Write-Success "Zone ID for $($domain): $zoneId"
                 
-                $dnsRecords = @($domain, "www.$domain", "api.$domain")
+                # Only create api.*/www.* DNS if domain supports subdomains (cert coverage)
+                $dnsRecords = @($domain)
+                if ($domainConfig.SubdomainsOK) {
+                    $dnsRecords += @("www.$domain", "api.$domain")
+                } else {
+                    Write-Info "Skipping api.*/www.* for $domain (nested subdomain - no cert coverage)"
+                }
                 foreach ($record in $dnsRecords) {
                     Write-Info "Setting DNS record: $record"
                     if (Set-DnsRecord -ApiToken $apiToken -ZoneId $zoneId -Hostname $record -TunnelId $tunnelId) {
@@ -826,7 +860,11 @@ function Start-FullSetup {
             Write-Step 4 "Configuring DNS Routes"
             foreach ($domainConfig in $DOMAINS) {
                 $domain = $domainConfig.Domain
-                foreach ($hostname in @($domain, "www.$domain", "api.$domain")) {
+                $hostnames = @($domain)
+                if ($domainConfig.SubdomainsOK) {
+                    $hostnames += @("www.$domain", "api.$domain")
+                }
+                foreach ($hostname in $hostnames) {
                     Write-Info "Setting DNS route: $hostname"
                     cloudflared tunnel route dns --overwrite-dns $TUNNEL_NAME $hostname 2>&1 | Out-Null
                     Write-Success "DNS route configured: $hostname"
@@ -870,8 +908,10 @@ function Start-FullSetup {
         $t = $domainConfig.Tenant
         Write-Host "  $($t):" -ForegroundColor White
         Write-Host "    https://$d" -ForegroundColor Green
-        Write-Host "    https://www.$d" -ForegroundColor Green
-        Write-Host "    https://api.$d" -ForegroundColor Green
+        if ($domainConfig.SubdomainsOK) {
+            Write-Host "    https://www.$d" -ForegroundColor Green
+            Write-Host "    https://api.$d" -ForegroundColor Green
+        }
     }
     Write-Host ""
 }
@@ -891,8 +931,10 @@ function Start-Tunnel {
             $t = $domainConfig.Tenant
             Write-Host "  $($t):" -ForegroundColor White
             Write-Host "    Frontend: https://$d" -ForegroundColor White
-            Write-Host "    Frontend: https://www.$d" -ForegroundColor White
-            Write-Host "    Backend:  https://api.$d" -ForegroundColor White
+            if ($domainConfig.SubdomainsOK) {
+                Write-Host "    Frontend: https://www.$d" -ForegroundColor White
+                Write-Host "    Backend:  https://api.$d" -ForegroundColor White
+            }
         }
         Write-Host ""
         Write-Host "Press Ctrl+C to stop the tunnel" -ForegroundColor Yellow
@@ -922,8 +964,10 @@ function Start-Tunnel {
         $t = $domainConfig.Tenant
         Write-Host "  $($t):" -ForegroundColor White
         Write-Host "    Frontend: https://$d" -ForegroundColor White
-        Write-Host "    Frontend: https://www.$d" -ForegroundColor White
-        Write-Host "    Backend:  https://api.$d" -ForegroundColor White
+        if ($domainConfig.SubdomainsOK) {
+            Write-Host "    Frontend: https://www.$d" -ForegroundColor White
+            Write-Host "    Backend:  https://api.$d" -ForegroundColor White
+        }
     }
     Write-Host ""
     Write-Host "Press Ctrl+C to stop the tunnel" -ForegroundColor Yellow
@@ -988,8 +1032,12 @@ function Show-Status {
         $t = $domainConfig.Tenant
         Write-Host "  $($t):" -ForegroundColor White
         Write-Host "    https://$d -> localhost:$($domainConfig.FrontendPort)" -ForegroundColor White
-        Write-Host "    https://www.$d -> localhost:$($domainConfig.FrontendPort)" -ForegroundColor White
-        Write-Host "    https://api.$d -> localhost:$($domainConfig.BackendPort)" -ForegroundColor White
+        if ($domainConfig.SubdomainsOK) {
+            Write-Host "    https://www.$d -> localhost:$($domainConfig.FrontendPort)" -ForegroundColor White
+            Write-Host "    https://api.$d -> localhost:$($domainConfig.BackendPort)" -ForegroundColor White
+        } else {
+            Write-Host "    (API via nginx proxy on same domain /api/)" -ForegroundColor DarkGray
+        }
     }
 }
 
@@ -1036,8 +1084,10 @@ function Install-TunnelService {
             $fePort = $domainConfig.FrontendPort
             $bePort = $domainConfig.BackendPort
             $tenant = $domainConfig.Tenant
+            $subOK = $domainConfig.SubdomainsOK
             
-            $ingressRules += @"
+            if ($subOK) {
+                $ingressRules += @"
 
   # $tenant - $domain
   - hostname: api.$domain
@@ -1057,6 +1107,16 @@ function Install-TunnelService {
     originRequest:
       noTLSVerify: true
 "@
+            } else {
+                $ingressRules += @"
+
+  # $tenant - $domain (nginx-proxied API, no api.*/www.* subdomains)
+  - hostname: $domain
+    service: http://localhost:$fePort
+    originRequest:
+      noTLSVerify: true
+"@
+            }
         }
         
         $systemConfig = @"
@@ -1075,8 +1135,10 @@ ingress:$ingressRules
   # Catch-all rule (required by cloudflared)
   - service: http_status:404
 "@
-        $systemConfig | Out-File -FilePath "$systemConfigDir\config.yml" -Encoding utf8 -Force
-        Write-Success "System config created with correct credentials path"
+        # Write UTF-8 without BOM (cloudflared's Go YAML parser rejects BOM)
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText("$systemConfigDir\config.yml", $systemConfig, $utf8NoBom)
+        Write-Success "System config created with correct credentials path (UTF-8 no BOM)"
     } else {
         # Fallback: just copy the config
         Copy-Item -Path $CONFIG_FILE -Destination "$systemConfigDir\config.yml" -Force

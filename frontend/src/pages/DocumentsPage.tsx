@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Link } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { Tree, NodeRendererProps } from 'react-arborist'
 import {
   DocumentTextIcon,
@@ -156,6 +157,7 @@ function FolderNode({ node, style, dragHandle }: NodeRendererProps<TreeNode>) {
 }
 
 export default function DocumentsPage() {
+  const { t } = useTranslation()
   const [allDocuments, setAllDocuments] = useState<Document[]>([])
   const [folderData, setFolderData] = useState<FoldersResponse | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -295,7 +297,7 @@ export default function DocumentsPage() {
   const handleDelete = async (documentId: string, e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    if (!confirm('Are you sure you want to delete this document and all its chunks?')) {
+    if (!confirm(t('documentsPage.deleteConfirm'))) {
       return
     }
     try {
@@ -308,22 +310,22 @@ export default function DocumentsPage() {
   }
 
   const formatDate = (dateStr?: string) => {
-    if (!dateStr) return 'N/A'
+    if (!dateStr) return t('documentsPage.notAvailable')
     try {
       const date = new Date(dateStr)
-      if (isNaN(date.getTime())) return 'N/A'
+      if (isNaN(date.getTime())) return t('documentsPage.notAvailable')
       return date.toLocaleDateString('en-US', {
         year: 'numeric',
         month: 'short',
         day: 'numeric',
       })
     } catch {
-      return 'N/A'
+      return t('documentsPage.notAvailable')
     }
   }
 
   const formatSize = (chunks: number) => {
-    return `${chunks} chunks`
+    return t('documentsPage.chunksCount', { count: chunks })
   }
 
   // Reset page when filter changes (but not on initial load)
@@ -374,10 +376,10 @@ export default function DocumentsPage() {
 
   // Sort options for dropdown
   const sortOptions: { value: SortField; label: string }[] = [
-    { value: 'modified', label: 'Date Modified' },
-    { value: 'name', label: 'Name' },
-    { value: 'size', label: 'Size' },
-    { value: 'type', label: 'Type' },
+    { value: 'modified', label: t('documentsPage.sortDateModified') },
+    { value: 'name', label: t('documentsPage.sortName') },
+    { value: 'size', label: t('documentsPage.sortSize') },
+    { value: 'type', label: t('documentsPage.sortType') },
   ]
 
   // Check for rebuild status on mount and poll while running
@@ -434,7 +436,7 @@ export default function DocumentsPage() {
         <div className="w-64 flex-shrink-0 flex flex-col bg-surface dark:bg-gray-800 rounded-2xl shadow-elevation-1 overflow-hidden">
           {/* Sidebar Header */}
           <div className="p-3 border-b border-surface-variant dark:border-gray-700 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-primary-900 dark:text-gray-200">Folders</h3>
+            <h3 className="text-sm font-semibold text-primary-900 dark:text-gray-200">{t('documentsPage.folders')}</h3>
             <button
               onClick={() => setSidebarCollapsed(true)}
               className="p-1 rounded hover:bg-surface-variant dark:hover:bg-gray-700"
@@ -450,7 +452,7 @@ export default function DocumentsPage() {
               ${!currentPath ? 'bg-primary-100 dark:bg-primary-900/40' : 'hover:bg-surface-variant dark:hover:bg-gray-700'}`}
           >
             <HomeIcon className="h-5 w-5 text-primary" />
-            <span className="text-sm text-primary-900 dark:text-gray-200">All Documents</span>
+            <span className="text-sm text-primary-900 dark:text-gray-200">{t('documentsPage.allDocuments')}</span>
             <span className="text-xs text-secondary dark:text-gray-500 ml-auto">{total}</span>
           </div>
           
@@ -493,7 +495,7 @@ export default function DocumentsPage() {
               <button
                 onClick={() => setSidebarCollapsed(false)}
                 className="p-2 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700"
-                title="Show folders"
+                title={t('documentsPage.showFolders')}
               >
                 <ChevronRightIcon className="h-4 w-4 text-secondary" />
               </button>
@@ -507,7 +509,7 @@ export default function DocumentsPage() {
                   ${!currentPath ? 'text-primary font-medium' : 'text-secondary dark:text-gray-400'}`}
               >
                 <HomeIcon className="h-4 w-4" />
-                <span>Documents</span>
+                <span>{t('documentsPage.documents')}</span>
               </button>
               {breadcrumbs.map((crumb, idx) => (
                 <div key={idx} className="flex items-center">
@@ -530,7 +532,7 @@ export default function DocumentsPage() {
                 type="text"
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
-                placeholder="Search documents..."
+                placeholder={t('documentsPage.searchPlaceholder')}
                 className="w-full pl-9 pr-8 py-2 text-sm bg-surface-variant dark:bg-gray-700 border-0 rounded-lg text-primary-900 dark:text-gray-200 placeholder:text-secondary focus:ring-2 focus:ring-primary"
               />
               {searchInput && (
@@ -559,7 +561,7 @@ export default function DocumentsPage() {
               <button
                 onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')}
                 className="p-2 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors"
-                title={sortOrder === 'desc' ? 'Sort descending' : 'Sort ascending'}
+                title={sortOrder === 'desc' ? t('documentsPage.sortDescending') : t('documentsPage.sortAscending')}
               >
                 {sortOrder === 'desc' 
                   ? <ChevronDownIcon className="h-4 w-4 text-secondary" />
@@ -595,12 +597,12 @@ export default function DocumentsPage() {
                     ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300' 
                     : 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-900/50'
                 }`}
-                title={isRebuilding ? 'Rebuilding metadata...' : `${docsWithZeroChunks} documents need metadata repair`}
+                title={isRebuilding ? t('documentsPage.rebuildingMetadata') : t('documentsPage.docsNeedRepair', { count: docsWithZeroChunks })}
               >
                 <WrenchScrewdriverIcon className={`h-4 w-4 ${isRebuilding ? 'animate-spin' : ''}`} />
                 {isRebuilding 
-                  ? `Rebuilding... ${rebuildStatus?.progress_percent || 0}%`
-                  : `Fix ${docsWithZeroChunks} docs`
+                  ? t('documentsPage.rebuildingPercent', { percent: rebuildStatus?.progress_percent || 0 })
+                  : t('documentsPage.fixDocs', { count: docsWithZeroChunks })
                 }
               </button>
             )}
@@ -643,7 +645,7 @@ export default function DocumentsPage() {
             {/* Rebuild completed message */}
             {rebuildStatus?.status === 'completed' && !isRebuilding && (
               <span className="text-secondary dark:text-secondary-400">
-                Rebuild complete: {rebuildStatus.updated} docs updated
+                {t('documentsPage.rebuildComplete', { count: rebuildStatus.updated })}
               </span>
             )}
           </div>
@@ -667,10 +669,10 @@ export default function DocumentsPage() {
             <div className="flex flex-col items-center justify-center h-full text-center">
               <DocumentTextIcon className="h-16 w-16 text-secondary dark:text-gray-600 mb-4" />
               <p className="text-secondary dark:text-gray-400 mb-1">
-                {searchTerm ? 'No documents match your search' : 'No documents in this folder'}
+                {searchTerm ? t('documentsPage.noSearchResults') : t('documentsPage.noDocumentsInFolder')}
               </p>
               <p className="text-sm text-secondary dark:text-gray-500">
-                {searchTerm ? 'Try different keywords' : 'Use ingestion to add documents'}
+                {searchTerm ? t('documentsPage.tryDifferentKeywords') : t('documentsPage.useIngestion')}
               </p>
             </div>
           ) : viewMode === 'grid' ? (
@@ -756,22 +758,22 @@ export default function DocumentsPage() {
                     onClick={() => handleSort('name')}
                     className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-secondary dark:text-gray-400 cursor-pointer hover:text-primary dark:hover:text-primary-300 select-none"
                   >
-                    Name{getSortIcon('name')}
+                    {t('documentsPage.columnName')}{getSortIcon('name')}
                   </th>
                   <th className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-secondary dark:text-gray-400 hidden md:table-cell">
-                    Path
+                    {t('documentsPage.columnPath')}
                   </th>
                   <th 
                     onClick={() => handleSort('size')}
                     className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-secondary dark:text-gray-400 w-24 cursor-pointer hover:text-primary dark:hover:text-primary-300 select-none"
                   >
-                    Size{getSortIcon('size')}
+                    {t('documentsPage.columnSize')}{getSortIcon('size')}
                   </th>
                   <th 
                     onClick={() => handleSort('modified')}
                     className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-secondary dark:text-gray-400 w-32 hidden sm:table-cell cursor-pointer hover:text-primary dark:hover:text-primary-300 select-none"
                   >
-                    Modified{getSortIcon('modified')}
+                    {t('documentsPage.columnModified')}{getSortIcon('modified')}
                   </th>
                   <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wider text-secondary dark:text-gray-400 w-16">
                     
@@ -878,17 +880,17 @@ export default function DocumentsPage() {
               className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg bg-surface-variant dark:bg-gray-700 text-primary-700 dark:text-primary-300 disabled:opacity-50 hover:bg-primary-100 dark:hover:bg-gray-600 transition-colors"
             >
               <ChevronLeftIcon className="h-4 w-4" />
-              Prev
+              {t('documentsPage.prev')}
             </button>
             <span className="text-sm text-secondary dark:text-gray-400 px-2">
-              {page} / {totalPages}
+              {t('documentsPage.pageOfTotal', { page, total: totalPages })}
             </span>
             <button
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={page === totalPages}
               className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg bg-surface-variant dark:bg-gray-700 text-primary-700 dark:text-primary-300 disabled:opacity-50 hover:bg-primary-100 dark:hover:bg-gray-600 transition-colors"
             >
-              Next
+              {t('documentsPage.next')}
               <ChevronRightIcon className="h-4 w-4" />
             </button>
           </div>

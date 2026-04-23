@@ -215,3 +215,55 @@ The tunnel exposes local Docker services to production domains via Cloudflare.
 # Install as Windows service (requires admin)
 .\setup-cloudflare-tunnel.ps1 -Install
 ```
+
+---
+
+## New Tenant Onboarding Checklist
+
+When adding a new tenant to the platform, complete **all** of the following steps:
+
+### 1. Frontend Tenant Config
+
+Create `frontend/src/tenants/configs/{tenant-id}.ts` with branding, theme, features, and **i18nOverrides**.
+
+### 2. Dashboard Suggestion Prompts (Required)
+
+Every tenant **must** have 4 domain-specific dashboard suggestion prompts defined via i18nOverrides. These are the first interaction users have with the product — they must be contextually high-value, 2-3 words long, and tailored to the tenant's domain.
+
+**Keys to override** (in the tenant's `i18nOverrides` for each supported language):
+```
+dashboard.suggestions.summarize   — primary action prompt
+dashboard.suggestions.findDocument — discovery/search prompt
+dashboard.suggestions.compare      — comparison/analysis prompt
+dashboard.suggestions.explain      — summarization/explanation prompt
+```
+
+**Example** (Quellex — legal domain):
+| Key | English | German |
+|---|---|---|
+| `summarize` | Analyze contract | Vertrag analysieren |
+| `findDocument` | Find precedent | Präzedenzfall finden |
+| `compare` | Compare clauses | Klauseln vergleichen |
+| `explain` | Summarize ruling | Urteil zusammenfassen |
+
+**Guidelines for choosing prompts:**
+- Keep prompts **2-3 words** — they are starter chips, not full questions
+- Use **domain-specific verbs** (e.g., "Analyze contract" not "Summarize documents")
+- Each prompt should map to a distinct high-value task the tenant's users do daily
+- Translate for all supported languages (currently: en, de)
+
+### 3. Register in Tenant Index
+
+Add the new config to `frontend/src/tenants/configs/index.ts`.
+
+### 4. Backend Tenant Config
+
+Add matching entry in `backend/routers/tenant.py` TENANT_CONFIGS dict.
+
+### 5. Docker Compose Services
+
+Add `backend-{tenant}` and `frontend-{tenant}` services to `docker-compose.yml` under a dedicated profile.
+
+### 6. Cloudflare Tunnel (if deployed)
+
+Add domain entry to `$DOMAINS` in `setup-cloudflare-tunnel.ps1`. Set `SubdomainsOK = $false` for nested subdomains (e.g., `subdomain.example.com`).

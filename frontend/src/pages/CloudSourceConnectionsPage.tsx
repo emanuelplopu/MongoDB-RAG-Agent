@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import {
   CloudIcon,
   PlusIcon,
@@ -82,6 +83,7 @@ function formatDate(dateString?: string): string {
 
 export default function CloudSourceConnectionsPage() {
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const { connectionId } = useParams<{ connectionId?: string }>()
   const { user, isLoading: authLoading } = useAuth()
 
@@ -249,7 +251,7 @@ export default function CloudSourceConnectionsPage() {
               className="flex items-center gap-2 px-4 py-2 rounded-xl border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
             >
               <TrashIcon className="h-5 w-5" />
-              Delete
+              {t('cloudConnectionsPage.deleteConnection')}
             </button>
           </div>
         </div>
@@ -296,11 +298,11 @@ export default function CloudSourceConnectionsPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
             <h2 className="text-lg font-semibold text-primary-900 dark:text-gray-100 mb-4">
-              Connection Details
+              {t('cloudConnectionsPage.connectionDetails')}
             </h2>
             <dl className="space-y-4">
               <div>
-                <dt className="text-sm text-secondary dark:text-gray-400">Status</dt>
+                <dt className="text-sm text-secondary dark:text-gray-400">{t('cloudConnectionsPage.statusLabel')}</dt>
                 <dd className="mt-1">
                   <span
                     className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm ${statusStyle.bg} ${statusStyle.text}`}
@@ -312,14 +314,14 @@ export default function CloudSourceConnectionsPage() {
                 </dd>
               </div>
               <div>
-                <dt className="text-sm text-secondary dark:text-gray-400">Authentication Type</dt>
+                <dt className="text-sm text-secondary dark:text-gray-400">{t('cloudConnectionsPage.authType')}</dt>
                 <dd className="mt-1 text-primary-900 dark:text-gray-100 capitalize">
                   {selectedConnection.auth_type.replace('_', ' ')}
                 </dd>
               </div>
               {selectedConnection.server_url && (
                 <div>
-                  <dt className="text-sm text-secondary dark:text-gray-400">Server URL</dt>
+                  <dt className="text-sm text-secondary dark:text-gray-400">{t('cloudConnectionsPage.serverUrl')}</dt>
                   <dd className="mt-1 text-primary-900 dark:text-gray-100 font-mono text-sm">
                     {selectedConnection.server_url}
                   </dd>
@@ -327,7 +329,7 @@ export default function CloudSourceConnectionsPage() {
               )}
               {selectedConnection.oauth_email && (
                 <div>
-                  <dt className="text-sm text-secondary dark:text-gray-400">Connected Account</dt>
+                  <dt className="text-sm text-secondary dark:text-gray-400">{t('cloudConnectionsPage.connectedAccount')}</dt>
                   <dd className="mt-1 text-primary-900 dark:text-gray-100">
                     {selectedConnection.oauth_email}
                   </dd>
@@ -336,7 +338,7 @@ export default function CloudSourceConnectionsPage() {
               {selectedConnection.oauth_expires_at && (
                 <div className="flex items-center justify-between">
                   <div>
-                    <dt className="text-sm text-secondary dark:text-gray-400">Token Expires</dt>
+                    <dt className="text-sm text-secondary dark:text-gray-400">{t('cloudConnectionsPage.tokenExpires')}</dt>
                     <dd className="mt-1 text-primary-900 dark:text-gray-100">
                       {formatDate(selectedConnection.oauth_expires_at)}
                     </dd>
@@ -345,26 +347,26 @@ export default function CloudSourceConnectionsPage() {
                     onClick={handleRefreshTokens}
                     className="text-sm text-primary hover:text-primary-700"
                   >
-                    Refresh Now
+                    {t('cloudConnectionsPage.refreshNow')}
                   </button>
                 </div>
               )}
               {selectedConnection.error_message && (
                 <div>
-                  <dt className="text-sm text-secondary dark:text-gray-400">Error</dt>
+                  <dt className="text-sm text-secondary dark:text-gray-400">{t('cloudConnectionsPage.errorLabel')}</dt>
                   <dd className="mt-1 text-red-600 dark:text-red-400 text-sm">
                     {selectedConnection.error_message}
                   </dd>
                 </div>
               )}
               <div>
-                <dt className="text-sm text-secondary dark:text-gray-400">Created</dt>
+                <dt className="text-sm text-secondary dark:text-gray-400">{t('cloudConnectionsPage.created')}</dt>
                 <dd className="mt-1 text-primary-900 dark:text-gray-100">
                   {formatDate(selectedConnection.created_at)}
                 </dd>
               </div>
               <div>
-                <dt className="text-sm text-secondary dark:text-gray-400">Last Validated</dt>
+                <dt className="text-sm text-secondary dark:text-gray-400">{t('cloudConnectionsPage.lastValidated')}</dt>
                 <dd className="mt-1 text-primary-900 dark:text-gray-100">
                   {formatDate(selectedConnection.last_validated_at)}
                 </dd>
@@ -376,14 +378,14 @@ export default function CloudSourceConnectionsPage() {
           <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-primary-900 dark:text-gray-100">
-                Sync Configurations
+                {t('cloudConnectionsPage.syncConfigurations')}
               </h2>
               <button
                 onClick={() => setShowCreateSync(true)}
                 className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-primary text-white text-sm hover:bg-primary-700"
               >
                 <PlusIcon className="h-4 w-4" />
-                Add Config
+                {t('cloudConnectionsPage.addConfig')}
               </button>
             </div>
 
@@ -401,14 +403,13 @@ export default function CloudSourceConnectionsPage() {
                           {config.name}
                         </h3>
                         <p className="text-sm text-secondary dark:text-gray-400">
-                          {config.source_paths.length} folder(s) •{' '}
-                          {config.stats.total_files.toLocaleString()} files
+                          {t('cloudConnectionsPage.folderFileInfo', { folders: config.source_paths.length, files: config.stats.total_files.toLocaleString() })}
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
                         {config.schedule.enabled && (
                           <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-400">
-                            Scheduled
+                            {t('cloudConnectionsPage.scheduled')}
                           </span>
                         )}
                         <ChevronRightIcon className="h-5 w-5 text-gray-400" />
@@ -421,14 +422,14 @@ export default function CloudSourceConnectionsPage() {
               <div className="text-center py-8">
                 <FolderIcon className="h-12 w-12 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
                 <p className="text-secondary dark:text-gray-400 mb-4">
-                  No sync configurations yet
+                  {t('cloudConnectionsPage.noSyncConfigs')}
                 </p>
                 <button
                   onClick={() => setShowCreateSync(true)}
                   className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-white hover:bg-primary-700"
                 >
                   <PlusIcon className="h-5 w-5" />
-                  Create First Config
+                  {t('cloudConnectionsPage.createFirstConfig')}
                 </button>
               </div>
             )}
@@ -440,11 +441,10 @@ export default function CloudSourceConnectionsPage() {
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-surface dark:bg-gray-800 rounded-2xl shadow-xl max-w-md w-full p-6">
               <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-100 mb-2">
-                Delete Connection
+                {t('cloudConnectionsPage.deleteConnection')}
               </h2>
               <p className="text-secondary dark:text-gray-400 mb-6">
-                Are you sure you want to delete "{selectedConnection.display_name}"? This will
-                also delete all sync configurations and indexed documents from this source.
+                {t('cloudConnectionsPage.deleteConfirm', { name: selectedConnection.display_name })}
               </p>
               <div className="flex items-center justify-end gap-3">
                 <button
@@ -458,7 +458,7 @@ export default function CloudSourceConnectionsPage() {
                   disabled={isDeleting}
                   className="px-4 py-2 rounded-xl bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
                 >
-                  {isDeleting ? 'Deleting...' : 'Delete'}
+                  {isDeleting ? t('cloudConnectionsPage.deleting') : t('cloudConnectionsPage.deleteConnection')}
                 </button>
               </div>
             </div>
@@ -494,10 +494,10 @@ export default function CloudSourceConnectionsPage() {
           </Link>
           <div>
             <h1 className="text-2xl font-bold text-primary-900 dark:text-gray-100">
-              Cloud Connections
+              {t('cloudConnectionsPage.title')}
             </h1>
             <p className="text-secondary dark:text-gray-400 mt-1">
-              Manage your connected cloud storage accounts
+              {t('cloudConnectionsPage.subtitle')}
             </p>
           </div>
         </div>
@@ -515,7 +515,7 @@ export default function CloudSourceConnectionsPage() {
             className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-white hover:bg-primary-700"
           >
             <PlusIcon className="h-5 w-5" />
-            Add Connection
+            {t('cloudConnectionsPage.addConnection')}
           </button>
         </div>
       </div>
@@ -575,7 +575,7 @@ export default function CloudSourceConnectionsPage() {
                     </p>
                   )}
                   <p className="text-xs text-secondary dark:text-gray-500 mt-2">
-                    Created {formatDate(conn.created_at)}
+                    {t('cloudConnectionsPage.createdDate', { date: formatDate(conn.created_at) })}
                   </p>
                 </div>
               </div>
@@ -586,17 +586,17 @@ export default function CloudSourceConnectionsPage() {
         <div className="rounded-2xl bg-surface dark:bg-gray-800 p-12 shadow-elevation-1 text-center">
           <CloudIcon className="h-16 w-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
           <h3 className="text-lg font-semibold text-primary-900 dark:text-gray-100 mb-2">
-            No Connections Yet
+            {t('cloudConnectionsPage.noConnections')}
           </h3>
           <p className="text-secondary dark:text-gray-400 mb-6 max-w-md mx-auto">
-            Connect your cloud storage accounts to start syncing documents into your RAG pipeline.
+            {t('cloudConnectionsPage.noConnectionsDesc')}
           </p>
           <button
             onClick={() => navigate('/cloud-sources')}
             className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-primary text-white hover:bg-primary-700"
           >
             <PlusIcon className="h-5 w-5" />
-            Add Your First Connection
+            {t('cloudConnectionsPage.addFirstConnection')}
           </button>
         </div>
       )}
@@ -612,6 +612,7 @@ interface CreateSyncConfigModalProps {
 }
 
 function CreateSyncConfigModal({ connection, onClose, onCreated }: CreateSyncConfigModalProps) {
+  const { t } = useTranslation()
   const [name, setName] = useState('')
   const [profileKey, setProfileKey] = useState('default')
   const [selectedPaths, setSelectedPaths] = useState<SourcePath[]>([])
@@ -649,7 +650,7 @@ function CreateSyncConfigModal({ connection, onClose, onCreated }: CreateSyncCon
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim() || selectedPaths.length === 0) {
-      setError('Please provide a name and select at least one folder')
+      setError(t('cloudConnectionsPage.validationError'))
       return
     }
 
@@ -689,7 +690,7 @@ function CreateSyncConfigModal({ connection, onClose, onCreated }: CreateSyncCon
           <div className="p-6 border-b border-gray-200 dark:border-gray-700">
             <div className="flex items-center justify-between">
               <h2 className="text-xl font-semibold text-primary-900 dark:text-gray-100">
-                Create Sync Configuration
+                {t('cloudConnectionsPage.createSyncConfig')}
               </h2>
               <button
                 type="button"
@@ -700,7 +701,7 @@ function CreateSyncConfigModal({ connection, onClose, onCreated }: CreateSyncCon
               </button>
             </div>
             <p className="text-secondary dark:text-gray-400 mt-1">
-              Configure which folders to sync from {connection.display_name}
+              {t('cloudConnectionsPage.configureFolders', { name: connection.display_name })}
             </p>
           </div>
 
@@ -715,13 +716,13 @@ function CreateSyncConfigModal({ connection, onClose, onCreated }: CreateSyncCon
             {/* Name */}
             <div>
               <label className="block text-sm font-medium text-primary-900 dark:text-gray-100 mb-2">
-                Configuration Name
+                {t('cloudConnectionsPage.configName')}
               </label>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="e.g., Project Documents"
+                placeholder={t('cloudConnectionsPage.configNamePlaceholder')}
                 className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 focus:ring-2 focus:ring-primary focus:border-transparent"
               />
             </div>
@@ -729,7 +730,7 @@ function CreateSyncConfigModal({ connection, onClose, onCreated }: CreateSyncCon
             {/* Profile */}
             <div>
               <label className="block text-sm font-medium text-primary-900 dark:text-gray-100 mb-2">
-                Target Profile
+                {t('cloudConnectionsPage.targetProfile')}
               </label>
               <input
                 type="text"
@@ -739,14 +740,14 @@ function CreateSyncConfigModal({ connection, onClose, onCreated }: CreateSyncCon
                 className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 focus:ring-2 focus:ring-primary focus:border-transparent"
               />
               <p className="text-xs text-secondary dark:text-gray-400 mt-1">
-                Documents will be indexed to this profile
+                {t('cloudConnectionsPage.profileHelp')}
               </p>
             </div>
 
             {/* Selected Folders */}
             <div>
               <label className="block text-sm font-medium text-primary-900 dark:text-gray-100 mb-2">
-                Source Folders
+                {t('cloudConnectionsPage.sourceFolders')}
               </label>
               {selectedPaths.length > 0 ? (
                 <div className="space-y-2 mb-3">
@@ -773,7 +774,7 @@ function CreateSyncConfigModal({ connection, onClose, onCreated }: CreateSyncCon
                 </div>
               ) : (
                 <p className="text-secondary dark:text-gray-400 text-sm mb-3">
-                  No folders selected
+                  {t('cloudConnectionsPage.noFoldersSelected')}
                 </p>
               )}
               <button
@@ -782,14 +783,14 @@ function CreateSyncConfigModal({ connection, onClose, onCreated }: CreateSyncCon
                 className="flex items-center gap-2 px-4 py-2 rounded-xl border border-dashed border-gray-300 dark:border-gray-600 text-primary-900 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 w-full justify-center"
               >
                 <FolderIcon className="h-5 w-5" />
-                Browse Folders
+                {t('cloudConnectionsPage.browseFolders')}
               </button>
             </div>
 
             {/* File Types */}
             <div>
               <label className="block text-sm font-medium text-primary-900 dark:text-gray-100 mb-2">
-                File Types
+                {t('cloudConnectionsPage.fileTypes')}
               </label>
               <input
                 type="text"
@@ -806,14 +807,14 @@ function CreateSyncConfigModal({ connection, onClose, onCreated }: CreateSyncCon
                 className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 focus:ring-2 focus:ring-primary focus:border-transparent"
               />
               <p className="text-xs text-secondary dark:text-gray-400 mt-1">
-                Comma-separated list of file extensions to sync
+                {t('cloudConnectionsPage.fileTypesHelp')}
               </p>
             </div>
 
             {/* Max File Size */}
             <div>
               <label className="block text-sm font-medium text-primary-900 dark:text-gray-100 mb-2">
-                Max File Size (MB)
+                {t('cloudConnectionsPage.maxFileSize')}
               </label>
               <input
                 type="number"
@@ -829,7 +830,7 @@ function CreateSyncConfigModal({ connection, onClose, onCreated }: CreateSyncCon
             <div>
               <div className="flex items-center justify-between mb-3">
                 <label className="text-sm font-medium text-primary-900 dark:text-gray-100">
-                  Automatic Sync
+                  {t('cloudConnectionsPage.automaticSync')}
                 </label>
                 <button
                   type="button"
@@ -850,7 +851,7 @@ function CreateSyncConfigModal({ connection, onClose, onCreated }: CreateSyncCon
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs text-secondary dark:text-gray-400 mb-1">
-                      Frequency
+                      {t('cloudConnectionsPage.frequency')}
                     </label>
                     <select
                       value={scheduleFrequency}
@@ -859,14 +860,14 @@ function CreateSyncConfigModal({ connection, onClose, onCreated }: CreateSyncCon
                       }
                       className="w-full px-3 py-2 rounded-xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100"
                     >
-                      <option value="hourly">Hourly</option>
-                      <option value="daily">Daily</option>
-                      <option value="weekly">Weekly</option>
+                      <option value="hourly">{t('cloudConnectionsPage.frequencyHourly')}</option>
+                      <option value="daily">{t('cloudConnectionsPage.frequencyDaily')}</option>
+                      <option value="weekly">{t('cloudConnectionsPage.frequencyWeekly')}</option>
                     </select>
                   </div>
                   <div>
                     <label className="block text-xs text-secondary dark:text-gray-400 mb-1">
-                      Hour (UTC)
+                      {t('cloudConnectionsPage.hourUtc')}
                     </label>
                     <select
                       value={scheduleHour}
@@ -888,10 +889,10 @@ function CreateSyncConfigModal({ connection, onClose, onCreated }: CreateSyncCon
             <div className="flex items-center justify-between">
               <div>
                 <label className="text-sm font-medium text-primary-900 dark:text-gray-100">
-                  Delete Removed Files
+                  {t('cloudConnectionsPage.deleteRemoved')}
                 </label>
                 <p className="text-xs text-secondary dark:text-gray-400">
-                  Remove indexed documents when source files are deleted
+                  {t('cloudConnectionsPage.deleteRemovedHelp')}
                 </p>
               </div>
               <button
@@ -923,7 +924,7 @@ function CreateSyncConfigModal({ connection, onClose, onCreated }: CreateSyncCon
               disabled={isSubmitting || !name.trim() || selectedPaths.length === 0}
               className="px-4 py-2 rounded-xl bg-primary text-white hover:bg-primary-700 disabled:opacity-50"
             >
-              {isSubmitting ? 'Creating...' : 'Create Configuration'}
+              {isSubmitting ? t('cloudConnectionsPage.creating') : t('cloudConnectionsPage.createConfiguration')}
             </button>
           </div>
         </form>

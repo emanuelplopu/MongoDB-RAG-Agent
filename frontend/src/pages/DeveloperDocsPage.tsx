@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 
 interface ApiEndpoint {
   path: string
@@ -15,6 +16,7 @@ interface ApiTag {
 const API_BASE_URL = import.meta.env.VITE_API_URL || ''
 
 export default function DeveloperDocsPage() {
+  const { t } = useTranslation()
   const [apiTags, setApiTags] = useState<ApiTag[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -99,10 +101,10 @@ export default function DeveloperDocsPage() {
       <div className="bg-white dark:bg-gray-800 shadow">
         <div className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-            Developer API Documentation
+            {t('devDocsPage.title')}
           </h1>
           <p className="mt-2 text-gray-600 dark:text-gray-400">
-            Complete API reference for the RecallHub system
+            {t('devDocsPage.subtitle')}
           </p>
         </div>
       </div>
@@ -122,8 +124,8 @@ export default function DeveloperDocsPage() {
               </svg>
             </div>
             <div className="ml-4">
-              <h3 className="font-semibold text-gray-900 dark:text-white">Swagger UI</h3>
-              <p className="text-sm text-gray-500 dark:text-gray-400">Interactive API testing</p>
+              <h3 className="font-semibold text-gray-900 dark:text-white">{t('devDocsPage.swaggerUi')}</h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400">{t('devDocsPage.swaggerDesc')}</p>
             </div>
           </a>
           
@@ -139,8 +141,8 @@ export default function DeveloperDocsPage() {
               </svg>
             </div>
             <div className="ml-4">
-              <h3 className="font-semibold text-gray-900 dark:text-white">ReDoc</h3>
-              <p className="text-sm text-gray-500 dark:text-gray-400">Beautiful API docs</p>
+              <h3 className="font-semibold text-gray-900 dark:text-white">{t('devDocsPage.redoc')}</h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400">{t('devDocsPage.redocDesc')}</p>
             </div>
           </a>
           
@@ -156,8 +158,8 @@ export default function DeveloperDocsPage() {
               </svg>
             </div>
             <div className="ml-4">
-              <h3 className="font-semibold text-gray-900 dark:text-white">OpenAPI Spec</h3>
-              <p className="text-sm text-gray-500 dark:text-gray-400">Download JSON spec</p>
+              <h3 className="font-semibold text-gray-900 dark:text-white">{t('devDocsPage.openApiSpec')}</h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400">{t('devDocsPage.openApiDesc')}</p>
             </div>
           </a>
         </div>
@@ -165,30 +167,30 @@ export default function DeveloperDocsPage() {
         {/* Quick Start Guide */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow mb-8 overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Quick Start</h2>
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{t('devDocsPage.quickStart')}</h2>
           </div>
           <div className="p-6 space-y-6">
             <div>
-              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">Base URL</h3>
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">{t('devDocsPage.baseUrl')}</h3>
               <code className="block bg-gray-100 dark:bg-gray-700 p-3 rounded text-sm font-mono">
                 {window.location.origin}/api/v1
               </code>
             </div>
 
             <div>
-              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">Authentication Methods</h3>
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">{t('devDocsPage.authMethods')}</h3>
               <p className="text-gray-600 dark:text-gray-400 mb-3">
-                The API supports two authentication methods:
+                {t('devDocsPage.authIntro')}
               </p>
               
               {/* Method 1: API Key */}
               <div className="mb-6">
                 <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-2 flex items-center gap-2">
-                  <span className="px-2 py-0.5 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 text-xs rounded">RECOMMENDED</span>
-                  Method 1: API Key (for external services)
+                  <span className="px-2 py-0.5 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 text-xs rounded">{t('devDocsPage.recommended')}</span>
+                  {t('devDocsPage.method1Title')}
                 </h4>
                 <p className="text-gray-600 dark:text-gray-400 mb-2 text-sm">
-                  Create an API key from the <a href="/system/api-keys" className="text-primary dark:text-primary-400 hover:underline">API Keys page</a> and use it in the X-API-Key header:
+                  {t('devDocsPage.method1Desc')}
                 </p>
                 <pre className="bg-gray-100 dark:bg-gray-700 p-3 rounded text-sm font-mono overflow-x-auto">
 {`# Using API Key (best for external apps like FocusAhead)
@@ -208,10 +210,10 @@ curl -X POST "${window.location.origin}/api/v1/sessions/SESSION_ID/messages" \\
               {/* Method 2: JWT Token */}
               <div>
                 <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-2">
-                  Method 2: JWT Bearer Token (for web sessions)
+                  {t('devDocsPage.method2Title')}
                 </h4>
                 <p className="text-gray-600 dark:text-gray-400 mb-2 text-sm">
-                  Obtain a JWT token via login for web-based authentication:
+                  {t('devDocsPage.method2Desc')}
                 </p>
                 <pre className="bg-gray-100 dark:bg-gray-700 p-3 rounded text-sm font-mono overflow-x-auto">
 {`# Login to get a JWT token
@@ -229,10 +231,10 @@ curl "${window.location.origin}/api/v1/search/hybrid" \\
             </div>
 
             <div>
-              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">Common Operations</h3>
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">{t('devDocsPage.commonOps')}</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="bg-gray-50 dark:bg-gray-700 p-4 rounded">
-                  <h4 className="font-medium text-gray-900 dark:text-white mb-2">Search Knowledge Base</h4>
+                  <h4 className="font-medium text-gray-900 dark:text-white mb-2">{t('devDocsPage.searchKb')}</h4>
                   <pre className="text-xs font-mono overflow-x-auto">
 {`POST /api/v1/search/hybrid
 {
@@ -244,7 +246,7 @@ curl "${window.location.origin}/api/v1/search/hybrid" \\
                 </div>
                 
                 <div className="bg-gray-50 dark:bg-gray-700 p-4 rounded">
-                  <h4 className="font-medium text-gray-900 dark:text-white mb-2">Chat with Agent</h4>
+                  <h4 className="font-medium text-gray-900 dark:text-white mb-2">{t('devDocsPage.chatAgent')}</h4>
                   <pre className="text-xs font-mono overflow-x-auto">
 {`POST /api/v1/sessions/{id}/messages
 {
@@ -256,7 +258,7 @@ curl "${window.location.origin}/api/v1/search/hybrid" \\
                 </div>
                 
                 <div className="bg-gray-50 dark:bg-gray-700 p-4 rounded">
-                  <h4 className="font-medium text-gray-900 dark:text-white mb-2">Start Document Ingestion</h4>
+                  <h4 className="font-medium text-gray-900 dark:text-white mb-2">{t('devDocsPage.startIngestion')}</h4>
                   <pre className="text-xs font-mono overflow-x-auto">
 {`POST /api/v1/ingestion/start
 {
@@ -268,7 +270,7 @@ curl "${window.location.origin}/api/v1/search/hybrid" \\
                 </div>
                 
                 <div className="bg-gray-50 dark:bg-gray-700 p-4 rounded">
-                  <h4 className="font-medium text-gray-900 dark:text-white mb-2">Get System Status</h4>
+                  <h4 className="font-medium text-gray-900 dark:text-white mb-2">{t('devDocsPage.systemStatus')}</h4>
                   <pre className="text-xs font-mono overflow-x-auto">
 {`GET /api/v1/system/health
 GET /api/v1/status/dashboard`}
@@ -282,17 +284,17 @@ GET /api/v1/status/dashboard`}
         {/* API Reference */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex flex-wrap items-center justify-between gap-4">
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">API Reference</h2>
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{t('devDocsPage.apiReference')}</h2>
             <div className="flex items-center gap-2">
               <input
                 type="text"
-                placeholder="Search endpoints..."
+                placeholder={t('devDocsPage.searchEndpoints')}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-sm"
               />
               <span className="text-sm text-gray-500 dark:text-gray-400">
-                {apiTags.reduce((sum, t) => sum + t.endpoints.length, 0)} endpoints
+                {t('devDocsPage.endpointCount', { count: apiTags.reduce((sum, tag) => sum + tag.endpoints.length, 0) })}
               </span>
             </div>
           </div>
@@ -300,7 +302,7 @@ GET /api/v1/status/dashboard`}
           {loading ? (
             <div className="p-8 text-center">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
-              <p className="mt-2 text-gray-500 dark:text-gray-400">Loading API spec...</p>
+              <p className="mt-2 text-gray-500 dark:text-gray-400">{t('devDocsPage.loadingSpec')}</p>
             </div>
           ) : error ? (
             <div className="p-8 text-center">
@@ -309,13 +311,13 @@ GET /api/v1/status/dashboard`}
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
               </div>
-              <p className="text-red-600 dark:text-red-400 font-medium mb-2">Failed to load API specification</p>
+              <p className="text-red-600 dark:text-red-400 font-medium mb-2">{t('devDocsPage.loadFailed')}</p>
               <p className="text-gray-500 dark:text-gray-400 text-sm mb-4">{error}</p>
               <button
                 onClick={() => { setLoading(true); fetchOpenApiSpec(); }}
                 className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-700"
               >
-                Retry
+                {t('devDocsPage.retry')}
               </button>
             </div>
           ) : (
@@ -365,13 +367,13 @@ GET /api/v1/status/dashboard`}
                         rel="noopener noreferrer"
                         className="flex-shrink-0 px-2 py-1 text-xs bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 rounded hover:bg-indigo-200 dark:hover:bg-indigo-800"
                       >
-                        Try it
+                        {t('devDocsPage.tryIt')}
                       </a>
                     </div>
                   ))}
                   {filteredEndpoints.length === 0 && (
                     <p className="text-center text-gray-500 dark:text-gray-400 py-8">
-                      No endpoints found
+                      {t('devDocsPage.noEndpoints')}
                     </p>
                   )}
                 </div>
@@ -383,7 +385,7 @@ GET /api/v1/status/dashboard`}
         {/* SDK/Client Libraries */}
         <div className="mt-8 bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Client Libraries</h2>
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{t('devDocsPage.clientLibraries')}</h2>
           </div>
           <div className="p-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -478,45 +480,45 @@ curl -X POST \\
         {/* Rate Limits & Best Practices */}
         <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Rate Limits</h2>
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">{t('devDocsPage.rateLimits')}</h2>
             <ul className="space-y-2 text-gray-600 dark:text-gray-400">
               <li className="flex items-center gap-2">
                 <span className="w-2 h-2 bg-green-500 rounded-full"></span>
-                Search endpoints: 60 requests/minute
+                {t('devDocsPage.rateSearch')}
               </li>
               <li className="flex items-center gap-2">
                 <span className="w-2 h-2 bg-yellow-500 rounded-full"></span>
-                Chat endpoints: 30 requests/minute
+                {t('devDocsPage.rateChat')}
               </li>
               <li className="flex items-center gap-2">
                 <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
-                Ingestion: 5 concurrent jobs
+                {t('devDocsPage.rateIngestion')}
               </li>
               <li className="flex items-center gap-2">
                 <span className="w-2 h-2 bg-gray-500 rounded-full"></span>
-                Request timeout: 30 seconds
+                {t('devDocsPage.rateTimeout')}
               </li>
             </ul>
           </div>
 
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Best Practices</h2>
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">{t('devDocsPage.bestPractices')}</h2>
             <ul className="space-y-2 text-gray-600 dark:text-gray-400">
               <li className="flex items-start gap-2">
                 <span className="text-green-500 mt-1">✓</span>
-                Use hybrid search for best results
+                {t('devDocsPage.practiceHybrid')}
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-green-500 mt-1">✓</span>
-                Store tokens securely, never in code
+                {t('devDocsPage.practiceTokens')}
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-green-500 mt-1">✓</span>
-                Handle rate limit errors with backoff
+                {t('devDocsPage.practiceRateLimit')}
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-green-500 mt-1">✓</span>
-                Use streaming for long responses
+                {t('devDocsPage.practiceStreaming')}
               </li>
             </ul>
           </div>
