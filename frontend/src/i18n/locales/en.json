@@ -1427,7 +1427,15 @@
     },
     "showMore": "Show {{count}} more",
     "toolSuccess": "Completed",
-    "toolFailed": "Failed"
+    "toolFailed": "Failed",
+    "liveTrace": {
+      "understood": "I understood",
+      "willSearch": "Planned searches",
+      "searchProgress": "Search progress",
+      "searchComplete": "found",
+      "searchInProgress": "searching...",
+      "totalFound": "{{count}} document(s) found across {{searches}} search(es)"
+    }
   },
   "systemPage": {
     "title": "System Management",

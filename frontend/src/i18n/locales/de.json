@@ -1427,7 +1427,15 @@
     },
     "showMore": "{{count}} weitere anzeigen",
     "toolSuccess": "Abgeschlossen",
-    "toolFailed": "Fehlgeschlagen"
+    "toolFailed": "Fehlgeschlagen",
+    "liveTrace": {
+      "understood": "Verstanden",
+      "willSearch": "Geplante Suchen",
+      "searchProgress": "Suchfortschritt",
+      "searchComplete": "gefunden",
+      "searchInProgress": "wird durchsucht...",
+      "totalFound": "{{count}} Dokument(e) in {{searches}} Suche(n) gefunden"
+    }
   },
   "systemPage": {
     "title": "Systemverwaltung",

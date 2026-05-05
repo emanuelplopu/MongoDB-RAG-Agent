@@ -629,4 +629,4 @@ volumes:
 
 ---
 
-*Dieses Dokument ergänzt PROJECT_DOCUMENTATION.md mit detaillierten technischen Blaupausen für alle Systemkomponenten.*
+*Dieses Dokument ergänzt [03-PROJECT_DOCUMENTATION.md](./03-PROJECT_DOCUMENTATION.md) mit detaillierten technischen Blaupausen für alle Systemkomponenten.*

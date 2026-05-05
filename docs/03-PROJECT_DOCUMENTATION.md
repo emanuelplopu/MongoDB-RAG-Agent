@@ -1,11 +1,13 @@
 # RecallHub - Complete Project Documentation
 
 > **Related Documentation:**
-> - [System Blueprints (EN)](./SYSTEM_BLUEPRINTS.md) - Detailed technical blueprints for all system components
-> - [Systemblaupausen (DE)](./SYSTEM_BLUEPRINTS_DE.md) - Deutsche Version der technischen Blaupausen
-> - [Cloud Sources Architecture](./architecture/cloud-sources-architecture.md) - Cloud integration design
+> - [System Blueprints (EN)](./02-SYSTEM_BLUEPRINTS.md) - Detailed technical blueprints for all system components
+> - [Systemblaupausen (DE)](./02-SYSTEM_BLUEPRINTS_DE.md) - Deutsche Version der technischen Blaupausen
+> - [Embedding and Query System](./04-EMBEDDING_AND_QUERY_SYSTEM.md) - RAG pipeline deep dive
+> - [Run Blueprint](./05-RUN_BLUEPRINT.md) - Build, start, and service access reference
+> - [Cloud Sources Architecture](./architecture/06-cloud-sources-architecture.md) - Cloud integration design
 > - [Docker Build Guide](./docker-build-guide.md) - Container build strategies
-> - [Airbyte Deployment](./airbyte-deployment-solution-summary.md) - Airbyte integration guide
+> - [Airbyte Troubleshooting Guide](./airbyte-troubleshooting-guide.md) - Airbyte operations reference
 
 ## Table of Contents
 1. [Project Overview](#1-project-overview)

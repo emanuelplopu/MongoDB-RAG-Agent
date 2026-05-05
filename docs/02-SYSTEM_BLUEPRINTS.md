@@ -2058,4 +2058,4 @@ def select_winner(results: List[ProviderResult]) -> str:
 
 ---
 
-*This document supplements PROJECT_DOCUMENTATION.md with detailed technical blueprints for all system components.*
+*This document supplements [03-PROJECT_DOCUMENTATION.md](./03-PROJECT_DOCUMENTATION.md) with detailed technical blueprints for all system components.*

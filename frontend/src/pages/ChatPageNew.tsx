@@ -116,7 +116,7 @@ export default function ChatPage() {
   const [useStreaming] = useState(true)  // Enable streaming by default
   const [lastFailedMessage, setLastFailedMessage] = useState<string | null>(null)  // Track last failed message for retry
   const [liveTrace, setLiveTrace] = useState<{
-    orchestrator_steps: Array<{ phase: string; reasoning: string; output: string; duration_ms: number; tokens: number }>
+    orchestrator_steps: Array<{ phase: string; reasoning: string; output: string; duration_ms: number; tokens: number; tasks?: Array<{ id: string; type: string; query: string }> }>
     worker_steps: Array<{ task_id: string; task_type: string; tool: string; duration_ms: number; success: boolean; documents: Array<{ title: string; score: number; excerpt: string }> }>
     stats: { total_tokens: number; orchestrator_tokens: number; worker_tokens: number; cost_usd: number }
     startTime: number
@@ -356,7 +356,7 @@ export default function ChatPage() {
       const sessionId = session.id
       const startTime = Date.now()
       const accumulated = {
-        orchestrator_steps: [] as Array<{ phase: string; reasoning: string; output: string; duration_ms: number; tokens: number }>,
+        orchestrator_steps: [] as Array<{ phase: string; reasoning: string; output: string; duration_ms: number; tokens: number; tasks?: Array<{ id: string; type: string; query: string }> }>,
         worker_steps: [] as Array<{ task_id: string; task_type: string; tool: string; duration_ms: number; success: boolean; documents: Array<{ title: string; score: number; excerpt: string }> }>,
         stats: { total_tokens: 0, orchestrator_tokens: 0, worker_tokens: 0, cost_usd: 0 },
         startTime,

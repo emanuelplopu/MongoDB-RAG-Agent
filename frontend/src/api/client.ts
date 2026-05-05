@@ -1410,6 +1410,7 @@ export const sessionsApi = {
         output: string
         duration_ms: number
         tokens: number
+        tasks?: Array<{ id: string; type: string; query: string }>
       }) => void
       onWorkerStep?: (step: {
         task_id: string
