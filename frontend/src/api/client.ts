@@ -361,6 +361,7 @@ export interface LLMModel {
   id: string
   owned_by: string
   created?: number
+  provider?: string
 }
 
 export interface LLMModelsResponse {

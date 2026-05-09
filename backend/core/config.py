@@ -92,6 +92,12 @@ class BackendSettings(BaseSettings):
         description="Provider for worker model"
     )
     
+    # Ollama Settings
+    ollama_base_url: str = Field(
+        default="http://host.docker.internal:11434",
+        description="Base URL for local Ollama instance (host.docker.internal resolves to host from Docker)"
+    )
+    
     # Federated Agent Settings
     agent_max_iterations: int = Field(
         default=3,
@@ -267,6 +273,30 @@ class BackendSettings(BaseSettings):
         if self.fast_llm_api_key:
             return self.fast_llm_api_key
         return self.get_api_key_for_provider(self.worker_provider)
+    
+    def resolve_model_provider(self, model_string: str, default_provider: str) -> tuple[str, str]:
+        """Resolve a model string that may contain a provider prefix.
+        
+        LiteLLM convention uses 'provider/model' format. This method detects
+        such prefixes and returns the cleaned model name and resolved provider.
+        
+        Args:
+            model_string: Model string, possibly with provider prefix (e.g. 'ollama/llama3.2')
+            default_provider: Provider to use if no prefix is detected
+        
+        Returns:
+            Tuple of (model_name, provider)
+        """
+        known_prefixes = {
+            "ollama/": "ollama",
+            "gemini/": "google",
+            "anthropic/": "anthropic",
+            "openai/": "openai",
+        }
+        for prefix, provider in known_prefixes.items():
+            if model_string.startswith(prefix):
+                return model_string[len(prefix):], provider
+        return model_string, default_provider
     
     class Config:
         env_file = ".env"

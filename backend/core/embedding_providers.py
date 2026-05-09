@@ -587,7 +587,7 @@ class OllamaEmbeddingProvider(BaseEmbeddingProvider):
     
     def __init__(self, config: EmbeddingProviderConfig):
         super().__init__(config)
-        self.base_url = config.base_url or "http://localhost:11434"
+        self.base_url = config.base_url or "http://host.docker.internal:11434"
     
     async def generate_embeddings(
         self,

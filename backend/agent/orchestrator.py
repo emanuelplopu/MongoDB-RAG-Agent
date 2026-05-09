@@ -144,7 +144,7 @@ class Orchestrator:
         try:
             # Get the model string with provider prefix
             model_string = self._get_model_string()
-            api_key = settings.get_orchestrator_api_key()
+            api_key = settings.get_api_key_for_provider(self.provider)
             
             # Handle newer OpenAI models that require max_completion_tokens
             llm_params = {
@@ -153,6 +153,10 @@ class Orchestrator:
                 "temperature": 0.2 if phase != OrchestratorPhase.SYNTHESIZE else 0.7,
                 "api_key": api_key,
             }
+            
+            # Set api_base for Ollama models so LiteLLM routes to the correct host
+            if self.provider.lower() == "ollama" or "ollama/" in model_string:
+                llm_params["api_base"] = settings.ollama_base_url
             
             # Check if this is a newer OpenAI model that requires max_completion_tokens
             model_lower = model_string.lower()
@@ -163,6 +167,8 @@ class Orchestrator:
                 llm_params["max_completion_tokens"] = 2000
             else:
                 llm_params["max_tokens"] = 2000
+            
+            logger.info(f"Orchestrator LLM call: model={model_string}, provider={self.provider}, api_base={llm_params.get('api_base', 'default')}")
             
             response = await acompletion(**llm_params)
             

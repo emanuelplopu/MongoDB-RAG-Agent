@@ -911,7 +911,7 @@ async def send_message(
     # Configure federated agent - use session model as orchestrator model
     # The user selects their model in the chat UI, stored in the session document
     orchestrator_model = session_model if session_model else settings.orchestrator_model
-    logger.info(f"Agent config: orchestrator_model={orchestrator_model} (session_model={session_model}, default={settings.orchestrator_model})")
+    logger.info(f"Agent config: orchestrator={settings.orchestrator_provider}/{orchestrator_model}, worker={settings.worker_provider}/{settings.worker_model}, session_model={session_model}")
     
     config = AgentModeConfig(
         mode=agent_mode,
@@ -1061,13 +1061,21 @@ async def send_message(
                 }
             ]
             
+            # Resolve provider from model prefix for proper routing
+            title_model = session_model
+            title_api_base = settings.llm_base_url if settings.llm_base_url else None
+            title_api_key = settings.llm_api_key
+            if session_model.startswith("ollama/"):
+                title_api_base = settings.ollama_base_url
+                title_api_key = ""  # Ollama doesn't need an API key
+            
             title_response = await litellm.acompletion(
-                model=session_model,
+                model=title_model,
                 messages=title_prompt,
                 temperature=0.7,
                 max_tokens=30,
-                api_key=settings.llm_api_key,
-                api_base=settings.llm_base_url if settings.llm_base_url else None,
+                api_key=title_api_key,
+                api_base=title_api_base,
             )
             
             generated_title = title_response.choices[0].message.content.strip()
@@ -1195,7 +1203,7 @@ async def send_message_stream(
             
             # Configure agent - use session model as orchestrator model
             orchestrator_model = session_model if session_model else settings.orchestrator_model
-            logger.info(f"Stream agent config: orchestrator_model={orchestrator_model} (session_model={session_model})")
+            logger.info(f"Stream agent config: orchestrator={settings.orchestrator_provider}/{orchestrator_model}, worker={settings.worker_provider}/{settings.worker_model}, session_model={session_model}")
             
             config = AgentModeConfig(
                 mode=agent_mode,
@@ -1398,13 +1406,21 @@ async def send_message_stream(
                         }
                     ]
                     
+                    # Resolve provider from model prefix for proper routing
+                    title_model = session_model
+                    title_api_base = settings.llm_base_url if settings.llm_base_url else None
+                    title_api_key = settings.llm_api_key
+                    if session_model.startswith("ollama/"):
+                        title_api_base = settings.ollama_base_url
+                        title_api_key = ""  # Ollama doesn't need an API key
+                    
                     title_response = await litellm.acompletion(
-                        model=session_model,
+                        model=title_model,
                         messages=title_prompt,
                         temperature=0.7,
                         max_tokens=30,
-                        api_key=settings.llm_api_key,
-                        api_base=settings.llm_base_url if settings.llm_base_url else None,
+                        api_key=title_api_key,
+                        api_base=title_api_base,
                     )
                     
                     generated_title = title_response.choices[0].message.content.strip()

@@ -207,7 +207,7 @@ services:
       - TENANT_DISABLED_TOOLS=web_search,browse_web
       
       # Profile (overrides profiles.yaml active_profile)
-      - ACTIVE_PROFILE=test-law
+      - ACTIVE_PROFILE=parhelion
       
       # LLM Configuration
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}

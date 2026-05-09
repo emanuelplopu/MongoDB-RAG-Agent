@@ -466,6 +466,11 @@ Remember: You have access to the user's company documents. Search them! Multiple
                 "api_base": settings.llm_base_url if settings.llm_base_url else None,
             }
             
+            # Override api_base for Ollama models
+            if llm_model.startswith("ollama/"):
+                llm_params["api_base"] = settings.ollama_base_url
+                llm_params["api_key"] = ""  # Ollama doesn't need an API key
+            
             # Check if this is a newer OpenAI model
             model_lower = llm_model.lower()
             needs_max_completion_tokens = any(prefix in model_lower for prefix in [

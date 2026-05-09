@@ -1,0 +1,24 @@
+active_profile: default
+profiles:
+  default:
+    name: Default
+    description: Default project profile
+    documents_folders:
+    - documents
+    database: rag_db
+    collection_documents: documents
+    collection_chunks: chunks
+    vector_index: vector_index
+    text_index: text_index
+    cloud_sources: []
+  test_profile:
+    name: Test Profile
+    description: A test profile
+    documents_folders:
+    - ./test_docs
+    database: rag_test_profile
+    collection_documents: documents
+    collection_chunks: chunks
+    vector_index: vector_index
+    text_index: text_index
+    cloud_sources: []

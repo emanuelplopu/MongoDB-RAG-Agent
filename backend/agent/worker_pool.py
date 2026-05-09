@@ -81,8 +81,9 @@ class WorkerPool:
         return model
     
     def _get_api_key(self) -> str:
-        """Get the API key for the worker model."""
-        return settings.get_worker_api_key()
+        """Get the API key for the worker model based on the resolved provider."""
+        # Use instance provider (which may have been resolved from model prefix)
+        return settings.get_api_key_for_provider(self.provider)
     
     def reset(self):
         """Reset steps for a new session."""
@@ -503,11 +504,17 @@ class WorkerPool:
                 "api_key": self._get_api_key(),
             }
             
+            # Set api_base for Ollama models
+            if self.provider.lower() == "ollama" or "ollama/" in model_string:
+                llm_params["api_base"] = settings.ollama_base_url
+            
             # Check if this is a newer OpenAI model
             if "gpt-5" in model_string.lower() or "gpt-4o" in model_string.lower():
                 llm_params["max_completion_tokens"] = 500
             else:
                 llm_params["max_tokens"] = 500
+            
+            logger.info(f"Worker LLM call (summarize): model={model_string}, provider={self.provider}, api_base={llm_params.get('api_base', 'default')}")
             
             response = await acompletion(**llm_params)
             return response.choices[0].message.content
@@ -557,11 +564,17 @@ class WorkerPool:
                 "api_key": self._get_api_key(),
             }
             
+            # Set api_base for Ollama models
+            if self.provider.lower() == "ollama" or "ollama/" in model_string:
+                llm_params["api_base"] = settings.ollama_base_url
+            
             # Check if this is a newer OpenAI model
             if "gpt-5" in model_string.lower() or "gpt-4o" in model_string.lower():
                 llm_params["max_completion_tokens"] = 100
             else:
                 llm_params["max_tokens"] = 100
+            
+            logger.info(f"Worker LLM call (refine): model={model_string}, provider={self.provider}, api_base={llm_params.get('api_base', 'default')}")
             
             response = await acompletion(**llm_params)
             return response.choices[0].message.content.strip()

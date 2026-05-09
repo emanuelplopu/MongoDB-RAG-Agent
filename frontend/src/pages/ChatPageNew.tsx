@@ -213,18 +213,28 @@ export default function ChatPage() {
 
 
   // Change model for current session
-  const handleChangeModel = async (modelId: string) => {
+  // For Ollama models, prefix with "ollama/" so the backend routes to the local instance
+  const handleChangeModel = async (modelId: string, provider?: string) => {
     if (!currentSession) return
+    const storedModelId = provider === 'ollama' ? `ollama/${modelId}` : modelId
     try {
-      await sessionsApi.update(currentSession.id, { model: modelId })
-      setCurrentSession(prev => prev ? { ...prev, model: modelId } : null)
+      await sessionsApi.update(currentSession.id, { model: storedModelId })
+      setCurrentSession(prev => prev ? { ...prev, model: storedModelId } : null)
       setSessions(prev => prev.map(s => 
-        s.id === currentSession.id ? { ...s, model: modelId } : s
+        s.id === currentSession.id ? { ...s, model: storedModelId } : s
       ))
     } catch (err) {
       console.error('Failed to change model:', err)
     }
     setShowModelSelector(false)
+  }
+
+  // Helper to get display name for a model (strip provider prefix)
+  const getModelDisplayName = (model: string) => {
+    if (model.startsWith('ollama/')) return model.slice(7)
+    if (model.startsWith('gemini/')) return model.slice(7)
+    if (model.startsWith('anthropic/')) return model.slice(10)
+    return model
   }
 
   // Handle file attachment
@@ -633,40 +643,110 @@ export default function ChatPage() {
                   className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-variant dark:bg-gray-700 hover:bg-surface dark:hover:bg-gray-600 text-sm transition-colors"
                 >
                   <SparklesIcon className="h-4 w-4 text-primary" />
-                  <span className="dark:text-gray-200">{currentSession.model}</span>
+                  <span className="dark:text-gray-200">{getModelDisplayName(currentSession.model)}</span>
                   <ChevronDownIcon className="h-4 w-4 text-secondary" />
                 </button>
                 {showModelSelector && (
                   <div className="absolute right-0 mt-1 w-80 max-h-96 overflow-y-auto bg-white dark:bg-gray-900 rounded-xl shadow-xl border border-gray-200 dark:border-gray-600 z-50">
                     <div className="p-2">
-                      <div className="text-xs font-medium text-primary-600 dark:text-primary-400 px-2 py-1 uppercase">
-                        {t('chatPage.selectModel')}
-                      </div>
-                      {models.slice(0, 20).map(model => {
-                        const pricing = getPricing(model.id)
-                        const isDefault = preferences.defaultModel === model.id
-                        return (
-                          <button
-                            key={model.id}
-                            onClick={() => handleChangeModel(model.id)}
-                            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left hover:bg-gray-100 dark:hover:bg-gray-700 ${
-                              currentSession.model === model.id ? 'bg-primary-50 dark:bg-primary-900/30' : ''
-                            }`}
-                          >
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-sm dark:text-gray-200">{model.id}</span>
-                              {isDefault && (
-                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary-100 dark:bg-primary-900/50 text-primary-600 dark:text-primary-400 font-medium">
-                                  {t('chatPage.defaultBadge')}
+                      {/* OpenAI models section */}
+                      {models.filter(m => m.provider !== 'ollama').length > 0 && (
+                        <>
+                          <div className="text-xs font-medium text-primary-600 dark:text-primary-400 px-2 py-1 uppercase">
+                            {t('chatPage.openaiModels')}
+                          </div>
+                          {models.filter(m => m.provider !== 'ollama').map(model => {
+                            const pricing = getPricing(model.id)
+                            const isDefault = preferences.defaultModel === model.id
+                            return (
+                              <button
+                                key={model.id}
+                                onClick={() => handleChangeModel(model.id)}
+                                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                                  currentSession.model === model.id ? 'bg-primary-50 dark:bg-primary-900/30' : ''
+                                }`}
+                              >
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-sm dark:text-gray-200">{model.id}</span>
+                                  {isDefault && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary-100 dark:bg-primary-900/50 text-primary-600 dark:text-primary-400 font-medium">
+                                      {t('chatPage.defaultBadge')}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-xs text-secondary dark:text-gray-400">
+                                  ${pricing.output}/1M out
                                 </span>
-                              )}
-                            </div>
-                            <span className="text-xs text-secondary dark:text-gray-400">
-                              ${pricing.output}/1M out
-                            </span>
-                          </button>
-                        )
-                      })}
+                              </button>
+                            )
+                          })}
+                        </>
+                      )}
+                      {/* Ollama (local) models section */}
+                      {models.filter(m => m.provider === 'ollama').length > 0 && (
+                        <>
+                          <div className="text-xs font-medium text-green-600 dark:text-green-400 px-2 py-1 mt-2 uppercase border-t border-gray-200 dark:border-gray-700 pt-2">
+                            {t('chatPage.ollamaLocal')}
+                          </div>
+                          {models.filter(m => m.provider === 'ollama').map(model => {
+                            const isDefault = preferences.defaultModel === `ollama/${model.id}`
+                            return (
+                              <button
+                                key={model.id}
+                                onClick={() => handleChangeModel(model.id, 'ollama')}
+                                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                                  currentSession.model === `ollama/${model.id}` ? 'bg-primary-50 dark:bg-primary-900/30' : ''
+                                }`}
+                              >
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-sm dark:text-gray-200">{model.id}</span>
+                                  {isDefault && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary-100 dark:bg-primary-900/50 text-primary-600 dark:text-primary-400 font-medium">
+                                      {t('chatPage.defaultBadge')}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 dark:bg-green-900/50 text-green-600 dark:text-green-400 font-medium">
+                                  {t('chatPage.localBadge')}
+                                </span>
+                              </button>
+                            )
+                          })}
+                        </>
+                      )}
+                      {/* Fallback: show all if no provider info */}
+                      {models.length > 0 && models.every(m => !m.provider) && (
+                        <>
+                          <div className="text-xs font-medium text-primary-600 dark:text-primary-400 px-2 py-1 uppercase">
+                            {t('chatPage.selectModel')}
+                          </div>
+                          {models.map(model => {
+                            const pricing = getPricing(model.id)
+                            const isDefault = preferences.defaultModel === model.id
+                            return (
+                              <button
+                                key={model.id}
+                                onClick={() => handleChangeModel(model.id)}
+                                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                                  currentSession.model === model.id ? 'bg-primary-50 dark:bg-primary-900/30' : ''
+                                }`}
+                              >
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-sm dark:text-gray-200">{model.id}</span>
+                                  {isDefault && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary-100 dark:bg-primary-900/50 text-primary-600 dark:text-primary-400 font-medium">
+                                      {t('chatPage.defaultBadge')}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-xs text-secondary dark:text-gray-400">
+                                  ${pricing.output}/1M out
+                                </span>
+                              </button>
+                            )
+                          })}
+                        </>
+                      )}
                       {/* Set as default option */}
                       {currentSession.model && currentSession.model !== preferences.defaultModel && (
                         <div className="border-t border-gray-200 dark:border-gray-700 mt-1 pt-1">

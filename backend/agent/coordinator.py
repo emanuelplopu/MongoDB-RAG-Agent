@@ -62,15 +62,25 @@ class FederatedAgent:
         self.strategy = self._resolve_strategy(strategy, strategy_id)
         logger.info(f"Using strategy: {self.strategy.metadata.id} ({self.strategy.metadata.name})")
         
+        # Detect provider from model prefix (e.g., "ollama/llama3.2" → provider="ollama", model="llama3.2")
+        orchestrator_model, orchestrator_provider = settings.resolve_model_provider(
+            self.config.orchestrator_model, settings.orchestrator_provider
+        )
+        worker_model, worker_provider = settings.resolve_model_provider(
+            self.config.worker_model, settings.worker_provider
+        )
+        
+        logger.info(f"FederatedAgent: orchestrator={orchestrator_provider}/{orchestrator_model}, worker={worker_provider}/{worker_model}")
+        
         # Initialize components with provider configuration
         self.orchestrator = Orchestrator(
-            model=self.config.orchestrator_model,
-            provider=settings.orchestrator_provider,
+            model=orchestrator_model,
+            provider=orchestrator_provider,
             strategy=self.strategy
         )
         self.worker_pool = WorkerPool(
-            model=self.config.worker_model,
-            provider=settings.worker_provider,
+            model=worker_model,
+            provider=worker_provider,
             max_workers=self.config.parallel_workers,
             federated_search=self.federated_search
         )
@@ -670,8 +680,11 @@ class FederatedAgent:
     
     def _get_worker_model_string(self) -> str:
         """Get the worker model string in LiteLLM format."""
-        provider = settings.worker_provider.lower()
-        model = self.config.worker_model
+        # Resolve provider from model prefix first
+        model, provider = settings.resolve_model_provider(
+            self.config.worker_model, settings.worker_provider
+        )
+        provider = provider.lower()
         
         if provider == "openai":
             return model
@@ -743,6 +756,10 @@ class FederatedAgent:
                 "temperature": 0.7,
                 "api_key": api_key,
             }
+            
+            # Set api_base for Ollama models so LiteLLM routes to the correct host
+            if "ollama/" in model_string:
+                llm_params["api_base"] = settings.ollama_base_url
             
             # Check if this is a newer OpenAI model
             if "gpt-5" in model_string.lower() or "gpt-4o" in model_string.lower():

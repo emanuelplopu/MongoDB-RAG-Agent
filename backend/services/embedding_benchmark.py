@@ -502,7 +502,7 @@ class EmbeddingBenchmarkService:
             )
         elif provider.provider_type == "ollama":
             embeddings, latencies = await self._generate_ollama_embeddings(
-                texts, provider.model, provider.base_url or "http://localhost:11434"
+                texts, provider.model, provider.base_url or "http://host.docker.internal:11434"
             )
         elif provider.provider_type in ["vllm", "custom"]:
             embeddings, latencies = await self._generate_openai_compatible_embeddings(

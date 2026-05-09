@@ -750,7 +750,7 @@ def _apply_offline_config(config: OfflineModeConfig):
         if config.chat_provider == "ollama":
             settings.llm_provider = "ollama"
             settings.llm_model = config.chat_model
-            settings.llm_api_base = config.chat_url or "http://localhost:11434"
+            settings.llm_api_base = config.chat_url or settings.ollama_base_url
         elif config.chat_provider in ["vllm", "localai", "lmstudio"]:
             settings.llm_provider = "openai"  # OpenAI-compatible
             settings.llm_model = config.chat_model
@@ -760,7 +760,7 @@ def _apply_offline_config(config: OfflineModeConfig):
         if config.embedding_provider == "ollama":
             settings.embedding_provider = "ollama"
             settings.embedding_model = config.embedding_model
-            settings.embedding_api_base = config.embedding_url or "http://localhost:11434"
+            settings.embedding_api_base = config.embedding_url or settings.ollama_base_url
         elif config.embedding_provider in ["vllm", "localai"]:
             settings.embedding_provider = "openai"
             settings.embedding_model = config.embedding_model
@@ -801,7 +801,8 @@ async def test_local_model(
     url = provider_url
     
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        # Ollama cold-starts can take 60-90s for large models (26GB+)
+        async with httpx.AsyncClient(timeout=120.0) as client:
             if model_type == "chat":
                 if provider_id == "ollama":
                     response = await client.post(

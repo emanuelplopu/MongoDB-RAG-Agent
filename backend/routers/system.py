@@ -266,6 +266,30 @@ def _get_detailed_models(model_dict):
     return models
 
 
+async def _try_fetch_ollama_models() -> list[str] | None:
+    """Attempt a quick live fetch of installed Ollama model names.
+
+    Tries several common Ollama base URLs with a short timeout.
+    Returns a list of model name strings on success, or ``None`` if
+    Ollama is unreachable so callers can fall back to the hardcoded list.
+    """
+    ollama_urls = [
+        "http://localhost:11434",
+        "http://host.docker.internal:11434",
+        "http://ollama:11434",
+    ]
+    for url in ollama_urls:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.get(f"{url}/api/tags")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return [m.get("name", "") for m in data.get("models", []) if m.get("name")]
+        except Exception:
+            continue
+    return None
+
+
 class ConfigUpdateRequest(BaseModel):
     llm_model: Optional[str] = None
     embedding_model: Optional[str] = None
@@ -702,14 +726,83 @@ _models_cache: dict = {
     "ttl": 300  # 5 minutes
 }
 
+# Ollama connectivity URLs (tried in order)
+_OLLAMA_URLS = [
+    "http://host.docker.internal:11434",
+    "http://ollama:11434",
+    "http://localhost:11434",
+]
+
+# Non-chat model substrings to exclude from OpenAI model list
+_NON_CHAT_SUBSTRINGS = [
+    "image", "audio", "realtime", "tts", "transcribe",
+    "diarize", "embedding", "moderation", "whisper",
+]
+
+
+async def _fetch_ollama_models() -> list[dict]:
+    """Fetch installed chat models from a local Ollama instance.
+
+    Tries multiple URLs with a short timeout. Returns an empty list if
+    Ollama is unreachable or has no installed models.
+    """
+    for url in _OLLAMA_URLS:
+        try:
+            logger.info(f"Trying Ollama at {url}...")
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                response = await client.get(f"{url}/api/tags")
+                if response.status_code == 200:
+                    data = response.json()
+                    raw_models = data.get("models", [])
+                    models: list[dict] = []
+                    for m in raw_models:
+                        model_name = m.get("name", "")
+                        name_lower = model_name.lower()
+                        # Skip embedding-only models
+                        if "embed" in name_lower or "bge" in name_lower or "minilm" in name_lower:
+                            continue
+                        models.append({
+                            "id": model_name,
+                            "owned_by": "ollama",
+                            "created": None,
+                            "provider": "ollama",
+                            "size_gb": round(m.get("size", 0) / 1024 / 1024 / 1024, 2),
+                        })
+                    logger.info(f"Found {len(models)} Ollama models")
+                    return models
+        except Exception as e:
+            logger.debug(f"Ollama not reachable at {url}: {e}")
+            continue
+    return []
+
+
+async def _is_ollama_configured(db) -> bool:
+    """Check whether Ollama is set as orchestrator or worker provider in DB config."""
+    try:
+        collection = db.db[LLM_CONFIG_COLLECTION]
+        doc = await collection.find_one({"_id": LLM_CONFIG_DOC_ID})
+        if doc:
+            orch = doc.get("orchestrator_provider", "")
+            worker = doc.get("worker_provider", "")
+            if "ollama" in (orch, worker):
+                return True
+    except Exception:
+        pass
+    # Also check env/settings defaults
+    if getattr(settings, "orchestrator_provider", "") == "ollama":
+        return True
+    if getattr(settings, "worker_provider", "") == "ollama":
+        return True
+    return False
+
 
 @router.get("/models/llm")
-async def list_llm_models():
+async def list_llm_models(request: Request):
     """
-    List available LLM models from OpenAI.
+    List available LLM models from configured providers.
     
-    Fetches models from the OpenAI API and filters to show only chat models.
-    Results are cached for 5 minutes.
+    Fetches models from OpenAI and always attempts to reach a local Ollama
+    instance (safe due to short timeout). Results are cached for 5 minutes.
     """
     import time as time_module
     
@@ -719,101 +812,113 @@ async def list_llm_models():
     if _models_cache["models"] and (current_time - _models_cache["timestamp"]) < _models_cache["ttl"]:
         return {
             "models": _models_cache["models"],
-            "provider": "openai",
+            "provider": "multiple",
             "cached": True
         }
     
-    # Fetch from OpenAI
+    all_models: list[dict] = []
+    
+    # --- Fetch OpenAI models ---
     api_key = settings.llm_api_key or settings.embedding_api_key
     if not api_key:
-        # Return fallback list if no API key
+        # Use fallback list if no API key
         fallback_models = [
-            {"id": "gpt-5.2-pro", "owned_by": "openai", "created": None},
-            {"id": "gpt-5.2", "owned_by": "openai", "created": None},
-            {"id": "gpt-5.1", "owned_by": "openai", "created": None},
-            {"id": "gpt-5", "owned_by": "openai", "created": None},
-            {"id": "gpt-5-mini", "owned_by": "openai", "created": None},
-            {"id": "gpt-4.1", "owned_by": "openai", "created": None},
-            {"id": "gpt-4.1-mini", "owned_by": "openai", "created": None},
-            {"id": "gpt-4.1-nano", "owned_by": "openai", "created": None},
-            {"id": "gpt-4o", "owned_by": "openai", "created": None},
-            {"id": "gpt-4o-mini", "owned_by": "openai", "created": None},
-            {"id": "o4-mini", "owned_by": "openai", "created": None},
-            {"id": "o3", "owned_by": "openai", "created": None},
-            {"id": "o3-mini", "owned_by": "openai", "created": None},
-            {"id": "o1", "owned_by": "openai", "created": None},
-            {"id": "o1-pro", "owned_by": "openai", "created": None},
-            {"id": "gpt-4-turbo", "owned_by": "openai", "created": None},
-            {"id": "gpt-3.5-turbo", "owned_by": "openai", "created": None},
+            {"id": "gpt-5.2-pro", "owned_by": "openai", "created": None, "provider": "openai"},
+            {"id": "gpt-5.2", "owned_by": "openai", "created": None, "provider": "openai"},
+            {"id": "gpt-5.1", "owned_by": "openai", "created": None, "provider": "openai"},
+            {"id": "gpt-5", "owned_by": "openai", "created": None, "provider": "openai"},
+            {"id": "gpt-5-mini", "owned_by": "openai", "created": None, "provider": "openai"},
+            {"id": "gpt-4.1", "owned_by": "openai", "created": None, "provider": "openai"},
+            {"id": "gpt-4.1-mini", "owned_by": "openai", "created": None, "provider": "openai"},
+            {"id": "gpt-4.1-nano", "owned_by": "openai", "created": None, "provider": "openai"},
+            {"id": "gpt-4o", "owned_by": "openai", "created": None, "provider": "openai"},
+            {"id": "gpt-4o-mini", "owned_by": "openai", "created": None, "provider": "openai"},
+            {"id": "o4-mini", "owned_by": "openai", "created": None, "provider": "openai"},
+            {"id": "o3", "owned_by": "openai", "created": None, "provider": "openai"},
+            {"id": "o3-mini", "owned_by": "openai", "created": None, "provider": "openai"},
+            {"id": "o1", "owned_by": "openai", "created": None, "provider": "openai"},
+            {"id": "o1-pro", "owned_by": "openai", "created": None, "provider": "openai"},
+            {"id": "gpt-4-turbo", "owned_by": "openai", "created": None, "provider": "openai"},
+            {"id": "gpt-3.5-turbo", "owned_by": "openai", "created": None, "provider": "openai"},
         ]
-        return {
-            "models": fallback_models,
-            "provider": "openai",
-            "cached": False,
-            "fallback": True
-        }
-    
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                "https://api.openai.com/v1/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-                timeout=10.0
-            )
-            response.raise_for_status()
-            data = response.json()
-        
-        # Filter to show relevant chat/completion models
-        models = []
-        for model in data.get("data", []):
-            model_id = model.get("id", "")
-            # Include GPT models (all versions), O1 models, and other chat-capable models
-            if any(prefix in model_id.lower() for prefix in ["gpt-", "o1-", "o3-", "o4-", "chatgpt"]):
-                models.append({
+        all_models.extend(fallback_models)
+    else:
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    "https://api.openai.com/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=10.0
+                )
+                response.raise_for_status()
+                data = response.json()
+            
+            # Filter to show relevant chat/completion models
+            for model in data.get("data", []):
+                model_id = model.get("id", "")
+                model_lower = model_id.lower()
+                # Must match a chat-model prefix
+                if not any(prefix in model_lower for prefix in ["gpt-", "o1-", "o3-", "o4-", "chatgpt"]):
+                    continue
+                # Must NOT be a non-chat model type
+                if any(blocked in model_lower for blocked in _NON_CHAT_SUBSTRINGS):
+                    continue
+                all_models.append({
                     "id": model_id,
                     "owned_by": model.get("owned_by", "unknown"),
-                    "created": model.get("created")
+                    "created": model.get("created"),
+                    "provider": "openai",
                 })
-        
-        # Sort by model ID (prefer gpt-5 first, then gpt-4o, then gpt-4, then others)
-        def sort_key(m):
-            mid = m["id"]
-            if "gpt-5" in mid:
-                return (0, mid)
-            elif "gpt-4.1" in mid:
-                return (1, mid)
-            elif "gpt-4o" in mid:
-                return (2, mid)
-            elif "o4-" in mid:
-                return (3, mid)
-            elif "o3-" in mid or "o3" == mid:
-                return (4, mid)
-            elif "o1-" in mid or "o1" == mid:
-                return (5, mid)
-            elif "gpt-4" in mid:
-                return (6, mid)
-            elif "gpt-3.5" in mid:
-                return (7, mid)
-            return (9, mid)
-        
-        models.sort(key=sort_key)
-        
-        # Update cache
-        _models_cache["models"] = models
-        _models_cache["timestamp"] = current_time
-        
-        return {
-            "models": models,
-            "provider": "openai",
-            "cached": False
-        }
-        
-    except httpx.HTTPStatusError as e:
-        logger.error(f"OpenAI API error: {e.response.status_code}")
-        raise HTTPException(status_code=e.response.status_code, detail="Failed to fetch models from OpenAI")
-    except Exception as e:
-        logger.error(f"Failed to fetch models: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        except httpx.HTTPStatusError as e:
+            logger.error(f"OpenAI API error: {e.response.status_code}")
+            # Continue without OpenAI models rather than failing entirely
+        except Exception as e:
+            logger.error(f"Failed to fetch OpenAI models: {e}")
+
+    # --- Always try fetching Ollama models (short timeout, safe to call unconditionally) ---
+    ollama_models = await _fetch_ollama_models()
+    if ollama_models:
+        all_models.extend(ollama_models)
+
+    # Sort: OpenAI models by preference tier, then Ollama at the end
+    def sort_key(m: dict):
+        mid = m["id"]
+        provider = m.get("provider", "openai")
+        if provider == "ollama":
+            return (10, mid)
+        if "gpt-5" in mid:
+            return (0, mid)
+        elif "gpt-4.1" in mid:
+            return (1, mid)
+        elif "gpt-4o" in mid:
+            return (2, mid)
+        elif "o4-" in mid:
+            return (3, mid)
+        elif "o3-" in mid or "o3" == mid:
+            return (4, mid)
+        elif "o1-" in mid or "o1" == mid:
+            return (5, mid)
+        elif "gpt-4" in mid:
+            return (6, mid)
+        elif "gpt-3.5" in mid:
+            return (7, mid)
+        return (9, mid)
+    
+    all_models.sort(key=sort_key)
+    
+    # Update cache
+    _models_cache["models"] = all_models
+    _models_cache["timestamp"] = current_time
+    
+    # Determine if this was a fallback response
+    is_fallback = not api_key
+    
+    return {
+        "models": all_models,
+        "provider": "multiple",
+        "cached": False,
+        "fallback": is_fallback if is_fallback else None,
+    }
 
 
 # Cache for embedding models
@@ -1677,8 +1782,13 @@ async def get_llm_provider_config(request: Request):
     Get current LLM provider configuration.
     
     Returns provider settings without exposing full API keys.
+    Ollama models are fetched live when the instance is reachable.
     """
     db = request.app.state.db
+    
+    # Try live Ollama model discovery; fall back to hardcoded list
+    live_ollama = await _try_fetch_ollama_models()
+    ollama_models_list = live_ollama if live_ollama is not None else _flatten_models(OLLAMA_MODELS)
     
     # Get from database if exists
     try:
@@ -1712,7 +1822,7 @@ async def get_llm_provider_config(request: Request):
                     {"id": "openai", "name": "OpenAI", "models": _flatten_models(OPENAI_MODELS), "categories": list(OPENAI_MODELS.keys()), "supports_fetch": True},
                     {"id": "google", "name": "Google Gemini", "models": _flatten_models(GOOGLE_MODELS), "categories": list(GOOGLE_MODELS.keys()), "supports_fetch": True},
                     {"id": "anthropic", "name": "Anthropic Claude", "models": _flatten_models(ANTHROPIC_MODELS), "categories": list(ANTHROPIC_MODELS.keys()), "supports_fetch": True},
-                    {"id": "ollama", "name": "Ollama (Local)", "models": _flatten_models(OLLAMA_MODELS), "categories": list(OLLAMA_MODELS.keys()), "supports_fetch": True},
+                    {"id": "ollama", "name": "Ollama (Local)", "models": ollama_models_list, "categories": list(OLLAMA_MODELS.keys()), "supports_fetch": True},
                 ],
             }
     except Exception as e:
@@ -1737,7 +1847,7 @@ async def get_llm_provider_config(request: Request):
             {"id": "openai", "name": "OpenAI", "models": ["gpt-5.2-pro", "gpt-5.2", "gpt-5.1", "gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o", "gpt-4o-mini", "o4-mini", "o3", "o3-mini", "o1", "o1-pro", "gpt-4-turbo", "gpt-3.5-turbo"]},
             {"id": "google", "name": "Google Gemini", "models": ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-exp", "gemini-2.0-flash-lite", "gemini-1.5-pro", "gemini-1.5-flash", "gemini-pro"]},
             {"id": "anthropic", "name": "Anthropic Claude", "models": ["claude-sonnet-4-20250514", "claude-3-7-sonnet-latest", "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest", "claude-3-haiku-20240307"]},
-            {"id": "ollama", "name": "Ollama (Local)", "models": []},
+            {"id": "ollama", "name": "Ollama (Local)", "models": ollama_models_list},
         ],
     }
 
@@ -2560,16 +2670,18 @@ async def test_provider_connection(request: Request, test_request: ProviderTestR
     elif provider == "ollama":
         log("Testing Ollama connection...")
         
+        # Try Docker-reachable hosts first; localhost rarely works from inside a container
         ollama_urls = [
-            "http://localhost:11434",
             "http://host.docker.internal:11434",
             "http://ollama:11434",
+            "http://localhost:11434",
         ]
         
         for url in ollama_urls:
             try:
                 log(f"Trying {url}...")
-                async with httpx.AsyncClient(timeout=60.0) as client:
+                # Ollama cold-starts can take 60-90s for large models (26GB+)
+                async with httpx.AsyncClient(timeout=120.0) as client:
                     response = await client.post(
                         f"{url}/api/generate",
                         json={

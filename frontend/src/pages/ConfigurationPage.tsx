@@ -90,7 +90,7 @@ export default function ConfigurationPage() {
     const [isSavingLlmConfig, setIsSavingLlmConfig] = useState(false)
     
     // Provider models and testing state
-    const [_providerModels, setProviderModels] = useState<Record<string, ProviderModelInfo[]>>({})
+    const [providerModels, setProviderModels] = useState<Record<string, ProviderModelInfo[]>>({})
     const [isFetchingModels, setIsFetchingModels] = useState<string | null>(null)
     const [isTestingProvider, setIsTestingProvider] = useState<string | null>(null)
     const [testLogs, setTestLogs] = useState<string[]>([])
@@ -1063,12 +1063,17 @@ export default function ConfigurationPage() {
                   value={selectedTestProvider}
                   onChange={(e) => {
                     setSelectedTestProvider(e.target.value)
-                    // Reset model and set default
-                    const provider = llmProviderConfig?.providers.find(p => p.id === e.target.value)
-                    if (provider && provider.models.length > 0) {
-                      setSelectedTestModel(provider.models[0])
+                    // Prefer discovered models if available, fallback to static config
+                    const discovered = providerModels[e.target.value]
+                    if (discovered && discovered.length > 0) {
+                      setSelectedTestModel(discovered[0].id)
                     } else {
-                      setSelectedTestModel('')
+                      const provider = llmProviderConfig?.providers.find(p => p.id === e.target.value)
+                      if (provider && provider.models.length > 0) {
+                        setSelectedTestModel(provider.models[0])
+                      } else {
+                        setSelectedTestModel('')
+                      }
                     }
                   }}
                   className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-primary-900 dark:text-gray-200"
@@ -1086,9 +1091,17 @@ export default function ConfigurationPage() {
                   className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-primary-900 dark:text-gray-200"
                 >
                   <option value="">{t('config.llm.selectModel')}</option>
-                  {(llmProviderConfig?.providers.find(p => p.id === selectedTestProvider)?.models || []).map((m) => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
+                  {(() => {
+                    const discovered = providerModels[selectedTestProvider]
+                    if (discovered && discovered.length > 0) {
+                      return discovered.map((m) => (
+                        <option key={m.id} value={m.id}>{m.name || m.id}</option>
+                      ))
+                    }
+                    return (llmProviderConfig?.providers.find(p => p.id === selectedTestProvider)?.models || []).map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))
+                  })()}
                 </select>
               </div>
               <div className="flex items-end">
