@@ -119,7 +119,8 @@
     "theme": "Theme",
     "signOut": "Log out",
     "signIn": "Sign in",
-    "knowledgeProfiles": "Knowledge Profiles"
+    "knowledgeProfiles": "Knowledge Profiles",
+    "liveDebug": "Live Debug"
   },
   "sidebar": {
     "newChat": "New chat",
@@ -1751,6 +1752,17 @@
     "save": "Save",
     "configuration": "Configuration"
   },
+  "support": {
+    "requestSupport": "Request Support",
+    "explanation": "The following diagnostic information will be sent to our support team. Please review before submitting.",
+    "describeIssue": "Describe your issue (optional)",
+    "descriptionPlaceholder": "What went wrong? What did you expect to happen?",
+    "submit": "Submit",
+    "cancel": "Cancel",
+    "success": "Support request submitted successfully",
+    "error": "Failed to submit support request",
+    "loading": "Loading diagnostics..."
+  },
   "quellexLanding": {
     "watermark": "MUSTER",
     "headerTitle": "Quellex — Aktensuche",
@@ -1809,5 +1821,31 @@
     "trustMadeInAustriaInfo": "Entwickelt und gehostet in Österreich",
     "footerCopyright": "© 2026 Quellex · Wien, Österreich",
     "footerTagline": "Für österreichische Rechtsanwaltskanzleien"
+  },
+  "debugPage": {
+    "title": "Live Debug",
+    "systemState": "System State",
+    "activeRequests": "Active Requests",
+    "recentActivity": "Recent Activity",
+    "noActiveRequests": "No active requests",
+    "noRecentActivity": "No recent activity",
+    "lastUpdated": "Last updated",
+    "secondsAgo": "s ago",
+    "elapsed": "elapsed",
+    "requestId": "Request ID",
+    "duration": "Duration",
+    "tokens": "Tokens",
+    "phases": "Phases",
+    "model": "Model",
+    "orchestrator": "Orchestrator",
+    "worker": "Worker",
+    "uptime": "Uptime",
+    "database": "Database",
+    "profile": "Profile",
+    "inProgress": "In Progress",
+    "complete": "Complete",
+    "error": "Error",
+    "expandDetails": "Show Details",
+    "collapseDetails": "Hide Details"
   }
 }

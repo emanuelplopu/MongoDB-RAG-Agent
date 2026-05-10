@@ -219,6 +219,16 @@ class BackendSettings(BaseSettings):
         description="Comma-separated list of TaskType values to disable for this tenant instance (e.g. 'web_search,browse_web')"
     )
     
+    # Support configuration
+    support_email_enabled: bool = Field(default=False, description="Enable email delivery for support requests")
+    support_email_to: str = Field(default="", description="Email address to send support requests to")
+    support_email_smtp_host: str = Field(default="", description="SMTP server host")
+    support_email_smtp_port: int = Field(default=587, description="SMTP server port")
+    support_email_smtp_user: str = Field(default="", description="SMTP username")
+    support_email_smtp_pass: str = Field(default="", description="SMTP password")
+    support_webhook_enabled: bool = Field(default=False, description="Enable webhook delivery for support requests")
+    support_webhook_url: str = Field(default="", description="Webhook URL for support requests")
+    
     # Web Search Settings (Brave Search API)
     brave_search_api_key: str = Field(
         default="BSALIxHlOobIdrJfmAgRPO1Y7RkkktH",

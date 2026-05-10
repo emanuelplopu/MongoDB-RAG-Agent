@@ -9,6 +9,7 @@ The FederatedAgent coordinates the Orchestrator and WorkerPool to:
 
 import logging
 import time
+import uuid
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple, Callable, Awaitable
 
@@ -27,6 +28,7 @@ from backend.agent.strategies.base import BaseStrategy
 from backend.agent.strategies.registry import StrategyRegistry
 from backend.agent.tool_gate import ToolGate
 from backend.core.config import settings
+from backend.services.activity_logger import ActivityLogger, NullActivityLogger
 try:
     from backend.routers.prompts import get_agent_prompt_sync
 except ImportError:
@@ -45,7 +47,8 @@ class FederatedAgent:
         config: Optional[AgentModeConfig] = None,
         federated_search: Optional[FederatedSearch] = None,
         strategy: Optional[BaseStrategy] = None,
-        strategy_id: Optional[str] = None
+        strategy_id: Optional[str] = None,
+        activity_logger=None
     ):
         """Initialize the federated agent.
         
@@ -54,13 +57,16 @@ class FederatedAgent:
             federated_search: FederatedSearch instance
             strategy: Direct strategy instance to use
             strategy_id: Strategy ID to load from registry
+            activity_logger: ActivityLogger instance for observability (defaults to NullActivityLogger)
         """
         self.config = config or AgentModeConfig()
         self.federated_search = federated_search or get_federated_search()
+        self.activity_logger = activity_logger or NullActivityLogger()
+        self.req_id = self.config.request_id or uuid.uuid4().hex[:8]
         
         # Resolve strategy: explicit > config override > config selection > default
         self.strategy = self._resolve_strategy(strategy, strategy_id)
-        logger.info(f"Using strategy: {self.strategy.metadata.id} ({self.strategy.metadata.name})")
+        logger.info(f"[req={self.req_id}] Using strategy: {self.strategy.metadata.id} ({self.strategy.metadata.name})")
         
         # Detect provider from model prefix (e.g., "ollama/llama3.2" → provider="ollama", model="llama3.2")
         orchestrator_model, orchestrator_provider = settings.resolve_model_provider(
@@ -70,19 +76,33 @@ class FederatedAgent:
             self.config.worker_model, settings.worker_provider
         )
         
-        logger.info(f"FederatedAgent: orchestrator={orchestrator_provider}/{orchestrator_model}, worker={worker_provider}/{worker_model}")
+        logger.info(f"[req={self.req_id}] FederatedAgent: orchestrator={orchestrator_provider}/{orchestrator_model}, worker={worker_provider}/{worker_model}")
+        
+        # Log system state for admin observability
+        self.activity_logger.log_system_state({
+            "orchestrator_model": orchestrator_model,
+            "orchestrator_provider": orchestrator_provider,
+            "worker_model": worker_model,
+            "worker_provider": worker_provider,
+            "strategy": self.strategy.metadata.id,
+            "mode": str(self.config.mode),
+        })
         
         # Initialize components with provider configuration
         self.orchestrator = Orchestrator(
             model=orchestrator_model,
             provider=orchestrator_provider,
-            strategy=self.strategy
+            strategy=self.strategy,
+            activity_logger=self.activity_logger,
+            req_id=self.req_id
         )
         self.worker_pool = WorkerPool(
             model=worker_model,
             provider=worker_provider,
             max_workers=self.config.parallel_workers,
-            federated_search=self.federated_search
+            federated_search=self.federated_search,
+            activity_logger=self.activity_logger,
+            req_id=self.req_id
         )
         
         # Current trace
@@ -297,7 +317,7 @@ class FederatedAgent:
         Returns:
             Response text
         """
-        logger.info(f"Processing with orchestrator: '{user_message[:50]}...'")
+        logger.info(f"[req={self.req_id}] Processing with orchestrator: '{user_message[:50]}...'")
         
         async def emit_event(event_type: str, data: Dict[str, Any]):
             """Helper to emit events safely."""
@@ -305,13 +325,16 @@ class FederatedAgent:
                 try:
                     await on_event(event_type, data)
                 except Exception as e:
-                    logger.error(f"Error emitting event {event_type}: {e}")
+                    logger.error(f"[req={self.req_id}] Error emitting event {event_type}: {e}")
         
         # Phase 1: Analyze
         await emit_event('phase', {'phase': 'analyze', 'status': 'started'})
+        self.activity_logger.log_phase("analyze", "started")
         analysis_start = time.time()
         analysis = await self.orchestrator.analyze(user_message, conversation_history)
-        logger.info(f"Analysis: {analysis.get('intent_summary', 'unknown')}")
+        analyze_duration_ms = (time.time() - analysis_start) * 1000
+        self.activity_logger.log_phase("analyze", "completed", duration_ms=analyze_duration_ms, details={"intent": analysis.get("intent_summary", "")})
+        logger.info(f"[req={self.req_id}] Analysis: {analysis.get('intent_summary', 'unknown')}")
         # Get tokens from the last orchestrator step
         analyze_tokens = self.orchestrator.steps[-1].tokens_used if self.orchestrator.steps else 0
         await emit_event('orchestrator_step', {
@@ -333,6 +356,7 @@ class FederatedAgent:
         
         # Phase 2: Plan
         await emit_event('phase', {'phase': 'plan', 'status': 'started'})
+        self.activity_logger.log_phase("plan", "started")
         plan_start = time.time()
         plan = await self.orchestrator.plan(
             analysis=analysis,
@@ -344,14 +368,16 @@ class FederatedAgent:
             } for s in available_sources]
         )
         self.trace.initial_plan = plan
+        plan_duration_ms = (time.time() - plan_start) * 1000
+        self.activity_logger.log_phase("plan", "completed", duration_ms=plan_duration_ms, details={"task_count": len(plan.tasks), "strategy": plan.strategy})
         
         # Filter out disabled tools from the plan (defense in depth)
         original_count = len(plan.tasks)
         plan.tasks = ToolGate.filter_tasks(plan.tasks)
         if len(plan.tasks) < original_count:
-            logger.info(f"ToolGate: Filtered plan from {original_count} to {len(plan.tasks)} tasks")
+            logger.info(f"[req={self.req_id}] ToolGate: Filtered plan from {original_count} to {len(plan.tasks)} tasks")
         
-        logger.info(f"Plan: {len(plan.tasks)} tasks, strategy: {plan.strategy}")
+        logger.info(f"[req={self.req_id}] Plan: {len(plan.tasks)} tasks, strategy: {plan.strategy}")
         plan_tokens = self.orchestrator.steps[-1].tokens_used if self.orchestrator.steps else 0
         await emit_event('orchestrator_step', {
             'phase': 'plan',
@@ -371,6 +397,7 @@ class FederatedAgent:
             iteration += 1
             self.trace.iterations = iteration
             await emit_event('phase', {'phase': 'execute', 'iteration': iteration, 'status': 'started'})
+            self.activity_logger.log_phase(f"execute_iter_{iteration}", "started")
             
             # Get tasks for this iteration
             if iteration == 1:
@@ -414,6 +441,21 @@ class FederatedAgent:
             iteration_docs = sum(len(r.documents_found) for r in results)
             iteration_links = sum(len(r.web_links_found) for r in results)
             
+            # Log search results summary
+            exec_duration_ms = (time.time() - analysis_start) * 1000  # rough cumulative
+            doc_summaries = []
+            if self.config.is_admin:
+                for r in results:
+                    for d in r.documents_found[:3]:
+                        doc_summaries.append({"title": d.title, "score": d.similarity_score})
+            self.activity_logger.log_search(
+                query=user_message[:200], source="federated",
+                results_count=iteration_docs + iteration_links,
+                duration_ms=exec_duration_ms,
+                documents=doc_summaries if doc_summaries else None
+            )
+            self.activity_logger.log_phase(f"execute_iter_{iteration}", "completed", duration_ms=exec_duration_ms, details={"docs": iteration_docs, "links": iteration_links})
+            
             # Calculate average quality score for this iteration
             avg_score = 0.0
             if iteration_docs > 0:
@@ -422,12 +464,12 @@ class FederatedAgent:
             
             if iteration_docs == 0 and iteration_links == 0:
                 empty_result_iterations += 1
-                logger.warning(f"Iteration {iteration} found no results ({empty_result_iterations} consecutive empty iterations)")
+                logger.warning(f"[req={self.req_id}] Iteration {iteration} found no results ({empty_result_iterations} consecutive empty iterations)")
                 
                 # Early exit if we've had 2 consecutive iterations with no results
                 # No point in continuing to refine queries that aren't finding anything
                 if empty_result_iterations >= 2:
-                    logger.info("Exiting early: 2 consecutive iterations with no results")
+                    logger.info(f"[req={self.req_id}] Exiting early: 2 consecutive iterations with no results")
                     break
             else:
                 empty_result_iterations = 0  # Reset counter if we found something
@@ -437,10 +479,10 @@ class FederatedAgent:
                 good_results = [r for r in results if r.result_quality in [ResultQuality.EXCELLENT, ResultQuality.GOOD]]
                 
                 if len(excellent_results) >= 2 or (len(good_results) >= 3 and avg_score > 0.75):
-                    logger.info(f"High-quality results found (avg_score={avg_score:.2f}), considering early synthesis")
+                    logger.info(f"[req={self.req_id}] High-quality results found (avg_score={avg_score:.2f}), considering early synthesis")
                     # Skip to synthesis if we have great results on first iteration
                     if iteration == 1 and len(good_results) >= 2:
-                        logger.info("Excellent first-iteration results, skipping to synthesis")
+                        logger.info(f"[req={self.req_id}] Excellent first-iteration results, skipping to synthesis")
                         break
             
             # Collect sources for trace
@@ -454,11 +496,14 @@ class FederatedAgent:
             
             # Phase 3: Evaluate
             await emit_event('phase', {'phase': 'evaluate', 'iteration': iteration, 'status': 'started'})
+            self.activity_logger.log_phase("evaluate", "started")
             eval_start = time.time()
             evaluation = await self.orchestrator.evaluate(plan, all_results, iteration)
+            eval_duration_ms = (time.time() - eval_start) * 1000
+            self.activity_logger.log_phase("evaluate", "completed", duration_ms=eval_duration_ms, details={"decision": evaluation.decision, "confidence": evaluation.confidence})
             self.trace.evaluation_history.append(evaluation)
             
-            logger.info(f"Iteration {iteration}: {evaluation.decision}, confidence: {evaluation.confidence}")
+            logger.info(f"[req={self.req_id}] Iteration {iteration}: {evaluation.decision}, confidence: {evaluation.confidence}")
             eval_tokens = self.orchestrator.steps[-1].tokens_used if self.orchestrator.steps else 0
             await emit_event('orchestrator_step', {
                 'phase': 'evaluate',
@@ -472,7 +517,7 @@ class FederatedAgent:
             
             # High-confidence early exit
             if evaluation.decision == "sufficient" and evaluation.confidence >= 0.80:
-                logger.info(f"High-confidence early exit (confidence={evaluation.confidence})")
+                logger.info(f"[req={self.req_id}] High-confidence early exit (confidence={evaluation.confidence})")
                 break
             
             if evaluation.decision in ["sufficient", "cannot_answer"]:
@@ -483,6 +528,7 @@ class FederatedAgent:
         
         # Phase 4: Synthesize (or return "no results" message)
         await emit_event('phase', {'phase': 'synthesize', 'status': 'started'})
+        self.activity_logger.log_phase("synthesize", "started")
         synth_start = time.time()
         
         # Check if we should return a "no relevant results" response
@@ -545,14 +591,16 @@ class FederatedAgent:
                     f"- Try rephrasing your question with different keywords\n"
                     f"- If searching for external information, web search may be rate-limited"
                 )
-            logger.info("Returning 'no relevant results' response instead of synthesizing from irrelevant data")
+            logger.info(f"[req={self.req_id}] Returning 'no relevant results' response instead of synthesizing from irrelevant data")
         else:
             response = await self.orchestrator.synthesize(user_message, filtered_results if filtered_results else all_results, language=language)
         
         # Log synthesis result for debugging
-        logger.info(f"Synthesize completed, response length: {len(response) if response else 0}")
+        synth_duration_ms = (time.time() - synth_start) * 1000
+        self.activity_logger.log_phase("synthesize", "completed", duration_ms=synth_duration_ms, details={"response_length": len(response) if response else 0})
+        logger.info(f"[req={self.req_id}] Synthesize completed, response length: {len(response) if response else 0}")
         if not response:
-            logger.error("Orchestrator synthesize returned empty response!")
+            logger.error(f"[req={self.req_id}] Orchestrator synthesize returned empty response!")
         
         synth_tokens = self.orchestrator.steps[-1].tokens_used if self.orchestrator.steps else 0
         await emit_event('orchestrator_step', {
@@ -592,7 +640,7 @@ class FederatedAgent:
         Returns:
             Response text
         """
-        logger.info(f"Processing fast: '{user_message[:50]}...'")
+        logger.info(f"[req={self.req_id}] Processing fast: '{user_message[:50]}...'")
         
         async def emit_event(event_type: str, data: Dict[str, Any]):
             """Helper to emit events safely."""
@@ -600,9 +648,10 @@ class FederatedAgent:
                 try:
                     await on_event(event_type, data)
                 except Exception as e:
-                    logger.error(f"Error emitting event {event_type}: {e}")
+                    logger.error(f"[req={self.req_id}] Error emitting event {event_type}: {e}")
         
         await emit_event('phase', {'phase': 'fast_search', 'status': 'started'})
+        self.activity_logger.log_phase("fast_search", "started")
         
         # Create simple search tasks
         tasks = [
@@ -665,10 +714,22 @@ class FederatedAgent:
         
         self.trace.iterations = 1
         
+        # Log fast search completion
+        fast_docs = sum(len(r.documents_found) for r in results)
+        fast_links = sum(len(r.web_links_found) for r in results)
+        self.activity_logger.log_search(
+            query=user_message[:200], source="fast_search",
+            results_count=fast_docs + fast_links, duration_ms=0
+        )
+        self.activity_logger.log_phase("fast_search", "completed", details={"docs": fast_docs, "links": fast_links})
+        
         # Generate response using fast model
         await emit_event('phase', {'phase': 'synthesize', 'status': 'started'})
+        self.activity_logger.log_phase("fast_synthesize", "started")
         synth_start = time.time()
         response = await self._generate_fast_response(user_message, results, language=language)
+        fast_synth_duration_ms = (time.time() - synth_start) * 1000
+        self.activity_logger.log_phase("fast_synthesize", "completed", duration_ms=fast_synth_duration_ms, details={"response_length": len(response) if response else 0})
         await emit_event('orchestrator_step', {
             'phase': 'synthesize',
             'reasoning': 'Fast response generation from search results',
@@ -770,7 +831,8 @@ class FederatedAgent:
             response = await acompletion(**llm_params)
             return response.choices[0].message.content
         except Exception as e:
-            logger.error(f"Fast response generation failed: {e}")
+            logger.error(f"[req={self.req_id}] Fast response generation failed: {e}")
+            self.activity_logger.log_error(str(e), context={"phase": "fast_response"})
             return f"I encountered an error while generating a response: {str(e)}"
     
     async def cleanup(self):

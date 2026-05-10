@@ -38,6 +38,7 @@ import {
   FolderArrowDownIcon,
   ArrowUpTrayIcon,
   ChevronDoubleLeftIcon,
+  BugAntIcon,
 } from '@heroicons/react/24/outline'
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid'
 import ThemeSwitcher from './ThemeSwitcher'
@@ -50,6 +51,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { useTenant } from '../contexts/TenantContext'
 import { ChatSession, indexesApi, profilesApi, ProfileListResponse } from '../api/client'
 import SidebarWarningToast, { SidebarWarning } from './SidebarWarningToast'
+import SupportRequestButton from './SupportRequestButton'
 
 // User menu items (shown in dropdown like OpenAI's user menu)
 const baseMenuItems = [
@@ -74,6 +76,7 @@ const systemMenuItems = [
   { nameKey: 'nav.apiKeys', href: '/system/api-keys', icon: KeyIcon },
   { nameKey: 'nav.strategies', href: '/system/strategies', icon: BeakerIcon },
   { nameKey: 'nav.backups', href: '/system/backups', icon: CloudArrowUpIcon },
+  { nameKey: 'nav.liveDebug', href: '/system/debug', icon: BugAntIcon },
 ]
 
 // Tenant Icon component - uses tenant iconUrl with fallback to Q letter
@@ -1086,6 +1089,9 @@ export default function Layout() {
         <main className={isOnChatPage ? 'h-screen' : isOnDashboardPage ? 'h-[calc(100vh-3.5rem)]' : 'py-6 px-4 sm:px-6 lg:px-8'}>
           <Outlet />
         </main>
+
+        {/* Support request button for non-admin users */}
+        <SupportRequestButton sessionId={currentSession?.id} />
       </div>
 
       {/* Context Menu */}

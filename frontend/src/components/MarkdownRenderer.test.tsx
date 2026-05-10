@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 
 vi.mock('@heroicons/react/24/outline', () => {
   const makeIcon = (name: string) => (props: { className?: string }) => <svg data-testid={name} {...props} />
@@ -32,6 +33,7 @@ describe('MarkdownRenderer', () => {
 
   it('renders block code, links, and rich markdown wrappers', async () => {
     render(
+      <MemoryRouter>
       <MarkdownRenderer
         className="custom-markdown"
         content={[
@@ -46,6 +48,7 @@ describe('MarkdownRenderer', () => {
           '- item',
         ].join('\n')}
       />
+      </MemoryRouter>
     )
 
     expect(document.querySelector('.custom-markdown')).toBeInTheDocument()
@@ -75,7 +78,7 @@ describe('MarkdownRenderer', () => {
     const execCommand = vi.mocked(document.execCommand)
     vi.mocked(navigator.clipboard.writeText).mockRejectedValueOnce(new Error('denied'))
 
-    render(<MarkdownRenderer content="Use `npm test` now." />)
+    render(<MemoryRouter><MarkdownRenderer content="Use `npm test` now." /></MemoryRouter>)
 
     const inlineCode = screen.getByText('npm test')
     await act(async () => {

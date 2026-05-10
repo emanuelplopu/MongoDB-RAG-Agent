@@ -3392,3 +3392,123 @@ export const benchmarkApi = {
     return response.data
   },
 }
+
+// ============== Support API ==============
+
+export interface SupportDiagnosticResponse {
+  diagnostic: string
+}
+
+export interface SupportRequestPayload {
+  diagnostic_text: string
+  session_id?: string
+  user_description?: string
+}
+
+export interface SupportRequestResponse {
+  success: boolean
+  message: string
+}
+
+export const supportApi = {
+  // Get session diagnostic info for support request
+  getSessionDiagnostic: async (sessionId: string): Promise<SupportDiagnosticResponse> => {
+    const response = await api.get(`/support/diagnostic/${sessionId}`)
+    return response.data
+  },
+
+  // Submit a support request with diagnostic data
+  submitSupportRequest: async (data: SupportRequestPayload): Promise<SupportRequestResponse> => {
+    const response = await api.post('/support/request', data)
+    return response.data
+  },
+}
+
+// =============================================================================
+// Debug API (admin only)
+// =============================================================================
+
+export interface DebugSystemState {
+  orchestrator_model: string
+  orchestrator_provider: string
+  worker_model: string
+  worker_provider: string
+  ollama_url: string
+  active_profile: string
+  database: string
+  uptime_seconds: number
+  active_requests: number
+}
+
+export interface DebugActiveRequest {
+  request_id: string
+  session_id: string
+  model: string
+  started_at: string
+  elapsed_ms: number
+}
+
+export interface DebugActivityEntry {
+  type: string
+  phase?: string
+  model?: string
+  duration_ms?: number
+  tokens?: number
+  query?: string
+  results_count?: number
+  error?: string
+  timestamp?: string
+  [key: string]: unknown
+}
+
+export interface DebugActivityItem {
+  request_id: string
+  session_id?: string
+  model?: string
+  started_at: string
+  completed_at?: string
+  duration_ms: number
+  total_tokens?: number
+  phases_count?: number
+  status: 'complete' | 'error' | 'in_progress'
+  entries?: DebugActivityEntry[]
+}
+
+export interface DebugLiveActivity {
+  active: DebugActiveRequest[]
+  recent: DebugActivityItem[]
+}
+
+export interface DebugRequestDetail {
+  request_id: string
+  session_id?: string
+  model?: string
+  started_at: string
+  completed_at?: string
+  duration_ms: number
+  total_tokens?: number
+  status: string
+  entries: DebugActivityEntry[]
+}
+
+export const debugApi = {
+  getLiveActivity: async (): Promise<DebugLiveActivity> => {
+    const response = await api.get('/debug/activity/live')
+    return response.data
+  },
+
+  getActiveRequests: async (): Promise<DebugActiveRequest[]> => {
+    const response = await api.get('/debug/activity/active')
+    return response.data
+  },
+
+  getSystemState: async (): Promise<DebugSystemState> => {
+    const response = await api.get('/debug/system-state')
+    return response.data
+  },
+
+  getRequestDetail: async (requestId: string): Promise<DebugRequestDetail> => {
+    const response = await api.get(`/debug/activity/${requestId}`)
+    return response.data
+  },
+}

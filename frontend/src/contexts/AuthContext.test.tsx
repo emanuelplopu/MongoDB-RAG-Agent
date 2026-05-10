@@ -33,6 +33,7 @@ vi.mock('../components/SessionExpiredModal', () => ({
 }))
 
 import { authApi, setAuthToken, clearAuthToken, getAuthToken } from '../api/client'
+import SessionExpiredModal from '../components/SessionExpiredModal'
 
 // Test component that uses useAuth - catches login errors
 function TestConsumer({ onAuthChange }: { onAuthChange?: (auth: ReturnType<typeof useAuth>) => void }) {
@@ -79,6 +80,11 @@ function TestConsumer({ onAuthChange }: { onAuthChange?: (auth: ReturnType<typeo
       <button data-testid="dismiss-expired-btn" onClick={() => auth.dismissSessionExpired()}>
         Dismiss Expired
       </button>
+      <SessionExpiredModal
+        isOpen={auth.showSessionModal}
+        onClose={() => auth.closeSessionModal()}
+        onContinueAsGuest={() => auth.continueAsGuest()}
+      />
     </div>
   )
 }

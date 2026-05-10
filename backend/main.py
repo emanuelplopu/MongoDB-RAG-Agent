@@ -27,7 +27,7 @@ from fastapi.exceptions import RequestValidationError
 
 from backend.routers import chat, search, profiles, ingestion, system, sessions, auth
 from backend.routers import status, indexes, ingestion_queue, local_llm, prompts, model_versions
-from backend.routers import strategies, backup, embedding_benchmark, file_registry, tenant
+from backend.routers import strategies, backup, embedding_benchmark, file_registry, tenant, support, debug
 from backend.routers.cloud_sources import (
     connections_router as cloud_connections,
     oauth_router as cloud_oauth,
@@ -204,6 +204,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         await backup_service.initialize_config()
     except Exception as e:
         logger.warning(f"Failed to initialize backup config: {e}")
+    
+    # Create TTL index for activity logs (auto-expire after 7 days)
+    try:
+        await db_manager.db["agent_activity_log"].create_index(
+            "started_at", expireAfterSeconds=7*24*3600
+        )
+        logger.info("Ensured TTL index on agent_activity_log")
+    except Exception as e:
+        logger.warning(f"Failed to create TTL index: {e}")
     
     logger.info(f"API ready at http://0.0.0.0:{settings.api_port}")
     
@@ -553,6 +562,18 @@ app.include_router(
     tenant.router,
     prefix="/api/v1",
     tags=["Tenant"]
+)
+
+app.include_router(
+    support.router,
+    prefix="/api/v1",
+    tags=["Support"]
+)
+
+app.include_router(
+    debug.router,
+    prefix="/api/v1",
+    tags=["Debug"]
 )
 
 

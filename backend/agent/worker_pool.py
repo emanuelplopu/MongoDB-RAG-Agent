@@ -21,6 +21,7 @@ from backend.agent.schemas import (
 from backend.agent.federated_search import FederatedSearch, get_federated_search
 from backend.agent.tool_gate import ToolGate
 from backend.core.config import settings
+from backend.services.activity_logger import NullActivityLogger
 try:
     from backend.routers.prompts import get_agent_prompt_sync
 except ImportError:
@@ -42,7 +43,9 @@ class WorkerPool:
         model: str = None,
         provider: str = None,
         max_workers: int = 4,
-        federated_search: FederatedSearch = None
+        federated_search: FederatedSearch = None,
+        activity_logger=None,
+        req_id: str = "no-req"
     ):
         """Initialize worker pool.
         
@@ -51,6 +54,8 @@ class WorkerPool:
             provider: LLM provider (openai, google, anthropic)
             max_workers: Maximum concurrent workers
             federated_search: FederatedSearch instance for database searches
+            activity_logger: ActivityLogger for observability (defaults to NullActivityLogger)
+            req_id: Request correlation ID for structured logging
         """
         self.model = model or settings.worker_model
         self.provider = provider or settings.worker_provider
@@ -58,6 +63,8 @@ class WorkerPool:
         self.federated_search = federated_search or get_federated_search()
         self.steps: List[WorkerStep] = []
         self._http_client: Optional[httpx.AsyncClient] = None
+        self.activity_logger = activity_logger or NullActivityLogger()
+        self.req_id = req_id
     
     def _get_model_string(self) -> str:
         """Get the model string in LiteLLM format with provider prefix."""
@@ -129,7 +136,7 @@ class WorkerPool:
             
             if not ready:
                 if pending:
-                    logger.error(f"Circular dependency detected in tasks: {[t.id for t in pending]}")
+                    logger.error(f"[req={self.req_id}] Circular dependency detected in tasks: {[t.id for t in pending]}")
                     # Break circular dependency by taking first pending task
                     ready = [pending[0]]
                 else:
@@ -154,7 +161,7 @@ class WorkerPool:
             # Record results and call callbacks
             for task, result in zip(batch, results):
                 if isinstance(result, Exception):
-                    logger.error(f"Task {task.id} failed with exception: {result}")
+                    logger.error(f"[req={self.req_id}] Task {task.id} failed with exception: {result}")
                     result = WorkerResult(
                         task_id=task.id,
                         task_type=task.type,
@@ -174,7 +181,7 @@ class WorkerPool:
                         step = next((s for s in self.steps if s.task_id == task.id), None)
                         await on_task_complete(task.id, result, step)
                     except Exception as e:
-                        logger.error(f"Error calling on_task_complete for task {task.id}: {e}")
+                        logger.error(f"[req={self.req_id}] Error calling on_task_complete for task {task.id}: {e}")
         
         return list(completed.values())
     
@@ -205,7 +212,7 @@ class WorkerPool:
         # Last line of defense: reject disabled task types
         task_type_val = task.type.value if hasattr(task.type, 'value') else str(task.type)
         if not ToolGate.is_enabled(task_type_val):
-            logger.warning(f"ToolGate: Blocked disabled task {task.id} (type={task_type_val})")
+            logger.warning(f"[req={self.req_id}] ToolGate: Blocked disabled task {task.id} (type={task_type_val})")
             return WorkerResult(
                 task_id=task.id,
                 task_type=task.type,
@@ -216,6 +223,7 @@ class WorkerPool:
                 duration_ms=0.0,
             )
         
+        self.activity_logger.log_phase(f"worker_task_{task.id}", "started", details={"type": task_type_val, "query": task.query[:200]})
         start_time = time.time()
         documents = []
         web_links = []
@@ -259,11 +267,28 @@ class WorkerPool:
                 # Could trigger follow-up search
                 
         except Exception as e:
-            logger.error(f"Task {task.id} execution failed: {e}")
+            logger.error(f"[req={self.req_id}] Task {task.id} execution failed: {e}")
+            self.activity_logger.log_error(str(e), context={"task_id": task.id, "task_type": task_type_val})
             error = str(e)
             success = False
         
         duration_ms = (time.time() - start_time) * 1000
+        
+        # Log search results for search tasks
+        if task.type in [TaskType.SEARCH_PROFILE, TaskType.SEARCH_CLOUD,
+                         TaskType.SEARCH_PERSONAL, TaskType.SEARCH_ALL]:
+            scores = [d.similarity_score for d in documents] if documents else None
+            self.activity_logger.log_search(
+                query=task.query[:200], source=task_type_val,
+                results_count=len(documents), documents=None,
+                scores=scores, duration_ms=duration_ms
+            )
+        
+        self.activity_logger.log_phase(
+            f"worker_task_{task.id}", "completed",
+            duration_ms=duration_ms,
+            details={"docs": len(documents), "links": len(web_links), "success": success}
+        )
         
         # Assess quality
         quality = self._assess_quality(documents, web_links)
@@ -358,7 +383,7 @@ class WorkerPool:
         sources_searched = [s.get("id", s.get("type", "unknown")) for s in metadata.get("sources", [])]
         
         logger.info(
-            f"Search task {task.id}: '{task.query[:50]}' returned {len(documents)} results "
+            f"[req={self.req_id}] Search task {task.id}: '{task.query[:50]}' returned {len(documents)} results "
             f"from {metadata.get('sources_with_results', 0)} sources"
         )
         
@@ -374,7 +399,7 @@ class WorkerPool:
             List of WebReference
         """
         if not settings.brave_api_key:
-            logger.warning("Brave API key not configured, skipping web search")
+            logger.warning(f"[req={self.req_id}] Brave API key not configured, skipping web search")
             return []
         
         try:
@@ -401,11 +426,11 @@ class WorkerPool:
                     search_query=query
                 ))
             
-            logger.info(f"Web search for '{query[:50]}' returned {len(results)} results")
+            logger.info(f"[req={self.req_id}] Web search for '{query[:50]}' returned {len(results)} results")
             return results
             
         except Exception as e:
-            logger.error(f"Web search failed: {e}")
+            logger.error(f"[req={self.req_id}] Web search failed: {e}")
             return []
     
     async def _execute_browse(self, url: str) -> Optional[WebReference]:
@@ -456,7 +481,7 @@ class WorkerPool:
             )
             
         except Exception as e:
-            logger.error(f"Failed to browse {url}: {e}")
+            logger.error(f"[req={self.req_id}] Failed to browse {url}: {e}")
             return None
     
     async def _execute_summarize(
@@ -514,12 +539,33 @@ class WorkerPool:
             else:
                 llm_params["max_tokens"] = 500
             
-            logger.info(f"Worker LLM call (summarize): model={model_string}, provider={self.provider}, api_base={llm_params.get('api_base', 'default')}")
+            logger.info(f"[req={self.req_id}] Worker LLM call (summarize): model={model_string}, provider={self.provider}, api_base={llm_params.get('api_base', 'default')}")
             
+            self.activity_logger.log_llm_request(
+                model=model_string, provider=self.provider,
+                messages=llm_params["messages"],
+                temperature=llm_params.get("temperature", 0),
+                max_tokens=llm_params.get("max_tokens", llm_params.get("max_completion_tokens", 0)),
+                phase="summarize"
+            )
+            
+            summ_start = time.time()
             response = await acompletion(**llm_params)
-            return response.choices[0].message.content
+            summ_duration_ms = (time.time() - summ_start) * 1000
+            
+            content = response.choices[0].message.content
+            tokens_used = response.usage.total_tokens if response.usage else 0
+            self.activity_logger.log_llm_response(
+                model=model_string, content=content, tokens_used=tokens_used,
+                duration_ms=summ_duration_ms,
+                finish_reason=response.choices[0].finish_reason or "",
+                phase="summarize"
+            )
+            
+            return content
         except Exception as e:
-            logger.error(f"Summarization failed: {e}")
+            logger.error(f"[req={self.req_id}] Summarization failed: {e}")
+            self.activity_logger.log_error(str(e), context={"phase": "summarize"})
             return "Summarization failed."
     
     async def _execute_refine_query(
@@ -574,12 +620,33 @@ class WorkerPool:
             else:
                 llm_params["max_tokens"] = 100
             
-            logger.info(f"Worker LLM call (refine): model={model_string}, provider={self.provider}, api_base={llm_params.get('api_base', 'default')}")
+            logger.info(f"[req={self.req_id}] Worker LLM call (refine): model={model_string}, provider={self.provider}, api_base={llm_params.get('api_base', 'default')}")
             
+            self.activity_logger.log_llm_request(
+                model=model_string, provider=self.provider,
+                messages=llm_params["messages"],
+                temperature=llm_params.get("temperature", 0),
+                max_tokens=llm_params.get("max_tokens", llm_params.get("max_completion_tokens", 0)),
+                phase="refine_query"
+            )
+            
+            refine_start = time.time()
             response = await acompletion(**llm_params)
-            return response.choices[0].message.content.strip()
+            refine_duration_ms = (time.time() - refine_start) * 1000
+            
+            content = response.choices[0].message.content.strip()
+            tokens_used = response.usage.total_tokens if response.usage else 0
+            self.activity_logger.log_llm_response(
+                model=model_string, content=content, tokens_used=tokens_used,
+                duration_ms=refine_duration_ms,
+                finish_reason=response.choices[0].finish_reason or "",
+                phase="refine_query"
+            )
+            
+            return content
         except Exception as e:
-            logger.error(f"Query refinement failed: {e}")
+            logger.error(f"[req={self.req_id}] Query refinement failed: {e}")
+            self.activity_logger.log_error(str(e), context={"phase": "refine_query"})
             return task.query
     
     async def _generate_summary(

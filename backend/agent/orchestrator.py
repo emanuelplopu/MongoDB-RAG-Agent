@@ -22,6 +22,7 @@ from backend.agent.schemas import (
 )
 from backend.agent.tool_gate import ToolGate
 from backend.core.config import settings
+from backend.services.activity_logger import NullActivityLogger
 try:
     from backend.routers.prompts import get_agent_prompt_sync, DEFAULT_AGENT_PROMPTS
 except ImportError:
@@ -51,7 +52,9 @@ class Orchestrator:
         self,
         model: str = None,
         provider: str = None,
-        strategy: "BaseStrategy" = None
+        strategy: "BaseStrategy" = None,
+        activity_logger=None,
+        req_id: str = "no-req"
     ):
         """Initialize orchestrator.
         
@@ -59,12 +62,16 @@ class Orchestrator:
             model: LLM model to use for orchestration
             provider: LLM provider (openai, google, anthropic)
             strategy: Strategy instance to use for prompts and processing
+            activity_logger: ActivityLogger for observability (defaults to NullActivityLogger)
+            req_id: Request correlation ID for structured logging
         """
         self.model = model or settings.orchestrator_model
         self.provider = provider or settings.orchestrator_provider
         self.strategy = strategy
         self.steps: List[OrchestratorStep] = []
         self._client = None
+        self.activity_logger = activity_logger or NullActivityLogger()
+        self.req_id = req_id
     
     def _get_model_string(self) -> str:
         """Get the model string in LiteLLM format with provider prefix."""
@@ -168,13 +175,31 @@ class Orchestrator:
             else:
                 llm_params["max_tokens"] = 2000
             
-            logger.info(f"Orchestrator LLM call: model={model_string}, provider={self.provider}, api_base={llm_params.get('api_base', 'default')}")
+            logger.info(f"[req={self.req_id}] Orchestrator LLM call: model={model_string}, provider={self.provider}, api_base={llm_params.get('api_base', 'default')}")
+            
+            # Log the LLM request for observability
+            self.activity_logger.log_llm_request(
+                model=model_string, provider=self.provider,
+                messages=llm_params["messages"],
+                temperature=llm_params.get("temperature", 0),
+                max_tokens=llm_params.get("max_tokens", llm_params.get("max_completion_tokens", 0)),
+                api_base=llm_params.get("api_base", ""),
+                phase=phase.value
+            )
             
             response = await acompletion(**llm_params)
             
             content = response.choices[0].message.content
             tokens_used = response.usage.total_tokens if response.usage else 0
             duration_ms = (time.time() - start_time) * 1000
+            
+            # Log the LLM response for observability
+            self.activity_logger.log_llm_response(
+                model=model_string, content=content, tokens_used=tokens_used,
+                duration_ms=duration_ms,
+                finish_reason=response.choices[0].finish_reason or "",
+                phase=phase.value
+            )
             
             # Try to parse JSON
             result = None
@@ -187,7 +212,7 @@ class Orchestrator:
                         content = content.split("```")[1].split("```")[0]
                     result = json.loads(content.strip())
                 except json.JSONDecodeError:
-                    logger.warning(f"Failed to parse JSON from orchestrator: {content[:200]}")
+                    logger.warning(f"[req={self.req_id}] Failed to parse JSON from orchestrator: {content[:200]}")
                     result = {"response": content, "parse_error": True}
             else:
                 result = {"response": content}
@@ -207,7 +232,8 @@ class Orchestrator:
             return result
             
         except Exception as e:
-            logger.error(f"Orchestrator LLM call failed: {e}")
+            logger.error(f"[req={self.req_id}] Orchestrator LLM call failed: {e}")
+            self.activity_logger.log_error(str(e), context={"phase": phase.value, "model": model_string})
             duration_ms = (time.time() - start_time) * 1000
             
             # Record failed step
@@ -402,7 +428,7 @@ class Orchestrator:
                 )
                 tasks.append(task)
             except Exception as e:
-                logger.warning(f"Failed to parse task: {e}")
+                logger.warning(f"[req={self.req_id}] Failed to parse task: {e}")
         
         # If no tasks were created, create smart default tasks based on analysis
         if not tasks:
@@ -427,7 +453,7 @@ class Orchestrator:
             primary_query = analysis.get("search_queries", {}).get(
                 "primary", analysis.get("intent_summary", "")
             )
-            logger.info("No document search tasks in plan - adding SEARCH_ALL as safety net")
+            logger.info(f"[req={self.req_id}] No document search tasks in plan - adding SEARCH_ALL as safety net")
             tasks.append(TaskDefinition(
                 id="safety_doc_search",
                 type=TaskType.SEARCH_ALL,
@@ -583,7 +609,7 @@ class Orchestrator:
                 )
                 follow_up_tasks.append(task)
             except Exception as e:
-                logger.warning(f"Failed to parse follow-up task: {e}")
+                logger.warning(f"[req={self.req_id}] Failed to parse follow-up task: {e}")
         
         # Filter out disabled task types from follow-up tasks
         follow_up_tasks = ToolGate.filter_tasks(follow_up_tasks)
@@ -657,7 +683,7 @@ class Orchestrator:
             
             entry_chars = len(json.dumps(info))
             if current_chars + entry_chars > max_content_chars:
-                logger.info(f"Truncating synthesis context: {len(limited_info)} of {len(all_info)} items used")
+                logger.info(f"[req={self.req_id}] Truncating synthesis context: {len(limited_info)} of {len(all_info)} items used")
                 break
             limited_info.append(info)
             current_chars += entry_chars
@@ -687,10 +713,10 @@ class Orchestrator:
             if response_text and response_text.strip():
                 return response_text
             
-            logger.warning("LLM returned empty response during synthesis, using fallback")
+            logger.warning(f"[req={self.req_id}] LLM returned empty response during synthesis, using fallback")
             
         except Exception as e:
-            logger.error(f"Synthesis LLM call failed: {e}")
+            logger.error(f"[req={self.req_id}] Synthesis LLM call failed: {e}")
         
         # Fallback: Generate a basic response from the found documents
         if limited_info:

@@ -14,8 +14,10 @@ from pydantic import BaseModel, Field
 
 from backend.core.config import settings
 from backend.routers.auth import get_current_user, UserResponse
+from backend.routers.debug import register_active_request, unregister_active_request
 from backend.agent.schemas import AgentMode, AgentModeConfig
 from backend.agent.coordinator import FederatedAgent
+from backend.services.activity_logger import ActivityLogger
 
 logger = logging.getLogger(__name__)
 
@@ -913,16 +915,32 @@ async def send_message(
     orchestrator_model = session_model if session_model else settings.orchestrator_model
     logger.info(f"Agent config: orchestrator={settings.orchestrator_provider}/{orchestrator_model}, worker={settings.worker_provider}/{settings.worker_model}, session_model={session_model}")
     
+    # Create activity logger for observability
+    req_id = uuid.uuid4().hex[:8]
+    is_admin = user.is_admin if user and hasattr(user, "is_admin") else False
+    activity_logger = ActivityLogger(
+        db=db.db, is_admin=is_admin, request_id=req_id,
+        session_id=session_id, user_id=user.id if user else "anon"
+    )
+    
+    register_active_request(
+        request_id=req_id, session_id=session_id,
+        user_id=user.id if user else "anon",
+        model=orchestrator_model, is_admin=is_admin
+    )
+    
     config = AgentModeConfig(
         mode=agent_mode,
         orchestrator_model=orchestrator_model,
         worker_model=settings.worker_model,
         max_iterations=settings.agent_max_iterations,
-        parallel_workers=settings.agent_parallel_workers
+        parallel_workers=settings.agent_parallel_workers,
+        request_id=req_id,
+        is_admin=is_admin
     )
     
     # Create and run federated agent
-    agent = FederatedAgent(config=config, strategy_id=msg_request.strategy_id)
+    agent = FederatedAgent(config=config, strategy_id=msg_request.strategy_id, activity_logger=activity_logger)
     generation_start = time.time()
     
     try:
@@ -947,7 +965,9 @@ async def send_message(
             detail="An error occurred while processing your request. Please try again."
         )
     finally:
+        unregister_active_request(req_id)
         await agent.cleanup()
+        await activity_logger.flush()
     
     generation_time = time.time() - generation_start
     total_time = time.time() - start_time
@@ -1205,15 +1225,31 @@ async def send_message_stream(
             orchestrator_model = session_model if session_model else settings.orchestrator_model
             logger.info(f"Stream agent config: orchestrator={settings.orchestrator_provider}/{orchestrator_model}, worker={settings.worker_provider}/{settings.worker_model}, session_model={session_model}")
             
+            # Create activity logger for observability
+            stream_req_id = uuid.uuid4().hex[:8]
+            stream_is_admin = user.is_admin if user and hasattr(user, "is_admin") else False
+            stream_activity_logger = ActivityLogger(
+                db=db.db, is_admin=stream_is_admin, request_id=stream_req_id,
+                session_id=session_id, user_id=user.id if user else "anon"
+            )
+            
+            register_active_request(
+                request_id=stream_req_id, session_id=session_id,
+                user_id=user.id if user else "anon",
+                model=orchestrator_model, is_admin=stream_is_admin
+            )
+            
             config = AgentModeConfig(
                 mode=agent_mode,
                 orchestrator_model=orchestrator_model,
                 worker_model=settings.worker_model,
                 max_iterations=settings.agent_max_iterations,
-                parallel_workers=settings.agent_parallel_workers
+                parallel_workers=settings.agent_parallel_workers,
+                request_id=stream_req_id,
+                is_admin=stream_is_admin
             )
             
-            agent = FederatedAgent(config=config, strategy_id=msg_request.strategy_id)
+            agent = FederatedAgent(config=config, strategy_id=msg_request.strategy_id, activity_logger=stream_activity_logger)
             
             # Send initial event
             yield f"data: {json.dumps({'type': 'start', 'mode': agent_mode_str, 'models': {'orchestrator': orchestrator_model, 'worker': settings.worker_model}})}\n\n"
@@ -1292,6 +1328,7 @@ async def send_message_stream(
             await agent_task
             
             if response_holder['error']:
+                unregister_active_request(stream_req_id)
                 yield f"data: {json.dumps({'type': 'error', 'message': response_holder['error']})}\n\n"
                 return
             
@@ -1305,6 +1342,8 @@ async def send_message_stream(
                 response_text = "I apologize, but I was unable to generate a response. Please try again."
             
             await agent.cleanup()
+            await stream_activity_logger.flush()
+            unregister_active_request(stream_req_id)
             
             # Calculate final stats
             generation_time = time.time() - start_time
@@ -1457,6 +1496,7 @@ async def send_message_stream(
             
         except Exception as e:
             logger.error(f"Streaming error: {e}\n{traceback.format_exc()}")
+            unregister_active_request(stream_req_id)
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
     
     return StreamingResponse(

@@ -420,6 +420,9 @@ class AgentModeConfig(BaseModel):
     # Strategy selection
     strategy: StrategySelection = StrategySelection.AUTO
     strategy_override: Optional[str] = None  # Direct strategy ID override
+    # Activity logging context
+    request_id: Optional[str] = None
+    is_admin: bool = False
     
     class Config:
         use_enum_values = True

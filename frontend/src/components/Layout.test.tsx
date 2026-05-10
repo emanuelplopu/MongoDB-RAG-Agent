@@ -252,6 +252,10 @@ vi.mock('./ConnectionStatus', () => ({
   default: () => <div>Connected</div>,
 }))
 
+vi.mock('./SupportRequestButton', () => ({
+  default: () => null,
+}))
+
 vi.mock('./CommandPalette', () => ({
   default: ({ isOpen }: { isOpen: boolean }) => isOpen ? <div>Palette open</div> : null,
   useCommandPalette: () => ({

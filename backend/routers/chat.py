@@ -12,6 +12,7 @@ from backend.models.schemas import ChatRequest, ChatResponse, SearchType
 from backend.core.config import settings
 from backend.tools.browser_tool import browse_url, BrowserToolResult
 from backend.agent.tool_gate import ToolGate
+from backend.services.activity_logger import ActivityLogger, NullActivityLogger
 
 logger = logging.getLogger(__name__)
 
@@ -329,7 +330,7 @@ async def perform_search(db, query: str, search_type: SearchType, match_count: i
         return [], thinking
 
 
-async def generate_response(message: str, context: str, conversation_history: list, db=None, tool_operations: List[ToolOperation] = None, model: str = None) -> tuple:
+async def generate_response(message: str, context: str, conversation_history: list, db=None, tool_operations: List[ToolOperation] = None, model: str = None, activity_logger=None) -> tuple:
     """Generate LLM response using LiteLLM with tool calling support.
     
     Args:
@@ -339,6 +340,7 @@ async def generate_response(message: str, context: str, conversation_history: li
         db: Database connection for knowledge base searches
         tool_operations: List to append tool operations to (for UI tracking)
         model: LLM model to use (defaults to settings.llm_model)
+        activity_logger: ActivityLogger for observability (defaults to NullActivityLogger)
     
     Returns:
         tuple: (response_text, tokens_used, search_thinking, tool_operations)
@@ -347,6 +349,9 @@ async def generate_response(message: str, context: str, conversation_history: li
     
     if tool_operations is None:
         tool_operations = []
+    
+    if activity_logger is None:
+        activity_logger = NullActivityLogger()
     
     # Use provided model or default
     llm_model = model or settings.llm_model
@@ -481,12 +486,33 @@ Remember: You have access to the user's company documents. Search them! Multiple
             else:
                 llm_params["max_tokens"] = 2000
             
+            # Log LLM request
+            activity_logger.log_llm_request(
+                model=llm_model, provider="openai",
+                messages=messages,
+                temperature=0.7,
+                max_tokens=llm_params.get("max_tokens", llm_params.get("max_completion_tokens", 0)),
+                phase=f"chat_iteration_{iteration}"
+            )
+            
+            llm_call_start = time.time()
             response = await litellm.acompletion(**llm_params)
+            llm_call_duration_ms = (time.time() - llm_call_start) * 1000
             
             if response.usage:
                 total_tokens += response.usage.total_tokens
             
             assistant_message = response.choices[0].message
+            
+            # Log LLM response
+            activity_logger.log_llm_response(
+                model=llm_model,
+                content=assistant_message.content or "",
+                tokens_used=response.usage.total_tokens if response.usage else 0,
+                duration_ms=llm_call_duration_ms,
+                finish_reason=response.choices[0].finish_reason or "",
+                phase=f"chat_iteration_{iteration}"
+            )
             
             # Log whether tools were called
             if assistant_message.tool_calls:
@@ -635,6 +661,15 @@ Remember: You have access to the user's company documents. Search them! Multiple
                         error=tool_error
                     ))
                     
+                    # Log tool call for observability
+                    activity_logger.log_tool_call(
+                        tool_name=tool_name,
+                        arguments=tool_args,
+                        result=result_summary,
+                        duration_ms=round(tool_duration, 2),
+                        success=tool_success
+                    )
+                    
                     # Add tool result to messages
                     messages.append({
                         "role": "tool",
@@ -657,6 +692,7 @@ Remember: You have access to the user's company documents. Search them! Multiple
         
         except Exception as e:
             logger.error(f"Error in generate_response: {e}")
+            activity_logger.log_error(str(e), context={"iteration": iteration})
             return (
                 f"I encountered an error while processing your request: {str(e)}",
                 total_tokens,
@@ -688,6 +724,14 @@ async def chat(request: Request, chat_request: ChatRequest):
     
     db = request.app.state.db
     
+    # Create activity logger for the legacy chat path
+    chat_req_id = uuid.uuid4().hex[:8]
+    chat_activity_logger = ActivityLogger(
+        db=db.db, is_admin=False, request_id=chat_req_id,
+        session_id=chat_request.conversation_id or "legacy",
+        user_id="legacy"
+    )
+    
     # Get or create conversation
     conversation_id = chat_request.conversation_id or str(uuid.uuid4())
     if conversation_id not in _conversations:
@@ -703,7 +747,8 @@ async def chat(request: Request, chat_request: ChatRequest):
         "",  # Empty context - agent will search if needed
         conversation_history,
         db=db,
-        tool_operations=tool_operations
+        tool_operations=tool_operations,
+        activity_logger=chat_activity_logger
     )
     
     # Build sources from search_thinking if available
@@ -728,6 +773,9 @@ async def chat(request: Request, chat_request: ChatRequest):
         _conversations[conversation_id] = conversation_history[-50:]
     
     processing_time = (time.time() - start_time) * 1000
+    
+    # Flush activity log
+    await chat_activity_logger.flush()
     
     return ChatResponse(
         message=response_text,
