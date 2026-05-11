@@ -37,6 +37,37 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Phase-specific max_tokens limits to prevent runaway generation
+_PHASE_MAX_TOKENS: Dict[str, int] = {
+    "analyze": 2000,
+    "plan": 2000,
+    "evaluate": 1500,
+    "synthesize": 4000,
+}
+
+
+def _detect_repetition(text: str, threshold: float = 0.5) -> bool:
+    """Detect if text is mostly repetitive patterns.
+
+    Args:
+        text: The text to check for repetition.
+        threshold: Unused (reserved for future tuning).
+
+    Returns:
+        True if the text appears to be repetitive garbage.
+    """
+    if len(text) < 100:
+        return False
+    # Check if any 10-char substring repeats more than 5 times
+    for i in range(0, min(len(text), 200), 10):
+        pattern = text[i:i + 10]
+        if pattern and text.count(pattern) > 5:
+            return True
+    # Check character diversity - if fewer than 20 unique chars in 500+ char text
+    if len(text) > 500 and len(set(text[:500])) < 20:
+        return True
+    return False
+
 
 # Default prompts (used when database is not available)
 # These are loaded from prompts.py and can be overridden in the database
@@ -153,6 +184,10 @@ class Orchestrator:
             model_string = self._get_model_string()
             api_key = settings.get_api_key_for_provider(self.provider)
             
+            # Determine phase-specific max_tokens
+            phase_key = phase.value if hasattr(phase, 'value') else str(phase)
+            max_tokens_for_phase = _PHASE_MAX_TOKENS.get(phase_key, 2000)
+            
             # Handle newer OpenAI models that require max_completion_tokens
             llm_params = {
                 "model": model_string,
@@ -162,8 +197,12 @@ class Orchestrator:
             }
             
             # Set api_base for Ollama models so LiteLLM routes to the correct host
-            if self.provider.lower() == "ollama" or "ollama/" in model_string:
+            is_ollama = self.provider.lower() == "ollama" or "ollama/" in model_string
+            if is_ollama:
                 llm_params["api_base"] = settings.ollama_base_url
+                # Ollama-specific: penalize repetition to prevent garbage output
+                llm_params["repeat_penalty"] = 1.3
+                llm_params["stop"] = ["\n\n\n\n", "---END---"]
             
             # Check if this is a newer OpenAI model that requires max_completion_tokens
             model_lower = model_string.lower()
@@ -171,9 +210,9 @@ class Orchestrator:
                 "gpt-5", "gpt-4o", "gpt-4.1", "o1", "o3", "o4"
             ])
             if needs_max_completion_tokens:
-                llm_params["max_completion_tokens"] = 2000
+                llm_params["max_completion_tokens"] = max_tokens_for_phase
             else:
-                llm_params["max_tokens"] = 2000
+                llm_params["max_tokens"] = max_tokens_for_phase
             
             logger.info(f"[req={self.req_id}] Orchestrator LLM call: model={model_string}, provider={self.provider}, api_base={llm_params.get('api_base', 'default')}")
             
@@ -192,6 +231,11 @@ class Orchestrator:
             content = response.choices[0].message.content
             tokens_used = response.usage.total_tokens if response.usage else 0
             duration_ms = (time.time() - start_time) * 1000
+            
+            # Repetition guard: detect and truncate garbage output
+            if content and _detect_repetition(content):
+                logger.warning(f"[req={self.req_id}] Repetitive output detected in {phase.value} phase, truncating")
+                content = content[:200] + "... [truncated: repetitive output detected]"
             
             # Log the LLM response for observability
             self.activity_logger.log_llm_response(

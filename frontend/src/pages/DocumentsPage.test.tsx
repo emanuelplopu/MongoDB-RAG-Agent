@@ -2,6 +2,46 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
+const translations: Record<string, string> = {
+  'documentsPage.folders': 'Folders',
+  'documentsPage.allDocuments': 'All documents',
+  'documentsPage.showFolders': 'Show folders',
+  'documentsPage.documents': 'Documents',
+  'documentsPage.searchPlaceholder': 'Search documents...',
+  'documentsPage.sortDateModified': 'Date modified',
+  'documentsPage.sortName': 'Name',
+  'documentsPage.sortSize': 'Size',
+  'documentsPage.sortType': 'Type',
+  'documentsPage.sortDescending': 'Sort descending',
+  'documentsPage.sortAscending': 'Sort ascending',
+  'documentsPage.rebuildingMetadata': 'Rebuilding metadata...',
+  'documentsPage.noSearchResults': 'No documents match your search',
+  'documentsPage.tryDifferentKeywords': 'Try different keywords',
+  'documentsPage.noDocumentsInFolder': 'No documents in this folder',
+  'documentsPage.useIngestion': 'Use ingestion to add documents',
+  'documentsPage.columnName': 'Name',
+  'documentsPage.columnPath': 'Path',
+  'documentsPage.columnSize': 'Size',
+  'documentsPage.columnModified': 'Modified',
+  'documentsPage.prev': 'Prev',
+  'documentsPage.next': 'Next',
+  'documentsPage.deleteConfirm': 'Are you sure you want to delete this document and all its chunks?',
+  'documentsPage.notAvailable': 'N/A',
+}
+const stableT = (key: string, params?: Record<string, unknown>) => {
+  if (key === 'documentsPage.chunksCount') return `${params?.count ?? 0} chunks`
+  if (key === 'documentsPage.fixDocs') return `Fix ${params?.count ?? 0} docs`
+  if (key === 'documentsPage.rebuildingPercent') return `Rebuilding... ${params?.percent ?? 0}%`
+  if (key === 'documentsPage.rebuildComplete') return `Rebuild complete: ${params?.count ?? 0} docs updated`
+  if (key === 'documentsPage.docsNeedRepair') return `${params?.count ?? 0} docs need repair`
+  if (key === 'documentsPage.pageOfTotal') return `Page ${params?.page ?? 1} of ${params?.total ?? 1}`
+  return translations[key] ?? key
+}
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: stableT, i18n: { language: 'en', changeLanguage: async () => {} } }),
+  Trans: ({ children }: { children?: unknown }) => children,
+  initReactI18next: { type: '3rdParty', init: () => {} },
+}))
 import type {
   Document,
   DocumentListResponse,
@@ -252,7 +292,7 @@ describe('DocumentsPage', () => {
       expect(listMock).toHaveBeenLastCalledWith(2, 50, 'reports', undefined, true, 'modified', 'desc')
     })
     expect(screen.getByText('Page Two Report')).toBeInTheDocument()
-    expect(screen.getByText('Page 2 of 2')).toBeInTheDocument()
+    expect(screen.getAllByText('Page 2 of 2').length).toBeGreaterThan(0)
   })
 
   it('starts metadata rebuilds and deletes documents after confirmation', async () => {

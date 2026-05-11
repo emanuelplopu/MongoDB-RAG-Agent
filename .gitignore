@@ -32,6 +32,12 @@ wheels/
 .coverage
 htmlcov/
 
+# Coverage artifacts
+backend-coverage.json
+
+# Debug logs
+logs/
+
 # IDEs
 .vscode/
 .idea/
@@ -50,3 +56,5 @@ frontend/node_modules
 # Large binary files
 *.tar
 *.tar.gz
+
+# Screenshots (moved to docs/assets/screenshots/)

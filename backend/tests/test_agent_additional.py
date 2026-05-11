@@ -100,6 +100,15 @@ class TestFederatedAgentAdditional:
         """Create a coordinator instance without running the heavy constructor."""
         agent = object.__new__(FederatedAgent)
         agent.config = AgentModeConfig(worker_model="gpt-4o-mini")
+        agent.req_id = "test-req"
+        agent.activity_logger = SimpleNamespace(
+            log_error=lambda *a, **kw: None,
+            log_phase=lambda *a, **kw: None,
+            log_llm_request=lambda *a, **kw: None,
+            log_llm_response=lambda *a, **kw: None,
+            log_search=lambda *a, **kw: None,
+            log_system_state=lambda *a, **kw: None,
+        )
         return agent
 
     def test_resolve_strategy_prefers_direct_instance(self, bare_agent):

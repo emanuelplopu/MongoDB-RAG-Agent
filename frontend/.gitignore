@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Coverage
+.coverage/
+
+# Temporary test/debug output
+.tmp-layout-*.log
+selector.log
+coverage_output.txt
+coverage-run.txt
+test-results.txt

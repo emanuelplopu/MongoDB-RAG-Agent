@@ -30,9 +30,11 @@ import {
 import {
   sessionsApi,
   documentsApi,
+  systemApi,
   SessionMessage,
   ApiError,
   AttachmentInfo,
+  ModelCapability,
 } from '../api/client'
 import { useChatSidebar } from '../contexts/ChatSidebarContext'
 import { useAuth } from '../contexts/AuthContext'
@@ -82,8 +84,6 @@ export default function ChatPage() {
     setCurrentSession,
     setSessions,
     handleNewChat,
-    models,
-    getPricing,
     pendingMessage,
     pendingAttachments,
     setPendingMessage,
@@ -91,7 +91,7 @@ export default function ChatPage() {
   
   // Get current user for error message handling
   const { user } = useAuth()
-  const { preferences, setPreference } = useUserPreferences()
+  const { preferences } = useUserPreferences()
   
   // Get current language for agent response language
   const { t, i18n } = useTranslation()
@@ -100,8 +100,14 @@ export default function ChatPage() {
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [showModelSelector, setShowModelSelector] = useState(false)
+  const [showOrchestratorSelector, setShowOrchestratorSelector] = useState(false)
+  const [showWorkerSelector, setShowWorkerSelector] = useState(false)
   const [showAgentModeSelector, setShowAgentModeSelector] = useState(false)
+  
+  // Model capabilities and session-level overrides (admin only)
+  const [modelCapabilities, setModelCapabilities] = useState<ModelCapability[]>([])
+  const [sessionOrchestratorModel, setSessionOrchestratorModel] = useState<string | null>(null)
+  const [sessionWorkerModel, setSessionWorkerModel] = useState<string | null>(null)
   
   // Persist agent mode selection
   const [agentMode, setAgentMode] = useLocalStorage<'auto' | 'thinking' | 'fast'>(STORAGE_KEYS.CHAT_AGENT_MODE, 'auto')
@@ -168,13 +174,14 @@ export default function ChatPage() {
 
   // Close dropdowns with Escape key
   const closeAllDropdowns = useCallback(() => {
-    setShowModelSelector(false)
+    setShowOrchestratorSelector(false)
+    setShowWorkerSelector(false)
     setShowAgentModeSelector(false)
     setShowSettingsInfo(false)
   }, [])
   
   // Use escape key to close dropdowns
-  const anyDropdownOpen = showModelSelector || showAgentModeSelector || showSettingsInfo
+  const anyDropdownOpen = showOrchestratorSelector || showWorkerSelector || showAgentModeSelector || showSettingsInfo
   useEscapeKey(closeAllDropdowns, anyDropdownOpen)
   
   // Global keyboard shortcuts
@@ -211,22 +218,58 @@ export default function ChatPage() {
     }
   }, [liveTrace?.startTime])
 
-
-  // Change model for current session
-  // For Ollama models, prefix with "ollama/" so the backend routes to the local instance
-  const handleChangeModel = async (modelId: string, provider?: string) => {
-    if (!currentSession) return
-    const storedModelId = provider === 'ollama' ? `ollama/${modelId}` : modelId
-    try {
-      await sessionsApi.update(currentSession.id, { model: storedModelId })
-      setCurrentSession(prev => prev ? { ...prev, model: storedModelId } : null)
-      setSessions(prev => prev.map(s => 
-        s.id === currentSession.id ? { ...s, model: storedModelId } : s
-      ))
-    } catch (err) {
-      console.error('Failed to change model:', err)
+  // Load model capabilities for admin users
+  useEffect(() => {
+    if (user?.is_admin) {
+      systemApi.getModelCapabilities()
+        .then(res => setModelCapabilities(res.models))
+        .catch(() => {})
     }
-    setShowModelSelector(false)
+  }, [user])
+
+  // Sync session-level model overrides when session changes
+  useEffect(() => {
+    if (currentSession) {
+      setSessionOrchestratorModel(currentSession.orchestrator_model || null)
+      setSessionWorkerModel(currentSession.worker_model || null)
+    }
+  }, [currentSession?.id, currentSession?.orchestrator_model, currentSession?.worker_model])
+
+  // Filtered approved models for dropdowns
+  const approvedOrchestrators = useMemo(
+    () => modelCapabilities.filter(m => m.orchestrator?.approved),
+    [modelCapabilities]
+  )
+  const approvedWorkers = useMemo(
+    () => modelCapabilities.filter(m => m.worker?.approved),
+    [modelCapabilities]
+  )
+
+
+  // Change orchestrator model for current session
+  const handleChangeOrchestratorModel = async (modelId: string | null) => {
+    if (!currentSession) return
+    try {
+      await sessionsApi.update(currentSession.id, { orchestrator_model: modelId })
+      setSessionOrchestratorModel(modelId)
+      setCurrentSession(prev => prev ? { ...prev, orchestrator_model: modelId } : null)
+    } catch (err) {
+      console.error('Failed to change orchestrator model:', err)
+    }
+    setShowOrchestratorSelector(false)
+  }
+
+  // Change worker model for current session
+  const handleChangeWorkerModel = async (modelId: string | null) => {
+    if (!currentSession) return
+    try {
+      await sessionsApi.update(currentSession.id, { worker_model: modelId })
+      setSessionWorkerModel(modelId)
+      setCurrentSession(prev => prev ? { ...prev, worker_model: modelId } : null)
+    } catch (err) {
+      console.error('Failed to change worker model:', err)
+    }
+    setShowWorkerSelector(false)
   }
 
   // Helper to get display name for a model (strip provider prefix)
@@ -635,138 +678,130 @@ export default function ChatPage() {
                 {currentSession.title || t('chat.newChat')}
               </h2>
             </div>
-            <div className="flex items-center gap-3">
-              {/* Model Selector - admin only */}
-              {user?.is_admin && (<div className="relative">
-                <button
-                  onClick={() => setShowModelSelector(!showModelSelector)}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-variant dark:bg-gray-700 hover:bg-surface dark:hover:bg-gray-600 text-sm transition-colors"
-                >
-                  <SparklesIcon className="h-4 w-4 text-primary" />
-                  <span className="dark:text-gray-200">{getModelDisplayName(currentSession.model)}</span>
-                  <ChevronDownIcon className="h-4 w-4 text-secondary" />
-                </button>
-                {showModelSelector && (
-                  <div className="absolute right-0 mt-1 w-80 max-h-96 overflow-y-auto bg-white dark:bg-gray-900 rounded-xl shadow-xl border border-gray-200 dark:border-gray-600 z-50">
-                    <div className="p-2">
-                      {/* OpenAI models section */}
-                      {models.filter(m => m.provider !== 'ollama').length > 0 && (
-                        <>
-                          <div className="text-xs font-medium text-primary-600 dark:text-primary-400 px-2 py-1 uppercase">
-                            {t('chatPage.openaiModels')}
-                          </div>
-                          {models.filter(m => m.provider !== 'ollama').map(model => {
-                            const pricing = getPricing(model.id)
-                            const isDefault = preferences.defaultModel === model.id
-                            return (
-                              <button
-                                key={model.id}
-                                onClick={() => handleChangeModel(model.id)}
-                                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left hover:bg-gray-100 dark:hover:bg-gray-700 ${
-                                  currentSession.model === model.id ? 'bg-primary-50 dark:bg-primary-900/30' : ''
-                                }`}
-                              >
-                                <div className="flex items-center gap-1.5">
-                                  <span className="text-sm dark:text-gray-200">{model.id}</span>
-                                  {isDefault && (
-                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary-100 dark:bg-primary-900/50 text-primary-600 dark:text-primary-400 font-medium">
-                                      {t('chatPage.defaultBadge')}
-                                    </span>
-                                  )}
-                                </div>
-                                <span className="text-xs text-secondary dark:text-gray-400">
-                                  ${pricing.output}/1M out
-                                </span>
-                              </button>
-                            )
-                          })}
-                        </>
-                      )}
-                      {/* Ollama (local) models section */}
-                      {models.filter(m => m.provider === 'ollama').length > 0 && (
-                        <>
-                          <div className="text-xs font-medium text-green-600 dark:text-green-400 px-2 py-1 mt-2 uppercase border-t border-gray-200 dark:border-gray-700 pt-2">
-                            {t('chatPage.ollamaLocal')}
-                          </div>
-                          {models.filter(m => m.provider === 'ollama').map(model => {
-                            const isDefault = preferences.defaultModel === `ollama/${model.id}`
-                            return (
-                              <button
-                                key={model.id}
-                                onClick={() => handleChangeModel(model.id, 'ollama')}
-                                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left hover:bg-gray-100 dark:hover:bg-gray-700 ${
-                                  currentSession.model === `ollama/${model.id}` ? 'bg-primary-50 dark:bg-primary-900/30' : ''
-                                }`}
-                              >
-                                <div className="flex items-center gap-1.5">
-                                  <span className="text-sm dark:text-gray-200">{model.id}</span>
-                                  {isDefault && (
-                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary-100 dark:bg-primary-900/50 text-primary-600 dark:text-primary-400 font-medium">
-                                      {t('chatPage.defaultBadge')}
-                                    </span>
-                                  )}
-                                </div>
-                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 dark:bg-green-900/50 text-green-600 dark:text-green-400 font-medium">
-                                  {t('chatPage.localBadge')}
-                                </span>
-                              </button>
-                            )
-                          })}
-                        </>
-                      )}
-                      {/* Fallback: show all if no provider info */}
-                      {models.length > 0 && models.every(m => !m.provider) && (
-                        <>
-                          <div className="text-xs font-medium text-primary-600 dark:text-primary-400 px-2 py-1 uppercase">
-                            {t('chatPage.selectModel')}
-                          </div>
-                          {models.map(model => {
-                            const pricing = getPricing(model.id)
-                            const isDefault = preferences.defaultModel === model.id
-                            return (
-                              <button
-                                key={model.id}
-                                onClick={() => handleChangeModel(model.id)}
-                                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left hover:bg-gray-100 dark:hover:bg-gray-700 ${
-                                  currentSession.model === model.id ? 'bg-primary-50 dark:bg-primary-900/30' : ''
-                                }`}
-                              >
-                                <div className="flex items-center gap-1.5">
-                                  <span className="text-sm dark:text-gray-200">{model.id}</span>
-                                  {isDefault && (
-                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary-100 dark:bg-primary-900/50 text-primary-600 dark:text-primary-400 font-medium">
-                                      {t('chatPage.defaultBadge')}
-                                    </span>
-                                  )}
-                                </div>
-                                <span className="text-xs text-secondary dark:text-gray-400">
-                                  ${pricing.output}/1M out
-                                </span>
-                              </button>
-                            )
-                          })}
-                        </>
-                      )}
-                      {/* Set as default option */}
-                      {currentSession.model && currentSession.model !== preferences.defaultModel && (
-                        <div className="border-t border-gray-200 dark:border-gray-700 mt-1 pt-1">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setPreference('defaultModel', currentSession.model)
-                              setShowModelSelector(false)
-                            }}
-                            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left text-xs text-secondary dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
-                          >
-                            <CheckCircleIcon className="h-3.5 w-3.5" />
-                            {t('chatPage.setAsDefault', { model: currentSession.model })}
-                          </button>
+            <div className="flex items-center gap-2">
+              {/* Orchestrator Model Selector - admin only */}
+              {user?.is_admin && (
+                <div className="relative">
+                  <button
+                    onClick={() => {
+                      setShowOrchestratorSelector(!showOrchestratorSelector)
+                      setShowWorkerSelector(false)
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-surface-variant dark:bg-gray-700 hover:bg-surface dark:hover:bg-gray-600 text-sm transition-colors"
+                    disabled={approvedOrchestrators.length === 0 && modelCapabilities.length === 0}
+                  >
+                    <span className="text-xs">🧠</span>
+                    <span className="dark:text-gray-200 text-xs max-w-[120px] truncate">
+                      {sessionOrchestratorModel ? getModelDisplayName(sessionOrchestratorModel) : t('chatPage.modelSelector.default')}
+                    </span>
+                    <ChevronDownIcon className="h-3 w-3 text-secondary" />
+                  </button>
+                  {showOrchestratorSelector && (
+                    <div className="absolute right-0 mt-1 w-72 max-h-80 overflow-y-auto bg-white dark:bg-gray-900 rounded-xl shadow-xl border border-gray-200 dark:border-gray-600 z-50">
+                      <div className="p-2">
+                        <div className="text-xs font-medium text-primary-600 dark:text-primary-400 px-2 py-1 uppercase">
+                          {t('chatPage.modelSelector.orchestrator')}
                         </div>
-                      )}
+                        {approvedOrchestrators.length === 0 ? (
+                          <div className="px-3 py-2 text-xs text-secondary dark:text-gray-400 italic">
+                            {t('chatPage.modelSelector.noTestedModels')}
+                          </div>
+                        ) : (
+                          <>
+                            {/* Reset to default option */}
+                            <button
+                              onClick={() => handleChangeOrchestratorModel(null)}
+                              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                                !sessionOrchestratorModel ? 'bg-primary-50 dark:bg-primary-900/30' : ''
+                              }`}
+                            >
+                              <span className="text-sm dark:text-gray-200">{t('chatPage.modelSelector.resetToDefault')}</span>
+                            </button>
+                            {approvedOrchestrators.map(model => (
+                              <button
+                                key={model.id}
+                                onClick={() => handleChangeOrchestratorModel(model.id)}
+                                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                                  sessionOrchestratorModel === model.id ? 'bg-primary-50 dark:bg-primary-900/30' : ''
+                                }`}
+                              >
+                                <span className="text-sm dark:text-gray-200">{model.model_name}</span>
+                                {model.orchestrator?.auto_score != null && (
+                                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                                    ({model.orchestrator.auto_score.toFixed(1)})
+                                  </span>
+                                )}
+                              </button>
+                            ))}
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
-              </div>)}
+                  )}
+                </div>
+              )}
+
+              {/* Worker Model Selector - admin only */}
+              {user?.is_admin && (
+                <div className="relative">
+                  <button
+                    onClick={() => {
+                      setShowWorkerSelector(!showWorkerSelector)
+                      setShowOrchestratorSelector(false)
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-surface-variant dark:bg-gray-700 hover:bg-surface dark:hover:bg-gray-600 text-sm transition-colors"
+                    disabled={approvedWorkers.length === 0 && modelCapabilities.length === 0}
+                  >
+                    <span className="text-xs">⚡</span>
+                    <span className="dark:text-gray-200 text-xs max-w-[120px] truncate">
+                      {sessionWorkerModel ? getModelDisplayName(sessionWorkerModel) : t('chatPage.modelSelector.default')}
+                    </span>
+                    <ChevronDownIcon className="h-3 w-3 text-secondary" />
+                  </button>
+                  {showWorkerSelector && (
+                    <div className="absolute right-0 mt-1 w-72 max-h-80 overflow-y-auto bg-white dark:bg-gray-900 rounded-xl shadow-xl border border-gray-200 dark:border-gray-600 z-50">
+                      <div className="p-2">
+                        <div className="text-xs font-medium text-primary-600 dark:text-primary-400 px-2 py-1 uppercase">
+                          {t('chatPage.modelSelector.worker')}
+                        </div>
+                        {approvedWorkers.length === 0 ? (
+                          <div className="px-3 py-2 text-xs text-secondary dark:text-gray-400 italic">
+                            {t('chatPage.modelSelector.noTestedModels')}
+                          </div>
+                        ) : (
+                          <>
+                            {/* Reset to default option */}
+                            <button
+                              onClick={() => handleChangeWorkerModel(null)}
+                              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                                !sessionWorkerModel ? 'bg-primary-50 dark:bg-primary-900/30' : ''
+                              }`}
+                            >
+                              <span className="text-sm dark:text-gray-200">{t('chatPage.modelSelector.resetToDefault')}</span>
+                            </button>
+                            {approvedWorkers.map(model => (
+                              <button
+                                key={model.id}
+                                onClick={() => handleChangeWorkerModel(model.id)}
+                                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                                  sessionWorkerModel === model.id ? 'bg-primary-50 dark:bg-primary-900/30' : ''
+                                }`}
+                              >
+                                <span className="text-sm dark:text-gray-200">{model.model_name}</span>
+                                {model.worker?.auto_score != null && (
+                                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                                    ({model.worker.auto_score.toFixed(1)})
+                                  </span>
+                                )}
+                              </button>
+                            ))}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Agent Mode Selector */}
               <div className="relative">

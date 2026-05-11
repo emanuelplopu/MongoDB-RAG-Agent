@@ -752,6 +752,40 @@
       "advancedModelManagement": "Advanced Model Version Management",
       "advancedModelDesc": "Browse and switch between all available model versions with detailed information about capabilities, pricing, and compatibility."
     },
+    "modelCapabilities": {
+      "title": "Model Capability Testing",
+      "selectModel": "Select Model",
+      "testAsOrchestrator": "Test as Orchestrator",
+      "testAsWorker": "Test as Worker",
+      "testing": "Testing model...",
+      "results": "Test Results",
+      "score": "Score",
+      "pass": "PASS",
+      "fail": "FAIL",
+      "reasoning": "Reasoning",
+      "instructionFollowing": "Instruction Following",
+      "coherence": "Coherence",
+      "speed": "Speed",
+      "latency": "Latency",
+      "responsePreview": "Response Preview",
+      "forceApprove": "Force Approve",
+      "forceReject": "Force Reject",
+      "testedModels": "Tested Models",
+      "model": "Model",
+      "provider": "Provider",
+      "orchestrator": "Orchestrator",
+      "worker": "Worker",
+      "approved": "Approved",
+      "rejected": "Rejected",
+      "untested": "Untested",
+      "filterAll": "All",
+      "filterApproved": "Approved",
+      "filterRejected": "Rejected",
+      "filterUntested": "Untested",
+      "testSuccess": "Model test completed",
+      "testFailed": "Model test failed",
+      "approveSuccess": "Model approval updated"
+    },
     "tools": {
       "title": "Agent Tools",
       "aboutTitle": "About Agent Tools",
@@ -1356,7 +1390,15 @@
     "currentMode": "Current:",
     "attachFiles": "Attach files",
     "totalTokens": "Total: ~{{tokens}} tokens",
-    "noResponseContent": "(No response content received)"
+    "noResponseContent": "(No response content received)",
+    "modelSelector": {
+      "orchestrator": "Orchestrator",
+      "worker": "Worker",
+      "default": "Default (system)",
+      "resetToDefault": "Reset to Default",
+      "noTestedModels": "No tested models — test models in System > Configuration > LLM",
+      "score": "Score"
+    }
   },
   "agentPanel": {
     "header": "Agent Operations",

@@ -29,7 +29,8 @@ import {
   Profile, SystemStats, CustomEndpoint, NetworkScanResult, ConfigOptions,
   LLMModel, EmbeddingModel, LLMProviderConfigResponse, LLMProviderConfigRequest,
   ProviderModelInfo, FetchModelsResponse, ProviderTestResponse,
-  AgentTool, ToolTestResponse, IngestionPerformanceConfig
+  AgentTool, ToolTestResponse, IngestionPerformanceConfig,
+  ModelTestResult, ModelCapability
 } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -136,6 +137,13 @@ export default function ConfigurationPage() {
     })
     const [isSavingIngestionConfig, setIsSavingIngestionConfig] = useState(false)
     const [ingestionConfigErrors, setIngestionConfigErrors] = useState<Record<string, string>>({})
+
+    // Model Capability Testing state
+    const [modelCapabilities, setModelCapabilities] = useState<ModelCapability[]>([])
+    const [capTestModel, setCapTestModel] = useState<string>('')
+    const [capTestResult, setCapTestResult] = useState<ModelTestResult | null>(null)
+    const [isCapTesting, setIsCapTesting] = useState(false)
+    const [capFilter, setCapFilter] = useState<'all' | 'approved' | 'rejected' | 'untested'>('all')
 
     // Validation rules for ingestion config fields
     const ingestionConfigValidation: Record<string, { min: number; max: number; label: string }> = {
@@ -278,6 +286,13 @@ export default function ConfigurationPage() {
       } catch (ingestionErr) {
         console.error('Error fetching ingestion config:', ingestionErr)
       }
+      // Fetch model capabilities
+      try {
+        const capRes = await systemApi.getModelCapabilities()
+        setModelCapabilities(capRes.models)
+      } catch (capErr) {
+        console.error('Error fetching model capabilities:', capErr)
+      }
     } catch (err) {
       console.error('Error fetching data:', err)
     } finally {
@@ -369,6 +384,42 @@ export default function ConfigurationPage() {
       setMessage({ type: 'error', text: 'Failed to save ingestion configuration' })
     } finally {
       setIsSavingIngestionConfig(false)
+    }
+  }
+
+  const handleCapabilityTest = async (role: 'orchestrator' | 'worker') => {
+    if (!capTestModel) return
+    setIsCapTesting(true)
+    setCapTestResult(null)
+    setMessage(null)
+    try {
+      const result = await systemApi.testModelCapability(capTestModel, role)
+      setCapTestResult(result)
+      if (result.success) {
+        setMessage({ type: 'success', text: t('config.modelCapabilities.testSuccess') })
+      } else {
+        setMessage({ type: 'error', text: result.error || t('config.modelCapabilities.testFailed') })
+      }
+      // Refresh capabilities list
+      const capRes = await systemApi.getModelCapabilities()
+      setModelCapabilities(capRes.models)
+    } catch (err) {
+      setMessage({ type: 'error', text: t('config.modelCapabilities.testFailed') })
+    } finally {
+      setIsCapTesting(false)
+    }
+  }
+
+  const handleApproveModel = async (modelId: string, role: 'orchestrator' | 'worker', approved: boolean) => {
+    setMessage(null)
+    try {
+      await systemApi.approveModel(modelId, role, approved)
+      setMessage({ type: 'success', text: t('config.modelCapabilities.approveSuccess') })
+      // Refresh capabilities
+      const capRes = await systemApi.getModelCapabilities()
+      setModelCapabilities(capRes.models)
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Failed to update model approval' })
     }
   }
 
@@ -1181,6 +1232,195 @@ export default function ConfigurationPage() {
               <li>• {t('config.llm.howItWorksItems.secureKeys')}</li>
               <li>• {t('config.llm.howItWorksItems.ollamaNoKey')}</li>
             </ul>
+          </div>
+        </div>
+      )}
+
+      {/* Model Capability Testing */}
+      {activeTab === 'llm' && (
+        <div className="space-y-6">
+          {/* Testing Panel */}
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+            <div className="flex items-center gap-3 mb-4">
+              <CpuChipIcon className="h-5 w-5 text-indigo-500" />
+              <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">{t('config.modelCapabilities.title')}</h3>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-3 mb-4">
+              <div className="md:col-span-1">
+                <label className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">{t('config.modelCapabilities.selectModel')}</label>
+                <select
+                  value={capTestModel}
+                  onChange={(e) => setCapTestModel(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-primary-900 dark:text-gray-200"
+                >
+                  <option value="">{t('config.llm.selectModel')}</option>
+                  {llmProviderConfig?.providers.flatMap(p =>
+                    p.models.map(m => ({ id: `${p.id}/${m}`, label: `${m} (${p.name})` }))
+                  ).map(item => (
+                    <option key={item.id} value={item.id}>{item.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-end gap-2 md:col-span-2">
+                <button
+                  onClick={() => handleCapabilityTest('orchestrator')}
+                  disabled={isCapTesting || !capTestModel}
+                  className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 font-medium text-white transition-all hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {isCapTesting && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
+                  {t('config.modelCapabilities.testAsOrchestrator')}
+                </button>
+                <button
+                  onClick={() => handleCapabilityTest('worker')}
+                  disabled={isCapTesting || !capTestModel}
+                  className="flex items-center gap-2 rounded-xl bg-green-600 px-4 py-2 font-medium text-white transition-all hover:bg-green-700 disabled:opacity-50"
+                >
+                  {isCapTesting && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
+                  {t('config.modelCapabilities.testAsWorker')}
+                </button>
+              </div>
+            </div>
+
+            {isCapTesting && (
+              <div className="flex items-center gap-2 text-sm text-secondary dark:text-gray-400 mb-4">
+                <ArrowPathIcon className="h-4 w-4 animate-spin" />
+                {t('config.modelCapabilities.testing')}
+              </div>
+            )}
+
+            {/* Test Result */}
+            {capTestResult && (
+              <div className={`rounded-xl p-4 ${capTestResult.success ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800'}`}>
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="text-lg font-semibold text-primary-900 dark:text-gray-200">
+                    {t('config.modelCapabilities.score')}: {capTestResult.overall?.toFixed(1)}/10
+                  </span>
+                  <span className={`px-2 py-0.5 rounded text-xs font-bold ${capTestResult.auto_pass ? 'bg-green-100 dark:bg-green-800 text-green-800 dark:text-green-200' : 'bg-red-100 dark:bg-red-800 text-red-800 dark:text-red-200'}`}>
+                    {capTestResult.auto_pass ? t('config.modelCapabilities.pass') : t('config.modelCapabilities.fail')}
+                  </span>
+                </div>
+                {capTestResult.scores && (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                    <div className="text-sm">
+                      <span className="text-secondary dark:text-gray-400">{t('config.modelCapabilities.reasoning')}:</span>
+                      <span className={`ml-1 font-medium ${capTestResult.scores.reasoning >= 7 ? 'text-green-600 dark:text-green-400' : capTestResult.scores.reasoning >= 5 ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-600 dark:text-red-400'}`}>{capTestResult.scores.reasoning}/10</span>
+                    </div>
+                    <div className="text-sm">
+                      <span className="text-secondary dark:text-gray-400">{t('config.modelCapabilities.instructionFollowing')}:</span>
+                      <span className={`ml-1 font-medium ${capTestResult.scores.instruction_following >= 7 ? 'text-green-600 dark:text-green-400' : capTestResult.scores.instruction_following >= 5 ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-600 dark:text-red-400'}`}>{capTestResult.scores.instruction_following}/10</span>
+                    </div>
+                    <div className="text-sm">
+                      <span className="text-secondary dark:text-gray-400">{t('config.modelCapabilities.coherence')}:</span>
+                      <span className={`ml-1 font-medium ${capTestResult.scores.coherence >= 7 ? 'text-green-600 dark:text-green-400' : capTestResult.scores.coherence >= 5 ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-600 dark:text-red-400'}`}>{capTestResult.scores.coherence}/10</span>
+                    </div>
+                    <div className="text-sm">
+                      <span className="text-secondary dark:text-gray-400">{t('config.modelCapabilities.speed')}:</span>
+                      <span className={`ml-1 font-medium ${capTestResult.scores.speed_score >= 7 ? 'text-green-600 dark:text-green-400' : capTestResult.scores.speed_score >= 5 ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-600 dark:text-red-400'}`}>{capTestResult.scores.speed_score}/10</span>
+                      {capTestResult.latency_ms && <span className="text-xs text-secondary dark:text-gray-500 ml-1">({capTestResult.latency_ms}ms)</span>}
+                    </div>
+                  </div>
+                )}
+                {capTestResult.response_preview && (
+                  <div className="bg-white dark:bg-gray-800 rounded-lg p-3 text-sm text-primary-900 dark:text-gray-200 mb-3">
+                    <strong>{t('config.modelCapabilities.responsePreview')}:</strong> {capTestResult.response_preview}
+                  </div>
+                )}
+                {capTestResult.success && (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleApproveModel(capTestResult.model_id, capTestResult.role as 'orchestrator' | 'worker', true)}
+                      className="flex items-center gap-1 rounded-lg bg-green-100 dark:bg-green-900/30 px-3 py-1.5 text-sm font-medium text-green-800 dark:text-green-200 hover:bg-green-200 dark:hover:bg-green-900/50 transition-colors"
+                    >
+                      <CheckCircleIcon className="h-4 w-4" />
+                      {t('config.modelCapabilities.forceApprove')}
+                    </button>
+                    <button
+                      onClick={() => handleApproveModel(capTestResult.model_id, capTestResult.role as 'orchestrator' | 'worker', false)}
+                      className="flex items-center gap-1 rounded-lg bg-red-100 dark:bg-red-900/30 px-3 py-1.5 text-sm font-medium text-red-800 dark:text-red-200 hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors"
+                    >
+                      <XCircleIcon className="h-4 w-4" />
+                      {t('config.modelCapabilities.forceReject')}
+                    </button>
+                  </div>
+                )}
+                {capTestResult.error && (
+                  <p className="text-sm text-red-600 dark:text-red-400 mt-2">{capTestResult.error}</p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Tested Models Summary Table */}
+          <div className="rounded-2xl bg-surface dark:bg-gray-800 p-6 shadow-elevation-1">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <MagnifyingGlassIcon className="h-5 w-5 text-indigo-500" />
+                <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">{t('config.modelCapabilities.testedModels')}</h3>
+              </div>
+              <div className="flex gap-1">
+                {(['all', 'approved', 'rejected', 'untested'] as const).map(f => (
+                  <button
+                    key={f}
+                    onClick={() => setCapFilter(f)}
+                    className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${capFilter === f ? 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-800 dark:text-indigo-200' : 'text-secondary dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+                  >
+                    {t(`config.modelCapabilities.filter${f.charAt(0).toUpperCase() + f.slice(1)}` as any)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {modelCapabilities.length === 0 ? (
+              <p className="text-sm text-secondary dark:text-gray-400">{t('config.modelCapabilities.untested')}</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200 dark:border-gray-700">
+                      <th className="text-left py-2 px-3 font-medium text-primary-900 dark:text-gray-200">{t('config.modelCapabilities.model')}</th>
+                      <th className="text-left py-2 px-3 font-medium text-primary-900 dark:text-gray-200">{t('config.modelCapabilities.provider')}</th>
+                      <th className="text-center py-2 px-3 font-medium text-primary-900 dark:text-gray-200">{t('config.modelCapabilities.orchestrator')}</th>
+                      <th className="text-center py-2 px-3 font-medium text-primary-900 dark:text-gray-200">{t('config.modelCapabilities.worker')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {modelCapabilities
+                      .filter(cap => {
+                        if (capFilter === 'all') return true
+                        if (capFilter === 'approved') return cap.orchestrator?.approved || cap.worker?.approved
+                        if (capFilter === 'rejected') return (cap.orchestrator?.tested && !cap.orchestrator?.approved) || (cap.worker?.tested && !cap.worker?.approved)
+                        if (capFilter === 'untested') return !cap.orchestrator?.tested && !cap.worker?.tested
+                        return true
+                      })
+                      .map(cap => (
+                        <tr key={cap.id} className="border-b border-gray-100 dark:border-gray-700/50">
+                          <td className="py-2 px-3 font-medium text-primary-900 dark:text-gray-200">{cap.model_name}</td>
+                          <td className="py-2 px-3 text-secondary dark:text-gray-400">{cap.provider}</td>
+                          <td className="py-2 px-3 text-center">
+                            {cap.orchestrator?.tested ? (
+                              <span className={`inline-flex items-center gap-1 ${cap.orchestrator.approved ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                                {cap.orchestrator.approved ? '✓' : '✗'} {cap.orchestrator.auto_score.toFixed(1)}/10
+                              </span>
+                            ) : (
+                              <span className="text-gray-400 dark:text-gray-600">— {t('config.modelCapabilities.untested')}</span>
+                            )}
+                          </td>
+                          <td className="py-2 px-3 text-center">
+                            {cap.worker?.tested ? (
+                              <span className={`inline-flex items-center gap-1 ${cap.worker.approved ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                                {cap.worker.approved ? '✓' : '✗'} {cap.worker.auto_score.toFixed(1)}/10
+                              </span>
+                            ) : (
+                              <span className="text-gray-400 dark:text-gray-600">— {t('config.modelCapabilities.untested')}</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}

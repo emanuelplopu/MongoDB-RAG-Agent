@@ -277,6 +277,8 @@ class ChatSession(BaseModel):
     is_archived: bool = False
     archived_at: Optional[datetime] = None
     profile: Optional[str] = None
+    orchestrator_model: Optional[str] = None  # Admin per-session override
+    worker_model: Optional[str] = None  # Admin per-session override
 
 
 class Folder(BaseModel):
@@ -302,6 +304,8 @@ class UpdateSessionRequest(BaseModel):
     folder_id: Optional[str] = None
     model: Optional[str] = None
     is_pinned: Optional[bool] = None
+    orchestrator_model: Optional[str] = None  # Admin-only per-session override
+    worker_model: Optional[str] = None  # Admin-only per-session override
 
 
 class AttachmentInfo(BaseModel):
@@ -601,11 +605,41 @@ async def update_session(
     if user:
         query["user_id"] = user.id
     
+    # Model override fields require admin privileges
+    is_admin = user.is_admin if user and hasattr(user, "is_admin") else False
+    if (update.orchestrator_model is not None or update.worker_model is not None) and not is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Only admins can set per-session model overrides"
+        )
+    
     update_dict = {k: v for k, v in update.model_dump().items() if v is not None}
     update_dict["updated_at"] = datetime.now()
     
     if not update_dict:
         raise HTTPException(status_code=400, detail="No fields to update")
+    
+    # Validate model override if provided (warn but don't hard-fail)
+    if is_admin and (update.orchestrator_model or update.worker_model):
+        try:
+            db = request.app.state.db
+            capabilities_col = db.db["model_capabilities"]
+            if update.orchestrator_model:
+                cap = await capabilities_col.find_one({"model_id": update.orchestrator_model})
+                if not cap:
+                    logger.warning(
+                        f"Admin set orchestrator_model={update.orchestrator_model} "
+                        f"but model not found in model_capabilities collection"
+                    )
+            if update.worker_model:
+                cap = await capabilities_col.find_one({"model_id": update.worker_model})
+                if not cap:
+                    logger.warning(
+                        f"Admin set worker_model={update.worker_model} "
+                        f"but model not found in model_capabilities collection"
+                    )
+        except Exception as e:
+            logger.warning(f"Could not validate model capabilities: {e}")
     
     result = await collection.update_one(query, {"$set": update_dict})
     
@@ -910,14 +944,26 @@ async def send_message(
     except ValueError:
         agent_mode = AgentMode.AUTO
     
-    # Configure federated agent - use session model as orchestrator model
-    # The user selects their model in the chat UI, stored in the session document
-    orchestrator_model = session_model if session_model else settings.orchestrator_model
-    logger.info(f"Agent config: orchestrator={settings.orchestrator_provider}/{orchestrator_model}, worker={settings.worker_provider}/{settings.worker_model}, session_model={session_model}")
-    
-    # Create activity logger for observability
+    # Configure federated agent - model resolution priority:
+    # session override (admin-only) > global settings
     req_id = uuid.uuid4().hex[:8]
     is_admin = user.is_admin if user and hasattr(user, "is_admin") else False
+    
+    if is_admin and doc.get("orchestrator_model"):
+        orchestrator_model = doc["orchestrator_model"]
+        model_source = "session_override"
+    else:
+        orchestrator_model = settings.orchestrator_model
+        model_source = "global_config"
+    
+    if is_admin and doc.get("worker_model"):
+        worker_model = doc["worker_model"]
+    else:
+        worker_model = settings.worker_model
+    
+    logger.info(f"[req={req_id}] Model routing: orchestrator={orchestrator_model}, worker={worker_model}, source={model_source}, session_model={session_model}")
+    
+    # Create activity logger for observability
     activity_logger = ActivityLogger(
         db=db.db, is_admin=is_admin, request_id=req_id,
         session_id=session_id, user_id=user.id if user else "anon"
@@ -932,7 +978,7 @@ async def send_message(
     config = AgentModeConfig(
         mode=agent_mode,
         orchestrator_model=orchestrator_model,
-        worker_model=settings.worker_model,
+        worker_model=worker_model,
         max_iterations=settings.agent_max_iterations,
         parallel_workers=settings.agent_parallel_workers,
         request_id=req_id,
@@ -1221,13 +1267,26 @@ async def send_message_stream(
             except ValueError:
                 agent_mode = AgentMode.AUTO
             
-            # Configure agent - use session model as orchestrator model
-            orchestrator_model = session_model if session_model else settings.orchestrator_model
-            logger.info(f"Stream agent config: orchestrator={settings.orchestrator_provider}/{orchestrator_model}, worker={settings.worker_provider}/{settings.worker_model}, session_model={session_model}")
-            
-            # Create activity logger for observability
+            # Configure agent - model resolution priority:
+            # session override (admin-only) > global settings
             stream_req_id = uuid.uuid4().hex[:8]
             stream_is_admin = user.is_admin if user and hasattr(user, "is_admin") else False
+            
+            if stream_is_admin and doc.get("orchestrator_model"):
+                orchestrator_model = doc["orchestrator_model"]
+                model_source = "session_override"
+            else:
+                orchestrator_model = settings.orchestrator_model
+                model_source = "global_config"
+            
+            if stream_is_admin and doc.get("worker_model"):
+                worker_model = doc["worker_model"]
+            else:
+                worker_model = settings.worker_model
+            
+            logger.info(f"[req={stream_req_id}] Stream model routing: orchestrator={orchestrator_model}, worker={worker_model}, source={model_source}, session_model={session_model}")
+            
+            # Create activity logger for observability
             stream_activity_logger = ActivityLogger(
                 db=db.db, is_admin=stream_is_admin, request_id=stream_req_id,
                 session_id=session_id, user_id=user.id if user else "anon"
@@ -1242,7 +1301,7 @@ async def send_message_stream(
             config = AgentModeConfig(
                 mode=agent_mode,
                 orchestrator_model=orchestrator_model,
-                worker_model=settings.worker_model,
+                worker_model=worker_model,
                 max_iterations=settings.agent_max_iterations,
                 parallel_workers=settings.agent_parallel_workers,
                 request_id=stream_req_id,
@@ -1252,7 +1311,7 @@ async def send_message_stream(
             agent = FederatedAgent(config=config, strategy_id=msg_request.strategy_id, activity_logger=stream_activity_logger)
             
             # Send initial event
-            yield f"data: {json.dumps({'type': 'start', 'mode': agent_mode_str, 'models': {'orchestrator': orchestrator_model, 'worker': settings.worker_model}})}\n\n"
+            yield f"data: {json.dumps({'type': 'start', 'mode': agent_mode_str, 'models': {'orchestrator': orchestrator_model, 'worker': worker_model}})}\n\n"
             
             # Create event queue for real-time streaming
             event_queue: asyncio.Queue = asyncio.Queue()

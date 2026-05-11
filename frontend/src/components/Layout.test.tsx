@@ -177,10 +177,12 @@ const mockFolders = [
   { id: 'folder-1', name: 'Project A', color: '#3b82f6', created_at: '2025-01-01T00:00:00Z' },
 ]
 
+const stableT = (key: string, _params?: Record<string, unknown>) => translations[key] ?? key
+const stableI18n = { language: 'en', changeLanguage: async () => {} }
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, _params?: Record<string, unknown>) => translations[key] ?? key,
-  }),
+  useTranslation: () => ({ t: stableT, i18n: stableI18n }),
+  Trans: ({ children }: { children?: unknown }) => children,
+  initReactI18next: { type: '3rdParty', init: () => {} },
 }))
 
 vi.mock('../contexts/AuthContext', () => ({
@@ -254,6 +256,20 @@ vi.mock('./ConnectionStatus', () => ({
 
 vi.mock('./SupportRequestButton', () => ({
   default: () => null,
+}))
+
+vi.mock('../contexts/ToastContext', () => ({
+  useToast: () => ({
+    success: vi.fn(),
+    error: vi.fn(),
+    warning: vi.fn(),
+    info: vi.fn(),
+    addToast: vi.fn(),
+    removeToast: vi.fn(),
+    clearToasts: vi.fn(),
+    toasts: [],
+  }),
+  ToastProvider: ({ children }: { children: React.ReactNode }) => children,
 }))
 
 vi.mock('./CommandPalette', () => ({
@@ -649,7 +665,7 @@ describe('Layout', () => {
     expect(screen.queryAllByText('Strategies')).toHaveLength(0)
     expect(screen.queryAllByText('Backups')).toHaveLength(0)
 
-    fireEvent.click(screen.getByText('System'))
+    fireEvent.click(screen.getAllByText('System')[0])
     await waitFor(() => expect(screen.getAllByText('Search indexes').length).toBeGreaterThan(0))
     expect(screen.getAllByText('Status').length).toBeGreaterThan(0)
     expect(screen.queryAllByText('Strategies')).toHaveLength(0)
@@ -666,7 +682,7 @@ describe('Layout', () => {
       active_profile: 'research',
     }
 
-    renderWithRouter('/chat')
+    renderWithRouter('/documents')
 
     await waitFor(() => expect(screen.getAllByText('Research').length).toBeGreaterThan(0))
     expect(screen.queryAllByText('Support')).toHaveLength(0)

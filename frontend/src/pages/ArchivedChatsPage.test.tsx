@@ -1,6 +1,42 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+const translations: Record<string, string> = {
+  'archivedChatsPage.title': 'Archived Chats',
+  'archivedChatsPage.subtitle': 'View and manage your archived conversations',
+  'archivedChatsPage.loadFailed': 'Failed to load archived chats',
+  'archivedChatsPage.restoreFailed': 'Failed to restore sessions',
+  'archivedChatsPage.deleteFailed': 'Failed to delete sessions',
+  'archivedChatsPage.exportFailed': 'Failed to export session',
+  'archivedChatsPage.selectAll': 'Select All',
+  'archivedChatsPage.noChats': 'No archived chats',
+  'archivedChatsPage.noChatsDesc': 'Chats you archive will appear here',
+  'archivedChatsPage.untitledChat': 'Untitled Chat',
+  'archivedChatsPage.download': 'Download',
+  'archivedChatsPage.restore': 'Restore',
+  'archivedChatsPage.deleteForever': 'Delete Forever',
+  'archivedChatsPage.aboutTitle': 'About Archived Chats',
+  'archivedChatsPage.aboutBullet1': 'Archived chats are hidden from your main chat list',
+  'archivedChatsPage.aboutBullet2': 'You can restore them at any time',
+  'archivedChatsPage.aboutBullet3': 'Permanently deleted chats cannot be recovered',
+  'archivedChatsPage.aboutBullet4': 'Export chats before deleting to keep a backup',
+  'archivedChatsPage.dateUnknown': 'Unknown',
+}
+const stableT = (key: string, params?: Record<string, unknown>) => {
+  if (key === 'archivedChatsPage.messagesCount') return `${params?.count ?? 0} messages`
+  if (key === 'archivedChatsPage.clearCount') return `Clear (${params?.count ?? 0})`
+  if (key === 'archivedChatsPage.restoreCount') return `Restore (${params?.count ?? 0})`
+  if (key === 'archivedChatsPage.deleteForeverCount') return `Delete Forever (${params?.count ?? 0})`
+  if (key === 'archivedChatsPage.confirmDelete') return `Permanently delete ${params?.count ?? 0} chat(s)?`
+  if (key === 'archivedChatsPage.archivedAt') return `Archived: ${params?.date ?? ''}`
+  if (key === 'archivedChatsPage.createdAt') return `Created: ${params?.date ?? ''}`
+  return translations[key] ?? key
+}
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: stableT, i18n: { language: 'en', changeLanguage: async () => {} } }),
+  Trans: ({ children }: { children?: unknown }) => children,
+  initReactI18next: { type: '3rdParty', init: () => {} },
+}))
 import type { ChatSession } from '../api/client'
 import ArchivedChatsPage from './ArchivedChatsPage'
 

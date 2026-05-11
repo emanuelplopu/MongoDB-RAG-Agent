@@ -1,6 +1,57 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+const translations: Record<string, string> = {
+  'devDocsPage.title': 'Developer API Documentation',
+  'devDocsPage.subtitle': 'Explore and test the API',
+  'devDocsPage.swaggerUi': 'Swagger UI',
+  'devDocsPage.swaggerDesc': 'Interactive API explorer',
+  'devDocsPage.redoc': 'ReDoc',
+  'devDocsPage.redocDesc': 'Beautiful API reference',
+  'devDocsPage.openApiSpec': 'OpenAPI Spec',
+  'devDocsPage.openApiDesc': 'Download the specification',
+  'devDocsPage.quickStart': 'Quick Start',
+  'devDocsPage.baseUrl': 'Base URL',
+  'devDocsPage.authMethods': 'Authentication',
+  'devDocsPage.authIntro': 'Two authentication methods are supported',
+  'devDocsPage.recommended': 'Recommended',
+  'devDocsPage.method1Title': 'API Key',
+  'devDocsPage.method1Desc': 'Use an API key for external apps',
+  'devDocsPage.method2Title': 'JWT Token',
+  'devDocsPage.method2Desc': 'Use JWT for browser sessions',
+  'devDocsPage.commonOps': 'Common Operations',
+  'devDocsPage.searchKb': 'Search Knowledge Base',
+  'devDocsPage.chatAgent': 'Chat with Agent',
+  'devDocsPage.startIngestion': 'Start Ingestion',
+  'devDocsPage.systemStatus': 'System Status',
+  'devDocsPage.apiReference': 'API Reference',
+  'devDocsPage.searchEndpoints': 'Search endpoints...',
+  'devDocsPage.loadingSpec': 'Loading specification...',
+  'devDocsPage.loadFailed': 'Failed to load API specification',
+  'devDocsPage.retry': 'Retry',
+  'devDocsPage.tryIt': 'Try it',
+  'devDocsPage.noEndpoints': 'No endpoints found',
+  'devDocsPage.clientLibraries': 'Client Libraries',
+  'devDocsPage.rateLimits': 'Rate Limits',
+  'devDocsPage.rateSearch': 'Search: 60 requests/min',
+  'devDocsPage.rateChat': 'Chat: 30 requests/min',
+  'devDocsPage.rateIngestion': 'Ingestion: 10 requests/min',
+  'devDocsPage.rateTimeout': 'Timeout: 30 seconds',
+  'devDocsPage.bestPractices': 'Best Practices',
+  'devDocsPage.practiceHybrid': 'Use hybrid search',
+  'devDocsPage.practiceTokens': 'Monitor token usage',
+  'devDocsPage.practiceRateLimit': 'Respect rate limits',
+  'devDocsPage.practiceStreaming': 'Use streaming for chat',
+}
+const stableT = (key: string, params?: Record<string, unknown>) => {
+  if (key === 'devDocsPage.endpointCount') return `${params?.count ?? 0} endpoints`
+  return translations[key] ?? key
+}
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: stableT, i18n: { language: 'en', changeLanguage: async () => {} } }),
+  Trans: ({ children }: { children?: unknown }) => children,
+  initReactI18next: { type: '3rdParty', init: () => {} },
+}))
 import DeveloperDocsPage from './DeveloperDocsPage'
 
 const fetchMock = vi.fn()

@@ -3488,3 +3488,61 @@ async def test_agent_tool(request: Request, test_request: ToolTestRequest):
             latency_ms=(time.time() - start_time) * 1000,
             logs=logs
         )
+
+
+# ==================== Model Capability Benchmark Endpoints ====================
+
+from fastapi import Depends, Query
+from backend.routers.auth import get_current_user, UserResponse
+from backend.services.model_benchmark import ModelBenchmarkService
+
+
+@router.get("/models/capabilities")
+async def get_model_capabilities(
+    request: Request,
+    user: UserResponse = Depends(get_current_user),
+):
+    """Get all tested model capabilities and approval status. Admin only."""
+    if not user or not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    db = request.app.state.db
+    service = ModelBenchmarkService(db.db)
+    capabilities = await service.get_capabilities()
+    return {"models": capabilities}
+
+
+@router.post("/models/{model_id:path}/test")
+async def test_model_capability(
+    request: Request,
+    model_id: str,
+    role: str = Query(..., pattern="^(orchestrator|worker)$"),
+    judge_model: Optional[str] = Query(None),
+    user: UserResponse = Depends(get_current_user),
+):
+    """Test a model's capability for orchestrator or worker role. Admin only."""
+    if not user or not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    db = request.app.state.db
+    service = ModelBenchmarkService(db.db)
+    result = await service.test_model(model_id, role, judge_model)
+    return result
+
+
+@router.post("/models/{model_id:path}/approve")
+async def approve_model(
+    request: Request,
+    model_id: str,
+    role: str = Query(..., pattern="^(orchestrator|worker)$"),
+    approved: bool = Query(...),
+    user: UserResponse = Depends(get_current_user),
+):
+    """Admin force-approve or reject a model for a role."""
+    if not user or not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    db = request.app.state.db
+    service = ModelBenchmarkService(db.db)
+    result = await service.approve_model(model_id, role, approved)
+    return result

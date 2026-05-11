@@ -470,6 +470,48 @@ export interface ProviderTestResponse {
   logs: string[]
 }
 
+// Model Capability Testing types
+export interface ModelTestResult {
+  success: boolean
+  model_id: string
+  role: string
+  scores?: { reasoning: number; instruction_following: number; coherence: number; speed_score: number }
+  overall?: number
+  auto_pass?: boolean
+  pass_threshold?: number
+  latency_ms?: number
+  tokens_generated?: number
+  response_preview?: string
+  error?: string
+}
+
+export interface ModelCapabilityRole {
+  tested: boolean
+  auto_score: number
+  auto_pass: boolean
+  admin_override: boolean | null
+  approved: boolean
+  test_results?: {
+    reasoning: number
+    instruction_following: number
+    coherence: number
+    speed_score: number
+    latency_ms: number
+    tokens_generated: number
+    tested_at: string
+    response_preview?: string
+  }
+}
+
+export interface ModelCapability {
+  id: string
+  provider: string
+  model_name: string
+  orchestrator?: ModelCapabilityRole
+  worker?: ModelCapabilityRole
+  updated_at: string
+}
+
 // Agent Tools types
 export interface ToolParameter {
   name: string
@@ -867,6 +909,8 @@ export interface ChatSession {
   title: string
   folder_id?: string
   model: string
+  orchestrator_model?: string | null
+  worker_model?: string | null
   created_at: string
   updated_at: string
   messages: SessionMessage[]
@@ -1333,6 +1377,22 @@ export const systemApi = {
   saveIngestionPerformanceConfig: async (config: IngestionPerformanceConfig): Promise<{ success: boolean; message: string }> => {
     const response = await api.post('/system/ingestion-performance', config)
     return response.data
+  },
+
+  // Model Capability Testing
+  testModelCapability: async (modelId: string, role: 'orchestrator' | 'worker'): Promise<ModelTestResult> => {
+    const response = await api.post(`/system/models/${encodeURIComponent(modelId)}/test?role=${role}`)
+    return response.data
+  },
+
+  getModelCapabilities: async (): Promise<{ models: ModelCapability[] }> => {
+    const response = await api.get('/system/models/capabilities')
+    return response.data
+  },
+
+  approveModel: async (modelId: string, role: 'orchestrator' | 'worker', approved: boolean): Promise<any> => {
+    const response = await api.post(`/system/models/${encodeURIComponent(modelId)}/approve?role=${role}&approved=${approved}`)
+    return response.data
   }
 }
 
@@ -1356,7 +1416,7 @@ export const sessionsApi = {
     return response.data
   },
 
-  update: async (sessionId: string, data: { title?: string; folder_id?: string; model?: string; is_pinned?: boolean }) => {
+  update: async (sessionId: string, data: { title?: string; folder_id?: string; model?: string; is_pinned?: boolean; orchestrator_model?: string | null; worker_model?: string | null }) => {
     const response = await api.put(`/sessions/${sessionId}`, data)
     return response.data
   },

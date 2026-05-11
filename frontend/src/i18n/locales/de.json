@@ -752,6 +752,40 @@
       "advancedModelManagement": "Erweiterte Modellversionsverwaltung",
       "advancedModelDesc": "Durchsuchen und wechseln Sie zwischen allen verfügbaren Modellversionen mit Details zu Fähigkeiten, Preisen und Kompatibilität."
     },
+    "modelCapabilities": {
+      "title": "Modell-Fähigkeitstest",
+      "selectModel": "Modell auswählen",
+      "testAsOrchestrator": "Als Orchestrator testen",
+      "testAsWorker": "Als Worker testen",
+      "testing": "Modell wird getestet...",
+      "results": "Testergebnisse",
+      "score": "Punktzahl",
+      "pass": "BESTANDEN",
+      "fail": "NICHT BESTANDEN",
+      "reasoning": "Schlussfolgerung",
+      "instructionFollowing": "Anweisungsbefolgung",
+      "coherence": "Kohärenz",
+      "speed": "Geschwindigkeit",
+      "latency": "Latenz",
+      "responsePreview": "Antwortvorschau",
+      "forceApprove": "Genehmigung erzwingen",
+      "forceReject": "Ablehnung erzwingen",
+      "testedModels": "Getestete Modelle",
+      "model": "Modell",
+      "provider": "Anbieter",
+      "orchestrator": "Orchestrator",
+      "worker": "Worker",
+      "approved": "Genehmigt",
+      "rejected": "Abgelehnt",
+      "untested": "Ungetestet",
+      "filterAll": "Alle",
+      "filterApproved": "Genehmigt",
+      "filterRejected": "Abgelehnt",
+      "filterUntested": "Ungetestet",
+      "testSuccess": "Modelltest abgeschlossen",
+      "testFailed": "Modelltest fehlgeschlagen",
+      "approveSuccess": "Modellgenehmigung aktualisiert"
+    },
     "tools": {
       "title": "Agenten-Tools",
       "aboutTitle": "Über Agenten-Tools",
@@ -1356,7 +1390,15 @@
     "currentMode": "Aktuell:",
     "attachFiles": "Dateien anhängen",
     "totalTokens": "Gesamt: ~{{tokens}} Token",
-    "noResponseContent": "(Kein Antwortinhalt erhalten)"
+    "noResponseContent": "(Kein Antwortinhalt erhalten)",
+    "modelSelector": {
+      "orchestrator": "Orchestrator",
+      "worker": "Worker",
+      "default": "Standard (System)",
+      "resetToDefault": "Auf Standard zurücksetzen",
+      "noTestedModels": "Keine getesteten Modelle — Modelle unter System > Konfiguration > LLM testen",
+      "score": "Bewertung"
+    }
   },
   "agentPanel": {
     "header": "Agenten-Operationen",

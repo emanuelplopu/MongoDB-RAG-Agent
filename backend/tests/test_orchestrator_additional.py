@@ -95,7 +95,7 @@ class TestOrchestratorAdditional:
         """Successful JSON responses should be parsed and recorded."""
         orchestrator = Orchestrator(model="gpt-4o", provider="openai")
         response = SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content='```json\n{"answer":"ok","reasoning":"why"}\n```'))],
+            choices=[SimpleNamespace(message=SimpleNamespace(content='```json\n{"answer":"ok","reasoning":"why"}\n```'), finish_reason="stop")],
             usage=SimpleNamespace(total_tokens=321),
         )
         mocked_completion = AsyncMock(return_value=response)
@@ -119,7 +119,7 @@ class TestOrchestratorAdditional:
         orchestrator = Orchestrator(model="claude-3-5-haiku", provider="anthropic")
 
         non_json_response = SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content="plain text response"))],
+            choices=[SimpleNamespace(message=SimpleNamespace(content="plain text response"), finish_reason="stop")],
             usage=None,
         )
         monkeypatch.setattr("litellm.acompletion", AsyncMock(return_value=non_json_response))

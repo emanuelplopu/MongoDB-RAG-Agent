@@ -2,6 +2,56 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
+const translations: Record<string, string> = {
+  'docPreviewPage.failedToLoad': 'Failed to load document details',
+  'docPreviewPage.notFound': 'Document not found',
+  'docPreviewPage.goBack': 'Go back',
+  'docPreviewPage.openInExplorer': 'Open in Explorer',
+  'docPreviewPage.openInCloud': 'Open in Cloud Provider',
+  'docPreviewPage.openPreview': 'Open Preview',
+  'docPreviewPage.openCached': 'Open Here (Cached)',
+  'docPreviewPage.opening': 'Opening...',
+  'docPreviewPage.allDocuments': 'All Documents',
+  'docPreviewPage.fileInfo': 'File Info',
+  'docPreviewPage.statusLabel': 'Status',
+  'docPreviewPage.available': 'Available',
+  'docPreviewPage.notFoundStatus': 'Not Found',
+  'docPreviewPage.size': 'Size',
+  'docPreviewPage.type': 'Type',
+  'docPreviewPage.contentLength': 'Content Length',
+  'docPreviewPage.chunksSemantic': 'Chunks & Semantics',
+  'docPreviewPage.totalChunks': 'Total Chunks',
+  'docPreviewPage.totalTokens': 'Total Tokens',
+  'docPreviewPage.avgTokensChunk': 'Avg Tokens/Chunk',
+  'docPreviewPage.embeddings': 'Embeddings',
+  'docPreviewPage.timestamps': 'Timestamps',
+  'docPreviewPage.ingested': 'Ingested',
+  'docPreviewPage.ingestionDate': 'Ingestion Date',
+  'docPreviewPage.filePath': 'File Path',
+  'docPreviewPage.cloudPath': 'Cloud Path',
+  'docPreviewPage.cachedLocally': 'Cached locally for preview',
+  'docPreviewPage.documentMetadata': 'Document Metadata',
+  'docPreviewPage.documentContent': 'Document Content',
+  'docPreviewPage.show': 'Show',
+  'docPreviewPage.hide': 'Hide',
+  'docPreviewPage.noContent': 'No content',
+  'docPreviewPage.copyPath': 'Copy Path',
+  'docPreviewPage.failedExplorer': 'Failed to open explorer',
+  'docPreviewPage.metadata': 'Metadata:',
+}
+const stableT = (key: string, params?: Record<string, unknown>) => {
+  if (key === 'docPreviewPage.embedded') return `Embedded (${params?.dims ?? 0}d)`
+  if (key === 'docPreviewPage.tokensCount') return `${params?.count ?? 0} tokens`
+  if (key === 'docPreviewPage.chunkNumber') return `Chunk ${params?.number ?? 0}`
+  if (key === 'docPreviewPage.chunksCount') return `${params?.count ?? 0} Chunks`
+  if (key === 'docPreviewPage.cloudSource') return `Cloud Source: ${params?.provider ?? ''}`
+  return translations[key] ?? key
+}
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: stableT, i18n: { language: 'en', changeLanguage: async () => {} } }),
+  Trans: ({ children }: { children?: unknown }) => children,
+  initReactI18next: { type: '3rdParty', init: () => {} },
+}))
 import type { DocumentFullInfo } from '../api/client'
 import DocumentPreviewPage from './DocumentPreviewPage'
 
