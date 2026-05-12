@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Quellex Profiler</title>
+<link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+<header class="hdr">
+  <div class="brand">
+    <img id="brand-logo" src="/static/quellex-logo.svg" alt="Quellex" />
+    <div>
+      <h1 id="brand-title">Quellex Profiler</h1>
+      <p class="subtitle">Hardware-aware configuration preview for your firm</p>
+    </div>
+  </div>
+  <div class="hdr-actions">
+    <label class="switch">
+      <input type="checkbox" id="brand-toggle" />
+      <span>Show as RecallHub</span>
+    </label>
+    <button id="btn-json" class="btn btn-ghost">Download JSON</button>
+    <button id="btn-print" class="btn btn-primary">Print / Save PDF</button>
+  </div>
+</header>
+
+<main id="app">
+  <section id="loading" class="card">
+    <p>Scanning this machine&hellip;</p>
+  </section>
+</main>
+
+<template id="tpl-dashboard">
+  <section class="card" data-section="system">
+    <h2>Detected System</h2>
+    <div class="grid-2">
+      <div>
+        <dl class="kv">
+          <dt>Operating system</dt><dd data-field="os"></dd>
+          <dt>CPU architecture</dt><dd data-field="arch"></dd>
+          <dt>CPU</dt><dd data-field="cpu"></dd>
+          <dt>Cores</dt><dd data-field="cores"></dd>
+          <dt>Max frequency</dt><dd data-field="freq"></dd>
+          <dt>RAM</dt><dd data-field="ram"></dd>
+          <dt>Accelerator VRAM</dt><dd data-field="vram"></dd>
+        </dl>
+      </div>
+      <div>
+        <h3>GPUs</h3>
+        <ul class="gpu-list" data-field="gpus"></ul>
+        <h3>Notes</h3>
+        <ul class="notes" data-field="notes"></ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" data-section="tier">
+    <div class="tier-header">
+      <span class="tier-badge" data-field="tier-badge"></span>
+      <h2 data-field="tier-label"></h2>
+    </div>
+    <p data-field="tier-summary"></p>
+  </section>
+
+  <section class="card" data-section="models">
+    <h2>Model Assignments</h2>
+    <div id="diagram" class="diagram"></div>
+    <div class="model-details" data-field="model-details"></div>
+  </section>
+
+  <section class="card" data-section="perf">
+    <h2>Expected Performance</h2>
+    <div id="perf-bars" class="bars"></div>
+    <p class="hint">
+      Tokens per second are indicative values from public benchmarks for the
+      detected hardware class. Real throughput depends on quantization,
+      context length, and concurrent load.
+    </p>
+  </section>
+
+  <section class="card" data-section="pc">
+    <h2>Privacy &amp; Cost</h2>
+    <div class="grid-2">
+      <div>
+        <h3>Privacy score</h3>
+        <div class="gauge">
+          <div class="gauge-fill" data-field="privacy-fill"></div>
+        </div>
+        <p data-field="privacy-text"></p>
+      </div>
+      <div>
+        <h3>Indicative monthly cost</h3>
+        <p class="big" data-field="cost-range"></p>
+        <p class="hint">
+          Based on ~200,000 RAG queries/month for a 10-user Kanzlei.
+          Local-only tiers incur hardware amortization, not API fees.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" data-section="caveats">
+    <h2>Caveats</h2>
+    <ul class="notes" data-field="caveats"></ul>
+  </section>
+</template>
+
+<footer class="ftr">
+  <span data-field="footer-meta"></span>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

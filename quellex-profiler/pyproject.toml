@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quellex-profiler"
+version = "0.1.0"
+description = "Standalone hardware profiler and Quellex configuration recommender for client demos."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "Quellex / RecallHub" }]
+dependencies = [
+    "psutil>=5.9",
+    "py-cpuinfo>=9.0",
+    "distro>=1.9; sys_platform == 'linux'",
+]
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6.6"]
+test = ["pytest>=8.0"]
+
+[project.scripts]
+quellex-profiler = "quellex_profiler.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["quellex_profiler*"]
+
+[tool.setuptools.package-data]
+quellex_profiler = ["ui/*.html", "ui/*.js", "ui/*.css", "ui/*.svg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
