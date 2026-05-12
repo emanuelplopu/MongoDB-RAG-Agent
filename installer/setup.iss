@@ -53,6 +53,9 @@ RestartApplications=no
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.19041
 
+; Logging
+SetupLogging=yes
+
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
@@ -94,11 +97,11 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: startupicon
 
 [Run]
-; Post-installation tasks
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\Install-WSL2.ps1"""; StatusMsg: "Configuring WSL2..."; Flags: runhidden waituntilterminated
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\Import-Distro.ps1"" -DistroPath ""{app}\distro\recallhub.tar.gz"" -InstallPath ""{app}\wsl"" -Force"; StatusMsg: "Importing RecallHub distribution..."; Flags: runhidden waituntilterminated
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\Configure-Firewall.ps1"""; StatusMsg: "Configuring firewall..."; Flags: runhidden waituntilterminated
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\Start-Services.ps1"" -Wait"; StatusMsg: "Starting services..."; Flags: runhidden waituntilterminated
+; Post-installation tasks (output captured to log files)
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Install-WSL2.ps1' *> '{localappdata}\RecallHub\logs\install-wsl2-run.log'"""; StatusMsg: "Configuring WSL2..."; Description: "Configure WSL2"; Flags: runhidden waituntilterminated
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Import-Distro.ps1' -DistroPath '{app}\distro\recallhub.tar.gz' -InstallPath '{app}\wsl' -Force *> '{localappdata}\RecallHub\logs\import-distro-run.log'"""; StatusMsg: "Importing RecallHub distribution..."; Description: "Import WSL2 distribution"; Flags: runhidden waituntilterminated
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Configure-Firewall.ps1' *> '{localappdata}\RecallHub\logs\configure-firewall-run.log'"""; StatusMsg: "Configuring firewall..."; Description: "Configure firewall rules"; Flags: runhidden waituntilterminated
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Start-Services.ps1' -Wait *> '{localappdata}\RecallHub\logs\start-services-run.log'"""; StatusMsg: "Starting services..."; Description: "Start RecallHub services"; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
@@ -112,6 +115,108 @@ Type: dirifempty; Name: "{app}"
 [Code]
 var
   WSLRestartRequired: Boolean;
+  InstallLogDir: String;
+  InstallStartTime: String;
+
+// ============================================================================
+// Logging & Transcript
+// ============================================================================
+
+// Initialize log directory early
+procedure InitializeLogDir();
+begin
+  InstallLogDir := ExpandConstant('{localappdata}\RecallHub\logs');
+  ForceDirectories(InstallLogDir);
+  InstallStartTime := GetDateTimeString('yyyy-mm-dd_hhnnss', '-', ':');
+end;
+
+// Log a message to our custom transcript file
+procedure LogTranscript(const Msg: String);
+var
+  LogFile: String;
+  Lines: TStringList;
+begin
+  LogFile := InstallLogDir + '\install-transcript-' + InstallStartTime + '.log';
+  Lines := TStringList.Create;
+  try
+    if FileExists(LogFile) then
+      Lines.LoadFromFile(LogFile);
+    Lines.Add('[' + GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':') + '] ' + Msg);
+    Lines.SaveToFile(LogFile);
+  finally
+    Lines.Free;
+  end;
+end;
+
+// ============================================================================
+// Install Manifest
+// ============================================================================
+
+// Create install manifest JSON at end
+procedure CreateInstallManifest();
+var
+  Manifest: TStringList;
+  ManifestFile: String;
+begin
+  ManifestFile := InstallLogDir + '\install-manifest.json';
+  Manifest := TStringList.Create;
+  try
+    Manifest.Add('{');
+    Manifest.Add('  "version": "{#MyAppVersion}",');
+    Manifest.Add('  "installTime": "' + GetDateTimeString('yyyy-mm-dd"T"hh:nn:ss', '-', ':') + '",');
+    Manifest.Add('  "installDir": "' + ExpandConstant('{app}') + '",');
+    Manifest.Add('  "logDir": "' + InstallLogDir + '",');
+    Manifest.Add('  "components": {');
+    Manifest.Add('    "wsl2": true,');
+    Manifest.Add('    "docker": true,');
+    Manifest.Add('    "ollama": true,');
+    Manifest.Add('    "backend": true,');
+    Manifest.Add('    "frontend": true');
+    Manifest.Add('  },');
+    Manifest.Add('  "transcriptFile": "install-transcript-' + InstallStartTime + '.log"');
+    Manifest.Add('}');
+    Manifest.SaveToFile(ManifestFile);
+    LogTranscript('MANIFEST: Created at ' + ManifestFile);
+  finally
+    Manifest.Free;
+  end;
+end;
+
+// ============================================================================
+// Exec with Logging
+// ============================================================================
+
+// Execute post-install scripts WITH logging (for use in custom code paths)
+function ExecWithLogging(const Filename, Params, LogPrefix: String; const Timeout: Integer): Boolean;
+var
+  ResultCode: Integer;
+  StdoutFile: String;
+  CmdLine: String;
+begin
+  StdoutFile := InstallLogDir + '\' + LogPrefix + '-' + InstallStartTime + '.log';
+  LogTranscript('EXEC: ' + Filename + ' ' + Params);
+  LogTranscript('  Output: ' + StdoutFile);
+  LogTranscript('  Timeout: ' + IntToStr(Timeout) + ' ms');
+
+  // Use cmd /c to redirect output to file
+  CmdLine := '/C "powershell.exe -ExecutionPolicy Bypass -File "' + Filename + '" ' + Params + ' > "' + StdoutFile + '" 2>&1"';
+
+  Result := Exec('cmd.exe', CmdLine, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  if Result then begin
+    LogTranscript('  Exit code: ' + IntToStr(ResultCode));
+    if ResultCode <> 0 then begin
+      LogTranscript('  WARNING: Script exited with non-zero code');
+      Result := False;
+    end;
+  end else begin
+    LogTranscript('  ERROR: Failed to execute script');
+  end;
+end;
+
+// ============================================================================
+// Setup Event Handlers
+// ============================================================================
 
 function InitializeSetup(): Boolean;
 var
@@ -119,38 +224,76 @@ var
 begin
   Result := True;
   WSLRestartRequired := False;
-  
+
+  // Initialize logging first
+  InitializeLogDir();
+  LogTranscript('=== RecallHub Installation Started ===');
+
   // Check Windows version
   GetWindowsVersionEx(WinVer);
-  
+  LogTranscript('Windows build: ' + IntToStr(WinVer.Build));
+
   if WinVer.Build < 19041 then
   begin
+    LogTranscript('ERROR: Windows build too old (requires 19041+)');
     MsgBox('RecallHub requires Windows 10 version 2004 or later (build 19041+).' + #13#10 +
            'Your current build is ' + IntToStr(WinVer.Build) + '.' + #13#10 + #13#10 +
            'Please update Windows and try again.', mbError, MB_OK);
     Result := False;
     Exit;
   end;
-  
+
   // Check for sufficient disk space (5GB minimum)
   if GetSpaceOnDisk(ExpandConstant('{localappdata}'), True, True) < 5368709120 then
   begin
+    LogTranscript('ERROR: Insufficient disk space (requires 5 GB)');
     MsgBox('RecallHub requires at least 5 GB of free disk space.' + #13#10 +
            'Please free up some space and try again.', mbError, MB_OK);
     Result := False;
     Exit;
   end;
+
+  LogTranscript('Install path: ' + ExpandConstant('{localappdata}\RecallHub'));
+  LogTranscript('Pre-flight checks passed');
 end;
 
+// Track page changes for granular logging
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  case CurPageID of
+    wpWelcome: LogTranscript('PAGE: Welcome');
+    wpLicense: LogTranscript('PAGE: License');
+    wpSelectDir: LogTranscript('PAGE: Select Directory');
+    wpReady: LogTranscript('PAGE: Ready to Install');
+    wpInstalling: LogTranscript('PAGE: Installing');
+    wpFinished: LogTranscript('PAGE: Finished');
+  end;
+end;
+
+// Track installation steps
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if CurStep = ssPostInstall then
-  begin
-    // Check if restart is needed for WSL2
-    if FileExists(ExpandConstant('{localappdata}\RecallHub\install-state.json')) then
-    begin
-      WSLRestartRequired := True;
-    end;
+  case CurStep of
+    ssInstall:
+      LogTranscript('STEP: Installation files being copied');
+    ssPostInstall:
+      begin
+        LogTranscript('STEP: Post-installation tasks starting');
+        // Check if restart is needed for WSL2
+        if FileExists(ExpandConstant('{localappdata}\RecallHub\install-state.json')) then
+        begin
+          WSLRestartRequired := True;
+          LogTranscript('INFO: WSL2 restart will be required');
+        end;
+      end;
+    ssDone:
+      begin
+        LogTranscript('STEP: Installation completed successfully');
+        CreateInstallManifest();
+        // Show error summary if any post-install log indicates failure
+        if WSLRestartRequired then
+          LogTranscript('INFO: System restart required for WSL2 activation');
+      end;
   end;
 end;
 
@@ -166,12 +309,6 @@ begin
     // Clean up any remaining files
     DelTree(ExpandConstant('{app}'), True, True, True);
   end;
-end;
-
-// Check if a source file exists
-function FileExists(FileName: string): Boolean;
-begin
-  Result := FileExists(FileName);
 end;
 
 [Messages]

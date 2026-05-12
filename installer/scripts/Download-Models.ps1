@@ -13,24 +13,34 @@
 
 param(
     [string]$OutputDir = "$PSScriptRoot\..\models",
-    [switch]$Force
+    [switch]$Force,
+    [string]$ConfigPath
 )
 
 $ErrorActionPreference = "Stop"
 
-# Configuration
-$OLLAMA_MODELS = @(
-    @{
-        Name = "llama3.2:3b"
-        Description = "Primary LLM for chat and reasoning"
-        RequiredSize = "2GB"
-    },
-    @{
-        Name = "nomic-embed-text"
-        Description = "Text embedding model for RAG"
-        RequiredSize = "300MB"
+# Load configuration
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$InstallerDir = Split-Path $ScriptDir -Parent
+if (-not $ConfigPath) { $ConfigPath = Join-Path $InstallerDir "config.json" }
+$Config = if (Test-Path $ConfigPath) { Get-Content $ConfigPath -Raw | ConvertFrom-Json } else { $null }
+
+# Get models from config or fall back to defaults
+if ($Config -and $Config.models.ollama) {
+    $OLLAMA_MODELS = @()
+    foreach ($m in $Config.models.ollama) {
+        $OLLAMA_MODELS += @{ Name = $m.name; Description = $m.purpose; RequiredSize = "$($m.expectedSizeGB)GB" }
     }
-)
+} else {
+    # Fallback defaults
+    $OLLAMA_MODELS = @(
+        @{ Name = "llama3.2:3b"; Description = "Primary LLM for chat and reasoning"; RequiredSize = "2GB" }
+        @{ Name = "nomic-embed-text"; Description = "Text embedding model for RAG"; RequiredSize = "300MB" }
+    )
+}
+
+# Ollama Docker image reference
+$ollamaImage = if ($Config) { "$($Config.docker.images.ollama.name):$($Config.docker.images.ollama.tag)" } else { "ollama/ollama:latest" }
 
 function Write-Step {
     param([string]$Message)

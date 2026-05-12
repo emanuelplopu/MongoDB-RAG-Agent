@@ -9,6 +9,9 @@
     3. Sets WSL2 as the default version
     4. Optionally installs a default Linux distribution
 
+    Supports resume-after-restart: if features require a reboot, the script
+    saves state and picks up where it left off on the next run.
+
 .NOTES
     Requires administrator privileges.
     May require a system restart after enabling WSL2.
@@ -21,29 +24,79 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Minimum Windows build for WSL2
+# ---------------------------------------------------------------------------
+# Logging module integration
+# ---------------------------------------------------------------------------
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+Import-Module (Join-Path $ScriptDir "RecallHub-Logging.psm1") -Force
+
+$logFile = Initialize-InstallLog -LogName "install-wsl2"
+Write-InstallLog "Starting WSL2 installation" -Source "Install-WSL2"
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 $MIN_BUILD = 19041
+$StateFile = Join-Path $env:LOCALAPPDATA "RecallHub\install-state.json"
 
-function Write-Step {
-    param([string]$Message)
-    Write-Host "`n==> $Message" -ForegroundColor Cyan
+# Track current section for error handler
+$currentSection = "Initialization"
+
+# ---------------------------------------------------------------------------
+# State management functions
+# ---------------------------------------------------------------------------
+function Save-InstallState {
+    param(
+        [string]$Phase,
+        [string]$Status,
+        [hashtable]$Data = @{}
+    )
+
+    $state = @{
+        phase          = $Phase
+        status         = $Status
+        timestamp      = (Get-Date).ToString("o")
+        windowsVersion = [System.Environment]::OSVersion.Version.ToString()
+        data           = $Data
+        checksum       = $null
+    }
+    # Add checksum for integrity verification
+    $json = $state | ConvertTo-Json -Depth 5
+    $state.checksum = [System.BitConverter]::ToString(
+        [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+            [System.Text.Encoding]::UTF8.GetBytes($json)
+        )
+    ).Replace("-", "").Substring(0, 16)
+
+    $stateDir = Split-Path $StateFile -Parent
+    if (-not (Test-Path $stateDir)) { New-Item -Path $stateDir -ItemType Directory -Force | Out-Null }
+
+    $state | ConvertTo-Json -Depth 5 | Set-Content -Path $StateFile -Encoding UTF8
+    Write-InstallLog "State saved: Phase=$Phase, Status=$Status" -Level DEBUG -Source "Install-WSL2"
 }
 
-function Write-Success {
-    param([string]$Message)
-    Write-Host "    [OK] $Message" -ForegroundColor Green
+function Get-InstallState {
+    if (-not (Test-Path $StateFile)) { return $null }
+    try {
+        $state = Get-Content $StateFile -Raw | ConvertFrom-Json
+        Write-InstallLog "Resumed from state: Phase=$($state.phase), Status=$($state.status)" -Source "Install-WSL2"
+        return $state
+    } catch {
+        Write-InstallLog "State file corrupted, starting fresh" -Level WARN -Source "Install-WSL2"
+        return $null
+    }
 }
 
-function Write-Warning {
-    param([string]$Message)
-    Write-Host "    [WARN] $Message" -ForegroundColor Yellow
+function Clear-InstallState {
+    if (Test-Path $StateFile) {
+        Remove-Item $StateFile -Force -ErrorAction SilentlyContinue
+        Write-InstallLog "Cleared install state file" -Level DEBUG -Source "Install-WSL2"
+    }
 }
 
-function Write-Error {
-    param([string]$Message)
-    Write-Host "    [ERROR] $Message" -ForegroundColor Red
-}
-
+# ---------------------------------------------------------------------------
+# Prerequisite checks
+# ---------------------------------------------------------------------------
 function Test-Administrator {
     $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
@@ -53,18 +106,16 @@ function Test-Administrator {
 function Test-WindowsVersion {
     $osVersion = [System.Environment]::OSVersion.Version
     $build = $osVersion.Build
-    
-    Write-Step "Checking Windows version..."
-    Write-Host "    Current build: $build"
-    Write-Host "    Required build: $MIN_BUILD+"
-    
+
+    Write-InstallLog "Checking Windows version... Current build: $build, Required: $MIN_BUILD+" -Source "Install-WSL2"
+
     if ($build -lt $MIN_BUILD) {
-        Write-Error "Windows build $build is not supported. WSL2 requires build $MIN_BUILD or later."
-        Write-Host "`n    Please update Windows to version 2004 or later."
+        Write-InstallLog "Windows build $build is not supported. WSL2 requires build $MIN_BUILD or later." -Level ERROR -Source "Install-WSL2"
+        Write-InstallLog "Please update Windows to version 2004 or later." -Level ERROR -Source "Install-WSL2"
         return $false
     }
-    
-    Write-Success "Windows version is compatible"
+
+    Write-InstallLog "Windows version is compatible (build $build)" -Source "Install-WSL2"
     return $true
 }
 
@@ -72,8 +123,7 @@ function Test-WSLInstalled {
     try {
         $wslPath = Get-Command wsl.exe -ErrorAction SilentlyContinue
         return ($null -ne $wslPath)
-    }
-    catch {
+    } catch {
         return $false
     }
 }
@@ -82,214 +132,352 @@ function Test-WSL2Default {
     try {
         $output = wsl --status 2>&1
         return $output -match "Default Version: 2"
-    }
-    catch {
+    } catch {
         return $false
     }
 }
 
-function Enable-WSLFeature {
-    Write-Step "Enabling Windows Subsystem for Linux feature..."
-    
+# ---------------------------------------------------------------------------
+# Restart detection
+# ---------------------------------------------------------------------------
+function Test-RestartRequired {
+    $state = Get-InstallState
+    if ($state -and $state.status -eq "restart-required") {
+        return $true
+    }
+
+    # Also check if features require restart
     try {
-        $result = Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -NoRestart
-        
-        if ($result.RestartNeeded) {
-            return "restart"
+        $wslFeature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -ErrorAction SilentlyContinue
+        $vmFeature = Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -ErrorAction SilentlyContinue
+
+        if (($wslFeature -and $wslFeature.RestartNeeded) -or ($vmFeature -and $vmFeature.RestartNeeded)) {
+            return $true
         }
-        
-        Write-Success "WSL feature enabled"
-        return "success"
+    } catch {
+        Write-InstallLog "Could not query feature restart state: $_" -Level WARN -Source "Install-WSL2"
     }
-    catch {
-        Write-Error "Failed to enable WSL feature: $_"
-        return "error"
-    }
+    return $false
 }
 
-function Enable-VirtualMachinePlatform {
-    Write-Step "Enabling Virtual Machine Platform feature..."
-    
-    try {
-        $result = Enable-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -NoRestart
-        
-        if ($result.RestartNeeded) {
-            return "restart"
-        }
-        
-        Write-Success "Virtual Machine Platform enabled"
-        return "success"
+function Test-IsResumeRun {
+    $state = Get-InstallState
+    if ($null -eq $state) { return $false }
+
+    # If the last run required restart AND features are now enabled, this is a resume
+    if ($state.status -eq "restart-required" -and $state.data.featuresEnabled) {
+        # Verify features are actually enabled now
+        try {
+            $wslFeature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -ErrorAction SilentlyContinue
+            $vmFeature = Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -ErrorAction SilentlyContinue
+
+            if ($wslFeature.State -eq "Enabled" -and $vmFeature.State -eq "Enabled") {
+                Write-InstallLog "Resume run detected - features now enabled after restart" -Source "Install-WSL2"
+                return $true
+            }
+        } catch {}
     }
-    catch {
-        Write-Error "Failed to enable Virtual Machine Platform: $_"
-        return "error"
-    }
+    return $false
 }
 
-function Install-WSL2Kernel {
-    Write-Step "Checking WSL2 kernel..."
-    
-    # Try to set WSL2 as default - this will indicate if kernel is installed
-    try {
-        wsl --set-default-version 2 2>&1 | Out-Null
-        Write-Success "WSL2 kernel is installed"
-        return $true
-    }
-    catch {
-        Write-Warning "WSL2 kernel may need to be installed"
-    }
-    
-    # Try to install kernel update via wsl --install
-    Write-Step "Installing WSL2 kernel update..."
-    
-    try {
-        wsl --install --no-distribution 2>&1 | Out-Null
-        Write-Success "WSL2 kernel installed"
-        return $true
-    }
-    catch {
-        Write-Warning "Could not install WSL2 kernel automatically"
-        Write-Host "`n    Please download and install the WSL2 kernel update manually:"
-        Write-Host "    https://wslstorestorage.blob.core.windows.net/wslblob/wsl_update_x64.msi"
-        return $false
-    }
-}
-
-function Set-WSL2Default {
-    Write-Step "Setting WSL2 as default version..."
-    
-    try {
-        wsl --set-default-version 2 2>&1 | Out-Null
-        Write-Success "WSL2 set as default"
-        return $true
-    }
-    catch {
-        Write-Error "Failed to set WSL2 as default: $_"
-        return $false
-    }
-}
-
-function Get-WSLStatus {
-    Write-Step "Getting WSL status..."
-    
-    try {
-        $output = wsl --status 2>&1
-        Write-Host $output
-    }
-    catch {
-        Write-Warning "Could not get WSL status"
-    }
-}
-
+# ---------------------------------------------------------------------------
+# Main installation logic
+# ---------------------------------------------------------------------------
 function Main {
-    Write-Host @"
-╔═══════════════════════════════════════════════════════════════════╗
-║         RecallHub WSL2 Installation Script                        ║
-║         Configures Windows Subsystem for Linux 2                  ║
-╚═══════════════════════════════════════════════════════════════════╝
-"@ -ForegroundColor Magenta
+    Write-InstallLog @"
+=====================================================================
+         RecallHub WSL2 Installation Script
+         Configures Windows Subsystem for Linux 2
+=====================================================================
+"@ -Source "Install-WSL2"
+
+    # ------------------------------------------------------------------
+    # Section: Prerequisites
+    # ------------------------------------------------------------------
+    $script:currentSection = "Prerequisites"
+    Start-InstallSection -Name "Prerequisites"
 
     # Check for admin privileges
     if (-not (Test-Administrator)) {
-        Write-Error "This script requires administrator privileges."
-        Write-Host "`n    Please run PowerShell as Administrator and try again."
+        Write-InstallLog "This script requires administrator privileges." -Level ERROR -Source "Install-WSL2"
+        Write-InstallLog "Please run PowerShell as Administrator and try again." -Level ERROR -Source "Install-WSL2"
+        Write-InstallDiagnostic -ErrorCode "WSL-000" -Component "WSL" -Message "Not running as Administrator" -Context @{}
+        Complete-InstallSection -Name "Prerequisites" -Status Failed
+        Export-InstallSummary
         exit 1
     }
-    
-    Write-Success "Running with administrator privileges"
-    
+    Write-InstallLog "Running with administrator privileges" -Source "Install-WSL2"
+
     # Check Windows version
     if (-not (Test-WindowsVersion)) {
+        Write-InstallDiagnostic -ErrorCode "WSL-000" -Component "WSL" -Message "Windows version too old for WSL2" -Context @{
+            currentBuild = [System.Environment]::OSVersion.Version.Build
+            requiredBuild = $MIN_BUILD
+        }
+        Complete-InstallSection -Name "Prerequisites" -Status Failed
+        Export-InstallSummary
         exit 1
     }
-    
+
+    Complete-InstallSection -Name "Prerequisites" -Status Success
+
+    # ------------------------------------------------------------------
+    # Check for resume-after-restart
+    # ------------------------------------------------------------------
+    $isResume = Test-IsResumeRun
+    if ($isResume) {
+        Write-InstallLog "This is a resume run after restart - skipping feature enablement" -Source "Install-WSL2"
+        Clear-InstallState
+    }
+
+    # ------------------------------------------------------------------
+    # Section: Windows Features
+    # ------------------------------------------------------------------
     $needsRestart = $false
-    
-    # Check if WSL is already installed
-    if (Test-WSLInstalled) {
-        Write-Success "WSL is already installed"
-        
-        # Check if WSL2 is default
-        if (Test-WSL2Default) {
-            Write-Success "WSL2 is already the default version"
-        }
-        else {
-            # Try to set WSL2 as default
-            if (-not (Set-WSL2Default)) {
-                # May need kernel update
-                Install-WSL2Kernel
-                Set-WSL2Default
+
+    if (-not $isResume) {
+        $script:currentSection = "Windows Features"
+        Start-InstallSection -Name "Windows Features"
+
+        if (Test-WSLInstalled -and (Test-WSL2Default) -and -not $Force) {
+            Write-InstallLog "WSL2 is already installed and set as default" -Source "Install-WSL2"
+            Complete-InstallSection -Name "Windows Features" -Status Skipped
+        } else {
+            # Enable WSL feature
+            Write-InstallLog "Enabling Microsoft-Windows-Subsystem-Linux..." -Source "Install-WSL2"
+            try {
+                $wslFeature = Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -NoRestart -ErrorAction Stop
+            } catch {
+                Write-InstallLog "Failed to enable WSL feature: $_" -Level ERROR -Source "Install-WSL2"
+                Write-InstallDiagnostic -ErrorCode "WSL-001" -Component "WSL" -Message "Failed to enable WSL feature" -Context @{
+                    error = $_.Exception.Message
+                }
+                Complete-InstallSection -Name "Windows Features" -Status Failed
+                throw "WSL feature enablement failed: $_"
             }
+
+            # Verify it's actually enabled
+            $verifyWsl = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux
+            if ($verifyWsl.State -ne "Enabled" -and -not $wslFeature.RestartNeeded) {
+                Write-InstallDiagnostic -ErrorCode "WSL-001" -Component "WSL" -Message "WSL feature failed to enable" -Context @{
+                    requestedState = "Enabled"
+                    actualState    = $verifyWsl.State
+                }
+                Complete-InstallSection -Name "Windows Features" -Status Failed
+                throw "WSL feature enablement verification failed"
+            }
+
+            if ($wslFeature.RestartNeeded) {
+                Write-InstallLog "WSL feature enabled (restart required)" -Level WARN -Source "Install-WSL2"
+                $needsRestart = $true
+            } else {
+                Write-InstallLog "WSL feature enabled successfully (verified)" -Source "Install-WSL2"
+            }
+
+            # Enable VirtualMachinePlatform
+            Write-InstallLog "Enabling VirtualMachinePlatform..." -Source "Install-WSL2"
+            try {
+                $vmFeature = Enable-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -NoRestart -ErrorAction Stop
+            } catch {
+                Write-InstallLog "Failed to enable VirtualMachinePlatform: $_" -Level ERROR -Source "Install-WSL2"
+                Write-InstallDiagnostic -ErrorCode "WSL-002" -Component "WSL" -Message "VirtualMachinePlatform failed to enable" -Context @{
+                    error = $_.Exception.Message
+                }
+                Complete-InstallSection -Name "Windows Features" -Status Failed
+                throw "VirtualMachinePlatform enablement failed: $_"
+            }
+
+            $verifyVm = Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform
+            if ($verifyVm.State -ne "Enabled" -and -not $vmFeature.RestartNeeded) {
+                Write-InstallDiagnostic -ErrorCode "WSL-002" -Component "WSL" -Message "VirtualMachinePlatform failed to enable" -Context @{
+                    requestedState = "Enabled"
+                    actualState    = $verifyVm.State
+                }
+                Complete-InstallSection -Name "Windows Features" -Status Failed
+                throw "VirtualMachinePlatform enablement verification failed"
+            }
+
+            if ($vmFeature.RestartNeeded) {
+                Write-InstallLog "VirtualMachinePlatform enabled (restart required)" -Level WARN -Source "Install-WSL2"
+                $needsRestart = $true
+            } else {
+                Write-InstallLog "VirtualMachinePlatform enabled successfully (verified)" -Source "Install-WSL2"
+            }
+
+            Complete-InstallSection -Name "Windows Features" -Status Success
         }
     }
-    else {
-        Write-Warning "WSL is not installed"
-        
-        # Enable WSL feature
-        $result = Enable-WSLFeature
-        if ($result -eq "restart") {
-            $needsRestart = $true
-        }
-        elseif ($result -eq "error") {
-            exit 1
-        }
-        
-        # Enable Virtual Machine Platform
-        $result = Enable-VirtualMachinePlatform
-        if ($result -eq "restart") {
-            $needsRestart = $true
-        }
-        elseif ($result -eq "error") {
-            exit 1
-        }
-    }
-    
+
+    # ------------------------------------------------------------------
     # Handle restart requirement
-    if ($needsRestart) {
-        Write-Host "`n" + ("=" * 60) -ForegroundColor Yellow
-        Write-Host "RESTART REQUIRED" -ForegroundColor Yellow
-        Write-Host ("=" * 60) -ForegroundColor Yellow
-        Write-Host "`nWindows features have been enabled that require a restart."
-        Write-Host "Please restart your computer and run this installer again."
-        Write-Host "`nAfter restarting, the installation will continue automatically."
-        
-        # Create a marker file to indicate WSL was being installed
-        $markerPath = Join-Path $env:LOCALAPPDATA "RecallHub\install-state.json"
-        $markerDir = Split-Path $markerPath -Parent
-        if (-not (Test-Path $markerDir)) {
-            New-Item -ItemType Directory -Path $markerDir -Force | Out-Null
+    # ------------------------------------------------------------------
+    if ($needsRestart -or (Test-RestartRequired)) {
+        $resumeMsg = @"
++==============================================================+
+|  RESTART REQUIRED                                            |
+|                                                              |
+|  Windows needs to restart to complete WSL2 installation.     |
+|                                                              |
+|  After restart, run the installer again - it will resume     |
+|  from where it left off automatically.                       |
+|                                                              |
+|  Resume state saved to:                                      |
+|  $StateFile
+|                                                              |
+|  Log file: $logFile
++==============================================================+
+"@
+        Write-InstallLog $resumeMsg -Level WARN -Source "Install-WSL2"
+        Save-InstallState -Phase "wsl-install" -Status "restart-required" -Data @{
+            featuresEnabled     = $true
+            logFile             = $logFile
+            resumeInstructions  = "Run installer again after restart"
         }
-        
-        @{
-            stage = "wsl-restart-pending"
-            timestamp = (Get-Date).ToString("o")
-        } | ConvertTo-Json | Set-Content $markerPath
-        
-        # Prompt for restart
-        $restart = Read-Host "`nWould you like to restart now? (y/n)"
-        if ($restart -eq 'y' -or $restart -eq 'Y') {
-            Restart-Computer -Force
+        Export-InstallSummary
+        exit 3010
+    }
+
+    # ------------------------------------------------------------------
+    # Section: WSL Kernel
+    # ------------------------------------------------------------------
+    $script:currentSection = "WSL Kernel"
+    Start-InstallSection -Name "WSL Kernel"
+
+    # Check current WSL version
+    try {
+        $wslVersion = wsl --version 2>&1
+        Write-InstallLog "WSL Version info:" -Source "Install-WSL2"
+        foreach ($line in $wslVersion) {
+            Write-InstallLog "  $line" -Source "Install-WSL2"
         }
-        
-        exit 0
+    } catch {
+        Write-InstallLog "Could not determine WSL version (may need install)" -Level WARN -Source "Install-WSL2"
     }
-    
-    # Install WSL2 kernel if needed
-    if (-not (Install-WSL2Kernel)) {
-        Write-Warning "WSL2 kernel installation may have failed"
+
+    Complete-InstallSection -Name "WSL Kernel" -Status Success
+
+    # ------------------------------------------------------------------
+    # Section: WSL Install
+    # ------------------------------------------------------------------
+    $script:currentSection = "WSL Install"
+    Start-InstallSection -Name "WSL Install"
+
+    Write-InstallLog "Running wsl --install (timeout: 5 minutes)..." -Source "Install-WSL2"
+
+    $installResult = Invoke-WithRetry -OperationName "WSL Install" -RetryCount 1 -TimeoutSeconds 300 -ScriptBlock {
+        $output = wsl --install --no-distribution 2>&1
+        if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) {
+            # 3010 = restart required, which is expected
+            throw "WSL install failed with exit code $LASTEXITCODE : $output"
+        }
+        return @{ exitCode = $LASTEXITCODE; output = $output }
     }
-    
-    # Set WSL2 as default
-    Set-WSL2Default
-    
-    # Show final status
-    Get-WSLStatus
-    
-    Write-Host "`n" + ("=" * 60) -ForegroundColor Green
-    Write-Host "WSL2 SETUP COMPLETE" -ForegroundColor Green
-    Write-Host ("=" * 60) -ForegroundColor Green
-    Write-Host "`nWSL2 is now configured and ready for RecallHub installation."
+
+    if ($installResult -and $installResult.exitCode -eq 3010) {
+        Write-InstallLog "WSL installation requires restart (exit code 3010)" -Level WARN -Source "Install-WSL2"
+        Save-InstallState -Phase "wsl-install" -Status "restart-required" -Data @{ reason = "WSL kernel installation" }
+        Complete-InstallSection -Name "WSL Install" -Status Success
+        Export-InstallSummary
+        exit 3010
+    }
+
+    Complete-InstallSection -Name "WSL Install" -Status Success
+
+    # ------------------------------------------------------------------
+    # Section: WSL2 Default
+    # ------------------------------------------------------------------
+    $script:currentSection = "WSL2 Default"
+    Start-InstallSection -Name "WSL2 Default"
+
+    Write-InstallLog "Setting WSL2 as default version..." -Source "Install-WSL2"
+    try {
+        wsl --set-default-version 2 2>&1 | Out-Null
+        Write-InstallLog "WSL2 set as default version" -Source "Install-WSL2"
+    } catch {
+        Write-InstallLog "Failed to set WSL2 as default: $_" -Level WARN -Source "Install-WSL2"
+    }
+
+    Complete-InstallSection -Name "WSL2 Default" -Status Success
+
+    # ------------------------------------------------------------------
+    # Section: Final Status
+    # ------------------------------------------------------------------
+    $script:currentSection = "Final Status"
+    Start-InstallSection -Name "Final Status"
+
+    try {
+        $output = wsl --status 2>&1
+        Write-InstallLog "WSL Status:" -Source "Install-WSL2"
+        foreach ($line in $output) {
+            Write-InstallLog "  $line" -Source "Install-WSL2"
+        }
+    } catch {
+        Write-InstallLog "Could not get WSL status" -Level WARN -Source "Install-WSL2"
+    }
+
+    Complete-InstallSection -Name "Final Status" -Status Success
+
+    # ------------------------------------------------------------------
+    # Cleanup and summary
+    # ------------------------------------------------------------------
+    Clear-InstallState
+
+    Write-InstallLog @"
+=====================================================================
+  WSL2 SETUP COMPLETE
+  WSL2 is now configured and ready for RecallHub installation.
+=====================================================================
+"@ -Source "Install-WSL2"
+
+    Export-InstallSummary
 }
 
-# Run main
-Main
+# ---------------------------------------------------------------------------
+# Execute with global error handler
+# ---------------------------------------------------------------------------
+try {
+    Main
+} catch {
+    Complete-InstallSection -Name $currentSection -Status Failed
+
+    # Capture DISM log
+    $dismLog = "$env:WINDIR\Logs\DISM\dism.log"
+    $dismTail = ""
+    if (Test-Path $dismLog) {
+        $dismTail = Get-Content $dismLog -Tail 30 | Out-String
+        Write-InstallLog "DISM log (last 30 lines):`n$dismTail" -Level ERROR -Source "Install-WSL2"
+    }
+
+    # Capture relevant Windows Event Log entries
+    try {
+        $events = Get-WinEvent -FilterHashtable @{
+            LogName   = 'System'
+            StartTime = (Get-Date).AddMinutes(-5)
+            Level     = @(1, 2, 3)  # Critical, Error, Warning
+        } -MaxEvents 10 -ErrorAction SilentlyContinue
+
+        if ($events) {
+            Write-InstallLog "Recent system events:" -Level ERROR -Source "Install-WSL2"
+            foreach ($evt in $events) {
+                Write-InstallLog "  [$($evt.TimeCreated)] $($evt.ProviderName): $($evt.Message)" -Level ERROR -Source "Install-WSL2"
+            }
+        }
+    } catch {}
+
+    # Capture feature state
+    $featureState = @{}
+    try {
+        $featureState.wsl = (Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -ErrorAction SilentlyContinue).State
+        $featureState.vm = (Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -ErrorAction SilentlyContinue).State
+    } catch {}
+
+    Write-InstallDiagnostic -ErrorCode "WSL-099" -Component "WSL" -Message $_.Exception.Message -Context @{
+        dismLog      = $dismTail
+        featureState = $featureState
+        windowsBuild = [System.Environment]::OSVersion.Version.Build
+    } -Exception $_.Exception
+
+    Save-InstallState -Phase $currentSection -Status "failed" -Data @{ error = $_.Exception.Message }
+    Export-InstallSummary
+    throw
+}

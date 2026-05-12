@@ -1,0 +1,208 @@
+{
+  "$schema": "./config.schema.json",
+  "_comment": "RecallHub Installer Configuration - Single source of truth for all build and install parameters",
+
+  "app": {
+    "name": "RecallHub",
+    "version": "1.0.0",
+    "publisher": "RecallHub",
+    "url": "https://recallhub.local",
+    "description": "AI-powered document intelligence platform",
+    "exeName": "RecallHubTray.exe",
+    "appId": "8F7E9D4C-3A2B-4E5F-9C8D-1A2B3C4D5E6F"
+  },
+
+  "models": {
+    "ollama": [
+      {
+        "name": "llama3.2:3b",
+        "purpose": "Primary chat LLM for reasoning and conversation",
+        "role": "chat",
+        "expectedSizeGB": 2.0,
+        "required": true
+      },
+      {
+        "name": "nomic-embed-text",
+        "purpose": "Text embedding model for RAG vector search",
+        "role": "embedding",
+        "expectedSizeGB": 0.3,
+        "required": true
+      }
+    ]
+  },
+
+  "docker": {
+    "images": {
+      "backend": {
+        "name": "recallhub-hardened-backend",
+        "dockerfile": "dockerfiles/Dockerfile.backend.hardened",
+        "minimumSizeMB": 100
+      },
+      "frontend": {
+        "name": "recallhub-hardened-frontend",
+        "dockerfile": "dockerfiles/Dockerfile.frontend.hardened",
+        "minimumSizeMB": 20
+      },
+      "ollama": {
+        "name": "ollama/ollama",
+        "tag": "latest"
+      },
+      "mongodb": {
+        "name": "mongodb/mongodb-atlas-local",
+        "tag": "latest"
+      },
+      "ubuntu": {
+        "name": "ubuntu",
+        "tag": "22.04"
+      }
+    },
+    "network": {
+      "internal": {
+        "name": "internal-only",
+        "subnet": "172.28.0.0/16",
+        "driver": "bridge"
+      },
+      "frontend": {
+        "name": "frontend-net",
+        "driver": "bridge"
+      }
+    },
+    "volumes": [
+      "mongodb_data",
+      "mongodb_config",
+      "ollama_models",
+      "documents_data",
+      "projects_data",
+      "config_data",
+      "logs_data"
+    ]
+  },
+
+  "ports": {
+    "mongodb": 27017,
+    "backend": 11000,
+    "frontend": 11080,
+    "ollama": 11434,
+    "backendQuellex": 11001,
+    "frontendQuellex": 11081
+  },
+
+  "containers": {
+    "mongodb": "recallhub-mongodb",
+    "backend": "recallhub-backend",
+    "frontend": "recallhub-frontend",
+    "ollama": "recallhub-ollama",
+    "worker": "recallhub-worker",
+    "backendQuellex": "quellex-backend",
+    "frontendQuellex": "quellex-frontend"
+  },
+
+  "llm": {
+    "provider": "ollama",
+    "baseUrl": "http://ollama:11434/v1",
+    "model": "llama3.2:3b",
+    "temperature": 0.7,
+    "maxTokens": 2048
+  },
+
+  "embedding": {
+    "provider": "ollama",
+    "model": "nomic-embed-text",
+    "dimension": 768,
+    "baseUrl": "http://ollama:11434/v1"
+  },
+
+  "mongodb": {
+    "uri": "mongodb://mongodb:27017",
+    "database": "recallhub"
+  },
+
+  "security": {
+    "appEnv": "production",
+    "appDebug": false,
+    "logLevel": "WARNING",
+    "exposeApiDocs": false,
+    "enableDebugRoutes": false,
+    "bindHost": "127.0.0.1",
+    "corsOrigins": ["http://localhost:11080", "http://127.0.0.1:11080"],
+    "sessionCookieSecure": true,
+    "sessionCookieHttpOnly": true,
+    "sessionCookieSameSite": "strict"
+  },
+
+  "features": {
+    "enableCloudSources": false,
+    "enableExternalWebhooks": false,
+    "enableTelemetry": false,
+    "enableRemoteAccess": false
+  },
+
+  "backup": {
+    "encryptionEnabled": true,
+    "retentionDays": 30,
+    "maxCount": 10
+  },
+
+  "healthChecks": {
+    "mongodb": {
+      "command": "mongosh --eval \"db.adminCommand('ping')\"",
+      "interval": "30s",
+      "timeout": "10s",
+      "retries": 3,
+      "startPeriod": "40s"
+    },
+    "ollama": {
+      "command": "curl -f http://localhost:11434/api/tags",
+      "interval": "30s",
+      "timeout": "10s",
+      "retries": 3,
+      "startPeriod": "60s"
+    },
+    "backend": {
+      "command": "curl -f http://localhost:11000/api/v1/status",
+      "interval": "30s",
+      "timeout": "10s",
+      "retries": 3,
+      "startPeriod": "30s"
+    },
+    "frontend": {
+      "command": "curl -f http://localhost:80/",
+      "interval": "30s",
+      "timeout": "10s",
+      "retries": 3,
+      "startPeriod": "10s"
+    }
+  },
+
+  "resources": {
+    "ollama": {
+      "gpu": {
+        "driver": "nvidia",
+        "count": "all",
+        "capabilities": ["gpu"]
+      }
+    }
+  },
+
+  "wsl": {
+    "distroName": "RecallHub",
+    "distroFile": "recallhub.tar.gz",
+    "minimumSizeMB": 500
+  },
+
+  "installer": {
+    "compression": "lzma2/ultra64",
+    "solidCompression": true,
+    "minWindowsVersion": "10.0.19041",
+    "requiredDiskSpaceGB": 10,
+    "recommendedDiskSpaceGB": 15,
+    "requiredRAMGB": 8,
+    "recommendedRAMGB": 16,
+    "buildDiskSpaceGB": 15
+  },
+
+  "update": {
+    "autoUpdateCheck": false,
+    "updateChannel": "stable"
+  }
+}

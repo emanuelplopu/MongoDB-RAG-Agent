@@ -39,8 +39,8 @@ services:
               count: all
               capabilities: [gpu]
 
-  # Override app configuration for local Ollama
-  app:
+  # Override backend configuration for local Ollama
+  backend:
     depends_on:
       mongodb:
         condition: service_healthy

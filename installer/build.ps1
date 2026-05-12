@@ -31,7 +31,7 @@
     Clean build artifacts before building
 
 .PARAMETER Debug
-    Keep intermediate build artifacts for debugging
+    Keep intermediate build artifacts for debugging and enable verbose logging
 
 .NOTES
     Requirements:
@@ -52,6 +52,39 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
+# ---------------------------------------------------------------------------
+# Import logging module
+# ---------------------------------------------------------------------------
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ScriptsDir = Join-Path $ScriptDir "scripts"
+Import-Module (Join-Path $ScriptsDir "RecallHub-Logging.psm1") -Force
+
+# Initialize with build-specific log name
+$logFile = Initialize-InstallLog -LogName "build"
+Write-InstallLog "Starting RecallHub installer build" -Source "Build"
+Write-InstallLog "Build parameters: Version=$Version, SkipModels=$SkipModels, SkipDistro=$SkipDistro, Clean=$Clean, Debug=$Debug" -Level DEBUG -Source "Build"
+
+if ($Debug) {
+    $env:RECALLHUB_DEBUG = "1"
+    Write-InstallLog "Debug mode enabled - verbose logging active" -Level DEBUG -Source "Build"
+}
+
+# ---------------------------------------------------------------------------
+# Load build configuration
+# ---------------------------------------------------------------------------
+$ConfigPath = Join-Path $ScriptDir "config.json"
+if (-not (Test-Path $ConfigPath)) {
+    throw "Build configuration not found: $ConfigPath. Please create config.json in the installer directory."
+}
+$Config = Get-Content $ConfigPath -Raw | ConvertFrom-Json
+Write-InstallLog "Loaded configuration: $($Config.app.name) v$($Config.app.version)" -Source "Build"
+
+# Override version from config if not explicitly passed
+if ($Version -eq "1.0.0" -and $Config.app.version) {
+    $Version = $Config.app.version
+    Write-InstallLog "Using version from config.json: $Version" -Level DEBUG -Source "Build"
+}
+
 # Paths
 $SCRIPT_DIR = $PSScriptRoot
 $PROJECT_ROOT = Split-Path $SCRIPT_DIR -Parent
@@ -61,9 +94,9 @@ $DISTRO_DIR = Join-Path $SCRIPT_DIR "distro"
 $MODELS_DIR = Join-Path $SCRIPT_DIR "models"
 $ASSETS_DIR = Join-Path $SCRIPT_DIR "assets"
 
-# Image tags
-$BACKEND_IMAGE = "recallhub-hardened-backend"
-$FRONTEND_IMAGE = "recallhub-hardened-frontend"
+# Image tags (from config)
+$BACKEND_IMAGE = $Config.docker.images.backend.name
+$FRONTEND_IMAGE = $Config.docker.images.frontend.name
 
 # =============================================================================
 # Helper Functions
@@ -81,21 +114,51 @@ function Write-Banner {
 function Write-Step {
     param([string]$Message)
     Write-Host "`n==> $Message" -ForegroundColor Cyan
+    Write-InstallLog $Message -Source "Build"
 }
 
 function Write-Success {
     param([string]$Message)
     Write-Host "    [OK] $Message" -ForegroundColor Green
+    Write-InstallLog $Message -Source "Build"
 }
 
-function Write-Warning {
+function Write-BuildWarning {
     param([string]$Message)
     Write-Host "    [WARN] $Message" -ForegroundColor Yellow
+    Write-InstallLog $Message -Level WARN -Source "Build"
 }
 
-function Write-Error {
+function Write-BuildError {
     param([string]$Message)
     Write-Host "    [ERROR] $Message" -ForegroundColor Red
+    Write-InstallLog $Message -Level ERROR -Source "Build"
+}
+
+function Test-BuildArtifact {
+    param(
+        [string]$Path,
+        [string]$Name,
+        [long]$MinimumSize = 1MB
+    )
+    
+    if (-not (Test-Path $Path)) {
+        Write-InstallDiagnostic -ErrorCode "BUILD-002" -Component "Artifacts" -Message "Build artifact missing: $Name" -Context @{ path = $Path }
+        return $false
+    }
+    
+    $size = (Get-Item $Path).Length
+    Write-InstallLog "Artifact: $Name = $([math]::Round($size/1MB, 1)) MB" -Source "Build"
+    
+    if ($size -lt $MinimumSize) {
+        Write-InstallDiagnostic -ErrorCode "BUILD-003" -Component "Artifacts" -Message "Artifact too small: $Name" -Context @{
+            path = $Path
+            actualSize = $size
+            minimumSize = $MinimumSize
+        }
+        return $false
+    }
+    return $true
 }
 
 function Test-Requirement {
@@ -111,7 +174,7 @@ function Test-Requirement {
         return $true
     }
     catch {
-        Write-Error "$Name is not installed"
+        Write-BuildError "$Name is not installed"
         Write-Host "    Please install from: $InstallUrl"
         return $false
     }
@@ -137,7 +200,7 @@ function Test-Requirements {
             Write-Success "Docker is running"
         }
         catch {
-            Write-Error "Docker is not running"
+            Write-BuildError "Docker is not running"
             $allMet = $false
         }
     }
@@ -153,7 +216,7 @@ function Test-Requirements {
         Write-Success "Inno Setup is installed"
     }
     else {
-        Write-Error "Inno Setup is not installed"
+        Write-BuildError "Inno Setup is not installed"
         Write-Host "    Please install from: https://jrsoftware.org/isinfo.php"
         $allMet = $false
     }
@@ -258,7 +321,7 @@ function Build-HardenedImages {
     
     try {
         # Build backend image
-        Write-Host "    Building backend image..."
+        Write-InstallLog "Building backend image..." -Source "Build"
         $backendDockerfile = Join-Path $SCRIPT_DIR "dockerfiles\Dockerfile.backend.hardened"
         
         docker build `
@@ -271,7 +334,7 @@ function Build-HardenedImages {
         Write-Success "Built backend image: ${BACKEND_IMAGE}:${Version}"
         
         # Build frontend image
-        Write-Host "    Building frontend image..."
+        Write-InstallLog "Building frontend image..." -Source "Build"
         $frontendDockerfile = Join-Path $SCRIPT_DIR "dockerfiles\Dockerfile.frontend.hardened"
         
         docker build `
@@ -307,8 +370,12 @@ function Export-DockerImages {
     # Get sizes
     $backendSize = (Get-Item $backendTar).Length / 1MB
     $frontendSize = (Get-Item $frontendTar).Length / 1MB
-    Write-Host "    Backend size: $([math]::Round($backendSize, 2)) MB"
-    Write-Host "    Frontend size: $([math]::Round($frontendSize, 2)) MB"
+    Write-InstallLog "Backend image size: $([math]::Round($backendSize, 2)) MB" -Source "Build"
+    Write-InstallLog "Frontend image size: $([math]::Round($frontendSize, 2)) MB" -Source "Build"
+    
+    # Validate exported artifacts
+    Test-BuildArtifact -Path $backendTar -Name "Backend Image" -MinimumSize ($Config.docker.images.backend.minimumSizeMB * 1MB) | Out-Null
+    Test-BuildArtifact -Path $frontendTar -Name "Frontend Image" -MinimumSize ($Config.docker.images.frontend.minimumSizeMB * 1MB) | Out-Null
 }
 
 function Build-TrayApp {
@@ -334,8 +401,8 @@ function Build-TrayApp {
         }
     }
     catch {
-        Write-Warning "Tray application build failed: $_"
-        Write-Host "    The installer will be created without the tray application"
+        Write-BuildWarning "Tray application build failed: $_"
+        Write-InstallLog "The installer will be created without the tray application" -Level WARN -Source "Build"
     }
     finally {
         Pop-Location
@@ -345,41 +412,55 @@ function Build-TrayApp {
 function Download-Models {
     Write-Step "Downloading Ollama models (via Docker)..."
     
-    # Use Docker to download models - no local Ollama required
-    Write-Host "    This downloads models using Docker containers..."
+    Write-InstallLog "Downloading models using Docker containers..." -Source "Build"
     
     # Create a volume to store models
     docker volume create recallhub-build-models 2>&1 | Out-Null
     
     try {
         # Pull and run Ollama to download models
-        Write-Host "    Pulling Ollama image..."
-        docker pull ollama/ollama:latest 2>&1 | Out-Null
+        $ollamaImage = "$($Config.docker.images.ollama.name):$($Config.docker.images.ollama.tag)"
+        Write-InstallLog "Pulling Ollama image: $ollamaImage" -Source "Build"
+        docker pull $ollamaImage 2>&1 | Out-Null
         
         # Start Ollama server in background
-        Write-Host "    Starting Ollama container..."
-        $containerId = docker run -d --name recallhub-ollama-download -v "recallhub-build-models:/root/.ollama" ollama/ollama:latest
+        Write-InstallLog "Starting Ollama container..." -Source "Build"
+        $containerId = docker run -d --name recallhub-ollama-download -v "recallhub-build-models:/root/.ollama" $ollamaImage
         Start-Sleep -Seconds 5
         
-        # Download models
-        Write-Host "    Downloading llama3.2:3b (this may take several minutes)..."
-        docker exec recallhub-ollama-download ollama pull llama3.2:3b 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
+        # Download models from config
+        $models = @()
+        foreach ($m in $Config.models.ollama) {
+            $models += @{ Name = $m.name; Purpose = $m.purpose }
+        }
         
-        Write-Host "    Downloading nomic-embed-text..."
-        docker exec recallhub-ollama-download ollama pull nomic-embed-text 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
+        foreach ($model in $models) {
+            Write-InstallLog "Downloading model: $($model.Name) ($($model.Purpose))" -Source "Build"
+            
+            $modelName = $model.Name
+            Invoke-WithRetry -OperationName "Download $modelName" -RetryCount 3 -InitialDelay 10 -BackoffMultiplier 2.0 -TimeoutSeconds 600 -ScriptBlock {
+                $output = docker exec recallhub-ollama-download ollama pull $using:modelName 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Model download failed: $output"
+                }
+            }
+            Write-Success "Model $($model.Name) downloaded successfully"
+        }
         
         # Export models to tar file
-        Write-Host "    Exporting models archive..."
+        Write-InstallLog "Exporting models archive..." -Source "Build"
         New-Item -ItemType Directory -Path $MODELS_DIR -Force | Out-Null
         
-        docker run --rm -v "recallhub-build-models:/source:ro" -v "${MODELS_DIR}:/dest" ubuntu:22.04 bash -c "cd /source && tar -cvf /dest/ollama-models.tar models/"
+        $ubuntuImage = "$($Config.docker.images.ubuntu.name):$($Config.docker.images.ubuntu.tag)"
+        docker run --rm -v "recallhub-build-models:/source:ro" -v "${MODELS_DIR}:/dest" $ubuntuImage bash -c "cd /source && tar -cvf /dest/ollama-models.tar models/"
         
         if (Test-Path "$MODELS_DIR\ollama-models.tar") {
             $size = (Get-Item "$MODELS_DIR\ollama-models.tar").Length / 1GB
             Write-Success "Models downloaded and exported ($([math]::Round($size, 2)) GB)"
+            Test-BuildArtifact -Path "$MODELS_DIR\ollama-models.tar" -Name "Ollama Models" -MinimumSize 100MB | Out-Null
         }
         else {
-            Write-Warning "Models archive may not have been created correctly"
+            Write-BuildWarning "Models archive may not have been created correctly"
         }
     }
     finally {
@@ -393,8 +474,8 @@ function Download-Models {
 function Create-WSLDistro {
     Write-Step "Creating WSL2 distribution..."
     
-    Write-Host "    Building complete WSL2 distribution with all components..."
-    Write-Host "    This includes: Ubuntu 22.04, Docker, pre-loaded images, Ollama models"
+    Write-InstallLog "Building complete WSL2 distribution with all components..." -Source "Build"
+    Write-InstallLog "Includes: Ubuntu 22.04, Docker, pre-loaded images, Ollama models" -Level DEBUG -Source "Build"
     
     # Run the distro build script
     $distroScript = Join-Path $SCRIPT_DIR "scripts\Build-Distro.ps1"
@@ -409,13 +490,14 @@ function Create-WSLDistro {
         if (Test-Path "$DISTRO_DIR\recallhub.tar.gz") {
             $size = (Get-Item "$DISTRO_DIR\recallhub.tar.gz").Length / 1GB
             Write-Success "WSL2 distribution created ($([math]::Round($size, 2)) GB)"
+            Test-BuildArtifact -Path "$DISTRO_DIR\recallhub.tar.gz" -Name "WSL Distribution" -MinimumSize ($Config.wsl.minimumSizeMB * 1MB) | Out-Null
         }
         else {
             throw "WSL2 distribution was not created"
         }
     }
     else {
-        Write-Error "Build-Distro.ps1 script not found"
+        Write-BuildError "Build-Distro.ps1 script not found"
         throw "Cannot create WSL2 distribution - missing build script"
     }
 }
@@ -426,8 +508,8 @@ function Create-Assets {
     # Create a simple icon if not exists (placeholder)
     $iconPath = Join-Path $ASSETS_DIR "icon.ico"
     if (-not (Test-Path $iconPath)) {
-        Write-Warning "Icon file not found at $iconPath"
-        Write-Host "    Please add a proper icon.ico file to the assets directory"
+        Write-BuildWarning "Icon file not found at $iconPath"
+        Write-InstallLog "Please add a proper icon.ico file to the assets directory" -Level WARN -Source "Build"
     }
 }
 
@@ -438,19 +520,17 @@ function Build-Installer {
     $setupScript = Join-Path $SCRIPT_DIR "setup.iss"
     
     if (-not (Test-Path $isccPath)) {
-        Write-Warning "Inno Setup not found - skipping installer creation"
+        Write-BuildWarning "Inno Setup not found - skipping installer creation"
         return
     }
     
-    # Update version in setup.iss
-    $setupContent = Get-Content $setupScript -Raw
-    $setupContent = $setupContent -replace '#define MyAppVersion ".*"', "#define MyAppVersion `"$Version`""
-    Set-Content -Path $setupScript -Value $setupContent
+    # Use version from config - pass as preprocessor define to ISCC
+    # This avoids modifying the source setup.iss file
     
     # Build installer
     Push-Location $SCRIPT_DIR
     try {
-        & $isccPath $setupScript
+        & $isccPath "/DMyAppVersion=$Version" $setupScript
         
         if ($LASTEXITCODE -eq 0) {
             Write-Success "Installer created successfully"
@@ -459,12 +539,11 @@ function Build-Installer {
             $installerPath = Join-Path $OUTPUT_DIR "RecallHubSetup-${Version}.exe"
             if (Test-Path $installerPath) {
                 $size = (Get-Item $installerPath).Length / 1GB
-                Write-Host "    Output: $installerPath"
-                Write-Host "    Size: $([math]::Round($size, 2)) GB"
+                Write-InstallLog "Installer output: $installerPath ($([math]::Round($size, 2)) GB)" -Source "Build"
             }
         }
         else {
-            Write-Error "Installer build failed"
+            Write-BuildError "Installer build failed"
         }
     }
     finally {
@@ -482,8 +561,48 @@ function Cleanup-Build {
         }
     }
     else {
-        Write-Warning "Debug mode - keeping build artifacts"
+        Write-BuildWarning "Debug mode - keeping build artifacts"
     }
+}
+
+function New-BuildManifest {
+    Write-Step "Generating build manifest..."
+    
+    $buildManifest = @{
+        buildId = [guid]::NewGuid().ToString()
+        timestamp = (Get-Date).ToString("o")
+        duration = ((Get-Date) - $buildStart).TotalSeconds
+        artifacts = @()
+        version = $Version
+        machine = $env:COMPUTERNAME
+        debug = [bool]$Debug
+    }
+    
+    # Collect all artifacts
+    $artifactPaths = @(
+        (Join-Path $OUTPUT_DIR "images\backend.tar"),
+        (Join-Path $OUTPUT_DIR "images\frontend.tar"),
+        (Join-Path $DISTRO_DIR "recallhub.tar.gz"),
+        (Join-Path $MODELS_DIR "ollama-models.tar")
+    )
+    
+    foreach ($path in $artifactPaths) {
+        if (Test-Path $path) {
+            $item = Get-Item $path
+            $hash = (Get-FileHash $path -Algorithm SHA256).Hash
+            $buildManifest.artifacts += @{
+                name = $item.Name
+                path = $item.FullName
+                sizeBytes = $item.Length
+                sha256 = $hash
+            }
+            Write-InstallLog "Manifest artifact: $($item.Name) ($([math]::Round($item.Length/1MB, 1)) MB) SHA256=$($hash.Substring(0,12))..." -Level DEBUG -Source "Build"
+        }
+    }
+    
+    $manifestPath = Join-Path $OUTPUT_DIR "build-manifest.json"
+    $buildManifest | ConvertTo-Json -Depth 5 | Set-Content -Path $manifestPath -Encoding UTF8
+    Write-InstallLog "Build manifest: $manifestPath" -Source "Build"
 }
 
 function Show-Summary {
@@ -514,7 +633,8 @@ function Show-Summary {
     Write-Host "Included Components:" -ForegroundColor Yellow
     Write-Host "  - Hardened Docker images (backend + frontend)"
     Write-Host "  - WSL2 distribution with Docker pre-installed"
-    Write-Host "  - Ollama models (llama3.2:3b, nomic-embed-text)"
+    $modelNames = ($Config.models.ollama | ForEach-Object { $_.name }) -join ", "
+    Write-Host "  - Ollama models ($modelNames)"
     Write-Host "  - MongoDB Atlas Local image"
     Write-Host "  - System tray application"
     Write-Host "  - Installation and management scripts"
@@ -530,6 +650,7 @@ function Main {
     Write-Banner "RecallHub Hardened Installer Build"
     Write-Host "Version: $Version"
     Write-Host "Output: $OUTPUT_DIR"
+    Write-Host "Log: $logFile"
     Write-Host ""
     Write-Host "This build will create a COMPLETE installer including:"
     Write-Host "  - Hardened Docker images"
@@ -537,58 +658,162 @@ function Main {
     Write-Host "  - Ollama LLM models (~2.3GB)"
     Write-Host ""
     
-    $startTime = Get-Date
+    $script:buildStart = Get-Date
+    $currentSection = "Init"
     
     try {
+        # --- Pre-flight Checks ---
+        Start-InstallSection -Name "Pre-flight Checks"
+        $currentSection = "Pre-flight Checks"
+        
+        # Check disk space (need sufficient space for full build with models)
+        $drive = (Get-Item $SCRIPT_DIR).PSDrive
+        $freeGB = [math]::Round($drive.Free / 1GB, 2)
+        Write-InstallLog "Available disk space on $($drive.Name): drive: $freeGB GB" -Source "Build"
+        
+        $requiredSpace = $Config.installer.buildDiskSpaceGB
+        if ($freeGB -lt $requiredSpace) {
+            Write-InstallDiagnostic -ErrorCode "BUILD-001" -Component "Preflight" -Message "Insufficient disk space for build" -Context @{
+                available = $freeGB
+                required = $requiredSpace
+                drive = $drive.Name
+            }
+            if ($freeGB -lt ($requiredSpace - 5)) {
+                throw "Insufficient disk space: $freeGB GB available, $requiredSpace GB required"
+            }
+            Write-InstallLog "WARNING: Low disk space ($freeGB GB). Build may fail." -Level WARN -Source "Build"
+        }
+        
         Test-Requirements
+        Complete-InstallSection -Name "Pre-flight Checks" -Status Success
+        
+        # --- Initialize ---
+        Start-InstallSection -Name "Initialize"
+        $currentSection = "Initialize"
         Initialize-Build
+        Complete-InstallSection -Name "Initialize" -Status Success
+        
+        # --- Generate Build Configuration ---
+        Start-InstallSection -Name "Generate Config"
+        $currentSection = "Generate Config"
+        
+        Write-Step "Generating deployment configuration from config.json..."
+        $templateScript = Join-Path $ScriptsDir "New-BuildConfig.ps1"
+        $buildConfigDir = Join-Path $BUILD_DIR "config"
+        New-Item -ItemType Directory -Path $buildConfigDir -Force | Out-Null
+        
+        & $templateScript -ConfigPath $ConfigPath -OutputDir $buildConfigDir
+        if ($LASTEXITCODE -ne 0) { throw "Configuration generation failed" }
+        
+        # Copy generated config to where docker-compose expects it
+        Copy-Item "$buildConfigDir\docker-compose.hardened.yml" -Destination "$BUILD_DIR\docker-compose.yml" -Force
+        Copy-Item "$buildConfigDir\hardened.env" -Destination "$BUILD_DIR\.env" -Force
+        Write-Success "Generated deployment configuration from config.json"
+        
+        Complete-InstallSection -Name "Generate Config" -Status Success
+        
+        # --- Copy Source ---
+        Start-InstallSection -Name "Copy Source"
+        $currentSection = "Copy Source"
         Copy-Source
+        Complete-InstallSection -Name "Copy Source" -Status Success
+        
+        # --- Hardening ---
+        Start-InstallSection -Name "Hardening Patches"
+        $currentSection = "Hardening Patches"
         Apply-HardeningPatches
+        Complete-InstallSection -Name "Hardening Patches" -Status Success
+        
+        # --- Docker Images ---
+        Start-InstallSection -Name "Docker Images"
+        $currentSection = "Docker Images"
         Build-HardenedImages
         Export-DockerImages
-        Build-TrayApp
+        Complete-InstallSection -Name "Docker Images" -Status Success
         
-        # Download models (now uses Docker - no local Ollama needed)
+        # --- Tray App ---
+        Start-InstallSection -Name "Tray Application"
+        $currentSection = "Tray Application"
+        Build-TrayApp
+        Complete-InstallSection -Name "Tray Application" -Status Success
+        
+        # --- Model Downloads ---
+        Start-InstallSection -Name "Model Downloads"
+        $currentSection = "Model Downloads"
         if (-not $SkipModels) {
             Download-Models
         }
         else {
             if (Test-Path "$MODELS_DIR\ollama-models.tar") {
-                Write-Step "Using existing Ollama models (skipped download)"
+                Write-InstallLog "Using existing Ollama models (skipped download)" -Source "Build"
             }
             else {
-                Write-Warning "SkipModels specified but no existing models found - downloading anyway"
+                Write-BuildWarning "SkipModels specified but no existing models found - downloading anyway"
                 Download-Models
             }
         }
+        Complete-InstallSection -Name "Model Downloads" -Status Success
         
-        # Build WSL2 distribution (now fully automated)
+        # --- WSL Distribution ---
+        Start-InstallSection -Name "WSL Distribution"
+        $currentSection = "WSL Distribution"
         if (-not $SkipDistro) {
             Create-WSLDistro
         }
         else {
             if (Test-Path "$DISTRO_DIR\recallhub.tar.gz") {
-                Write-Step "Using existing WSL2 distribution (skipped creation)"
+                Write-InstallLog "Using existing WSL2 distribution (skipped creation)" -Source "Build"
             }
             else {
-                Write-Warning "SkipDistro specified but no existing distro found - building anyway"
+                Write-BuildWarning "SkipDistro specified but no existing distro found - building anyway"
                 Create-WSLDistro
             }
         }
+        Complete-InstallSection -Name "WSL Distribution" -Status Success
         
+        # --- Assets & Installer ---
+        Start-InstallSection -Name "Installer Packaging"
+        $currentSection = "Installer Packaging"
         Create-Assets
         Build-Installer
-        Cleanup-Build
+        Complete-InstallSection -Name "Installer Packaging" -Status Success
         
-        $duration = (Get-Date) - $startTime
-        Write-Host "`nBuild completed in $([math]::Round($duration.TotalMinutes, 1)) minutes"
+        # --- Cleanup ---
+        Start-InstallSection -Name "Cleanup"
+        $currentSection = "Cleanup"
+        Cleanup-Build
+        Complete-InstallSection -Name "Cleanup" -Status Success
+        
+        # --- Build Manifest ---
+        Start-InstallSection -Name "Build Manifest"
+        $currentSection = "Build Manifest"
+        New-BuildManifest
+        Complete-InstallSection -Name "Build Manifest" -Status Success
+        
+        # --- Summary ---
+        $duration = (Get-Date) - $script:buildStart
+        Write-InstallLog "Build completed in $([math]::Round($duration.TotalMinutes, 1)) minutes" -Source "Build"
+        
+        Export-InstallSummary
+        Write-InstallLog "Build completed successfully!" -Source "Build"
         
         Show-Summary
     }
     catch {
-        Write-Error "Build failed: $_"
+        # Mark current section as failed
+        if ($currentSection -and $currentSection -ne "Init") {
+            try { Complete-InstallSection -Name $currentSection -Status Failed } catch { }
+        }
+        
+        Write-InstallDiagnostic -ErrorCode "BUILD-099" -Component "Build" -Message $_.Exception.Message -Exception $_.Exception -Context @{
+            lastSection = $currentSection
+        }
+        Export-InstallSummary
+        Write-InstallLog "BUILD FAILED: $($_.Exception.Message)" -Level ERROR -Source "Build"
+        
+        Write-BuildError "Build failed: $_"
         Write-Host $_.ScriptStackTrace
-        exit 1
+        throw
     }
 }
 
