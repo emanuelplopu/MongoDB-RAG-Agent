@@ -214,6 +214,35 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     except Exception as e:
         logger.warning(f"Failed to create TTL index: {e}")
     
+    # Log resolved LLM configuration
+    logger.info("LLM Configuration:")
+    logger.info(f"  Orchestrator: provider={settings.orchestrator_provider}, model={settings.orchestrator_model}")
+    logger.info(f"  Worker: provider={settings.worker_provider}, model={settings.worker_model}")
+    logger.info(f"  Embedding: provider={settings.embedding_provider}, model={settings.embedding_model}")
+    logger.info(f"  Ollama Base URL: {settings.ollama_base_url}")
+
+    # Non-blocking LLM health check at startup
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            if "ollama" in [
+                settings.orchestrator_provider,
+                settings.worker_provider,
+                settings.embedding_provider,
+            ]:
+                ollama_url = settings.ollama_base_url or "http://host.docker.internal:11434"
+                try:
+                    resp = await client.get(f"{ollama_url}/api/tags")
+                    if resp.status_code == 200:
+                        models = [m["name"] for m in resp.json().get("models", [])]
+                        logger.info(f"  Ollama reachable, available models: {models}")
+                    else:
+                        logger.warning(f"  Ollama responded with status {resp.status_code}")
+                except Exception as e:
+                    logger.warning(f"  Ollama unreachable at {ollama_url}: {e}")
+    except Exception as e:
+        logger.warning(f"  Startup LLM health check failed (non-blocking): {e}")
+
     logger.info(f"API ready at http://0.0.0.0:{settings.api_port}")
     
     yield

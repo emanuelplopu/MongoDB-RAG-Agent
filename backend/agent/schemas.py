@@ -423,6 +423,7 @@ class AgentModeConfig(BaseModel):
     # Activity logging context
     request_id: Optional[str] = None
     is_admin: bool = False
+    model_source: str = "global_config"  # "session_override" or "global_config"
     
     class Config:
         use_enum_values = True

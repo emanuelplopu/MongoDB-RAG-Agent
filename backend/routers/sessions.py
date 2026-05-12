@@ -982,7 +982,8 @@ async def send_message(
         max_iterations=settings.agent_max_iterations,
         parallel_workers=settings.agent_parallel_workers,
         request_id=req_id,
-        is_admin=is_admin
+        is_admin=is_admin,
+        model_source=model_source
     )
     
     # Create and run federated agent
@@ -1305,7 +1306,8 @@ async def send_message_stream(
                 max_iterations=settings.agent_max_iterations,
                 parallel_workers=settings.agent_parallel_workers,
                 request_id=stream_req_id,
-                is_admin=stream_is_admin
+                is_admin=stream_is_admin,
+                model_source=model_source
             )
             
             agent = FederatedAgent(config=config, strategy_id=msg_request.strategy_id, activity_logger=stream_activity_logger)

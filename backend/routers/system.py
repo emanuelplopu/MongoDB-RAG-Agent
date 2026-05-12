@@ -359,6 +359,219 @@ async def health_check(request: Request):
     )
 
 
+@router.get("/health/detailed")
+async def detailed_health_check(request: Request) -> dict:
+    """Comprehensive health check including LLM providers, embeddings, and database.
+
+    Performs individual connectivity checks with timing for:
+    - MongoDB database
+    - Orchestrator LLM provider
+    - Worker LLM provider
+    - Embedding provider
+    - Ollama model availability (if any provider uses Ollama)
+
+    Returns:
+        Dict with overall status, uptime, and per-component check results.
+    """
+    checks: dict = {}
+    db = request.app.state.db
+
+    # 1. MongoDB connectivity
+    mongo_check: dict = {"status": "ok", "latency_ms": 0.0, "error": None}
+    try:
+        t0 = time.time()
+        await db.client.admin.command("ping")
+        mongo_check["latency_ms"] = round((time.time() - t0) * 1000, 2)
+    except Exception as e:
+        mongo_check["status"] = "error"
+        mongo_check["error"] = str(e)
+    checks["mongodb"] = mongo_check
+
+    # Helper to resolve provider base URL for health probes
+    def _get_provider_health_url(provider: str) -> Optional[str]:
+        """Return a lightweight health/models URL for the given provider."""
+        provider = provider.lower()
+        if provider == "ollama":
+            return f"{settings.ollama_base_url or 'http://host.docker.internal:11434'}/api/tags"
+        elif provider == "openai":
+            return "https://api.openai.com/v1/models"
+        elif provider in ("google", "gemini"):
+            api_key = settings.get_api_key_for_provider(provider)
+            if api_key:
+                return f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+            return None
+        elif provider in ("anthropic", "claude"):
+            return "https://api.anthropic.com/v1/models"
+        return None
+
+    def _get_auth_headers(provider: str) -> dict:
+        """Return auth headers for cloud provider API probes."""
+        provider = provider.lower()
+        api_key = settings.get_api_key_for_provider(provider)
+        if provider == "openai":
+            return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        elif provider in ("anthropic", "claude"):
+            return {"x-api-key": api_key, "anthropic-version": "2023-06-01"} if api_key else {}
+        return {}
+
+    # 2. Orchestrator LLM check
+    orch_check: dict = {
+        "status": "unconfigured",
+        "provider": settings.orchestrator_provider,
+        "model": settings.orchestrator_model,
+        "latency_ms": 0.0,
+        "error": None,
+    }
+    orch_url = _get_provider_health_url(settings.orchestrator_provider)
+    if orch_url:
+        try:
+            headers = _get_auth_headers(settings.orchestrator_provider)
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                t0 = time.time()
+                resp = await client.get(orch_url, headers=headers)
+                orch_check["latency_ms"] = round((time.time() - t0) * 1000, 2)
+                if resp.status_code < 400:
+                    orch_check["status"] = "ok"
+                else:
+                    orch_check["status"] = "error"
+                    orch_check["error"] = f"HTTP {resp.status_code}"
+        except Exception as e:
+            orch_check["status"] = "error"
+            orch_check["error"] = str(e)
+    checks["orchestrator_llm"] = orch_check
+
+    # 3. Worker LLM check
+    worker_check: dict = {
+        "status": "unconfigured",
+        "provider": settings.worker_provider,
+        "model": settings.worker_model,
+        "latency_ms": 0.0,
+        "error": None,
+    }
+    worker_url = _get_provider_health_url(settings.worker_provider)
+    if worker_url:
+        try:
+            headers = _get_auth_headers(settings.worker_provider)
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                t0 = time.time()
+                resp = await client.get(worker_url, headers=headers)
+                worker_check["latency_ms"] = round((time.time() - t0) * 1000, 2)
+                if resp.status_code < 400:
+                    worker_check["status"] = "ok"
+                else:
+                    worker_check["status"] = "error"
+                    worker_check["error"] = f"HTTP {resp.status_code}"
+        except Exception as e:
+            worker_check["status"] = "error"
+            worker_check["error"] = str(e)
+    checks["worker_llm"] = worker_check
+
+    # 4. Embedding provider check
+    embed_check: dict = {
+        "status": "unconfigured",
+        "provider": settings.embedding_provider,
+        "model": settings.embedding_model,
+        "latency_ms": 0.0,
+        "error": None,
+    }
+    embed_url = _get_provider_health_url(settings.embedding_provider)
+    if embed_url:
+        try:
+            headers = _get_auth_headers(settings.embedding_provider)
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                t0 = time.time()
+                resp = await client.get(embed_url, headers=headers)
+                embed_check["latency_ms"] = round((time.time() - t0) * 1000, 2)
+                if resp.status_code < 400:
+                    embed_check["status"] = "ok"
+                else:
+                    embed_check["status"] = "error"
+                    embed_check["error"] = f"HTTP {resp.status_code}"
+        except Exception as e:
+            embed_check["status"] = "error"
+            embed_check["error"] = str(e)
+    checks["embedding"] = embed_check
+
+    # 5. Ollama model availability (if any provider uses ollama)
+    ollama_providers = [
+        p for p in [
+            settings.orchestrator_provider,
+            settings.worker_provider,
+            settings.embedding_provider,
+        ]
+        if p.lower() == "ollama"
+    ]
+    ollama_check: dict = {
+        "status": "not_applicable",
+        "available_models": [],
+        "required_models": [],
+        "missing_models": [],
+    }
+    if ollama_providers:
+        ollama_url = settings.ollama_base_url or "http://host.docker.internal:11434"
+        required_models: List[str] = []
+        if settings.orchestrator_provider.lower() == "ollama":
+            required_models.append(settings.orchestrator_model)
+        if settings.worker_provider.lower() == "ollama":
+            required_models.append(settings.worker_model)
+        if settings.embedding_provider.lower() == "ollama":
+            required_models.append(settings.embedding_model)
+        # Deduplicate
+        required_models = list(dict.fromkeys(required_models))
+        ollama_check["required_models"] = required_models
+
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{ollama_url}/api/tags")
+                if resp.status_code == 200:
+                    models_data = resp.json().get("models", [])
+                    available = [m.get("name", "") for m in models_data]
+                    # Ollama model names may include :tag, normalize for comparison
+                    available_base = [m.split(":")[0] for m in available]
+                    ollama_check["available_models"] = available
+                    missing = [
+                        m for m in required_models
+                        if m not in available and m.split(":")[0] not in available_base
+                    ]
+                    ollama_check["missing_models"] = missing
+                    ollama_check["status"] = "ok" if not missing else "error"
+                else:
+                    ollama_check["status"] = "error"
+                    ollama_check["missing_models"] = required_models
+        except Exception as e:
+            ollama_check["status"] = "error"
+            ollama_check["missing_models"] = required_models
+    checks["ollama_models"] = ollama_check
+
+    # Determine overall status
+    mongo_ok = checks["mongodb"]["status"] == "ok"
+    llm_statuses = [
+        checks["orchestrator_llm"]["status"],
+        checks["worker_llm"]["status"],
+    ]
+    all_llm_failed = all(s == "error" for s in llm_statuses if s != "unconfigured")
+    any_error = any(
+        c.get("status") == "error"
+        for c in checks.values()
+    )
+
+    if not mongo_ok or (all_llm_failed and any(s != "unconfigured" for s in llm_statuses)):
+        overall_status = "unhealthy"
+    elif any_error:
+        overall_status = "degraded"
+    else:
+        overall_status = "healthy"
+
+    uptime = (datetime.now() - _startup_time).total_seconds()
+
+    return {
+        "status": overall_status,
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "uptime_seconds": round(uptime, 2),
+        "checks": checks,
+    }
+
+
 @router.get("/stats", response_model=SystemStatsResponse)
 async def get_stats(request: Request):
     """

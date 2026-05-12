@@ -42,6 +42,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - rag-network
     restart: unless-stopped
@@ -86,6 +91,17 @@ services:
       # Profile-specific document folders (create these on host to use)
       - ./mounts/parhelion-energy:/app/mounts/parhelion-energy:ro
       - ./mounts/gdrive-root:/app/mounts/gdrive-root:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - rag-network
     restart: unless-stopped
@@ -150,6 +166,17 @@ services:
       # Profile-specific document folders (create these on host to use)
       - ./mounts/parhelion-energy:/app/mounts/parhelion-energy:ro
       - ./mounts/gdrive-root:/app/mounts/gdrive-root:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - rag-network
     restart: unless-stopped
@@ -173,6 +200,17 @@ services:
       - API_DOMAIN=api.recallhub.app
     depends_on:
       - backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - rag-network
     restart: unless-stopped
@@ -237,6 +275,17 @@ services:
       # Profile-specific document folders (create these on host to use)
       - ./mounts/parhelion-energy:/app/mounts/parhelion-energy:ro
       - ./mounts/gdrive-root:/app/mounts/gdrive-root:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - rag-network
     restart: unless-stopped
@@ -260,6 +309,17 @@ services:
       - API_DOMAIN=test-0-8-7.quellex.at
     depends_on:
       - backend-quellex
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - rag-network
     restart: unless-stopped

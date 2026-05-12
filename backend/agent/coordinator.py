@@ -77,6 +77,7 @@ class FederatedAgent:
         )
         
         logger.info(f"[req={self.req_id}] FederatedAgent: orchestrator={orchestrator_provider}/{orchestrator_model}, worker={worker_provider}/{worker_model}")
+        logger.info(f"[req={self.req_id}] Model routing: mode={self.config.mode}, orchestrator={orchestrator_model}, worker={worker_model}, source={self.config.model_source}")
         
         # Log system state for admin observability
         self.activity_logger.log_system_state({

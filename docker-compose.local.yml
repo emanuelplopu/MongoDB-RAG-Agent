@@ -25,6 +25,12 @@ services:
       start_period: 60s
     networks:
       - rag-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
     deploy:
       resources:
         reservations:
