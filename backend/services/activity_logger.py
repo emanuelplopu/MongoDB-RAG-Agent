@@ -418,6 +418,26 @@ class ActivityLogger:
             if e["category"] == "phase" and e["data"].get("status") == "completed"
         ]
 
+        # Aggregate orchestrator phase durations for performance benchmarking
+        orchestrator_phase_names = {"analyze", "plan", "evaluate", "synthesize"}
+        orchestrator_ms = sum(
+            e["data"].get("duration_ms", 0)
+            for e in self._entries
+            if e["category"] == "phase"
+            and e["data"].get("status") == "completed"
+            and e["data"].get("phase", "") in orchestrator_phase_names
+        )
+
+        avg_tokens_per_second = (
+            round(self._total_tokens / (total_duration_ms / 1000), 1)
+            if total_duration_ms > 0 and self._total_tokens > 0 else 0.0
+        )
+
+        cold_start_detected = any(
+            e.get("data", {}).get("is_cold_start")
+            for e in self._entries
+        )
+
         return {
             "total_entries": len(self._entries),
             "total_llm_calls": sum(
@@ -433,6 +453,13 @@ class ActivityLogger:
             "total_duration_ms": total_duration_ms,
             "phases_completed": phases_completed,
             "models_used": sorted(self._models_used),
+            "performance": {
+                "total_duration_ms": total_duration_ms,
+                "orchestrator_ms": round(orchestrator_ms, 2),
+                "avg_tokens_per_second": avg_tokens_per_second,
+                "overhead_ms": round(max(0.0, total_duration_ms - orchestrator_ms), 2),
+                "cold_start_detected": cold_start_detected,
+            },
         }
 
     # ------------------------------------------------------------------

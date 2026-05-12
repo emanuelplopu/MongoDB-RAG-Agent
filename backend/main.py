@@ -85,12 +85,20 @@ except ValueError as e:
 # Request timeout middleware to prevent blocking requests
 REQUEST_TIMEOUT_SECONDS = 30  # Default timeout for API requests
 CHAT_TIMEOUT_SECONDS = 300  # Extended timeout for chat/agent endpoints (5 minutes)
+MODEL_TEST_TIMEOUT_SECONDS = 180  # Extended timeout for model testing (3 minutes, Ollama cold-start)
 HEALTH_CHECK_PATHS = {"/health", "/api/v1/system/health", "/"}
 
 # Paths that need extended timeout (agent operations can take a while)
 EXTENDED_TIMEOUT_PATHS = {
     "/api/v1/sessions/",  # Chat messages
     "/api/v1/chat/",      # Chat completions
+}
+
+# Paths that need model-test timeout (Ollama models can be slow on first load)
+MODEL_TEST_TIMEOUT_PATHS = {
+    "/api/v1/system/models/",      # Model capability testing
+    "/api/v1/local-llm/test-model",  # LLM connection testing
+    "/api/v1/local-llm/custom-endpoints/",  # Custom endpoint testing
 }
 
 
@@ -114,6 +122,9 @@ class RequestTimeoutMiddleware(BaseHTTPMiddleware):
         # Extended timeout for chat/agent endpoints
         elif any(request.url.path.startswith(p) for p in EXTENDED_TIMEOUT_PATHS):
             timeout = CHAT_TIMEOUT_SECONDS
+        # Model testing timeout (Ollama cold-start can take 30-120s)
+        elif any(request.url.path.startswith(p) for p in MODEL_TEST_TIMEOUT_PATHS):
+            timeout = MODEL_TEST_TIMEOUT_SECONDS
         else:
             timeout = REQUEST_TIMEOUT_SECONDS
         

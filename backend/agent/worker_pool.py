@@ -230,11 +230,12 @@ class WorkerPool:
         sources_searched = []
         error = None
         success = True
+        tokens_used = 0  # Track LLM token usage for tasks that call models
         
         try:
             if task.type in [TaskType.SEARCH_PROFILE, TaskType.SEARCH_CLOUD, 
                             TaskType.SEARCH_PERSONAL, TaskType.SEARCH_ALL]:
-                # Database search
+                # Database search (no LLM call — tokens remain 0)
                 documents, sources_searched = await self._execute_search(
                     task=task,
                     user_id=user_id,
@@ -245,25 +246,25 @@ class WorkerPool:
                 )
                 
             elif task.type == TaskType.WEB_SEARCH:
-                # Web search using Brave API
+                # Web search using Brave API (no LLM call — tokens remain 0)
                 web_links = await self._execute_web_search(task.query)
                 sources_searched = ["web"]
                 
             elif task.type == TaskType.BROWSE_WEB:
-                # Browse a specific URL
+                # Browse a specific URL (no LLM call — tokens remain 0)
                 web_link = await self._execute_browse(task.query)
                 if web_link:
                     web_links = [web_link]
                 sources_searched = ["web"]
                     
             elif task.type == TaskType.SUMMARIZE:
-                # Summarize prior results (uses LLM)
-                summary = await self._execute_summarize(task, prior_results)
+                # Summarize prior results (uses LLM - tokens captured in _execute_summarize)
+                summary, tokens_used = await self._execute_summarize(task, prior_results)
                 # Store summary in metadata
                 
             elif task.type == TaskType.REFINE_QUERY:
-                # Refine a query based on prior results (uses LLM)
-                refined = await self._execute_refine_query(task, prior_results)
+                # Refine a query based on prior results (uses LLM - tokens captured in _execute_refine_query)
+                refined, tokens_used = await self._execute_refine_query(task, prior_results)
                 # Could trigger follow-up search
                 
         except Exception as e:
@@ -311,7 +312,7 @@ class WorkerPool:
             result_quality=quality,
             suggested_refinements=refinements,
             duration_ms=duration_ms,
-            tokens_used=0,  # Updated by summary generation
+            tokens_used=tokens_used,
             sources_searched=sources_searched
         )
         
@@ -326,7 +327,7 @@ class WorkerPool:
             documents=documents,
             web_links=web_links,
             duration_ms=duration_ms,
-            tokens_used=0,
+            tokens_used=tokens_used,
             success=success,
             error=error
         )
@@ -488,7 +489,7 @@ class WorkerPool:
         self,
         task: TaskDefinition,
         prior_results: Dict[str, WorkerResult]
-    ) -> str:
+    ) -> tuple:
         """Summarize prior results.
         
         Args:
@@ -496,7 +497,7 @@ class WorkerPool:
             prior_results: Prior task results
         
         Returns:
-            Summary string
+            Tuple of (summary string, tokens_used int)
         """
         # Collect all content from prior results
         all_content = []
@@ -507,7 +508,7 @@ class WorkerPool:
                 all_content.append(f"Web: {link.title}\n{link.excerpt}")
         
         if not all_content:
-            return "No content to summarize."
+            return "No content to summarize.", 0
         
         # Use LLM to summarize
         from litellm import acompletion
@@ -562,17 +563,17 @@ class WorkerPool:
                 phase="summarize"
             )
             
-            return content
+            return content, tokens_used
         except Exception as e:
             logger.error(f"[req={self.req_id}] Summarization failed: {e}")
             self.activity_logger.log_error(str(e), context={"phase": "summarize"})
-            return "Summarization failed."
+            return "Summarization failed.", 0
     
     async def _execute_refine_query(
         self,
         task: TaskDefinition,
         prior_results: Dict[str, WorkerResult]
-    ) -> str:
+    ) -> tuple:
         """Refine a query based on prior results.
         
         Args:
@@ -580,7 +581,7 @@ class WorkerPool:
             prior_results: Prior task results
         
         Returns:
-            Refined query string
+            Tuple of (refined query string, tokens_used int)
         """
         # Analyze prior results to refine query
         from litellm import acompletion
@@ -643,11 +644,11 @@ class WorkerPool:
                 phase="refine_query"
             )
             
-            return content
+            return content, tokens_used
         except Exception as e:
             logger.error(f"[req={self.req_id}] Query refinement failed: {e}")
             self.activity_logger.log_error(str(e), context={"phase": "refine_query"})
-            return task.query
+            return task.query, 0
     
     async def _generate_summary(
         self,

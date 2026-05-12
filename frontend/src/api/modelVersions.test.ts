@@ -40,7 +40,7 @@ describe('modelVersionsApi', () => {
 
     expect(create).toHaveBeenCalledWith({
       baseURL: 'http://localhost:8000/api/v1',
-      timeout: 30000,
+      timeout: 180000,
       withCredentials: true,
     })
     expect(requestUse).toHaveBeenCalledTimes(1)

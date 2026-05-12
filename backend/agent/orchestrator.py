@@ -45,6 +45,9 @@ _PHASE_MAX_TOKENS: Dict[str, int] = {
     "synthesize": 4000,
 }
 
+# Module-level cold-start tracker: tracks which models have completed at least one call
+_model_first_call_done: set = set()
+
 
 def _detect_repetition(text: str, threshold: float = 0.5) -> bool:
     """Detect if text is mostly repetitive patterns.
@@ -261,6 +264,16 @@ class Orchestrator:
             else:
                 result = {"response": content}
             
+            # Calculate per-phase token throughput for hardware benchmarking
+            tokens_per_second = (
+                round(tokens_used / (duration_ms / 1000), 1)
+                if duration_ms > 0 and tokens_used > 0 else 0.0
+            )
+            
+            # Cold-start detection: first call per model is flagged
+            is_cold_start = self.model not in _model_first_call_done
+            _model_first_call_done.add(self.model)
+            
             # Record step
             step = OrchestratorStep(
                 phase=phase,
@@ -269,7 +282,9 @@ class Orchestrator:
                 reasoning=result.get("reasoning", content[:500]),
                 output_summary=json.dumps(result)[:500] if isinstance(result, dict) else str(result)[:500],
                 tokens_used=tokens_used,
-                duration_ms=duration_ms
+                duration_ms=duration_ms,
+                tokens_per_second=tokens_per_second,
+                is_cold_start=is_cold_start
             )
             self.steps.append(step)
             

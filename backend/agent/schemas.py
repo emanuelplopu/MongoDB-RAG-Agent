@@ -194,6 +194,8 @@ class OrchestratorStep(BaseModel):
     output_summary: str = Field(description="What was decided/output")
     tokens_used: int = 0
     duration_ms: float = 0.0
+    tokens_per_second: float = Field(default=0.0, description="Token throughput for hardware benchmarking")
+    is_cold_start: bool = Field(default=False, description="True if this was the first call for this model (cold start)")
     
     class Config:
         use_enum_values = True
@@ -250,6 +252,7 @@ class AgentTrace(BaseModel):
     total_duration_ms: float = 0.0
     orchestrator_duration_ms: float = 0.0
     worker_duration_ms: float = 0.0
+    overhead_ms: float = Field(default=0.0, description="Non-LLM overhead (total - orchestrator - worker)")
     
     # Costs
     total_tokens: int = 0
@@ -283,6 +286,12 @@ class AgentTrace(BaseModel):
         """Finalize the trace with timing and cost calculations."""
         self.completed_at = datetime.now()
         self.total_duration_ms = (self.completed_at - self.started_at).total_seconds() * 1000
+        
+        # Calculate overhead (framework/network time not spent in LLM calls)
+        self.overhead_ms = max(
+            0.0,
+            self.total_duration_ms - self.orchestrator_duration_ms - self.worker_duration_ms
+        )
         
         # Calculate estimated cost based on token usage
         # Pricing per million tokens (approximate averages)
@@ -344,6 +353,9 @@ class AgentTrace(BaseModel):
                     "output": s.output_summary,
                     "duration_ms": s.duration_ms,
                     "tokens": s.tokens_used,
+                    "tokens_per_second": s.tokens_per_second,
+                    "is_cold_start": s.is_cold_start,
+                    "model": s.model,
                 }
                 for s in self.orchestrator_steps
             ],
@@ -395,6 +407,7 @@ class AgentTrace(BaseModel):
                 "total_ms": self.total_duration_ms,
                 "orchestrator_ms": self.orchestrator_duration_ms,
                 "worker_ms": self.worker_duration_ms,
+                "overhead_ms": self.overhead_ms,
             },
             "tokens": {
                 "total": self.total_tokens,
