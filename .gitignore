@@ -58,3 +58,21 @@ frontend/node_modules
 *.tar.gz
 
 # Screenshots (moved to docs/assets/screenshots/)
+/frontend/.coverage-layout-detail
+/frontend/.coverage-layout-full
+/frontend/.coverage-layout-seq
+
+# .NET build outputs (general)
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Tray App (.NET) build artifacts
+installer/tray-app/bin/
+installer/tray-app/obj/
+installer/tray-app/.vs/
+
+# Installer build outputs
+installer/output/
+installer/*.exe

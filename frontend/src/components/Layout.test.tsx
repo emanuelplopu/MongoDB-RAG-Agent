@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { ReactNode } from 'react'
-import { cleanup, render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { Layout } from './Layout'
@@ -695,6 +695,141 @@ describe('Layout', () => {
 
     renderWithRouter('/chat')
     await waitFor(() => expect(consoleError).toHaveBeenCalledWith('Error fetching profiles for header:', expect.any(Error)))
+  })
+
+  it('opens move menus, handles folder moves, empty projects, and dismisses warnings', async () => {
+    mockStore.state.sessions = mockSessions
+    mockStore.state.folders = mockFolders
+    mockStore.state.isSelectMode = true
+    mockStore.state.selectedSessions = new Set(['session-1'])
+    mockStore.state.isAuthenticated = true
+    mockStore.state.user = { ...mockStore.state.user, is_admin: true }
+    mockStore.state.dashboardResponse = { indexes: [] }
+
+    const firstRender = renderWithRouter('/chat')
+
+    await waitFor(() => expect(screen.getAllByText('Both indexes are missing').length).toBeGreaterThan(0))
+    fireEvent.click(screen.getAllByText('Move to project (1)')[0])
+    fireEvent.click(screen.getAllByText('Project A')[0])
+    expect(mockFns.moveSelectedToFolder).toHaveBeenCalledWith('folder-1')
+
+    fireEvent.click(screen.getAllByText('Dismiss missing-both-indexes')[0])
+    await waitFor(() => expect(screen.queryAllByText('Both indexes are missing')).toHaveLength(0))
+
+    firstRender.unmount()
+    mockStore.state.folders = []
+    renderWithRouter('/chat')
+
+    fireEvent.click(screen.getAllByText('Move to project (1)')[0])
+    expect(screen.getAllByText('No projects').length).toBeGreaterThan(0)
+    fireEvent.click(screen.getAllByText('Unfiled')[0])
+    expect(mockFns.moveSelectedToFolder).toHaveBeenCalledWith(null)
+  })
+
+  it('handles session row selection, context menus, select mode toggles, and edit cancel', () => {
+    mockStore.state.sessions = mockSessions
+    mockStore.state.folders = mockFolders
+
+    const firstRender = renderWithRouter('/chat')
+
+    fireEvent.click(screen.getAllByText('General Chat')[0])
+    fireEvent.click(screen.getAllByText('Folder Chat')[0])
+    fireEvent.click(screen.getAllByText('Pinned Chat')[0])
+    expect(mockFns.handleSelectSession).toHaveBeenCalledWith('session-1')
+    expect(mockFns.handleSelectSession).toHaveBeenCalledWith('session-3')
+    expect(mockFns.handleSelectSession).toHaveBeenCalledWith('session-2')
+
+    fireEvent.contextMenu(screen.getAllByText('General Chat')[0], { clientX: 10, clientY: 20 })
+    fireEvent.contextMenu(screen.getAllByText('Folder Chat')[0], { clientX: 15, clientY: 25 })
+    fireEvent.contextMenu(screen.getAllByText('Pinned Chat')[0], { clientX: 20, clientY: 30 })
+    expect(mockFns.setContextMenu).toHaveBeenCalled()
+
+    firstRender.unmount()
+    mockStore.state.isSelectMode = true
+    renderWithRouter('/chat')
+
+    fireEvent.click(screen.getAllByText('General Chat')[0])
+    fireEvent.click(screen.getAllByText('Folder Chat')[0])
+    fireEvent.click(screen.getAllByText('Pinned Chat')[0])
+    expect(mockFns.toggleSessionSelection).toHaveBeenCalledWith('session-1')
+    expect(mockFns.toggleSessionSelection).toHaveBeenCalledWith('session-3')
+    expect(mockFns.toggleSessionSelection).toHaveBeenCalledWith('session-2')
+
+    cleanup()
+    resetStore()
+    mockStore.state.sessions = mockSessions
+    mockStore.state.editingTitle = 'session-1'
+    mockStore.state.editingTitleValue = 'General Draft'
+    renderWithRouter('/chat')
+
+    const editInput = screen.getAllByDisplayValue('General Draft')[0]
+    fireEvent.click(editInput)
+    fireEvent.keyDown(editInput, { key: 'Escape' })
+    expect(mockFns.setEditingTitle).toHaveBeenCalledWith(null)
+  })
+
+  it('handles sidebar quick actions, search controls, and sidebar events', async () => {
+    mockStore.state.sessions = mockSessions
+    mockStore.state.user = { ...mockStore.state.user, is_admin: true }
+
+    renderWithRouter('/documents')
+
+    fireEvent.click(screen.getAllByText('New chat')[0])
+    expect(mockFns.handleNewChat).toHaveBeenCalledWith()
+
+    fireEvent.click(screen.getAllByTitle('Edit chats')[0])
+    expect(mockFns.toggleSelectMode).toHaveBeenCalled()
+
+    fireEvent.click(screen.getAllByTitle('Collapse')[0])
+    expect(screen.getAllByTitle('Expand').length).toBeGreaterThan(0)
+
+    await act(async () => {
+      window.dispatchEvent(new Event('toggle-desktop-sidebar'))
+    })
+    await waitFor(() => expect(screen.queryAllByTitle('Expand')).toHaveLength(0))
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Search chats' })[0])
+    const searchInput = screen.getAllByPlaceholderText('Search chats')[0]
+    fireEvent.change(searchInput, { target: { value: 'General' } })
+    await waitFor(() => expect(document.querySelector('button.absolute.right-3')).not.toBeNull())
+    const clearButton = document.querySelector('button.absolute.right-3')
+    fireEvent.click(clearButton!)
+    await waitFor(() => expect(screen.queryAllByPlaceholderText('Search chats')).toHaveLength(0))
+
+    await act(async () => {
+      window.dispatchEvent(new Event('open-mobile-sidebar'))
+    })
+    await waitFor(() => expect(document.querySelector('div.fixed.inset-0.z-40.bg-black\\/50')).not.toBeNull())
+    const backdrop = document.querySelector('div.fixed.inset-0.z-40.bg-black\\/50')
+    expect(backdrop).not.toBeNull()
+    fireEvent.click(backdrop!)
+    await waitFor(() => expect(document.querySelector('div.fixed.inset-0.z-40.bg-black\\/50')).toBeNull())
+  })
+
+  it('opens the profile dropdown, closes it on outside click, and switches profiles', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockStore.state.isAuthenticated = true
+    mockStore.state.profilesResponse = {
+      profiles: {
+        research: { name: 'Research', description: 'Research profile' },
+        support: { name: 'Support', description: 'Support profile' },
+      },
+      active_profile: 'research',
+    }
+
+    renderWithRouter('/documents')
+
+    await waitFor(() => expect(screen.getAllByText('Research').length).toBeGreaterThan(0))
+    fireEvent.click(screen.getAllByText('Research')[0].closest('button')!)
+    expect(screen.getAllByText('Support').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Active').length).toBeGreaterThan(0)
+
+    fireEvent.mouseDown(document.body)
+    await waitFor(() => expect(screen.queryAllByText('Support')).toHaveLength(0))
+
+    fireEvent.click(screen.getAllByText('Research')[0].closest('button')!)
+    fireEvent.click(screen.getAllByText('Support')[0])
+    await waitFor(() => expect(mockFns.switchProfile).toHaveBeenCalledWith('support'))
   })
 
   it('restores the collapsed desktop sidebar and expands it again', async () => {

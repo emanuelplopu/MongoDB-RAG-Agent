@@ -99,8 +99,8 @@ describe('StatusPage', () => {
     render(<StatusPage />)
 
     expect(await screen.findByText('System Resources')).toBeInTheDocument()
-    expect(screen.getByText('1,239')).toBeInTheDocument()
-    expect(screen.getByText('5,688')).toBeInTheDocument()
+    expect(screen.getByText(/1[,.]239/)).toBeInTheDocument()
+    expect(screen.getByText(/5[,.]688/)).toBeInTheDocument()
     expect(screen.getByText('1d 1h')).toBeInTheDocument()
     expect(screen.getByText('10.4 / 16.0 GB')).toBeInTheDocument()
     expect(screen.getByText('120.2 / 250.0 GB')).toBeInTheDocument()

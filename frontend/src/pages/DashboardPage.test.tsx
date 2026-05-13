@@ -184,8 +184,8 @@ describe('DashboardPage', () => {
     expect(screen.getByText('notes.txt')).toBeInTheDocument()
     expect(screen.queryByText('too-big.pdf')).not.toBeInTheDocument()
     expect(screen.getByText(/~765 tokens/)).toBeInTheDocument()
-    expect(screen.getByText(/~1,000 tokens/)).toBeInTheDocument()
-    expect(screen.getByText('Total: ~1,765 tokens')).toBeInTheDocument()
+    expect(screen.getByText(/~1[,.]000 tokens/)).toBeInTheDocument()
+    expect(screen.getByText(/Total: ~1[,.]765 tokens/)).toBeInTheDocument()
     expect(screen.getByAltText('preview.png')).toHaveAttribute('src', 'data:image/png;base64,preview')
 
     const notesChip = screen.getByText('notes.txt').closest('div.relative')
@@ -195,7 +195,7 @@ describe('DashboardPage', () => {
     await user.click(removeButton as HTMLButtonElement)
 
     expect(screen.queryByText('notes.txt')).not.toBeInTheDocument()
-    expect(screen.getByText('Total: ~765 tokens')).toBeInTheDocument()
+    expect(screen.getByText(/Total: ~765 tokens/)).toBeInTheDocument()
   })
 
   it('supports switching agent mode and closes the selector when clicking outside', async () => {

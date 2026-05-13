@@ -196,7 +196,7 @@ describe('DocumentPreviewPage', () => {
     expect(screen.getByText('reports/q1-report.pdf')).toBeInTheDocument()
     expect(screen.getByText('1.5 KB')).toBeInTheDocument()
     expect(screen.getByText('pdf')).toBeInTheDocument()
-    expect(screen.getByText('1,200 chars')).toBeInTheDocument()
+    expect(screen.getByText(/1[,.]200 chars/)).toBeInTheDocument()
     expect(screen.getAllByText('42').length).toBeGreaterThan(0)
     expect(screen.getByText('Embedded (1536d)')).toBeInTheDocument()
     expect(screen.getByText('C:/docs/reports/q1-report.pdf')).toBeInTheDocument()
