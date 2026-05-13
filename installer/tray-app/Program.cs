@@ -1,5 +1,5 @@
-// RecallHub Tray Application
-// Provides system tray integration for RecallHub services
+// RecallHub Desktop Application
+// Provides system tray integration and embedded WebView2 browser for RecallHub
 
 namespace RecallHub.TrayApp;
 
@@ -13,7 +13,7 @@ static class Program
     {
         // Ensure single instance
         using var mutex = new Mutex(true, "RecallHub.TrayApp.SingleInstance", out bool createdNew);
-        
+
         if (!createdNew)
         {
             // Another instance is already running
@@ -26,10 +26,11 @@ static class Program
             return;
         }
 
-        // To customize application configuration such as set high DPI settings or default font,
-        // see https://aka.ms/applicationconfiguration.
-        ApplicationConfiguration.Initialize();
-        
+        // High DPI support
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+
         // Run the tray application
         Application.Run(new TrayApplicationContext());
     }

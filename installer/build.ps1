@@ -209,6 +209,20 @@ function Test-Requirements {
     if (-not (Test-Requirement -Command "dotnet" -Name ".NET SDK" -InstallUrl "https://dotnet.microsoft.com")) {
         $allMet = $false
     }
+    else {
+        # Verify .NET 8 SDK is available (required for WebView2 and tray app)
+        $dotnetSdks = dotnet --list-sdks 2>&1
+        $hasNet8 = $dotnetSdks | Where-Object { $_ -match '^8\.' }
+        if ($hasNet8) {
+            Write-Success ".NET 8 SDK is available"
+        }
+        else {
+            Write-BuildError ".NET 8 SDK is required for tray app (WebView2 dependency)"
+            Write-Host "    Installed SDKs: $dotnetSdks"
+            Write-Host "    Please install .NET 8 SDK from: https://dotnet.microsoft.com/download/dotnet/8.0"
+            $allMet = $false
+        }
+    }
     
     # Check Inno Setup
     $isccPath = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
@@ -386,18 +400,39 @@ function Build-TrayApp {
     Push-Location $trayAppDir
     
     try {
-        # Restore and build
-        dotnet restore 2>&1 | Out-Null
-        dotnet build -c Release 2>&1 | Out-Null
-        dotnet publish -c Release -r win-x64 --self-contained true 2>&1 | Out-Null
+        # Restore NuGet packages (ensures WebView2 and other dependencies are available)
+        Write-InstallLog "Restoring NuGet packages (including WebView2)..." -Source "Build"
+        dotnet restore 2>&1 | ForEach-Object { if ($Debug) { Write-Host "    $_" -ForegroundColor Gray } }
+        if ($LASTEXITCODE -ne 0) { throw "NuGet restore failed" }
+        Write-Success "NuGet packages restored"
         
-        Write-Success "Built tray application"
+        # Build the tray app
+        dotnet build -c Release --no-restore 2>&1 | ForEach-Object { if ($Debug) { Write-Host "    $_" -ForegroundColor Gray } }
+        if ($LASTEXITCODE -ne 0) { throw "Tray app build failed" }
+        
+        # Publish with WebView2 native library extraction support
+        # IncludeAllContentForSelfExtract ensures WebView2 loader DLL extracts correctly at runtime
+        dotnet publish -c Release -r win-x64 --self-contained true --no-restore `
+            -p:IncludeAllContentForSelfExtract=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true 2>&1 | ForEach-Object { if ($Debug) { Write-Host "    $_" -ForegroundColor Gray } }
+        if ($LASTEXITCODE -ne 0) { throw "Tray app publish failed" }
+        
+        Write-Success "Built tray application (with WebView2 support)"
         
         # Copy to output
         $publishDir = Join-Path $trayAppDir "bin\Release\net8.0-windows\win-x64\publish"
         if (Test-Path $publishDir) {
             Copy-Item "$publishDir\*" -Destination $OUTPUT_DIR -Recurse -Force
             Write-Success "Copied tray application to output"
+            
+            # Validate tray app binary size (WebView2 increases size to ~5-8 MB)
+            $trayExePath = Join-Path $OUTPUT_DIR "RecallHubTray.exe"
+            if (Test-Path $trayExePath) {
+                Test-BuildArtifact -Path $trayExePath -Name "Tray Application" -MinimumSize 5MB | Out-Null
+            }
+        }
+        else {
+            throw "Publish output directory not found: $publishDir"
         }
     }
     catch {

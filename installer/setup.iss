@@ -60,7 +60,7 @@ SetupLogging=yes
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checked
 Name: "startupicon"; Description: "Start RecallHub when Windows starts"; GroupDescription: "Startup Options"
 
 [Files]
@@ -89,11 +89,17 @@ Name: "{app}\updates"
 Name: "{app}\wsl"
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+; Start Menu entries
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\assets\icon.ico"; Comment: "Launch RecallHub"
 Name: "{group}\Start {#MyAppName}"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\Start-Services.ps1"""; IconFilename: "{app}\assets\icon.ico"
 Name: "{group}\Stop {#MyAppName}"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\Stop-Services.ps1"""; IconFilename: "{app}\assets\icon.ico"
-Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\View Logs"; Filename: "{app}\logs"; IconFilename: "{sys}\shell32.dll"; IconIndex: 3; Comment: "Open RecallHub logs folder"
+Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"; IconFilename: "{app}\assets\icon.ico"
+
+; Desktop shortcut (user-scoped)
+Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\assets\icon.ico"; Tasks: desktopicon
+
+; Startup entry
 Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: startupicon
 
 [Run]
@@ -104,12 +110,27 @@ Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Start-Services.ps1' -Wait *> '{localappdata}\RecallHub\logs\start-services-run.log'"""; StatusMsg: "Starting services..."; Description: "Start RecallHub services"; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
+[Registry]
+; Protocol handler: recallhub://
+Root: HKCU; Subkey: "Software\Classes\recallhub"; ValueType: string; ValueName: ""; ValueData: "URL:RecallHub Protocol"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\recallhub"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\recallhub\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\assets\icon.ico"""
+Root: HKCU; Subkey: "Software\Classes\recallhub\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """"{app}\{#MyAppExeName}"" ""%1"""
+
+; File association: .rhu (RecallHub Update)
+Root: HKCU; Subkey: "Software\Classes\.rhu"; ValueType: string; ValueName: ""; ValueData: "RecallHub.Update"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\RecallHub.Update"; ValueType: string; ValueName: ""; ValueData: "RecallHub Update File"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\RecallHub.Update\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\assets\icon.ico"""
+Root: HKCU; Subkey: "Software\Classes\RecallHub.Update\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """"{app}\{#MyAppExeName}"" ""%1"""
+
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\Uninstall.ps1"" -Force"; Flags: runhidden waituntilterminated
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\wsl"
 Type: filesandordirs; Name: "{app}\logs"
+Type: files; Name: "{localappdata}\RecallHub\window-state.json"
+Type: files; Name: "{userdesktop}\{#MyAppName}.lnk"
 Type: dirifempty; Name: "{app}"
 
 [Code]

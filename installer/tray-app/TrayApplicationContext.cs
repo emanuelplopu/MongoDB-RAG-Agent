@@ -1,5 +1,5 @@
 // RecallHub Tray Application Context
-// Manages the system tray icon and menu
+// Manages the system tray icon, menu, main window, and service lifecycle
 
 using System.Diagnostics;
 using System.Text.Json;
@@ -7,7 +7,7 @@ using System.Text.Json;
 namespace RecallHub.TrayApp;
 
 /// <summary>
-/// Application context that manages the system tray icon and menu.
+/// Application context that manages the system tray icon, menu, and main window.
 /// </summary>
 public class TrayApplicationContext : ApplicationContext
 {
@@ -15,20 +15,24 @@ public class TrayApplicationContext : ApplicationContext
     private readonly ServiceManager _serviceManager;
     private readonly ContextMenuStrip _contextMenu;
     private readonly System.Windows.Forms.Timer _statusTimer;
-    
+
+    private MainWindow? _mainWindow;
+    private SplashScreen? _splashScreen;
+
     private ToolStripMenuItem _statusMenuItem = null!;
     private ToolStripMenuItem _startMenuItem = null!;
     private ToolStripMenuItem _stopMenuItem = null!;
-    
+    private ToolStripMenuItem _showHideMenuItem = null!;
+
     private bool _servicesRunning = false;
 
     public TrayApplicationContext()
     {
         _serviceManager = new ServiceManager();
-        
+
         // Create context menu
         _contextMenu = CreateContextMenu();
-        
+
         // Create tray icon
         _trayIcon = new NotifyIcon
         {
@@ -37,10 +41,10 @@ public class TrayApplicationContext : ApplicationContext
             Visible = true,
             Text = "RecallHub"
         };
-        
-        // Handle double-click to open browser
+
+        // Handle double-click to show window
         _trayIcon.DoubleClick += OnTrayIconDoubleClick;
-        
+
         // Start status timer
         _statusTimer = new System.Windows.Forms.Timer
         {
@@ -48,9 +52,9 @@ public class TrayApplicationContext : ApplicationContext
         };
         _statusTimer.Tick += OnStatusTimerTick;
         _statusTimer.Start();
-        
-        // Initial status check
-        _ = UpdateStatusAsync();
+
+        // Start the initialization sequence
+        _ = InitializeAsync();
     }
 
     private Icon LoadIcon()
@@ -62,8 +66,8 @@ public class TrayApplicationContext : ApplicationContext
             {
                 return new Icon(iconPath);
             }
-            
-            // Fallback to embedded resource or system icon
+
+            // Fallback to system icon
             return SystemIcons.Application;
         }
         catch
@@ -75,7 +79,7 @@ public class TrayApplicationContext : ApplicationContext
     private ContextMenuStrip CreateContextMenu()
     {
         var menu = new ContextMenuStrip();
-        
+
         // Status indicator (not clickable)
         _statusMenuItem = new ToolStripMenuItem("Status: Checking...")
         {
@@ -83,47 +87,227 @@ public class TrayApplicationContext : ApplicationContext
             Image = null
         };
         menu.Items.Add(_statusMenuItem);
-        
+
         menu.Items.Add(new ToolStripSeparator());
-        
-        // Open RecallHub
+
+        // Open RecallHub (shows main window)
         var openItem = new ToolStripMenuItem("Open RecallHub", null, OnOpenClick);
         openItem.Font = new Font(openItem.Font, FontStyle.Bold);
         menu.Items.Add(openItem);
-        
+
         // Open Admin Panel
         menu.Items.Add(new ToolStripMenuItem("Open Admin Panel", null, OnOpenAdminClick));
-        
+
+        // Show/Hide Window
+        _showHideMenuItem = new ToolStripMenuItem("Hide Window", null, OnShowHideClick);
+        menu.Items.Add(_showHideMenuItem);
+
         menu.Items.Add(new ToolStripSeparator());
-        
+
         // Start Services
         _startMenuItem = new ToolStripMenuItem("Start Services", null, OnStartClick);
         menu.Items.Add(_startMenuItem);
-        
+
         // Stop Services
         _stopMenuItem = new ToolStripMenuItem("Stop Services", null, OnStopClick);
         menu.Items.Add(_stopMenuItem);
-        
+
         // Restart Services
         menu.Items.Add(new ToolStripMenuItem("Restart Services", null, OnRestartClick));
-        
+
         menu.Items.Add(new ToolStripSeparator());
-        
+
         // View Logs
         menu.Items.Add(new ToolStripMenuItem("View Logs", null, OnViewLogsClick));
-        
+
         // Check for Updates
         menu.Items.Add(new ToolStripMenuItem("Check for Updates", null, OnCheckUpdatesClick));
-        
+
         menu.Items.Add(new ToolStripSeparator());
-        
+
         // About
         menu.Items.Add(new ToolStripMenuItem("About RecallHub", null, OnAboutClick));
-        
+
         // Exit
         menu.Items.Add(new ToolStripMenuItem("Exit", null, OnExitClick));
-        
+
         return menu;
+    }
+
+    /// <summary>
+    /// Initialize the application: check services, show splash if needed, open main window.
+    /// </summary>
+    private async Task InitializeAsync()
+    {
+        // Quick check - are services already running?
+        var alreadyRunning = await _serviceManager.CheckServicesRunningAsync();
+
+        if (alreadyRunning)
+        {
+            // Services are running - just open the main window directly
+            _servicesRunning = true;
+            UpdateMenuState();
+            ShowMainWindow();
+            return;
+        }
+
+        // Services not running - show splash and start them
+        await StartServicesWithSplashAsync();
+    }
+
+    /// <summary>
+    /// Show splash screen and start services.
+    /// </summary>
+    private async Task StartServicesWithSplashAsync()
+    {
+        _splashScreen = new SplashScreen();
+        _splashScreen.Cancelled += (_, _) => { /* Cancellation is tracked via IsCancelled */ };
+        _splashScreen.ViewLogsRequested += (_, _) => OnViewLogsClick(null, EventArgs.Empty);
+        _splashScreen.Show();
+
+        try
+        {
+            // Step 1: Check services
+            _splashScreen.UpdateStatus("Checking services...");
+            _splashScreen.SetProgress(10);
+            await Task.Delay(300);
+
+            if (_splashScreen.IsCancelled)
+            {
+                _splashScreen.CloseFromAnyThread();
+                return;
+            }
+
+            // Step 2: Starting database
+            _splashScreen.UpdateStatus("Starting database...");
+            _splashScreen.SetProgress(25);
+
+            var startSuccess = await _serviceManager.StartServicesAsync();
+
+            if (_splashScreen.IsCancelled)
+            {
+                _splashScreen.CloseFromAnyThread();
+                return;
+            }
+
+            if (!startSuccess)
+            {
+                _splashScreen.UpdateStatus("Failed to start services.");
+                await Task.Delay(2000);
+                _splashScreen.CloseFromAnyThread();
+
+                _trayIcon.ShowBalloonTip(
+                    5000,
+                    "RecallHub",
+                    "Failed to start services. Right-click tray icon for options.",
+                    ToolTipIcon.Warning
+                );
+                return;
+            }
+
+            // Step 3: Starting backend
+            _splashScreen.UpdateStatus("Starting backend...");
+            _splashScreen.SetProgress(55);
+            await Task.Delay(500);
+
+            if (_splashScreen.IsCancelled)
+            {
+                _splashScreen.CloseFromAnyThread();
+                return;
+            }
+
+            // Step 4: Starting frontend
+            _splashScreen.UpdateStatus("Starting frontend...");
+            _splashScreen.SetProgress(80);
+
+            // Wait for frontend to respond
+            for (int i = 0; i < 15; i++)
+            {
+                if (await _serviceManager.CheckServicesRunningAsync())
+                {
+                    break;
+                }
+
+                if (_splashScreen.IsCancelled)
+                {
+                    _splashScreen.CloseFromAnyThread();
+                    return;
+                }
+
+                await Task.Delay(1000);
+            }
+
+            // Step 5: Ready!
+            _splashScreen.SetProgress(100);
+            await _splashScreen.ShowReadyAndCloseAsync(600);
+
+            _servicesRunning = true;
+            UpdateMenuState();
+            ShowMainWindow();
+        }
+        catch (Exception ex)
+        {
+            _splashScreen?.CloseFromAnyThread();
+            _trayIcon.ShowBalloonTip(
+                5000,
+                "RecallHub",
+                $"Startup error: {ex.Message}",
+                ToolTipIcon.Error
+            );
+        }
+        finally
+        {
+            _splashScreen = null;
+        }
+    }
+
+    private void ShowMainWindow()
+    {
+        EnsureMainWindow();
+        _mainWindow!.ShowAndFocus();
+        UpdateShowHideMenuItem();
+    }
+
+    private void EnsureMainWindow()
+    {
+        if (_mainWindow == null || _mainWindow.IsDisposed)
+        {
+            _mainWindow = new MainWindow();
+            _mainWindow.WindowHiding += (_, _) => UpdateShowHideMenuItem();
+            _mainWindow.VisibleChanged += (_, _) => UpdateShowHideMenuItem();
+        }
+    }
+
+    private void UpdateShowHideMenuItem()
+    {
+        if (_mainWindow != null && _mainWindow.Visible)
+        {
+            _showHideMenuItem.Text = "Hide Window";
+        }
+        else
+        {
+            _showHideMenuItem.Text = "Show Window";
+        }
+    }
+
+    private void UpdateMenuState()
+    {
+        if (_servicesRunning)
+        {
+            _statusMenuItem.Text = "Status: Running";
+            _statusMenuItem.ForeColor = Color.Green;
+            _trayIcon.Text = "RecallHub - Running";
+            _startMenuItem.Enabled = false;
+            _stopMenuItem.Enabled = true;
+        }
+        else
+        {
+            _statusMenuItem.Text = "Status: Stopped";
+            _statusMenuItem.ForeColor = Color.Red;
+            _trayIcon.Text = "RecallHub - Stopped";
+            _startMenuItem.Enabled = true;
+            _stopMenuItem.Enabled = false;
+        }
     }
 
     private async void OnStatusTimerTick(object? sender, EventArgs e)
@@ -136,23 +320,7 @@ public class TrayApplicationContext : ApplicationContext
         try
         {
             _servicesRunning = await _serviceManager.CheckServicesRunningAsync();
-            
-            if (_servicesRunning)
-            {
-                _statusMenuItem.Text = "Status: Running";
-                _statusMenuItem.ForeColor = Color.Green;
-                _trayIcon.Text = "RecallHub - Running";
-                _startMenuItem.Enabled = false;
-                _stopMenuItem.Enabled = true;
-            }
-            else
-            {
-                _statusMenuItem.Text = "Status: Stopped";
-                _statusMenuItem.ForeColor = Color.Red;
-                _trayIcon.Text = "RecallHub - Stopped";
-                _startMenuItem.Enabled = true;
-                _stopMenuItem.Enabled = false;
-            }
+            UpdateMenuState();
         }
         catch
         {
@@ -171,45 +339,56 @@ public class TrayApplicationContext : ApplicationContext
 
     private void OnOpenClick(object? sender, EventArgs e)
     {
-        try
+        if (_mainWindow != null && _mainWindow.IsWebViewReady)
         {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "http://localhost:11080",
-                UseShellExecute = true
-            });
+            ShowMainWindow();
         }
-        catch (Exception ex)
+        else
         {
-            ShowError("Failed to open browser", ex.Message);
+            // Try to create/show main window; if WebView2 fails it will fallback to browser
+            EnsureMainWindow();
+            _mainWindow!.ShowAndFocus();
+            UpdateShowHideMenuItem();
         }
     }
 
     private void OnOpenAdminClick(object? sender, EventArgs e)
     {
-        try
+        if (_mainWindow != null && _mainWindow.IsWebViewReady)
         {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "http://localhost:11080/admin",
-                UseShellExecute = true
-            });
+            _mainWindow.NavigateTo("/admin");
+            ShowMainWindow();
         }
-        catch (Exception ex)
+        else
         {
-            ShowError("Failed to open browser", ex.Message);
+            // Fallback to browser
+            MainWindow.OpenInBrowser("http://localhost:11080/admin");
         }
+    }
+
+    private void OnShowHideClick(object? sender, EventArgs e)
+    {
+        if (_mainWindow != null && _mainWindow.Visible)
+        {
+            _mainWindow.Hide();
+        }
+        else
+        {
+            ShowMainWindow();
+        }
+
+        UpdateShowHideMenuItem();
     }
 
     private async void OnStartClick(object? sender, EventArgs e)
     {
         _startMenuItem.Enabled = false;
         _statusMenuItem.Text = "Status: Starting...";
-        
+
         try
         {
             var success = await _serviceManager.StartServicesAsync();
-            
+
             if (success)
             {
                 _trayIcon.ShowBalloonTip(
@@ -218,6 +397,11 @@ public class TrayApplicationContext : ApplicationContext
                     "Services started successfully",
                     ToolTipIcon.Info
                 );
+
+                // Auto-show window when services start
+                _servicesRunning = true;
+                UpdateMenuState();
+                ShowMainWindow();
             }
             else
             {
@@ -228,7 +412,7 @@ public class TrayApplicationContext : ApplicationContext
         {
             ShowError("Start Failed", ex.Message);
         }
-        
+
         await UpdateStatusAsync();
     }
 
@@ -236,11 +420,11 @@ public class TrayApplicationContext : ApplicationContext
     {
         _stopMenuItem.Enabled = false;
         _statusMenuItem.Text = "Status: Stopping...";
-        
+
         try
         {
             var success = await _serviceManager.StopServicesAsync();
-            
+
             if (success)
             {
                 _trayIcon.ShowBalloonTip(
@@ -259,7 +443,7 @@ public class TrayApplicationContext : ApplicationContext
         {
             ShowError("Stop Failed", ex.Message);
         }
-        
+
         await UpdateStatusAsync();
     }
 
@@ -268,25 +452,28 @@ public class TrayApplicationContext : ApplicationContext
         _startMenuItem.Enabled = false;
         _stopMenuItem.Enabled = false;
         _statusMenuItem.Text = "Status: Restarting...";
-        
+
         try
         {
             await _serviceManager.StopServicesAsync();
             await Task.Delay(2000);
             await _serviceManager.StartServicesAsync();
-            
+
             _trayIcon.ShowBalloonTip(
                 3000,
                 "RecallHub",
                 "Services restarted successfully",
                 ToolTipIcon.Info
             );
+
+            _servicesRunning = true;
+            UpdateMenuState();
         }
         catch (Exception ex)
         {
             ShowError("Restart Failed", ex.Message);
         }
-        
+
         await UpdateStatusAsync();
     }
 
@@ -299,7 +486,7 @@ public class TrayApplicationContext : ApplicationContext
                 "RecallHub",
                 "logs"
             );
-            
+
             if (Directory.Exists(logsPath))
             {
                 Process.Start(new ProcessStartInfo
@@ -329,12 +516,12 @@ public class TrayApplicationContext : ApplicationContext
                 "RecallHub",
                 "updates"
             );
-            
+
             // Check for .rhu files
             if (Directory.Exists(updatesPath))
             {
                 var updateFiles = Directory.GetFiles(updatesPath, "*.rhu");
-                
+
                 if (updateFiles.Length > 0)
                 {
                     var result = MessageBox.Show(
@@ -343,7 +530,7 @@ public class TrayApplicationContext : ApplicationContext
                         MessageBoxButtons.YesNo,
                         MessageBoxIcon.Information
                     );
-                    
+
                     if (result == DialogResult.Yes)
                     {
                         OnOpenAdminClick(sender, e);
@@ -379,7 +566,7 @@ public class TrayApplicationContext : ApplicationContext
     private void OnAboutClick(object? sender, EventArgs e)
     {
         var version = typeof(Program).Assembly.GetName().Version?.ToString() ?? "1.0.0";
-        
+
         MessageBox.Show(
             $"RecallHub\nVersion {version}\n\n" +
             "A local-first RAG (Retrieval-Augmented Generation) application.\n\n" +
@@ -401,20 +588,21 @@ public class TrayApplicationContext : ApplicationContext
             MessageBoxButtons.YesNoCancel,
             MessageBoxIcon.Question
         );
-        
+
         if (result == DialogResult.Cancel)
         {
             return;
         }
-        
+
         if (result == DialogResult.Yes)
         {
             _ = _serviceManager.StopServicesAsync();
         }
-        
+
         // Clean up and exit
         _statusTimer.Stop();
         _trayIcon.Visible = false;
+        _mainWindow?.ForceClose();
         Application.Exit();
     }
 
@@ -430,8 +618,9 @@ public class TrayApplicationContext : ApplicationContext
             _statusTimer.Dispose();
             _trayIcon.Dispose();
             _contextMenu.Dispose();
+            _mainWindow?.Dispose();
         }
-        
+
         base.Dispose(disposing);
     }
 }

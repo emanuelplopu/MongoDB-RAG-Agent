@@ -10,6 +10,7 @@
     1. Install Docker Desktop + Ollama (from apps/ folder or internet)
     2. Restore Ollama models (gemma4:26b, gemma4:e4b)
     3. Full system restore (source code, MongoDB, Test_Data, Docker build, services)
+    4. Deploy Desktop App (WebView2 tray app, shortcuts, protocol handler)
 .PARAMETER TestDataPath
     Where to restore Test_Data. Defaults to C:\Test_Data.
 .PARAMETER InstallPath
@@ -20,6 +21,8 @@
     Skip Ollama model restore.
 .PARAMETER SkipRestore
     Skip the full system restore (only install prerequisites and models).
+.PARAMETER SkipDesktopApp
+    Skip desktop app deployment (Phase 4).
 .PARAMETER Repair
     Repair mode: skip prerequisites and models, clean up existing deployment
     (containers, images, source, test data), then re-run full restore.
@@ -40,7 +43,8 @@ param(
     [switch]$SkipModels,
     [switch]$SkipRestore,
     [switch]$Repair,
-    [switch]$RepairFull
+    [switch]$RepairFull,
+    [switch]$SkipDesktopApp
 )
 
 $ErrorActionPreference = "Stop"
@@ -56,6 +60,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     if ($SkipRestore) { $arguments += " -SkipRestore" }
     if ($Repair) { $arguments += " -Repair" }
     if ($RepairFull) { $arguments += " -RepairFull" }
+    if ($SkipDesktopApp) { $arguments += " -SkipDesktopApp" }
     Start-Process powershell.exe -ArgumentList $arguments -Verb RunAs -Wait
     exit
 }
@@ -98,6 +103,7 @@ Write-Host "  Steps:" -ForegroundColor Gray
 Write-Host "    1. Install Docker Desktop + Ollama" -ForegroundColor Gray
 Write-Host "    2. Restore Ollama AI Models (~26 GB)" -ForegroundColor Gray
 Write-Host "    3. Full System Restore (DB, code, data, services)" -ForegroundColor Gray
+Write-Host "    4. Deploy Desktop App (WebView2 tray app)" -ForegroundColor Gray
 Write-Host ""
 
 # --- Validate backup contents ---
@@ -238,7 +244,7 @@ Write-Host "  [OK] Install manifest initialized" -ForegroundColor Green
 if (-not $SkipPrerequisites) {
     Write-Host "" -NoNewline
     Write-Host "===================================================" -ForegroundColor Magenta
-    Write-Host "  STEP 1/3: Installing Prerequisites" -ForegroundColor Magenta
+    Write-Host "  STEP 1/4: Installing Prerequisites" -ForegroundColor Magenta
     Write-Host "===================================================" -ForegroundColor Magenta
 
     $prereqScript = Join-Path $ScriptsDir "install-prerequisites.ps1"
@@ -329,7 +335,7 @@ if (-not $SkipPrerequisites) {
 if (-not $SkipModels) {
     Write-Host ""
     Write-Host "===================================================" -ForegroundColor Magenta
-    Write-Host "  STEP 2/3: Restoring Ollama AI Models" -ForegroundColor Magenta
+    Write-Host "  STEP 2/4: Restoring Ollama AI Models" -ForegroundColor Magenta
     Write-Host "===================================================" -ForegroundColor Magenta
 
     $modelsScript = Join-Path $ScriptsDir "restore-ollama-models.ps1"
@@ -369,7 +375,7 @@ if (-not $SkipModels) {
 if (-not $SkipRestore) {
     Write-Host ""
     Write-Host "===================================================" -ForegroundColor Magenta
-    Write-Host "  STEP 3/3: Full System Restore" -ForegroundColor Magenta
+    Write-Host "  STEP 3/4: Full System Restore" -ForegroundColor Magenta
     Write-Host "===================================================" -ForegroundColor Magenta
 
     $restoreScript = Join-Path $ScriptsDir "full-restore.ps1"
@@ -383,6 +389,176 @@ if (-not $SkipRestore) {
 } else {
     Write-Host ""
     Write-Host "[SKIP] Full system restore skipped" -ForegroundColor DarkGray
+}
+
+# --- Step 4: Deploy Desktop App ---
+if (-not $SkipDesktopApp) {
+    Write-Host ""
+    Write-Host "===================================================" -ForegroundColor Magenta
+    Write-Host "  STEP 4/4: Deploy Desktop App" -ForegroundColor Magenta
+    Write-Host "===================================================" -ForegroundColor Magenta
+
+    # Locate the tray app executable
+    $trayExe = $null
+    $primaryPath = Join-Path $InstallPath "installer"
+    $primaryPath = Join-Path $primaryPath "tray-app"
+    $primaryPath = Join-Path $primaryPath "bin"
+    $primaryPath = Join-Path $primaryPath "publish"
+    $primaryPath = Join-Path $primaryPath "RecallHubTray.exe"
+
+    if (Test-Path $primaryPath) {
+        $trayExe = $primaryPath
+    } else {
+        # Try alternate publish path
+        $altPath = Join-Path $InstallPath "installer"
+        $altPath = Join-Path $altPath "tray-app"
+        $altPath = Join-Path $altPath "bin"
+        $altPath = Join-Path $altPath "Release"
+        $altPath = Join-Path $altPath "net8.0-windows"
+        $altPath = Join-Path $altPath "win-x64"
+        $altPath = Join-Path $altPath "publish"
+        $altPath = Join-Path $altPath "RecallHubTray.exe"
+
+        if (Test-Path $altPath) {
+            $trayExe = $altPath
+        }
+    }
+
+    if (-not $trayExe) {
+        Write-Host "  [WARN] RecallHubTray.exe not found, skipping desktop app deployment" -ForegroundColor Yellow
+        Write-Host "  Searched:" -ForegroundColor Gray
+        Write-Host "    $primaryPath" -ForegroundColor Gray
+        Write-Host "    $altPath" -ForegroundColor Gray
+    } else {
+        Write-Host "  Found tray app: $trayExe" -ForegroundColor Gray
+
+        # Create the app directory
+        $appDir = Join-Path $env:LOCALAPPDATA "RecallHub"
+        if (-not (Test-Path $appDir)) {
+            New-Item -Path $appDir -ItemType Directory -Force | Out-Null
+        }
+
+        # Copy the executable
+        Write-Host "  Copying RecallHubTray.exe..." -ForegroundColor Gray
+        Copy-Item -Path $trayExe -Destination (Join-Path $appDir "RecallHubTray.exe") -Force
+        Write-Host "  [OK] Executable copied" -ForegroundColor Green
+
+        # Copy the icon if available
+        $iconSource = Join-Path $InstallPath "installer"
+        $iconSource = Join-Path $iconSource "assets"
+        $iconSource = Join-Path $iconSource "icon.ico"
+        $assetsDir = Join-Path $appDir "assets"
+
+        if (Test-Path $iconSource) {
+            if (-not (Test-Path $assetsDir)) {
+                New-Item -Path $assetsDir -ItemType Directory -Force | Out-Null
+            }
+            Copy-Item -Path $iconSource -Destination (Join-Path $assetsDir "icon.ico") -Force
+            Write-Host "  [OK] Icon copied" -ForegroundColor Green
+        }
+
+        $exePath = Join-Path $appDir "RecallHubTray.exe"
+        $iconPath = Join-Path $assetsDir "icon.ico"
+
+        # Create Desktop Shortcut
+        Write-Host "  Creating desktop shortcut..." -ForegroundColor Gray
+        try {
+            $WshShell = New-Object -ComObject WScript.Shell
+            $desktopPath = [Environment]::GetFolderPath('Desktop')
+            $Shortcut = $WshShell.CreateShortcut("$desktopPath\RecallHub.lnk")
+            $Shortcut.TargetPath = $exePath
+            if (Test-Path $iconPath) {
+                $Shortcut.IconLocation = $iconPath
+            }
+            $Shortcut.Description = "RecallHub - AI Knowledge Assistant"
+            $Shortcut.WorkingDirectory = $appDir
+            $Shortcut.Save()
+            Write-Host "  [OK] Desktop shortcut created" -ForegroundColor Green
+        } catch {
+            Write-Host "  [WARN] Failed to create desktop shortcut: $_" -ForegroundColor Yellow
+        }
+
+        # Create Start Menu Shortcut
+        Write-Host "  Creating Start Menu shortcut..." -ForegroundColor Gray
+        try {
+            $startMenuBase = Join-Path $env:APPDATA "Microsoft"
+            $startMenuBase = Join-Path $startMenuBase "Windows"
+            $startMenuBase = Join-Path $startMenuBase "Start Menu"
+            $startMenuBase = Join-Path $startMenuBase "Programs"
+            $startMenuDir = Join-Path $startMenuBase "RecallHub"
+            if (-not (Test-Path $startMenuDir)) {
+                New-Item -Path $startMenuDir -ItemType Directory -Force | Out-Null
+            }
+            $WshShell = New-Object -ComObject WScript.Shell
+            $smShortcut = $WshShell.CreateShortcut("$startMenuDir\RecallHub.lnk")
+            $smShortcut.TargetPath = $exePath
+            if (Test-Path $iconPath) {
+                $smShortcut.IconLocation = $iconPath
+            }
+            $smShortcut.Description = "RecallHub - AI Knowledge Assistant"
+            $smShortcut.WorkingDirectory = $appDir
+            $smShortcut.Save()
+            Write-Host "  [OK] Start Menu shortcut created" -ForegroundColor Green
+        } catch {
+            Write-Host "  [WARN] Failed to create Start Menu shortcut: $_" -ForegroundColor Yellow
+        }
+
+        # Register recallhub:// Protocol Handler
+        Write-Host "  Registering recallhub:// protocol handler..." -ForegroundColor Gray
+        try {
+            $protocolKey = "HKCU:\Software\Classes\recallhub"
+            New-Item -Path $protocolKey -Force | Out-Null
+            Set-ItemProperty -Path $protocolKey -Name "(Default)" -Value "URL:RecallHub Protocol"
+            Set-ItemProperty -Path $protocolKey -Name "URL Protocol" -Value ""
+            New-Item -Path "$protocolKey\DefaultIcon" -Force | Out-Null
+            Set-ItemProperty -Path "$protocolKey\DefaultIcon" -Name "(Default)" -Value "`"$exePath`",0"
+            $cmdKey = Join-Path $protocolKey "shell"
+            $cmdKey = Join-Path $cmdKey "open"
+            $cmdKey = Join-Path $cmdKey "command"
+            New-Item -Path $cmdKey -Force | Out-Null
+            Set-ItemProperty -Path $cmdKey -Name "(Default)" -Value "`"$exePath`" `"%1`""
+            Write-Host "  [OK] Protocol handler registered" -ForegroundColor Green
+        } catch {
+            Write-Host "  [WARN] Failed to register protocol handler: $_" -ForegroundColor Yellow
+        }
+
+        # Configure Windows Startup
+        Write-Host "  Configuring Windows startup..." -ForegroundColor Gray
+        try {
+            $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+            Set-ItemProperty -Path $runKey -Name "RecallHub" -Value "`"$exePath`""
+            Write-Host "  [OK] Windows startup configured" -ForegroundColor Green
+        } catch {
+            Write-Host "  [WARN] Failed to configure Windows startup: $_" -ForegroundColor Yellow
+        }
+
+        # Update manifest with desktop app info
+        Update-Manifest @{
+            desktop_app_deployed = $true
+            desktop_app_path = $exePath
+        }
+
+        # Launch the app
+        Write-Host "  Launching RecallHub desktop app..." -ForegroundColor Gray
+        try {
+            Start-Process -FilePath $exePath
+            Write-Host "  [OK] Desktop app launched" -ForegroundColor Green
+        } catch {
+            Write-Host "  [WARN] Failed to launch desktop app: $_" -ForegroundColor Yellow
+        }
+
+        # Phase 4 summary
+        Write-Host ""
+        Write-Host "  Desktop App deployed successfully!" -ForegroundColor Green
+        Write-Host "    Location:         $exePath" -ForegroundColor White
+        Write-Host "    Desktop shortcut: Created" -ForegroundColor White
+        Write-Host "    Start Menu:       Created" -ForegroundColor White
+        Write-Host "    Protocol handler: recallhub:// registered" -ForegroundColor White
+        Write-Host "    Windows startup:  Configured" -ForegroundColor White
+    }
+} else {
+    Write-Host ""
+    Write-Host "[SKIP] Desktop app deployment skipped" -ForegroundColor DarkGray
 }
 
 # --- Finalize manifest ---
@@ -412,6 +588,13 @@ Write-Host ""
 Write-Host "  Ollama models loaded:" -ForegroundColor Gray
 Write-Host "    gemma4:26b (orchestrator)" -ForegroundColor Gray
 Write-Host "    gemma4:e4b (worker)" -ForegroundColor Gray
+Write-Host ""
+Write-Host "  Desktop App:" -ForegroundColor Gray
+if (-not $SkipDesktopApp) {
+    Write-Host "    $env:LOCALAPPDATA\RecallHub\RecallHubTray.exe" -ForegroundColor Gray
+} else {
+    Write-Host "    (skipped)" -ForegroundColor DarkGray
+}
 Write-Host ""
 Write-Host "=====================================================" -ForegroundColor Green
 Write-Host ""
