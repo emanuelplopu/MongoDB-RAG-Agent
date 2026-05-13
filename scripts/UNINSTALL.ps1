@@ -160,6 +160,57 @@ if ($manifest) {
         wsl_config_created_by_us = $false
         docker_settings_modified_by_us = $false
         ollama_models_path = "$env:USERPROFILE\.ollama\models"
+        install_complete = $false
+    }
+}
+
+# --- Enhanced detection for partial installs ---
+if (-not $manifest.install_complete) {
+    Write-Host "  [INFO] Detecting installed components (partial or missing manifest)..." -ForegroundColor Cyan
+
+    # Detect Docker Desktop
+    $dockerDetected = (Test-Path "$env:ProgramFiles\Docker\Docker\Docker Desktop Installer.exe") -or
+                      (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
+                       Where-Object { $_.DisplayName -like "*Docker Desktop*" })
+    if ($dockerDetected -and -not $manifest.docker_installed_by_us) {
+        if ($Force) {
+            $manifest.docker_installed_by_us = $true
+        } else {
+            Write-Host "  Docker Desktop detected but no record of who installed it." -ForegroundColor Yellow
+            if (Confirm-Action "Was Docker Desktop installed by RecallHub INSTALL.ps1?") {
+                $manifest.docker_installed_by_us = $true
+            }
+        }
+    }
+
+    # Detect Ollama
+    $ollamaDetected = (Get-Command ollama -ErrorAction SilentlyContinue) -or
+                      (Test-Path "$env:LOCALAPPDATA\Programs\Ollama")
+    if ($ollamaDetected -and -not $manifest.ollama_installed_by_us) {
+        if ($Force) {
+            $manifest.ollama_installed_by_us = $true
+        } else {
+            Write-Host "  Ollama detected but no record of who installed it." -ForegroundColor Yellow
+            if (Confirm-Action "Was Ollama installed by RecallHub INSTALL.ps1?") {
+                $manifest.ollama_installed_by_us = $true
+            }
+        }
+    }
+
+    # Detect WSL2
+    $wslFeatureEnabled = dism.exe /online /get-featureinfo /featurename:Microsoft-Windows-Subsystem-Linux 2>&1 |
+                         Select-String "State : Enabled"
+    if ($wslFeatureEnabled -and -not $manifest.wsl_enabled_by_us) {
+        if ($Force) {
+            $manifest.wsl_enabled_by_us = $true
+            $manifest.wsl_config_created_by_us = (Test-Path "$env:USERPROFILE\.wslconfig")
+        } else {
+            Write-Host "  WSL2 is enabled but no record of who enabled it." -ForegroundColor Yellow
+            if (Confirm-Action "Was WSL2 enabled by RecallHub INSTALL.ps1?") {
+                $manifest.wsl_enabled_by_us = $true
+                $manifest.wsl_config_created_by_us = (Test-Path "$env:USERPROFILE\.wslconfig")
+            }
+        }
     }
 }
 
@@ -207,6 +258,30 @@ try {
     docker info 2>&1 | Out-Null
     $dockerAvailable = $true
 } catch {}
+
+# If Docker is installed but not running, try to start it
+if (-not $dockerAvailable) {
+    $dockerExe = "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe"
+    if (Test-Path $dockerExe) {
+        Write-Host "  Docker Desktop found but not running. Attempting to start..." -ForegroundColor Yellow
+        Start-Process $dockerExe -WindowStyle Hidden
+        $waited = 0
+        while ($waited -lt 60) {
+            Start-Sleep -Seconds 5
+            $waited += 5
+            try {
+                docker info 2>&1 | Out-Null
+                $dockerAvailable = $true
+                break
+            } catch {}
+        }
+        if ($dockerAvailable) {
+            Write-Host "  Docker Desktop started successfully" -ForegroundColor Green
+        } else {
+            Write-Host "  Could not start Docker Desktop within 60s. Container/image cleanup will be skipped." -ForegroundColor Yellow
+        }
+    }
+}
 
 if ($dockerAvailable) {
     if (Test-Path $InstallPath) {

@@ -20,17 +20,27 @@
     Skip Ollama model restore.
 .PARAMETER SkipRestore
     Skip the full system restore (only install prerequisites and models).
+.PARAMETER Repair
+    Repair mode: skip prerequisites and models, clean up existing deployment
+    (containers, images, source, test data), then re-run full restore.
+    Does NOT touch Docker Desktop, Ollama, WSL, or model files.
+.PARAMETER RepairFull
+    Like -Repair but also re-restores Ollama models (Phase 2 + Phase 3).
 .EXAMPLE
     .\INSTALL.ps1
     .\INSTALL.ps1 -TestDataPath "D:\Test_Data" -InstallPath "D:\RecallHub"
     .\INSTALL.ps1 -SkipPrerequisites
+    .\INSTALL.ps1 -Repair
+    .\INSTALL.ps1 -RepairFull
 #>
 param(
     [string]$TestDataPath = "C:\Test_Data",
     [string]$InstallPath = "C:\RecallHub",
     [switch]$SkipPrerequisites,
     [switch]$SkipModels,
-    [switch]$SkipRestore
+    [switch]$SkipRestore,
+    [switch]$Repair,
+    [switch]$RepairFull
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,8 +54,26 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     if ($SkipPrerequisites) { $arguments += " -SkipPrerequisites" }
     if ($SkipModels) { $arguments += " -SkipModels" }
     if ($SkipRestore) { $arguments += " -SkipRestore" }
+    if ($Repair) { $arguments += " -Repair" }
+    if ($RepairFull) { $arguments += " -RepairFull" }
     Start-Process powershell.exe -ArgumentList $arguments -Verb RunAs -Wait
     exit
+}
+
+# --- Helper: Incremental manifest writing ---
+function Update-Manifest {
+    param([hashtable]$Updates)
+    $manifestDir = Join-Path $env:ProgramData "RecallHub"
+    $manifestFile = Join-Path $manifestDir "install-manifest.json"
+    if (-not (Test-Path $manifestDir)) { New-Item $manifestDir -ItemType Directory -Force | Out-Null }
+
+    $manifest = @{}
+    if (Test-Path $manifestFile) {
+        $existing = Get-Content $manifestFile -Raw | ConvertFrom-Json
+        $existing.PSObject.Properties | ForEach-Object { $manifest[$_.Name] = $_.Value }
+    }
+    foreach ($key in $Updates.Keys) { $manifest[$key] = $Updates[$key] }
+    $manifest | ConvertTo-Json -Depth 3 | Set-Content $manifestFile -Encoding UTF8
 }
 
 # --- Resolve backup directory (where this script lives) ---
@@ -54,7 +82,12 @@ $ScriptsDir = Join-Path (Join-Path $BackupDir "source") "scripts"
 
 Write-Host ""
 Write-Host "=====================================================" -ForegroundColor Cyan
-Write-Host "   RecallHub v0.8.8 - Complete System Installation" -ForegroundColor Cyan
+if ($Repair -or $RepairFull) {
+    $modeLabel = if ($RepairFull) { "Full Repair" } else { "Repair" }
+    Write-Host "   RecallHub v0.8.8 - $modeLabel Mode" -ForegroundColor Yellow
+} else {
+    Write-Host "   RecallHub v0.8.8 - Complete System Installation" -ForegroundColor Cyan
+}
 Write-Host "=====================================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Backup Source:  $BackupDir" -ForegroundColor Gray
@@ -82,6 +115,125 @@ if ($missing.Count -gt 0) {
 }
 Write-Host "  [OK] Backup structure validated" -ForegroundColor Green
 
+# --- Repair mode: clean up existing deployment before restoring ---
+if ($Repair -or $RepairFull) {
+    Write-Host ""
+    Write-Host "===================================================" -ForegroundColor Yellow
+    Write-Host "  REPAIR MODE: Cleaning existing deployment" -ForegroundColor Yellow
+    Write-Host "===================================================" -ForegroundColor Yellow
+
+    # Mark install as incomplete during repair
+    Update-Manifest @{ install_complete = $false }
+
+    # Validate Docker is available (required for cleanup)
+    $dockerOk = $false
+    try {
+        docker info 2>&1 | Out-Null
+        $dockerOk = $true
+    } catch {}
+
+    if ($dockerOk) {
+        # Stop and remove compose services
+        if (Test-Path $InstallPath) {
+            Write-Host "  Stopping Docker Compose services..." -ForegroundColor Gray
+            try {
+                Push-Location $InstallPath
+                docker compose --profile recallhub --profile quellex down -v --remove-orphans 2>&1 | Out-Null
+                Pop-Location
+                Write-Host "  [OK] Compose services stopped" -ForegroundColor Green
+            } catch {
+                Pop-Location
+                Write-Host "  [WARN] Failed to stop compose services (continuing)" -ForegroundColor Yellow
+            }
+        }
+
+        # Remove leftover containers
+        Write-Host "  Removing leftover containers..." -ForegroundColor Gray
+        $filterNames = @("recallhub", "quellex", "rag-")
+        foreach ($filterName in $filterNames) {
+            $containers = docker ps -a --filter "name=$filterName" -q 2>&1
+            if ($containers -and $containers -notlike "*error*") {
+                foreach ($cid in $containers) {
+                    if ($cid.Trim()) { docker rm -f $cid.Trim() 2>&1 | Out-Null }
+                }
+            }
+        }
+
+        # Remove our Docker images
+        Write-Host "  Removing RecallHub Docker images..." -ForegroundColor Gray
+        $ourImages = @(
+            "recallhub-backend*",
+            "recallhub-frontend*",
+            "recallhub-worker*",
+            "recallhub-base*",
+            "recallhub-ml-heavy*",
+            "quellex-*",
+            "rag-*",
+            "mongodb-rag-agent-backend*",
+            "mongodb-rag-agent-frontend*",
+            "mongodb-rag-agent-ingestion-worker*"
+        )
+        foreach ($pattern in $ourImages) {
+            $imageIds = docker images --filter "reference=$pattern" -q 2>&1
+            if ($imageIds -and $imageIds -notlike "*error*") {
+                foreach ($imgId in $imageIds) {
+                    if ($imgId.Trim()) { docker rmi -f $imgId.Trim() 2>&1 | Out-Null }
+                }
+            }
+        }
+        $pulledImages = @("mongodb/mongodb-atlas-local:8.0", "mongo:8.0", "recallhub-backend-base:latest")
+        foreach ($img in $pulledImages) {
+            $exists = docker images -q $img 2>&1
+            if ($exists -and $exists.Trim()) { docker rmi $img 2>&1 | Out-Null }
+        }
+        Write-Host "  [OK] Docker images removed" -ForegroundColor Green
+    } else {
+        Write-Host "  [WARN] Docker not available, skipping container/image cleanup" -ForegroundColor Yellow
+    }
+
+    # Remove source code directory
+    if (Test-Path $InstallPath) {
+        Write-Host "  Removing source code: $InstallPath" -ForegroundColor Gray
+        try {
+            Remove-Item $InstallPath -Recurse -Force
+            Write-Host "  [OK] Source code removed" -ForegroundColor Green
+        } catch {
+            Write-Host "  [WARN] Failed to remove $InstallPath`: $_" -ForegroundColor Yellow
+        }
+    }
+
+    # Remove Test_Data directory
+    if (Test-Path $TestDataPath) {
+        Write-Host "  Removing test data: $TestDataPath" -ForegroundColor Gray
+        try {
+            Remove-Item $TestDataPath -Recurse -Force
+            Write-Host "  [OK] Test data removed" -ForegroundColor Green
+        } catch {
+            Write-Host "  [WARN] Failed to remove $TestDataPath`: $_" -ForegroundColor Yellow
+        }
+    }
+
+    Write-Host "  [OK] Cleanup complete" -ForegroundColor Green
+    Write-Host ""
+
+    # In repair mode, skip Phase 1 (prerequisites) and conditionally Phase 2
+    $SkipPrerequisites = $true
+    if (-not $RepairFull) { $SkipModels = $true }
+    $SkipRestore = $false
+}
+
+# --- Write initial manifest (tracks partial installs) ---
+$ollamaModelsPath = if ($env:OLLAMA_MODELS) { $env:OLLAMA_MODELS } else { "$env:USERPROFILE\.ollama\models" }
+Update-Manifest @{
+    version = "0.8.8"
+    installed_at = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    install_path = $InstallPath
+    test_data_path = $TestDataPath
+    ollama_models_path = $ollamaModelsPath
+    install_complete = $false
+}
+Write-Host "  [OK] Install manifest initialized" -ForegroundColor Green
+
 # --- Step 1: Prerequisites ---
 if (-not $SkipPrerequisites) {
     Write-Host "" -NoNewline
@@ -93,7 +245,33 @@ if (-not $SkipPrerequisites) {
     $appsDir = Join-Path $BackupDir "apps"
 
     if (Test-Path $prereqScript) {
-        & $prereqScript -AppsPath $appsDir
+        # Capture output to parse install results
+        $prereqOutput = & $prereqScript -AppsPath $appsDir 2>&1 | Out-String
+        Write-Host $prereqOutput
+
+        # Parse installation results from output markers
+        $dockerInstalledByUs = $false
+        $ollamaInstalledByUs = $false
+        $wslEnabledByUs = $false
+        $wslConfigCreatedByUs = $false
+
+        if ($prereqOutput -match '##INSTALL_RESULTS##(.+?)##END_RESULTS##') {
+            $resultsBlock = $Matches[1]
+            if ($resultsBlock -match 'DOCKER_INSTALLED=True') { $dockerInstalledByUs = $true }
+            if ($resultsBlock -match 'OLLAMA_INSTALLED=True') { $ollamaInstalledByUs = $true }
+            if ($resultsBlock -match 'WSL_ENABLED=True') { $wslEnabledByUs = $true }
+            if ($resultsBlock -match 'WSL_CONFIG_CREATED=True') { $wslConfigCreatedByUs = $true }
+        }
+
+        # Update manifest with Phase 1 results
+        Update-Manifest @{
+            docker_installed_by_us = $dockerInstalledByUs
+            ollama_installed_by_us = $ollamaInstalledByUs
+            wsl_enabled_by_us = $wslEnabledByUs
+            wsl_config_created_by_us = $wslConfigCreatedByUs
+            docker_settings_modified_by_us = $dockerInstalledByUs
+        }
+        Write-Host "  [OK] Manifest updated with prerequisite results" -ForegroundColor Green
 
         # Check if restart is needed (Docker first install)
         $dockerOk = $false
@@ -137,6 +315,14 @@ if (-not $SkipPrerequisites) {
         Write-Host "  ERROR: Ollama is not installed." -ForegroundColor Red
         exit 1
     }
+    # Mark prerequisites as not installed by us (skipped)
+    Update-Manifest @{
+        docker_installed_by_us = $false
+        ollama_installed_by_us = $false
+        wsl_enabled_by_us = $false
+        wsl_config_created_by_us = $false
+        docker_settings_modified_by_us = $false
+    }
 }
 
 # --- Step 2: Restore Ollama Models ---
@@ -173,6 +359,12 @@ if (-not $SkipModels) {
     Write-Host "[SKIP] Model restore skipped" -ForegroundColor DarkGray
 }
 
+# Update manifest after models phase
+if (-not $SkipModels) {
+    Update-Manifest @{ ollama_models_restored = $true }
+    Write-Host "  [OK] Manifest updated: models restored" -ForegroundColor Green
+}
+
 # --- Step 3: Full System Restore ---
 if (-not $SkipRestore) {
     Write-Host ""
@@ -193,24 +385,10 @@ if (-not $SkipRestore) {
     Write-Host "[SKIP] Full system restore skipped" -ForegroundColor DarkGray
 }
 
-# --- Write install manifest for uninstaller ---
-$ollamaModelsPath = if ($env:OLLAMA_MODELS) { $env:OLLAMA_MODELS } else { "$env:USERPROFILE\.ollama\models" }
-$manifestData = @{
-    installed_at = (Get-Date -Format "o")
-    version = "0.8.8"
-    install_path = $InstallPath
-    test_data_path = $TestDataPath
-    docker_installed_by_us = (-not ([bool]$SkipPrerequisites))
-    ollama_installed_by_us = (-not ([bool]$SkipPrerequisites))
-    wsl_enabled_by_us = (-not ([bool]$SkipPrerequisites))
-    wsl_config_created_by_us = (-not ([bool]$SkipPrerequisites))
-    docker_settings_modified_by_us = (-not ([bool]$SkipPrerequisites))
-    ollama_models_path = $ollamaModelsPath
-}
+# --- Finalize manifest ---
+Update-Manifest @{ docker_images_loaded = $true; install_complete = $true }
 $manifestDir = Join-Path $env:ProgramData "RecallHub"
-if (-not (Test-Path $manifestDir)) { New-Item -ItemType Directory -Path $manifestDir -Force | Out-Null }
-$manifestData | ConvertTo-Json | Set-Content (Join-Path $manifestDir "install-manifest.json") -Encoding UTF8
-Write-Host "  [OK] Install manifest written to: $manifestDir\install-manifest.json" -ForegroundColor Green
+Write-Host "  [OK] Install manifest finalized: $manifestDir\install-manifest.json" -ForegroundColor Green
 
 # --- Final Summary ---
 Write-Host ""
