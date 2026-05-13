@@ -1350,20 +1350,54 @@ async def send_message_stream(
             # Start agent processing in background
             agent_task = asyncio.create_task(process_agent())
             
-            # Stream events as they arrive
-            # Use short timeout to send keepalive pings, preventing
-            # Cloudflare/proxy timeouts on idle SSE connections
+            # Stream events as they arrive.
+            #
+            # Two independent caps, both configurable via settings:
+            #   - idle_timeout: seconds of silence (no agent events) before
+            #     we give up. Reset every time an event is forwarded.
+            #   - total_timeout: absolute wall-clock cap for the entire
+            #     streamed response. Catches runaway loops.
+            # Keepalive pings are emitted on every short-idle interval so
+            # Cloudflare / reverse proxies do not close idle SSE connections.
             KEEPALIVE_INTERVAL = 15  # seconds between heartbeats
-            max_total_timeout = 600  # 10 minute hard limit
-            elapsed = 0
-            
-            while elapsed < max_total_timeout:
+            idle_timeout = max(KEEPALIVE_INTERVAL, int(settings.agent_sse_idle_timeout))
+            total_timeout = max(idle_timeout, int(settings.agent_sse_total_timeout))
+            stream_started = time.time()
+            idle_elapsed = 0
+            timeout_reason: Optional[str] = None
+
+            while True:
+                total_elapsed = time.time() - stream_started
+                if total_elapsed >= total_timeout:
+                    timeout_reason = (
+                        f"total wall-clock cap of {total_timeout}s reached "
+                        f"(agent_sse_total_timeout)"
+                    )
+                    break
+                if idle_elapsed >= idle_timeout:
+                    timeout_reason = (
+                        f"{idle_timeout}s without any agent events "
+                        f"(agent_sse_idle_timeout)"
+                    )
+                    break
+
+                # Bound the per-iteration wait so we still emit keepalives
+                # and re-check the total cap even under sustained silence.
+                wait_budget = min(
+                    KEEPALIVE_INTERVAL,
+                    max(1, idle_timeout - idle_elapsed),
+                    max(1, int(total_timeout - total_elapsed)),
+                )
+
                 try:
-                    event = await asyncio.wait_for(event_queue.get(), timeout=KEEPALIVE_INTERVAL)
-                    
+                    event = await asyncio.wait_for(event_queue.get(), timeout=wait_budget)
+
                     if event['type'] == 'done':
                         break
-                    
+
+                    # Progress received: reset idle counter.
+                    idle_elapsed = 0
+
                     # Forward the event immediately
                     if event['type'] == 'phase':
                         yield f"data: {json.dumps({'type': 'phase', **event['data']})}\n\n"
@@ -1373,17 +1407,30 @@ async def send_message_stream(
                         yield f"data: {json.dumps({'type': 'worker_step', **event['data']})}\n\n"
                     else:
                         yield f"data: {json.dumps(event)}\n\n"
-                        
+
                 except asyncio.TimeoutError:
-                    # No event received within interval - send SSE keepalive
-                    # This prevents Cloudflare and reverse proxies from
-                    # closing the connection due to inactivity
-                    elapsed += KEEPALIVE_INTERVAL
-                    if elapsed >= max_total_timeout:
-                        logger.error("Agent processing timed out")
-                        yield f"data: {json.dumps({'type': 'error', 'message': 'Processing timed out'})}\n\n"
-                        break
+                    # No event received within the bounded wait. Emit an SSE
+                    # keepalive to preserve the connection and accumulate
+                    # idle time toward the idle cap.
+                    idle_elapsed += wait_budget
                     yield f": keepalive\n\n"
+
+            if timeout_reason is not None:
+                logger.error(
+                    f"[req={stream_req_id}] Agent SSE stream aborted: {timeout_reason}"
+                )
+                yield (
+                    f"data: {json.dumps({'type': 'error', 'message': f'Processing timed out: {timeout_reason}'})}\n\n"
+                )
+                # Cancel the background agent task so we don't leak work.
+                if not agent_task.done():
+                    agent_task.cancel()
+                    try:
+                        await agent_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                unregister_active_request(stream_req_id)
+                return
             
             # Wait for agent task to complete
             await agent_task

@@ -129,6 +129,33 @@ class BackendSettings(BaseSettings):
         default=300,
         description="Maximum total time in seconds for a complete agent request"
     )
+    # SSE streaming timeouts (applied in backend/routers/sessions.py)
+    # These bound the streamed chat response, not individual LLM calls.
+    agent_sse_idle_timeout: int = Field(
+        default=900,
+        description=(
+            "Seconds of silence (no SSE events from the agent) before the "
+            "stream is aborted. Counter resets every time an event is "
+            "forwarded to the client. Increase for slow local models."
+        )
+    )
+    agent_sse_total_timeout: int = Field(
+        default=3600,
+        description=(
+            "Absolute wall-clock cap (seconds) for a single streamed chat "
+            "response. Protects against runaway agent loops."
+        )
+    )
+    # Per-LLM-call timeout passed to LiteLLM for local/Ollama providers.
+    # Cloud providers usually have their own sensible server-side limits.
+    agent_llm_request_timeout: int = Field(
+        default=1800,
+        description=(
+            "Timeout in seconds passed to LiteLLM acompletion() for local "
+            "LLM calls (Ollama). Large local models (e.g. gemma:26b) need "
+            "generous budgets for cold-start and long generations."
+        )
+    )
     agent_default_mode: str = Field(
         default="auto",
         description="Default agent mode: auto, thinking, or fast"

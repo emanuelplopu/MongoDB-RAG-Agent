@@ -822,6 +822,7 @@ class FederatedAgent:
             # Set api_base for Ollama models so LiteLLM routes to the correct host
             if "ollama/" in model_string:
                 llm_params["api_base"] = settings.ollama_base_url
+                llm_params["timeout"] = settings.agent_llm_request_timeout
             
             # Check if this is a newer OpenAI model
             if "gpt-5" in model_string.lower() or "gpt-4o" in model_string.lower():

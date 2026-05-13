@@ -264,6 +264,12 @@ LLM_MODEL=$($Config.llm.model)
 LLM_TEMPERATURE=$($Config.llm.temperature)
 LLM_MAX_TOKENS=$($Config.llm.maxTokens)
 
+# Orchestrator / Worker Model Routing
+ORCHESTRATOR_PROVIDER=$($Config.orchestrator.provider)
+ORCHESTRATOR_MODEL=ollama/$($Config.orchestrator.model)
+WORKER_PROVIDER=$($Config.worker.provider)
+WORKER_MODEL=ollama/$($Config.worker.model)
+
 # Disable external LLM providers (hardened mode)
 OPENAI_API_KEY=
 OPENROUTER_API_KEY=

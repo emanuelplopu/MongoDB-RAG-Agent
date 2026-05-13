@@ -206,6 +206,10 @@ class Orchestrator:
                 # Ollama-specific: penalize repetition to prevent garbage output
                 llm_params["repeat_penalty"] = 1.3
                 llm_params["stop"] = ["\n\n\n\n", "---END---"]
+                # Large local models (cold start + long generation) need a
+                # generous per-call budget. Cloud providers use their own
+                # server-side limits.
+                llm_params["timeout"] = settings.agent_llm_request_timeout
             
             # Check if this is a newer OpenAI model that requires max_completion_tokens
             model_lower = model_string.lower()
