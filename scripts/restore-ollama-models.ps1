@@ -105,25 +105,52 @@ if ($ollamaProcesses) {
     $ollamaWasRunning = $true
     Write-Info "Stopping Ollama processes..."
 
-    $stopAttempts = 0
-    $maxAttempts = 3
-    while ((Get-Process -Name "ollama" -ErrorAction SilentlyContinue) -and $stopAttempts -lt $maxAttempts) {
-        Stop-Process -Name "ollama" -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
-        $stopAttempts++
-    }
+    # Attempt 1: Graceful Stop-Process for ollama and ollama_llama_server
+    Write-Info "  Attempt 1: Stop-Process (ollama + ollama_llama_server)..."
+    Stop-Process -Name "ollama" -Force -ErrorAction SilentlyContinue
+    Stop-Process -Name "ollama_llama_server" -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
 
-    if (Get-Process -Name "ollama" -ErrorAction SilentlyContinue) {
-        Write-Err "Could not stop Ollama processes after $maxAttempts attempts"
-        Write-Err "Please close Ollama manually and re-run this script"
-        exit 1
+    if (-not (Get-Process -Name "ollama" -ErrorAction SilentlyContinue)) {
+        Write-OK "Ollama stopped (Stop-Process)"
+    } else {
+        # Attempt 2: Stop the Windows service if it exists
+        Write-Info "  Attempt 2: Stop-Service OllamaService..."
+        try {
+            $svc = Get-Service -Name "OllamaService" -ErrorAction SilentlyContinue
+            if ($svc -and $svc.Status -eq 'Running') {
+                Stop-Service -Name "OllamaService" -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 3
+            }
+        } catch { }
+        Stop-Process -Name "ollama" -Force -ErrorAction SilentlyContinue
+        Stop-Process -Name "ollama_llama_server" -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 3
+
+        if (-not (Get-Process -Name "ollama" -ErrorAction SilentlyContinue)) {
+            Write-OK "Ollama stopped (service stop)"
+        } else {
+            # Attempt 3: taskkill as last resort (kills process tree)
+            Write-Info "  Attempt 3: taskkill /F /IM ollama.exe /T..."
+            try {
+                $null = cmd /c "taskkill /F /IM ollama.exe /T 2>&1"
+                $null = cmd /c "taskkill /F /IM ollama_llama_server.exe /T 2>&1"
+            } catch { }
+            Start-Sleep -Seconds 3
+
+            if (-not (Get-Process -Name "ollama" -ErrorAction SilentlyContinue)) {
+                Write-OK "Ollama stopped (taskkill)"
+            } else {
+                Write-Warn "Could not stop all Ollama processes after 3 attempts"
+                Write-Warn "Continuing anyway - file copy may work if models are not locked"
+            }
+        }
     }
-    Write-OK "Ollama service stopped"
 } else {
     Write-Info "Ollama is not currently running"
 }
 
-# Also stop ollama_llama_server if present
+# Also ensure ollama_llama_server is stopped
 Stop-Process -Name "ollama_llama_server" -Force -ErrorAction SilentlyContinue
 
 # ─── Copy models ────────────────────────────────────────────────────────────────

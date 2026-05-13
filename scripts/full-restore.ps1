@@ -358,8 +358,22 @@ if (-not (Test-Path $dockerComposePath)) {
 }
 
 Write-Info "Stopping any existing containers..."
-docker compose --profile recallhub down 2>&1 | Out-Null
-docker compose down 2>&1 | Out-Null
+try {
+    $null = docker compose --profile recallhub down 2>&1
+} catch {
+    # Docker writes informational messages to stderr (e.g., "Container ... Stopping")
+}
+if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne $null) {
+    Write-Warn "docker compose --profile recallhub down returned exit code $LASTEXITCODE"
+}
+try {
+    $null = docker compose down 2>&1
+} catch {
+    # Docker writes informational messages to stderr
+}
+if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne $null) {
+    Write-Warn "docker compose down returned exit code $LASTEXITCODE"
+}
 Write-OK "Docker environment cleared"
 
 # Step 9: Start MongoDB and restore dump
@@ -368,15 +382,22 @@ Write-Step "Starting MongoDB and restoring databases..."
 Write-Info "Starting MongoDB container..."
 $mongoStarted = $false
 try {
-    docker compose --profile recallhub up -d mongodb 2>&1 | ForEach-Object { Write-Info $_ }
+    $output = docker compose --profile recallhub up -d mongodb 2>&1
+    $output | ForEach-Object { Write-Info "$_" }
     if ($LASTEXITCODE -eq 0) { $mongoStarted = $true }
-} catch { }
+} catch {
+    # Docker stderr is informational, check exit code instead
+    if ($LASTEXITCODE -eq 0) { $mongoStarted = $true }
+}
 
 if (-not $mongoStarted) {
     try {
-        docker compose up -d mongodb 2>&1 | ForEach-Object { Write-Info $_ }
+        $output = docker compose up -d mongodb 2>&1
+        $output | ForEach-Object { Write-Info "$_" }
         if ($LASTEXITCODE -eq 0) { $mongoStarted = $true }
-    } catch { }
+    } catch {
+        if ($LASTEXITCODE -eq 0) { $mongoStarted = $true }
+    }
 }
 
 if (-not $mongoStarted) {
@@ -387,7 +408,11 @@ if (-not $mongoStarted) {
 
 Write-Info "Waiting for MongoDB to become healthy..."
 # Use longer timeout if image was just pulled (first-time init takes longer)
-$imageAge = docker image inspect "mongodb/mongodb-atlas-local:8.0" --format ".Created" 2>&1 | Out-String
+try {
+    $imageAge = docker image inspect "mongodb/mongodb-atlas-local:8.0" --format ".Created" 2>&1 | Out-String
+} catch {
+    $imageAge = ""
+}
 $maxWait = 300  # 5 min default for safety
 Write-Info "  (timeout: ${maxWait}s)"
 
@@ -396,8 +421,11 @@ $mongoReady = $false
 while ($waited -lt $maxWait) {
     try {
         $svcHealth = docker compose --profile recallhub exec -T mongodb mongosh --eval "db.adminCommand('ping')" --quiet 2>&1
-        if ("$svcHealth" -match 'ok\s*:\s*1') { $mongoReady = $true; break }
-    } catch { }
+    } catch {
+        # Docker/mongosh stderr is informational
+        $svcHealth = ""
+    }
+    if ("$svcHealth" -match 'ok\s*:\s*1') { $mongoReady = $true; break }
     Start-Sleep -Seconds 3
     $waited += 3
     Write-Host "." -NoNewline -ForegroundColor Gray
@@ -447,10 +475,15 @@ if (Test-Path $mongoDumpDir) {
 
     $restoreContainer = "recallhub-mongorestore-temp"
     try {
-        docker rm -f $restoreContainer 2>&1 | Out-Null
+        try { $null = docker rm -f $restoreContainer 2>&1 } catch {}
         Write-Info "Pulling mongo:8.0 image (if needed)..."
-        docker pull mongo:8.0 2>&1 | Select-Object -Last 3 | ForEach-Object { Write-Info $_ }
-        docker run -d --name $restoreContainer --network $network mongo:8.0 sleep 300 2>&1 | Out-Null
+        try {
+            $pullOutput = docker pull mongo:8.0 2>&1
+            $pullOutput | Select-Object -Last 3 | ForEach-Object { Write-Info "$_" }
+        } catch {
+            Write-Info "(pull output suppressed)"
+        }
+        try { $null = docker run -d --name $restoreContainer --network $network mongo:8.0 sleep 300 2>&1 } catch {}
 
         # Copy dump into container
         Write-Info "Copying dump into container via docker cp..."
@@ -480,7 +513,7 @@ if (Test-Path $mongoDumpDir) {
     } catch {
         Write-Err "MongoDB restore failed: $_"
     } finally {
-        docker rm -f $restoreContainer 2>&1 | Out-Null
+        try { $null = docker rm -f $restoreContainer 2>&1 } catch {}
     }
 } elseif (Test-Path $mongoArchive) {
     # Legacy archive format
@@ -603,10 +636,14 @@ if (-not $imagesLoaded -and -not $SkipBuild) {
 
     Write-Ts; Write-Host "Building frontend image..." -ForegroundColor White
     try {
-        docker compose --profile recallhub build frontend
-        Write-OK "Frontend image built"
+        $null = docker compose --profile recallhub build frontend 2>&1
     } catch {
-        Write-Warn "Frontend build failed: $_"
+        # Docker stderr is informational, not necessarily an error
+    }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "Frontend build failed (exit code: $LASTEXITCODE)"
+    } else {
+        Write-OK "Frontend image built"
     }
 } elseif (-not $imagesLoaded -and $SkipBuild) {
     Write-Info "Skipped (-SkipBuild flag)"
@@ -617,9 +654,12 @@ Write-Step "Starting all services and verifying health..."
 
 Write-Info "Starting all RecallHub services..."
 try {
-    docker compose --profile recallhub up -d
+    $null = docker compose --profile recallhub up -d 2>&1
 } catch {
-    Write-Warn "Some services may have failed to start: $_"
+    # Docker stderr is informational (e.g., "Container ... Starting")
+}
+if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne $null) {
+    Write-Warn "Some services may have failed to start (exit code: $LASTEXITCODE)"
 }
 
 Write-Info "Waiting for services to initialize (30s)..."
@@ -628,7 +668,8 @@ Start-Sleep -Seconds 30
 # Check container status
 Write-Info "Container status:"
 try {
-    $containers = docker compose --profile recallhub ps --format json 2>&1 | ConvertFrom-Json -ErrorAction SilentlyContinue
+    $psOutput = docker compose --profile recallhub ps --format json 2>&1
+    $containers = $psOutput | ConvertFrom-Json -ErrorAction SilentlyContinue
     if ($containers) {
         foreach ($container in $containers) {
             $status = if ($container.State -eq "running") { "Running" } else { $container.State }
@@ -644,7 +685,7 @@ try {
 Write-Info "Verifying MongoDB..."
 try {
     $dbListRaw = docker compose --profile recallhub exec -T mongodb mongosh --eval "db.adminCommand('listDatabases').databases.map(d => d.name + ' (' + Math.round(d.sizeOnDisk/1024/1024) + ' MB)').join(', ')" --quiet 2>&1
-    $dbListStr = ($dbListRaw | Select-Object -Last 1).Trim()
+    $dbListStr = ("$($dbListRaw | Select-Object -Last 1)").Trim()
     if ($dbListStr) {
         Write-OK "Databases: $dbListStr"
     }

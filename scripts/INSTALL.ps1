@@ -144,9 +144,17 @@ if ($Repair -or $RepairFull) {
             Write-Host "  Stopping Docker Compose services..." -ForegroundColor Gray
             try {
                 Push-Location $InstallPath
-                docker compose --profile recallhub --profile quellex down -v --remove-orphans 2>&1 | Out-Null
+                try {
+                    $null = docker compose --profile recallhub --profile quellex down -v --remove-orphans 2>&1
+                } catch {
+                    # Docker writes informational messages to stderr (e.g., "Container ... Stopping")
+                }
+                if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne $null) {
+                    Write-Host "  [WARN] docker compose down returned exit code $LASTEXITCODE (continuing)" -ForegroundColor Yellow
+                } else {
+                    Write-Host "  [OK] Compose services stopped" -ForegroundColor Green
+                }
                 Pop-Location
-                Write-Host "  [OK] Compose services stopped" -ForegroundColor Green
             } catch {
                 Pop-Location
                 Write-Host "  [WARN] Failed to stop compose services (continuing)" -ForegroundColor Yellow
