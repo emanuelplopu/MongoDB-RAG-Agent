@@ -116,11 +116,28 @@ if (Test-Path $fallbackManifest) {
     $manifest = Get-Content $primaryManifest -Raw | ConvertFrom-Json
 }
 
+# --- Determine tenant ---
+$tenant = "recallhub"  # default
+if ($manifest -and $manifest.tenant) {
+    $tenant = $manifest.tenant
+}
+$tenantName = $tenant.Substring(0,1).ToUpper() + $tenant.Substring(1)
+
+# Override InstallPath from manifest tenant if not explicitly changed
+if ($manifest) {
+    if ($InstallPath -eq "C:\RecallHub" -and $manifest.install_path) {
+        $InstallPath = $manifest.install_path
+    } elseif ($InstallPath -eq "C:\RecallHub" -and $tenant -ne "recallhub") {
+        $InstallPath = "C:\$tenantName"
+    }
+}
+
 # --- Header ---
 Write-Host ""
 Write-Host "=====================================================" -ForegroundColor Red
-Write-Host "   RecallHub - Complete System Uninstallation" -ForegroundColor Red
+Write-Host "   $tenantName - Complete System Uninstallation" -ForegroundColor Red
 Write-Host "=====================================================" -ForegroundColor Red
+Write-Host "  Tenant: $tenantName" -ForegroundColor Gray
 Write-Host ""
 
 if ($DryRun) {
@@ -135,10 +152,7 @@ if ($manifest) {
     Write-Host "  Install path: $($manifest.install_path)" -ForegroundColor Gray
     Write-Host ""
 
-    # Override InstallPath from manifest if not explicitly changed
-    if ($InstallPath -eq "C:\RecallHub" -and $manifest.install_path) {
-        $InstallPath = $manifest.install_path
-    }
+    # InstallPath override is handled above in tenant detection
 } else {
     Write-Host "  [WARN] No install manifest found." -ForegroundColor Yellow
     Write-Host "  Will use defaults and prompt for confirmation at each step." -ForegroundColor Yellow
@@ -290,7 +304,7 @@ if ($dockerAvailable) {
         } else {
             try {
                 Push-Location $InstallPath
-                docker compose --profile recallhub --profile quellex down -v --remove-orphans 2>&1 | Out-Null
+                docker compose --profile $tenant down -v --remove-orphans 2>&1 | Out-Null
                 Pop-Location
                 Write-Done "Docker compose services stopped and removed"
             } catch {
@@ -345,20 +359,29 @@ if ($dockerAvailable) {
 Write-Step -Step 2 -Total $TotalSteps -Message "Removing RecallHub Docker images"
 
 if ($dockerAvailable) {
-    # Patterns for images built via docker-compose (project name prefix)
-    $ourImages = @(
-        "recallhub-backend*",
-        "recallhub-frontend*",
-        "recallhub-worker*",
-        "recallhub-base*",
-        "recallhub-ml-heavy*",
-        "quellex-*",
-        "rag-*",
-        # Images loaded from exported tar files (offline deployment)
-        "mongodb-rag-agent-backend*",
-        "mongodb-rag-agent-frontend*",
-        "mongodb-rag-agent-ingestion-worker*"
+    # Shared image patterns (always cleaned regardless of tenant)
+    $sharedPatterns = @(
+        "mongodb-rag-agent-ingestion-worker*",
+        "rag-*"
     )
+    # Tenant-specific image patterns
+    $tenantPatterns = @{
+        "quellex" = @(
+            "mongodb-rag-agent-backend-quellex*",
+            "mongodb-rag-agent-frontend-quellex*",
+            "quellex-*"
+        )
+        "recallhub" = @(
+            "mongodb-rag-agent-backend:*",
+            "mongodb-rag-agent-frontend:*",
+            "recallhub-backend*",
+            "recallhub-frontend*",
+            "recallhub-worker*",
+            "recallhub-base*",
+            "recallhub-ml-heavy*"
+        )
+    }
+    $ourImages = $sharedPatterns + $tenantPatterns[$tenant]
 
     foreach ($pattern in $ourImages) {
         $imageIds = docker images --filter "reference=$pattern" -q 2>&1
@@ -809,7 +832,7 @@ if ($restartNeeded -and -not $DryRun) {
 }
 
 if ($errors.Count -eq 0 -and -not $DryRun) {
-    Write-Host "  RecallHub has been completely removed from this system." -ForegroundColor Green
+    Write-Host "  $tenantName has been completely removed from this system." -ForegroundColor Green
 }
 
 Write-Host ""

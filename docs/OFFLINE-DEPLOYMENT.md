@@ -2,41 +2,62 @@
 
 ## Overview
 
-RecallHub deploys as a fully self-contained offline package. A single backup folder contains everything needed to stand up the complete system on a fresh Windows machine with zero internet connectivity:
+RecallHub deploys as a fully self-contained offline package. Backups are **per-tenant** — each backup targets a single tenant (Quellex or RecallHub) and contains only the Docker images, database collections, and configuration for that tenant. A single backup folder contains everything needed to stand up the tenant on a fresh Windows machine with zero internet connectivity:
 
 - Docker Desktop + WSL2 runtime
 - Ollama with pre-loaded AI models
-- Pre-built Docker images for all services
-- Full MongoDB database dump
-- Document corpus (Test_Data)
+- Tenant-specific Docker images (backend + frontend)
+- Shared service images (ingestion worker, MongoDB)
+- Tenant-scoped MongoDB database dump
 - Complete source code and configuration
 
-The installer is idempotent — safe to re-run after interruptions or restarts.
+The installer is idempotent — safe to re-run after interruptions or restarts. It reads the tenant from `manifest.json` and adjusts paths, ports, and profiles automatically.
 
 ## Backup Package Structure
 
+Each backup is named `<Tenant>_v<version>_<timestamp>` and contains only tenant-relevant resources:
+
 ```
-RecallHub_v0.8.8_YYYYMMDD_HHMMSS/
-├── INSTALL.ps1          — Single entry point (run this)
-├── apps/                — Bundled installers
+Quellex_v0.8.8_YYYYMMDD_HHMMSS/
+├── INSTALL.ps1              (reads tenant from manifest)
+├── manifest.json            (includes "tenant": "quellex")
+├── apps/
 │   ├── DockerDesktopInstaller.exe
 │   └── OllamaSetup.exe
-├── images/              — Pre-built Docker images
-│   ├── backend.tar
-│   ├── backend-quellex.tar
-│   ├── ingestion-worker.tar
-│   ├── frontend.tar
-│   ├── frontend-quellex.tar
-│   └── mongodb-atlas-local.tar
-├── models/              — Ollama AI models
-│   ├── blobs/
-│   └── manifests/
-├── mongodb/dump/        — Full database backup
-├── Test_Data/           — Document corpus
-├── source/              — Complete source code
-├── config/              — Environment configs
-└── manifest.json        — Backup metadata
+├── images/
+│   ├── backend-quellex.tar      (tenant backend)
+│   ├── frontend-quellex.tar     (tenant frontend)
+│   ├── ingestion-worker.tar     (shared)
+│   └── mongodb-atlas-local.tar  (shared)
+├── models/                      (Ollama AI models)
+├── mongodb/dump/
+│   ├── admin/                   (shared)
+│   ├── recallhub/               (shared auth DB)
+│   └── rag_parhelion/           (tenant data)
+├── config/
+│   ├── .env                     (tenant-specific)
+│   ├── docker-compose.yml
+│   └── profiles.yaml            (tenant profiles)
+├── source/                      (complete source code)
+└── documents/
 ```
+
+A RecallHub backup follows the same structure with `backend.tar`, `frontend.tar`, and RecallHub-specific databases (`rag_db`, `rag_test_law`, etc.).
+
+## Tenant-Resource Mapping
+
+| Resource | Quellex | RecallHub |
+|----------|---------|-----------|
+| Docker profile | `--profile quellex` | `--profile recallhub` |
+| Backend image | `backend-quellex` | `backend` |
+| Frontend image | `frontend-quellex` | `frontend` |
+| ACTIVE_PROFILE | `parhelion` | `default` |
+| MONGODB_DATABASE | `rag_parhelion` | `rag_db` |
+| Databases | admin, recallhub, rag_parhelion | admin, recallhub, rag_db, rag_test_law, user_rag_* |
+| Install path | `C:\Quellex` | `C:\RecallHub` |
+| Ports (backend/frontend) | 11001 / 11081 | 11000 / 11080 |
+
+The `recallhub` database is always included — it holds the shared authentication data used by both tenants.
 
 ## System Requirements
 
@@ -57,14 +78,15 @@ WSL2 and Hyper-V capable hardware required (most modern PCs).
 # 1. Set execution policy for this session
 Set-ExecutionPolicy Bypass -Scope Process -Force
 
-# 2. Run the installer (auto-elevates to Admin)
-& "D:\path\to\backup\INSTALL.ps1"
+# 2. Run the installer — tenant is auto-detected from manifest.json
+& "D:\Quellex_v0.8.8_...\INSTALL.ps1"
+# Installs to C:\Quellex (or C:\RecallHub based on tenant)
 
 # 3. After restart (if Docker was freshly installed):
-& "D:\path\to\backup\INSTALL.ps1" -SkipPrerequisites
+& "D:\Quellex_v0.8.8_...\INSTALL.ps1" -SkipPrerequisites
 ```
 
-That's it. The system will be accessible at `http://localhost:11080` (RecallHub) and `http://localhost:11081` (Quellex).
+The installer reads the tenant from `manifest.json` and configures everything accordingly. After install, the system is accessible at the tenant's ports (e.g., `http://localhost:11081` for Quellex, `http://localhost:11080` for RecallHub).
 
 ## What INSTALL.ps1 Does
 
@@ -86,46 +108,53 @@ The installer runs in 3 phases:
 
 ### Phase 3: Full System Restore
 
-1. Copies source code from `source/` to `InstallPath` (default: `C:\RecallHub`)
-2. Writes `.env` and `.env.docker` configuration files
-3. Loads Docker images from `images/*.tar` via `docker load`
-4. Starts MongoDB container
-5. Restores database from `mongodb/dump/` via `mongorestore`
-6. Copies Test_Data to configured path
-7. Starts all services via `docker compose up -d`
-8. Runs health checks on all endpoints
-9. Writes install manifest for future uninstall/upgrade
+1. Reads tenant from `manifest.json` (e.g., `quellex` or `recallhub`)
+2. Copies source code from `source/` to `InstallPath` (default: `C:\<Tenant>`)
+3. Writes `.env` and `.env.docker` with tenant-specific configuration
+4. Loads tenant Docker images from `images/*.tar` via `docker load`
+5. Starts MongoDB container
+6. Restores tenant databases from `mongodb/dump/` via `mongorestore`
+7. Copies documents to configured path
+8. Starts tenant services via `docker compose --profile <tenant> up -d`
+9. Runs health checks on tenant endpoints
+10. Writes install manifest for future uninstall/upgrade
 
 ### Installer Parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `-InstallPath` | `C:\RecallHub` | Where source code is deployed |
+| `-InstallPath` | `C:\<Tenant>` | Where source code is deployed (auto-set from tenant) |
 | `-TestDataPath` | `C:\Test_Data` | Where document corpus is stored |
 | `-SkipPrerequisites` | false | Skip Docker/Ollama install (use after restart) |
+| `-Repair` | false | Re-run restore steps without reinstalling prerequisites |
 | `-Force` | false | Skip confirmation prompts |
+
+The tenant is always read from `manifest.json` — there is no `-Tenant` parameter on `INSTALL.ps1`.
 
 ## Creating a Backup (Source Machine)
 
-Run these from the project root on a machine with a working RecallHub installation:
+The `-Tenant` parameter is **mandatory**. Each backup targets a single tenant:
 
 ```powershell
-# Full backup (source, database, config — without Docker images)
-.\scripts\full-backup.ps1 -OutputPath "E:\RecallHub_Backups" -TestDataPath "D:\Test_Data"
+# Create a Quellex backup
+.\scripts\full-backup.ps1 -OutputPath "E:\Backups" -Tenant quellex
+
+# Create a RecallHub backup
+.\scripts\full-backup.ps1 -OutputPath "E:\Backups" -Tenant recallhub -TestDataPath "D:\Test_Data"
 ```
 
-The backup folder is created at `E:\RecallHub_Backups\RecallHub_v0.8.8_YYYYMMDD_HHMMSS\`.
+The backup folder is created at `E:\Backups\Quellex_v0.8.8_YYYYMMDD_HHMMSS\` (or `RecallHub_...`).
 
-### Export Docker images (large, ~35 GB total)
+### Export Docker images for a specific tenant
 
 ```powershell
-.\scripts\export-docker-images.ps1 -OutputPath "E:\RecallHub_Backups\RecallHub_v0.8.8_...\images"
+.\scripts\export-docker-images.ps1 -OutputPath "E:\Backups\Quellex_v0.8.8_...\images" -Tenant quellex
 ```
 
 ### Export Ollama models
 
 ```powershell
-.\scripts\backup-ollama-models.ps1 -OutputPath "E:\RecallHub_Backups\RecallHub_v0.8.8_...\models"
+.\scripts\backup-ollama-models.ps1 -OutputPath "E:\Backups\Quellex_v0.8.8_...\models"
 ```
 
 ### Bundle prerequisite installers
@@ -137,21 +166,25 @@ Copy-Item "path\to\OllamaSetup.exe" "E:\...\apps\"
 
 ### Verify backup completeness
 
-A valid backup must contain:
+A valid per-tenant backup must contain:
 - `INSTALL.ps1` — copied from `scripts/INSTALL.ps1`
+- `manifest.json` — valid JSON with `tenant`, `version`, and backup metadata
 - `apps/` — both installers present
-- `images/` — all 6 tar files
+- `images/` — tenant backend + frontend tars, plus shared images
 - `models/blobs/` — non-empty
 - `source/` — contains `docker-compose.yml`
-- `mongodb/dump/` — non-empty
-- `manifest.json` — valid JSON with version info
+- `mongodb/dump/` — tenant databases + shared auth DB
+- `config/` — tenant `.env`, `docker-compose.yml`, `profiles.yaml`
 
 ## Uninstallation
 
-Clean removal of all RecallHub components:
+The uninstaller reads the tenant from the install manifest and removes only that tenant's components:
 
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
+# Tenant is auto-detected from the install manifest
+& "C:\Quellex\scripts\UNINSTALL.ps1"
+# Or for RecallHub:
 & "C:\RecallHub\scripts\UNINSTALL.ps1"
 ```
 
@@ -159,27 +192,27 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 
 ```powershell
 # Preview what would be removed (no changes made)
-& "C:\RecallHub\scripts\UNINSTALL.ps1" -DryRun
+& "C:\Quellex\scripts\UNINSTALL.ps1" -DryRun
 
 # Keep Docker Desktop installed
-& "C:\RecallHub\scripts\UNINSTALL.ps1" -KeepDocker
+& "C:\Quellex\scripts\UNINSTALL.ps1" -KeepDocker
 
 # Keep Ollama installed
-& "C:\RecallHub\scripts\UNINSTALL.ps1" -KeepOllama
+& "C:\Quellex\scripts\UNINSTALL.ps1" -KeepOllama
 
-# Keep Test_Data and DB data (useful before reinstall)
-& "C:\RecallHub\scripts\UNINSTALL.ps1" -KeepData
+# Keep data (useful before reinstall)
+& "C:\Quellex\scripts\UNINSTALL.ps1" -KeepData
 
 # Skip all prompts
-& "C:\RecallHub\scripts\UNINSTALL.ps1" -Force
+& "C:\Quellex\scripts\UNINSTALL.ps1" -Force
 ```
 
 The uninstaller removes (in order):
-1. Docker containers, volumes, and networks
-2. All RecallHub Docker images (built and loaded)
-3. Source code directory
-4. Test_Data directory
-5. Ollama models (RecallHub-specific)
+1. Tenant Docker containers, volumes, and networks
+2. Tenant Docker images (backend, frontend)
+3. Source code directory (`C:\<Tenant>`)
+4. Documents directory
+5. Ollama models (tenant-specific)
 6. Ollama application (if installed by us)
 7. Docker Desktop (if installed by us)
 8. WSL configuration (if created by us)
@@ -203,7 +236,8 @@ The uninstaller removes (in order):
 Override at install time:
 
 ```powershell
-& ".\INSTALL.ps1" -InstallPath "D:\MyRecallHub" -TestDataPath "D:\MyData"
+# Tenant is read from manifest.json; override install path if needed
+& ".\INSTALL.ps1" -InstallPath "D:\MyQuellex" -TestDataPath "D:\MyData"
 ```
 
 ### Docker Resource Allocation
@@ -278,14 +312,14 @@ Some antivirus solutions flag PowerShell automation. Temporarily disable real-ti
 ## Script Reference
 
 | Script | Purpose |
-|--------|---------|
-| `scripts/INSTALL.ps1` | Single entry point for offline deployment |
-| `scripts/UNINSTALL.ps1` | Clean removal of all components |
+|--------|--------|
+| `scripts/INSTALL.ps1` | Single entry point — reads tenant from backup manifest |
+| `scripts/UNINSTALL.ps1` | Tenant-aware clean removal |
 | `scripts/install-prerequisites.ps1` | Docker Desktop + Ollama silent install |
 | `scripts/restore-ollama-models.ps1` | Restore model blobs and manifests |
-| `scripts/full-restore.ps1` | Source, DB, data, Docker images, service start |
-| `scripts/full-backup.ps1` | Create backup package from running system |
-| `scripts/export-docker-images.ps1` | Save Docker images as tar files |
+| `scripts/full-restore.ps1` | Tenant-aware restore (auto-detects from manifest) |
+| `scripts/full-backup.ps1` | Create per-tenant backup (`-Tenant quellex\|recallhub`) |
+| `scripts/export-docker-images.ps1` | Export tenant-specific Docker images (`-Tenant`) |
 | `scripts/backup-ollama-models.ps1` | Export Ollama model files |
 
 ## Version History

@@ -7,15 +7,21 @@
     inclusion in the backup package. Target machine loads them with docker load.
 .PARAMETER OutputPath
     Directory to save image tar files. Defaults to .\images
+.PARAMETER Tenant
+    Optional tenant filter. When specified, only exports that tenant's images
+    plus shared images. Valid values: quellex, recallhub, or empty (all).
 .PARAMETER IncludeBase
     Also export the backend-base image for future fast builds on target.
 .EXAMPLE
     .\export-docker-images.ps1 -OutputPath "E:\RecallHub_Backups\images"
+    .\export-docker-images.ps1 -OutputPath ".\docker-images-export" -Tenant quellex
     .\export-docker-images.ps1 -OutputPath ".\docker-images-export" -IncludeBase
 #>
 param(
     [Parameter(Mandatory=$true)]
     [string]$OutputPath,
+    [ValidateSet("quellex", "recallhub", "")]
+    [string]$Tenant = "",
     [switch]$IncludeBase
 )
 
@@ -35,6 +41,7 @@ Write-Host @"
 "@ -ForegroundColor Magenta
 
 Write-Host "  Output Path: $OutputPath" -ForegroundColor Gray
+Write-Host "  Tenant:      $(if ($Tenant) { $Tenant } else { 'ALL' })" -ForegroundColor Gray
 Write-Host "  Include Base: $(if ($IncludeBase) { 'YES' } else { 'NO' })" -ForegroundColor Gray
 Write-Host ""
 
@@ -53,16 +60,31 @@ if (-not (Test-Path $OutputPath)) {
     Write-OK "Created output directory: $OutputPath"
 }
 
-# Define images to export
-# These names match what docker-compose.yml generates (project-name + service-name)
-$images = @(
-    @{ Image = "mongodb-rag-agent-backend:latest";          File = "backend.tar" },
-    @{ Image = "mongodb-rag-agent-backend-quellex:latest";  File = "backend-quellex.tar" },
+# Shared images (always included)
+$sharedImages = @(
     @{ Image = "mongodb-rag-agent-ingestion-worker:latest"; File = "ingestion-worker.tar" },
-    @{ Image = "mongodb-rag-agent-frontend:latest";         File = "frontend.tar" },
-    @{ Image = "mongodb-rag-agent-frontend-quellex:latest"; File = "frontend-quellex.tar" },
     @{ Image = "mongodb/mongodb-atlas-local:8.0";           File = "mongodb-atlas-local.tar" }
 )
+
+# Tenant-specific images
+$tenantImages = @{
+    "quellex" = @(
+        @{ Image = "mongodb-rag-agent-backend-quellex:latest";  File = "backend-quellex.tar" },
+        @{ Image = "mongodb-rag-agent-frontend-quellex:latest"; File = "frontend-quellex.tar" }
+    )
+    "recallhub" = @(
+        @{ Image = "mongodb-rag-agent-backend:latest";  File = "backend.tar" },
+        @{ Image = "mongodb-rag-agent-frontend:latest"; File = "frontend.tar" }
+    )
+}
+
+if ($Tenant) {
+    Write-Host "  Exporting images for tenant: $Tenant" -ForegroundColor Cyan
+    $images = $sharedImages + $tenantImages[$Tenant]
+} else {
+    Write-Host "  Exporting ALL tenant images" -ForegroundColor Cyan
+    $images = $sharedImages + $tenantImages["quellex"] + $tenantImages["recallhub"]
+}
 
 if ($IncludeBase) {
     $images += @{ Image = "recallhub-backend-base:latest"; File = "backend-base.tar" }

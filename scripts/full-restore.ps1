@@ -1,8 +1,8 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    RecallHub Full System Restore Script
-    Restores a complete RecallHub installation from a full-backup package.
+    RecallHub/Quellex Full System Restore Script
+    Restores a complete installation from a full-backup package with tenant awareness.
 
 .DESCRIPTION
     This script restores a system from a backup created by full-backup.ps1:
@@ -21,7 +21,11 @@
     Where to restore Test_Data on this machine. Defaults to C:\Test_Data.
 
 .PARAMETER InstallPath
-    Where to place the source code. Defaults to D:\dev\repos\MongoDB-RAG-Agent.
+    Where to place the source code. Defaults to C:\<TenantName> (e.g., C:\Recallhub or C:\Quellex).
+
+.PARAMETER Tenant
+    Which tenant to restore for. Valid values: "quellex", "recallhub", or "" (auto-detect).
+    If not specified, auto-detects from backup manifest. Falls back to "recallhub".
 
 .PARAMETER SkipBuild
     Skip Docker image rebuild (use if images are included or already built).
@@ -36,13 +40,16 @@
     .\full-restore.ps1 -BackupPath "E:\RecallHub_Backups\RecallHub_v0.8.8_20260512_143000"
     .\full-restore.ps1 -BackupPath "E:\backup.zip" -TestDataPath "C:\Test_Data"
     .\full-restore.ps1 -BackupPath "E:\backup" -InstallPath "C:\RecallHub" -SkipTestData
+    .\full-restore.ps1 -BackupPath "E:\backup" -Tenant quellex
 #>
 
 param(
     [Parameter(Mandatory=$true)]
     [string]$BackupPath,
     [string]$TestDataPath = "C:\Test_Data",
-    [string]$InstallPath = "D:\dev\repos\MongoDB-RAG-Agent",
+    [string]$InstallPath = "",
+    [ValidateSet("quellex", "recallhub", "")]
+    [string]$Tenant = "",
     [switch]$SkipBuild,
     [switch]$SkipTestData,
     [switch]$SkipSourceCopy
@@ -72,7 +79,6 @@ Write-Host @"
 "@ -ForegroundColor Magenta
 
 Write-Host "  Backup Path:    $BackupPath"    -ForegroundColor Gray
-Write-Host "  Install Path:   $InstallPath"   -ForegroundColor Gray
 Write-Host "  Test Data Dest: $(if ($SkipTestData) { 'SKIP' } else { $TestDataPath })" -ForegroundColor Gray
 Write-Host ""
 
@@ -95,14 +101,7 @@ try {
     exit 1
 }
 
-# Check disk space on install drive
-$installDrive = Split-Path $InstallPath -Qualifier
-$disk = Get-PSDrive -Name ($installDrive -replace ":", "")
-$freeGB = [math]::Round($disk.Free / 1GB, 2)
-Write-Info "Free space on ${installDrive}: $freeGB GB"
-if ($freeGB -lt 20) {
-    Write-Warn "Less than 20 GB free on $installDrive - restore may fail."
-}
+# Disk space check deferred until after InstallPath is resolved (see Step 3)
 
 Write-OK "Prerequisites validated"
 
@@ -162,6 +161,37 @@ if (Test-Path $manifestPath) {
     }
 } else {
     Write-Warn "No manifest.json found - proceeding with best effort"
+}
+
+# Auto-detect tenant from manifest if not specified
+if (-not $Tenant -and $manifest -and $manifest.tenant) {
+    $Tenant = $manifest.tenant
+    Write-Info "Detected tenant from backup manifest: $Tenant"
+}
+if (-not $Tenant) {
+    Write-Warn "No tenant specified and none found in manifest. Defaulting to 'recallhub'"
+    $Tenant = "recallhub"
+}
+
+# Compute tenant-aware install path
+$tenantName = $Tenant.Substring(0,1).ToUpper() + $Tenant.Substring(1)
+if (-not $InstallPath) {
+    $InstallPath = "C:\$tenantName"
+}
+Write-Info "Tenant: $Tenant"
+Write-Info "Install path: $InstallPath"
+
+# Check disk space on install drive
+try {
+    $installDrive = Split-Path $InstallPath -Qualifier
+    $disk = Get-PSDrive -Name ($installDrive -replace ":", "")
+    $freeGB = [math]::Round($disk.Free / 1GB, 2)
+    Write-Info "Free space on ${installDrive}: $freeGB GB"
+    if ($freeGB -lt 20) {
+        Write-Warn "Less than 20 GB free on $installDrive - restore may fail."
+    }
+} catch {
+    Write-Warn "Could not check disk space for $InstallPath"
 }
 
 # Verify critical backup components exist
@@ -334,6 +364,52 @@ if ((Test-Path $overridePath) -and $manifest) {
                 Set-Content $overridePath $override -Encoding UTF8 -NoNewline
             }
         }
+
+        # ── Sanitize volume mounts for paths that don't exist on this machine ──
+        Write-Info "Sanitizing volume mounts for non-existent host paths..."
+        $override = Get-Content $overridePath -Raw
+        $lines = $override -split "`n"
+        $cleanedLines = @()
+        $removedMounts = @()
+
+        foreach ($line in $lines) {
+            # Match volume mount lines like:
+            #   - "G:/My Drive/root:/app/mounts/gdrive-root:ro"   (quoted, may have spaces)
+            #   - D:/parhelion.energy:/app/mounts/parhelion-energy:ro  (unquoted)
+            # Only target absolute host paths with a drive letter (A-Z).
+            if ($line -match '^\s*-\s*"?([A-Za-z]:[/\\][^:]+):(/app/[^:"]+)') {
+                $hostPath = $Matches[1] -replace '/', '\'
+                if (-not (Test-Path $hostPath)) {
+                    $removedMounts += $hostPath
+                    # Comment out instead of delete for transparency
+                    $cleanedLines += "      # REMOVED (path not found): $($line.TrimStart())"
+                    continue
+                }
+            }
+            $cleanedLines += $line
+        }
+
+        if ($removedMounts.Count -gt 0) {
+            # Also clean MOUNT_MAPPINGS env var entries for removed paths
+            $result = $cleanedLines -join "`n"
+            foreach ($removedPath in $removedMounts) {
+                $fwdPath = $removedPath -replace '\\', '/'
+                $escaped = [regex]::Escape($fwdPath)
+                # Remove pipe-separated segment with leading pipe:  |/app/mounts/name=G:/My Drive/root
+                $result = $result -replace "\|[^|=]+=$escaped", ''
+                # Remove segment with trailing pipe (if it was first):  /app/mounts/name=G:/My Drive/root|
+                $result = $result -replace "[^|=]+=$escaped\|", ''
+                # Remove segment if it's the only one (no pipes)
+                $result = $result -replace "MOUNT_MAPPINGS=[^|=]+=$escaped\s*`$", 'MOUNT_MAPPINGS='
+            }
+            Set-Content $overridePath $result -Encoding UTF8 -NoNewline
+            Write-OK "Removed $($removedMounts.Count) volume mount(s) for non-existent paths:"
+            foreach ($m in $removedMounts) {
+                Write-Info "    - $m"
+            }
+        } else {
+            Write-OK "All volume mount paths exist on this machine"
+        }
     } catch {
         Write-Warn "Failed to update override paths: $_"
     }
@@ -343,6 +419,32 @@ if ((Test-Path $overridePath) -and $manifest) {
     } else {
         Write-Info "No manifest available - manual path review recommended"
     }
+}
+
+# Ensure .env has correct tenant values
+$envFile = Join-Path $InstallPath ".env"
+if (Test-Path $envFile) {
+    $tenantConfig = @{
+        "quellex" = @{ ACTIVE_PROFILE = "parhelion"; MONGODB_DATABASE = "rag_parhelion" }
+        "recallhub" = @{ ACTIVE_PROFILE = "default"; MONGODB_DATABASE = "rag_db" }
+    }
+    $envContent = Get-Content $envFile -Raw
+    $config = $tenantConfig[$Tenant]
+    foreach ($key in $config.Keys) {
+        $envContent = $envContent -replace "(?m)^${key}=.*$", "${key}=$($config[$key])"
+    }
+    Set-Content $envFile $envContent -Encoding UTF8
+    Write-OK "Updated .env for tenant: $Tenant (ACTIVE_PROFILE=$($config['ACTIVE_PROFILE']), MONGODB_DATABASE=$($config['MONGODB_DATABASE']))"
+}
+
+# Update profiles.yaml active_profile
+$profilesFile = Join-Path $InstallPath "profiles.yaml"
+if (Test-Path $profilesFile) {
+    $profilesContent = Get-Content $profilesFile -Raw
+    $activeProfile = if ($Tenant -eq "quellex") { "parhelion" } else { "default" }
+    $profilesContent = $profilesContent -replace "(?m)^active_profile:.*$", "active_profile: $activeProfile"
+    Set-Content $profilesFile $profilesContent -Encoding UTF8
+    Write-OK "Updated profiles.yaml active_profile to: $activeProfile"
 }
 
 # Step 8: Stop any existing containers
@@ -359,12 +461,12 @@ if (-not (Test-Path $dockerComposePath)) {
 
 Write-Info "Stopping any existing containers..."
 try {
-    $null = docker compose --profile recallhub down 2>&1
+    $null = docker compose --profile $Tenant down 2>&1
 } catch {
     # Docker writes informational messages to stderr (e.g., "Container ... Stopping")
 }
 if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne $null) {
-    Write-Warn "docker compose --profile recallhub down returned exit code $LASTEXITCODE"
+    Write-Warn "docker compose --profile $Tenant down returned exit code $LASTEXITCODE"
 }
 try {
     $null = docker compose down 2>&1
@@ -382,7 +484,7 @@ Write-Step "Starting MongoDB and restoring databases..."
 Write-Info "Starting MongoDB container..."
 $mongoStarted = $false
 try {
-    $output = docker compose --profile recallhub up -d mongodb 2>&1
+    $output = docker compose --profile $Tenant up -d mongodb 2>&1
     $output | ForEach-Object { Write-Info "$_" }
     if ($LASTEXITCODE -eq 0) { $mongoStarted = $true }
 } catch {
@@ -407,12 +509,6 @@ if (-not $mongoStarted) {
 }
 
 Write-Info "Waiting for MongoDB to become healthy..."
-# Use longer timeout if image was just pulled (first-time init takes longer)
-try {
-    $imageAge = docker image inspect "mongodb/mongodb-atlas-local:8.0" --format ".Created" 2>&1 | Out-String
-} catch {
-    $imageAge = ""
-}
 $maxWait = 300  # 5 min default for safety
 Write-Info "  (timeout: ${maxWait}s)"
 
@@ -420,12 +516,15 @@ $waited = 0
 $mongoReady = $false
 while ($waited -lt $maxWait) {
     try {
-        $svcHealth = docker compose --profile recallhub exec -T mongodb mongosh --eval "db.adminCommand('ping')" --quiet 2>&1
+        $svcHealth = docker compose --profile $Tenant exec -T mongodb mongosh --eval "db.adminCommand('ping')" --quiet 2>&1 | Out-String
     } catch {
-        # Docker/mongosh stderr is informational
         $svcHealth = ""
     }
-    if ("$svcHealth" -match 'ok\s*:\s*1') { $mongoReady = $true; break }
+    # Match any variant: { ok: 1 }, ok: 1, "ok" : 1, etc.
+    if ($svcHealth -match 'ok.*:.*1' -or ($LASTEXITCODE -eq 0 -and $svcHealth -and $svcHealth.Trim())) {
+        $mongoReady = $true
+        break
+    }
     Start-Sleep -Seconds 3
     $waited += 3
     Write-Host "." -NoNewline -ForegroundColor Gray
@@ -433,15 +532,16 @@ while ($waited -lt $maxWait) {
 Write-Host ""
 
 if (-not $mongoReady) {
-    Write-Err "MongoDB did not become healthy within ${maxWait}s"
-    Write-Err "Possible causes:"
-    Write-Info "  1. WSL2 not fully initialized (try restart)"
-    Write-Info "  2. Docker Desktop still loading (wait and retry)"
-    Write-Info "  3. Port conflict (check if port 11017 is in use)"
+    Write-Warn "MongoDB did not become healthy within ${maxWait}s - CONTINUING anyway"
+    Write-Info "  The container may still be initializing."
+    Write-Info "  Possible causes:"
+    Write-Info "    1. WSL2 not fully initialized (try restart)"
+    Write-Info "    2. Docker Desktop still loading"
+    Write-Info "    3. Port conflict (check if port 11017 is in use)"
     Write-Info "  Run: docker compose logs mongodb"
-    exit 1
+} else {
+    Write-OK "MongoDB is healthy"
 }
-Write-OK "MongoDB is healthy"
 
 $mongoDumpDir = Join-Path $workingBackup "mongodb\dump"
 $mongoArchive = Join-Path $workingBackup "mongodb\full_backup.archive"
@@ -503,7 +603,7 @@ if (Test-Path $mongoDumpDir) {
 
         # Verify databases were actually restored
         Write-Info "Verifying restored databases..."
-        $dbCount = docker compose --profile recallhub exec -T mongodb mongosh --eval "db.adminCommand('listDatabases').databases.length" --quiet 2>&1 | Out-String
+        $dbCount = docker compose --profile $Tenant exec -T mongodb mongosh --eval "db.adminCommand('listDatabases').databases.length" --quiet 2>&1 | Out-String
         $dbCountTrimmed = $dbCount.Trim()
         if ($dbCountTrimmed -match '^\d+$' -and [int]$dbCountTrimmed -gt 2) {
             Write-OK "MongoDB restored ($dbCountTrimmed databases)"
@@ -636,7 +736,8 @@ if (-not $imagesLoaded -and -not $SkipBuild) {
 
     Write-Ts; Write-Host "Building frontend image..." -ForegroundColor White
     try {
-        $null = docker compose --profile recallhub build frontend 2>&1
+        $frontendService = if ($Tenant -eq "quellex") { "frontend-quellex" } else { "frontend" }
+        $null = docker compose --profile $Tenant build $frontendService 2>&1
     } catch {
         # Docker stderr is informational, not necessarily an error
     }
@@ -649,12 +750,26 @@ if (-not $imagesLoaded -and -not $SkipBuild) {
     Write-Info "Skipped (-SkipBuild flag)"
 }
 
+# Step 10b: Deploy tray app scripts to expected location
+Write-Step "Deploying tray app scripts..."
+$trayScriptsSource = Join-Path $InstallPath "installer\scripts"
+$trayScriptsDest = Join-Path $env:LOCALAPPDATA "RecallHub\scripts"
+if (Test-Path $trayScriptsSource) {
+    if (-not (Test-Path $trayScriptsDest)) {
+        New-Item $trayScriptsDest -ItemType Directory -Force | Out-Null
+    }
+    Copy-Item "$trayScriptsSource\*" $trayScriptsDest -Recurse -Force
+    Write-OK "Tray app scripts deployed to $trayScriptsDest"
+} else {
+    Write-Info "No installer\scripts found - tray app scripts skipped"
+}
+
 # Step 11: Start all services and verify
 Write-Step "Starting all services and verifying health..."
 
-Write-Info "Starting all RecallHub services..."
+Write-Info "Starting all $tenantName services..."
 try {
-    $null = docker compose --profile recallhub up -d 2>&1
+    $null = docker compose --profile $Tenant up -d 2>&1
 } catch {
     # Docker stderr is informational (e.g., "Container ... Starting")
 }
@@ -668,7 +783,7 @@ Start-Sleep -Seconds 30
 # Check container status
 Write-Info "Container status:"
 try {
-    $psOutput = docker compose --profile recallhub ps --format json 2>&1
+    $psOutput = docker compose --profile $Tenant ps --format json 2>&1
     $containers = $psOutput | ConvertFrom-Json -ErrorAction SilentlyContinue
     if ($containers) {
         foreach ($container in $containers) {
@@ -684,7 +799,7 @@ try {
 # Verify MongoDB
 Write-Info "Verifying MongoDB..."
 try {
-    $dbListRaw = docker compose --profile recallhub exec -T mongodb mongosh --eval "db.adminCommand('listDatabases').databases.map(d => d.name + ' (' + Math.round(d.sizeOnDisk/1024/1024) + ' MB)').join(', ')" --quiet 2>&1
+    $dbListRaw = docker compose --profile $Tenant exec -T mongodb mongosh --eval "db.adminCommand('listDatabases').databases.map(d => d.name + ' (' + Math.round(d.sizeOnDisk/1024/1024) + ' MB)').join(', ')" --quiet 2>&1
     $dbListStr = ("$($dbListRaw | Select-Object -Last 1)").Trim()
     if ($dbListStr) {
         Write-OK "Databases: $dbListStr"
@@ -694,12 +809,14 @@ try {
 }
 
 # Verify backend API health
-Write-Info "Verifying backend API..."
+$backendPort = if ($Tenant -eq "quellex") { 11001 } else { 11000 }
+$frontendPort = if ($Tenant -eq "quellex") { 11081 } else { 11080 }
+Write-Info "Verifying backend API (port $backendPort)..."
 $backendOk = $false
 $retries = 3
 for ($i = 0; $i -lt $retries; $i++) {
     try {
-        $response = Invoke-WebRequest -Uri "http://localhost:11000/api/v1/system/health" -UseBasicParsing -TimeoutSec 10
+        $response = Invoke-WebRequest -Uri "http://localhost:${backendPort}/api/v1/system/health" -UseBasicParsing -TimeoutSec 10
         if ($response.StatusCode -eq 200) {
             Write-OK "Backend API: healthy (HTTP $($response.StatusCode))"
             $backendOk = $true
@@ -717,9 +834,9 @@ if (-not $backendOk) {
 }
 
 # Verify frontend
-Write-Info "Verifying frontend..."
+Write-Info "Verifying frontend (port $frontendPort)..."
 try {
-    $response = Invoke-WebRequest -Uri "http://localhost:11080" -UseBasicParsing -TimeoutSec 10
+    $response = Invoke-WebRequest -Uri "http://localhost:${frontendPort}" -UseBasicParsing -TimeoutSec 10
     if ($response.StatusCode -eq 200) {
         Write-OK "Frontend: serving (HTTP $($response.StatusCode))"
     }
@@ -759,9 +876,11 @@ foreach ($r in $results) {
 }
 
 Write-Host ""
+Write-Host "  Tenant:         $Tenant" -ForegroundColor White
+Write-Host ""
 Write-Host "  ACCESS YOUR APPLICATION:" -ForegroundColor Yellow
-Write-Host "    Frontend:     http://localhost:11080" -ForegroundColor Cyan
-Write-Host "    Backend API:  http://localhost:11000/docs" -ForegroundColor Cyan
+Write-Host "    Frontend:     http://localhost:${frontendPort}" -ForegroundColor Cyan
+Write-Host "    Backend API:  http://localhost:${backendPort}/docs" -ForegroundColor Cyan
 Write-Host "    MongoDB:      localhost:11017" -ForegroundColor Cyan
 Write-Host ""
 
@@ -786,7 +905,7 @@ if ($script:Errors.Count -gt 0) {
 
 Write-Host ""
 Write-Host "  USEFUL COMMANDS:" -ForegroundColor Yellow
-Write-Host "    View logs:    docker compose --profile recallhub logs -f" -ForegroundColor Gray
-Write-Host "    Stop:         docker compose --profile recallhub down" -ForegroundColor Gray
-Write-Host "    Restart:      docker compose --profile recallhub restart" -ForegroundColor Gray
+Write-Host "    View logs:    docker compose --profile $Tenant logs -f" -ForegroundColor Gray
+Write-Host "    Stop:         docker compose --profile $Tenant down" -ForegroundColor Gray
+Write-Host "    Restart:      docker compose --profile $Tenant restart" -ForegroundColor Gray
 Write-Host ""

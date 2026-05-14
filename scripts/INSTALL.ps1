@@ -1,9 +1,10 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    RecallHub Complete Installation from Backup
+    RecallHub/Quellex Complete Installation from Backup (Tenant-Aware)
 .DESCRIPTION
-    Single entry point to restore a complete RecallHub system from this backup.
+    Single entry point to restore a complete system from this backup.
+    Automatically detects the tenant from manifest.json (recallhub or quellex).
     Run this script from the backup folder (e.g., from a USB drive).
 
     Steps performed:
@@ -14,7 +15,7 @@
 .PARAMETER TestDataPath
     Where to restore Test_Data. Defaults to C:\Test_Data.
 .PARAMETER InstallPath
-    Where to install the RecallHub source code. Defaults to C:\RecallHub.
+    Where to install the source code. Defaults to C:\<TenantName> based on manifest.
 .PARAMETER SkipPrerequisites
     Skip Docker/Ollama installation (if already installed).
 .PARAMETER SkipModels
@@ -31,14 +32,14 @@
     Like -Repair but also re-restores Ollama models (Phase 2 + Phase 3).
 .EXAMPLE
     .\INSTALL.ps1
-    .\INSTALL.ps1 -TestDataPath "D:\Test_Data" -InstallPath "D:\RecallHub"
+    .\INSTALL.ps1 -TestDataPath "D:\Test_Data" -InstallPath "D:\Quellex"
     .\INSTALL.ps1 -SkipPrerequisites
     .\INSTALL.ps1 -Repair
     .\INSTALL.ps1 -RepairFull
 #>
 param(
     [string]$TestDataPath = "C:\Test_Data",
-    [string]$InstallPath = "C:\RecallHub",
+    [string]$InstallPath = "",
     [switch]$SkipPrerequisites,
     [switch]$SkipModels,
     [switch]$SkipRestore,
@@ -54,7 +55,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     Write-Host "This script requires Administrator privileges. Restarting elevated..." -ForegroundColor Yellow
     $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     if ($TestDataPath -ne "C:\Test_Data") { $arguments += " -TestDataPath `"$TestDataPath`"" }
-    if ($InstallPath -ne "C:\RecallHub") { $arguments += " -InstallPath `"$InstallPath`"" }
+    if ($InstallPath) { $arguments += " -InstallPath `"$InstallPath`"" }
     if ($SkipPrerequisites) { $arguments += " -SkipPrerequisites" }
     if ($SkipModels) { $arguments += " -SkipModels" }
     if ($SkipRestore) { $arguments += " -SkipRestore" }
@@ -85,16 +86,38 @@ function Update-Manifest {
 $BackupDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $ScriptsDir = Join-Path (Join-Path $BackupDir "source") "scripts"
 
+# --- Read tenant from backup manifest ---
+$manifestFile = Join-Path $BackupDir "manifest.json"
+$tenant = "recallhub"  # default
+if (Test-Path $manifestFile) {
+    try {
+        $backupManifest = Get-Content $manifestFile -Raw | ConvertFrom-Json
+        if ($backupManifest.tenant) {
+            $tenant = $backupManifest.tenant
+        }
+    } catch {
+        Write-Host "  [WARN] Could not read manifest.json, defaulting to recallhub" -ForegroundColor Yellow
+    }
+}
+$tenantName = $tenant.Substring(0,1).ToUpper() + $tenant.Substring(1)
+Write-Host "  Tenant: $tenantName" -ForegroundColor Cyan
+
+# --- Compute default InstallPath if not provided ---
+if (-not $InstallPath) {
+    $InstallPath = "C:\$tenantName"
+}
+
 Write-Host ""
 Write-Host "=====================================================" -ForegroundColor Cyan
 if ($Repair -or $RepairFull) {
     $modeLabel = if ($RepairFull) { "Full Repair" } else { "Repair" }
-    Write-Host "   RecallHub v0.8.8 - $modeLabel Mode" -ForegroundColor Yellow
+    Write-Host "   $tenantName v0.8.8 - $modeLabel Mode" -ForegroundColor Yellow
 } else {
-    Write-Host "   RecallHub v0.8.8 - Complete System Installation" -ForegroundColor Cyan
+    Write-Host "   $tenantName v0.8.8 - Complete System Installation" -ForegroundColor Cyan
 }
 Write-Host "=====================================================" -ForegroundColor Cyan
 Write-Host ""
+Write-Host "  Installing:     $tenantName" -ForegroundColor Cyan
 Write-Host "  Backup Source:  $BackupDir" -ForegroundColor Gray
 Write-Host "  Install Path:   $InstallPath" -ForegroundColor Gray
 Write-Host "  Test Data Path: $TestDataPath" -ForegroundColor Gray
@@ -145,7 +168,7 @@ if ($Repair -or $RepairFull) {
             try {
                 Push-Location $InstallPath
                 try {
-                    $null = docker compose --profile recallhub --profile quellex down -v --remove-orphans 2>&1
+                    $null = docker compose --profile $tenant down -v --remove-orphans 2>&1
                 } catch {
                     # Docker writes informational messages to stderr (e.g., "Container ... Stopping")
                 }
@@ -240,6 +263,7 @@ if ($Repair -or $RepairFull) {
 $ollamaModelsPath = if ($env:OLLAMA_MODELS) { $env:OLLAMA_MODELS } else { "$env:USERPROFILE\.ollama\models" }
 Update-Manifest @{
     version = "0.8.8"
+    tenant = $tenant
     installed_at = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
     install_path = $InstallPath
     test_data_path = $TestDataPath
@@ -389,7 +413,7 @@ if (-not $SkipRestore) {
     $restoreScript = Join-Path $ScriptsDir "full-restore.ps1"
 
     if (Test-Path $restoreScript) {
-        & $restoreScript -BackupPath $BackupDir -TestDataPath $TestDataPath -InstallPath $InstallPath
+        & $restoreScript -BackupPath $BackupDir -TestDataPath $TestDataPath -InstallPath $InstallPath -Tenant $tenant
     } else {
         Write-Host "  [ERROR] full-restore.ps1 not found at: $restoreScript" -ForegroundColor Red
         exit 1
@@ -445,6 +469,10 @@ if (-not $SkipDesktopApp) {
         if (-not (Test-Path $appDir)) {
             New-Item -Path $appDir -ItemType Directory -Force | Out-Null
         }
+
+        # Stop tray app if running (prevents file-in-use error during copy)
+        Stop-Process -Name "RecallHubTray" -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 500
 
         # Copy the executable
         Write-Host "  Copying RecallHubTray.exe..." -ForegroundColor Gray
@@ -570,28 +598,27 @@ if (-not $SkipDesktopApp) {
 }
 
 # --- Finalize manifest ---
-Update-Manifest @{ docker_images_loaded = $true; install_complete = $true }
+Update-Manifest @{ docker_images_loaded = $true; tenant = $tenant; install_complete = $true }
 $manifestDir = Join-Path $env:ProgramData "RecallHub"
 Write-Host "  [OK] Install manifest finalized: $manifestDir\install-manifest.json" -ForegroundColor Green
 
 # --- Final Summary ---
+$tenantPort = if ($tenant -eq "quellex") { "11001" } else { "11000" }
 Write-Host ""
 Write-Host "=====================================================" -ForegroundColor Green
-Write-Host "   INSTALLATION COMPLETE" -ForegroundColor Green
+Write-Host "   $tenantName INSTALLATION COMPLETE" -ForegroundColor Green
 Write-Host "=====================================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "  RecallHub is now running at:" -ForegroundColor White
-Write-Host "    RecallHub:  http://localhost:11000" -ForegroundColor White
-Write-Host "    Quellex:    http://localhost:11001" -ForegroundColor White
+Write-Host "  $tenantName is now running at:" -ForegroundColor White
+Write-Host "    http://localhost:$tenantPort" -ForegroundColor White
 Write-Host ""
 Write-Host "  Source code:    $InstallPath" -ForegroundColor Gray
 Write-Host "  Test data:      $TestDataPath" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  To manage services:" -ForegroundColor Gray
 Write-Host "    cd $InstallPath" -ForegroundColor Gray
-Write-Host "    docker compose --profile recallhub up -d" -ForegroundColor Gray
-Write-Host "    docker compose --profile quellex up -d" -ForegroundColor Gray
-Write-Host "    docker compose down" -ForegroundColor Gray
+Write-Host "    docker compose --profile $tenant up -d" -ForegroundColor Gray
+Write-Host "    docker compose --profile $tenant down" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  Ollama models loaded:" -ForegroundColor Gray
 Write-Host "    gemma4:26b (orchestrator)" -ForegroundColor Gray
@@ -599,7 +626,7 @@ Write-Host "    gemma4:e4b (worker)" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  Desktop App:" -ForegroundColor Gray
 if (-not $SkipDesktopApp) {
-    Write-Host "    $env:LOCALAPPDATA\RecallHub\RecallHubTray.exe" -ForegroundColor Gray
+    Write-Host "    $env:LOCALAPPDATA\$tenantName\${tenantName}Tray.exe" -ForegroundColor Gray
 } else {
     Write-Host "    (skipped)" -ForegroundColor DarkGray
 }
