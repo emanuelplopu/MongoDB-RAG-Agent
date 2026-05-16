@@ -355,7 +355,7 @@ export default function Layout() {
   }
 
   const SidebarContent = () => (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full min-h-0">
       {/* Top Section - ChatGPT-style header */}
       <div className="p-3 flex-shrink-0 space-y-1">
         {isSelectMode ? (
@@ -543,8 +543,11 @@ export default function Layout() {
       {/* Sidebar Warnings */}
       <SidebarWarningToast warnings={sidebarWarnings} onDismiss={handleDismissWarning} />
 
+      {/* Scrollable middle: folders + conversations (single scroll area so bottom user menu stays pinned) */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+
       {/* Folders Section (Projects) */}
-      <div className="px-3 flex-shrink-0">
+      <div className="px-3">
         <div className="text-xs font-medium text-primary-600 dark:text-primary-400 uppercase tracking-wider px-2 py-2">
           {t('sidebar.projects')}
         </div>
@@ -650,8 +653,8 @@ export default function Layout() {
       {/* Divider */}
       <div className="mx-3 my-2 premium-divider" />
 
-      {/* Scrollable Chat List */}
-      <div className="flex-1 overflow-y-auto px-3">
+      {/* Conversations List */}
+      <div className="px-3">
         {isSidebarLoading ? (
           <div className="flex justify-center py-8">
             <div className="animate-spin h-6 w-6 border-2 border-primary border-t-transparent rounded-full" />
@@ -723,6 +726,8 @@ export default function Layout() {
             )}
           </div>
         )}
+      </div>
+      {/* end scrollable middle */}
       </div>
 
       {/* Bottom Sticky Section - User Menu */}
@@ -932,7 +937,7 @@ export default function Layout() {
         onMouseLeave={() => { if (desktopSidebarCollapsed) setSidebarHovered(false) }}
       >
         {/* Expanded sidebar content */}
-        <div className={`flex grow flex-col bg-surface dark:bg-gray-800 shadow-elevation-1 transition-all duration-300 ${
+        <div className={`flex grow flex-col bg-surface dark:bg-gray-800 shadow-elevation-1 transition-all duration-300 min-h-0 ${
           desktopSidebarVisible ? 'w-72 opacity-100' : 'w-0 opacity-0 overflow-hidden pointer-events-none absolute'
         }`}>
           <SidebarContent />

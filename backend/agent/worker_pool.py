@@ -22,6 +22,7 @@ from backend.agent.federated_search import FederatedSearch, get_federated_search
 from backend.agent.tool_gate import ToolGate
 from backend.core.config import settings
 from backend.services.activity_logger import NullActivityLogger
+from backend.models.telemetry import LLMCall, SearchOperation, ToolExecution
 try:
     from backend.routers.prompts import get_agent_prompt_sync
 except ImportError:
@@ -65,6 +66,10 @@ class WorkerPool:
         self._http_client: Optional[httpx.AsyncClient] = None
         self.activity_logger = activity_logger or NullActivityLogger()
         self.req_id = req_id
+        # Telemetry collection lists
+        self._task_records: List[ToolExecution] = []
+        self._search_records: List[SearchOperation] = []
+        self._llm_calls: List[LLMCall] = []
     
     def _get_model_string(self) -> str:
         """Get the model string in LiteLLM format with provider prefix."""
@@ -95,6 +100,9 @@ class WorkerPool:
     def reset(self):
         """Reset steps for a new session."""
         self.steps = []
+        self._task_records = []
+        self._search_records = []
+        self._llm_calls = []
     
     @property
     def http_client(self) -> httpx.AsyncClient:
@@ -332,7 +340,46 @@ class WorkerPool:
             error=error
         )
         self.steps.append(step)
-        
+
+        # Record telemetry ToolExecution
+        task_type_str = task.type.value if hasattr(task.type, 'value') else str(task.type)
+        task_record = ToolExecution(
+            task_id=task.id,
+            task_type=task_type_str,
+            input_query=task.query or "",
+            output_text=summary,
+            duration_ms=int(duration_ms),
+            tokens_used=tokens_used,
+            success=success,
+            error=error,
+            results_count=len(documents) + len(web_links),
+            sources_searched=sources_searched,
+        )
+        self._task_records.append(task_record)
+
+        # Record telemetry SearchOperation for search tasks
+        if task.type in [TaskType.SEARCH_PROFILE, TaskType.SEARCH_CLOUD,
+                         TaskType.SEARCH_PERSONAL, TaskType.SEARCH_ALL]:
+            top_scores = sorted(
+                [d.similarity_score for d in documents], reverse=True
+            )[:5] if documents else []
+            chunks_returned = [
+                (d.full_content or d.excerpt)[:500] for d in documents[:10]
+            ] if documents else []
+            search_record = SearchOperation(
+                query=task.query,
+                search_type="hybrid",
+                sources_queried=sources_searched,
+                results_per_source={s: sum(1 for d in documents if getattr(d, 'source_database', '') == s) for s in sources_searched} if sources_searched else {},
+                total_results=len(documents),
+                deduplicated_results=len(documents),
+                duration_ms=int(duration_ms),
+                rrf_applied=True,
+                top_scores=top_scores,
+                chunks_returned=chunks_returned,
+            )
+            self._search_records.append(search_record)
+
         return result
     
     async def _execute_search(
@@ -563,6 +610,25 @@ class WorkerPool:
                 finish_reason=response.choices[0].finish_reason or "",
                 phase="summarize"
             )
+
+            # Record telemetry LLMCall for summarize
+            usage = response.usage
+            llm_record = LLMCall(
+                phase="summarize",
+                model=self.model,
+                provider=self.provider,
+                temperature=llm_params.get("temperature", 0.3),
+                max_tokens=llm_params.get("max_tokens", llm_params.get("max_completion_tokens", 0)),
+                prompt_text=prompt,
+                response_text=content if content else "",
+                prompt_tokens=usage.prompt_tokens if usage and hasattr(usage, 'prompt_tokens') else 0,
+                response_tokens=usage.completion_tokens if usage and hasattr(usage, 'completion_tokens') else 0,
+                total_tokens=tokens_used,
+                latency_ms=int(summ_duration_ms),
+                finish_reason=response.choices[0].finish_reason or "",
+                success=True,
+            )
+            self._llm_calls.append(llm_record)
             
             return content, tokens_used
         except Exception as e:
@@ -645,6 +711,25 @@ class WorkerPool:
                 finish_reason=response.choices[0].finish_reason or "",
                 phase="refine_query"
             )
+
+            # Record telemetry LLMCall for refine_query
+            usage = response.usage
+            llm_record = LLMCall(
+                phase="refine_query",
+                model=self.model,
+                provider=self.provider,
+                temperature=llm_params.get("temperature", 0.5),
+                max_tokens=llm_params.get("max_tokens", llm_params.get("max_completion_tokens", 0)),
+                prompt_text=prompt,
+                response_text=content if content else "",
+                prompt_tokens=usage.prompt_tokens if usage and hasattr(usage, 'prompt_tokens') else 0,
+                response_tokens=usage.completion_tokens if usage and hasattr(usage, 'completion_tokens') else 0,
+                total_tokens=tokens_used,
+                latency_ms=int(refine_duration_ms),
+                finish_reason=response.choices[0].finish_reason or "",
+                success=True,
+            )
+            self._llm_calls.append(llm_record)
             
             return content, tokens_used
         except Exception as e:

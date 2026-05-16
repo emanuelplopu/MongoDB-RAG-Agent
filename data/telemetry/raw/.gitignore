@@ -1,0 +1,4 @@
+# Raw telemetry contains unprotected PII - NEVER commit
+*
+!.gitignore
+!README.md

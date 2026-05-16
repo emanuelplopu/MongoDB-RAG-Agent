@@ -7,6 +7,7 @@ The FederatedAgent coordinates the Orchestrator and WorkerPool to:
 4. Maintain full trace for transparency
 """
 
+import asyncio
 import logging
 import time
 import uuid
@@ -29,6 +30,7 @@ from backend.agent.strategies.registry import StrategyRegistry
 from backend.agent.tool_gate import ToolGate
 from backend.core.config import settings
 from backend.services.activity_logger import ActivityLogger, NullActivityLogger
+from backend.models.telemetry import LLMCall, SearchOperation, ToolExecution, PhaseMetrics
 try:
     from backend.routers.prompts import get_agent_prompt_sync
 except ImportError:
@@ -37,6 +39,19 @@ except ImportError:
         return ""
 
 logger = logging.getLogger(__name__)
+
+# Module-level telemetry service reference, set during app lifespan
+_telemetry_service = None
+
+
+def set_telemetry_service(service) -> None:
+    """Set the module-level telemetry service reference.
+
+    Called during app lifespan initialization so the coordinator
+    can emit telemetry without needing a reference to the FastAPI app.
+    """
+    global _telemetry_service
+    _telemetry_service = service
 
 
 class FederatedAgent:
@@ -289,8 +304,152 @@ class FederatedAgent:
             self.trace.add_worker_step(step)
         self.trace.finalize()
         
+        # Fire-and-forget telemetry recording (non-blocking)
+        self._emit_telemetry(
+            session_id=session_id or "",
+            user_id=user_id,
+            user_message=user_message,
+            response=response,
+            language=language,
+        )
+        
         return response, self.trace
     
+    def _emit_telemetry(
+        self,
+        session_id: str,
+        user_id: str,
+        user_message: str,
+        response: str,
+        language: Optional[str] = None,
+    ) -> None:
+        """Emit telemetry record as a fire-and-forget background task.
+
+        Extracts full trace data from orchestrator steps, worker steps,
+        and LLM call records for comprehensive interaction capture.
+        Non-blocking: failures are logged but never crash the request.
+        """
+        try:
+            from backend.services.telemetry_service import TelemetryService
+
+            telemetry: Optional[TelemetryService] = _telemetry_service
+            if telemetry is None or not telemetry.enabled:
+                return
+
+            strategy_name = self.strategy.metadata.id if self.strategy else ""
+            model_used = self.config.orchestrator_model
+            latency_ms = int(self.trace.total_duration_ms) if self.trace else 0
+
+            # --- Extract LLM calls from orchestrator ---
+            llm_calls: list[LLMCall] = []
+            # Collect orchestrator LLM call records
+            for call_record in getattr(self.orchestrator, '_llm_calls', []):
+                llm_calls.append(call_record)
+            # Collect worker pool LLM call records (from summarize/refine tasks)
+            for call_record in getattr(self.worker_pool, '_llm_calls', []):
+                llm_calls.append(call_record)
+
+            # --- Extract search operations from worker steps ---
+            search_operations: list[SearchOperation] = []
+            for search_record in getattr(self.worker_pool, '_search_records', []):
+                search_operations.append(search_record)
+
+            # --- Extract tool executions from worker pool ---
+            tool_executions: list[ToolExecution] = []
+            for task_record in getattr(self.worker_pool, '_task_records', []):
+                tool_executions.append(task_record)
+
+            # --- Extract phase metrics from orchestrator steps ---
+            phase_metrics: list[PhaseMetrics] = []
+            if self.trace:
+                for step in self.trace.orchestrator_steps:
+                    phase_metrics.append(PhaseMetrics(
+                        phase=step.phase if isinstance(step.phase, str) else step.phase.value,
+                        duration_ms=int(step.duration_ms),
+                        tokens_used=step.tokens_used,
+                        input_size=len(step.input_summary),
+                        output_size=len(step.output_summary),
+                        success=True,
+                    ))
+
+            # --- Token breakdown per model ---
+            tokens_per_model: dict = {}
+            if self.trace:
+                for step in self.trace.orchestrator_steps:
+                    tokens_per_model[step.model] = tokens_per_model.get(step.model, 0) + step.tokens_used
+                for step in self.trace.worker_steps:
+                    tokens_per_model[step.model] = tokens_per_model.get(step.model, 0) + step.tokens_used
+
+            # --- Resolve provider names ---
+            _, orchestrator_provider = settings.resolve_model_provider(
+                self.config.orchestrator_model, settings.orchestrator_provider
+            )
+            _, worker_provider = settings.resolve_model_provider(
+                self.config.worker_model, settings.worker_provider
+            )
+
+            # --- Early exit detection ---
+            early_exit_triggered = False
+            early_exit_confidence: Optional[float] = None
+            if self.trace and self.trace.evaluation_history:
+                last_eval = self.trace.evaluation_history[-1]
+                if last_eval.confidence >= 0.80 and last_eval.decision == "sufficient":
+                    early_exit_triggered = True
+                    early_exit_confidence = last_eval.confidence
+
+            # --- Source counts ---
+            total_sources_found = 0
+            deduplicated_sources = 0
+            if self.trace:
+                total_sources_found = sum(
+                    len(s.documents) + len(s.web_links) for s in self.trace.worker_steps
+                )
+                deduplicated_sources = len(self.trace.all_documents) + len(self.trace.all_web_links)
+
+            # --- Token totals ---
+            prompt_tokens = 0
+            response_tokens = 0
+            if self.trace:
+                # Estimate split from total (orchestrator heavy on input, workers balanced)
+                prompt_tokens = int(self.trace.orchestrator_tokens * 0.7 + self.trace.worker_tokens * 0.5)
+                response_tokens = int(self.trace.orchestrator_tokens * 0.3 + self.trace.worker_tokens * 0.5)
+
+            asyncio.create_task(
+                telemetry.record_interaction(
+                    session_id=session_id,
+                    user_id=user_id,
+                    tenant=settings.tenant_id,
+                    prompt=user_message,
+                    response=response,
+                    agent_strategy=strategy_name,
+                    model_used=model_used,
+                    latency_ms=latency_ms,
+                    prompt_tokens=prompt_tokens,
+                    response_tokens=response_tokens,
+                    language=language or "de",
+                    # Full capture data
+                    llm_calls=llm_calls,
+                    search_operations=search_operations,
+                    tool_executions=tool_executions,
+                    phase_metrics=phase_metrics,
+                    agent_mode=str(self.config.mode),
+                    orchestrator_model=self.config.orchestrator_model,
+                    worker_model=self.config.worker_model,
+                    orchestrator_provider=orchestrator_provider,
+                    worker_provider=worker_provider,
+                    orchestrator_duration_ms=int(self.trace.orchestrator_duration_ms) if self.trace else 0,
+                    worker_duration_ms=int(self.trace.worker_duration_ms) if self.trace else 0,
+                    total_duration_ms=int(self.trace.total_duration_ms) if self.trace else 0,
+                    tokens_per_model=tokens_per_model,
+                    early_exit_triggered=early_exit_triggered,
+                    early_exit_confidence=early_exit_confidence,
+                    total_sources_found=total_sources_found,
+                    deduplicated_sources=deduplicated_sources,
+                )
+            )
+        except Exception as e:
+            logger.debug(f"[req={self.req_id}] Telemetry emit skipped: {e}")
+
     async def _process_with_orchestrator(
         self,
         user_message: str,

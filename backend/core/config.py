@@ -256,6 +256,32 @@ class BackendSettings(BaseSettings):
     support_webhook_enabled: bool = Field(default=False, description="Enable webhook delivery for support requests")
     support_webhook_url: str = Field(default="", description="Webhook URL for support requests")
     
+    # Telemetry - captures full interaction traces for development
+    telemetry_enabled: bool = Field(
+        default=True,
+        description="Enable development telemetry collection"
+    )
+    telemetry_mode: str = Field(
+        default="dev",
+        description="Telemetry mode: dev | beta | production | disabled"
+    )
+    telemetry_pii_mode: str = Field(
+        default="both",
+        description="PII mode: both | protected_only | raw_only | disabled"
+    )
+    telemetry_retention_days: int = Field(
+        default=90,
+        description="Days to retain telemetry JSONL files before rotation"
+    )
+    telemetry_storage_path: str = Field(
+        default="data/telemetry",
+        description="Directory for telemetry JSONL output files"
+    )
+    telemetry_pii_markers: bool = Field(
+        default=True,
+        description="Wrap PII replacements with [PII:TYPE]...[/PII] markers in protected telemetry"
+    )
+    
     # Web Search Settings (Brave Search API)
     brave_search_api_key: str = Field(
         default="BSALIxHlOobIdrJfmAgRPO1Y7RkkktH",

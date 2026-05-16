@@ -163,6 +163,7 @@ services:
       - ./projects:/app/projects
       - ./profiles.yaml:/app/profiles.yaml
       - ./data/backups:/app/data/backups
+      - ./data/telemetry:/app/data/telemetry
       # Profile-specific document folders (create these on host to use)
       - ./mounts/parhelion-energy:/app/mounts/parhelion-energy:ro
       - ./mounts/gdrive-root:/app/mounts/gdrive-root:ro
@@ -236,7 +237,7 @@ services:
     environment:
       # MongoDB connection (internal container network)
       - MONGODB_URI=mongodb://mongodb:27017/?directConnection=true
-      - MONGODB_DATABASE=${MONGODB_DATABASE:-rag_db}
+      - MONGODB_DATABASE=rag_test_law
       
       # Tenant
       - TENANT_ID=quellex
@@ -245,7 +246,7 @@ services:
       - TENANT_DISABLED_TOOLS=web_search,browse_web
       
       # Profile (overrides profiles.yaml active_profile)
-      - ACTIVE_PROFILE=parhelion
+      - ACTIVE_PROFILE=test-law
       
       # LLM Configuration
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}
@@ -272,6 +273,7 @@ services:
       - ./projects:/app/projects
       - ./profiles.yaml:/app/profiles.yaml
       - ./data/backups:/app/data/backups
+      - ./data/telemetry:/app/data/telemetry
       # Profile-specific document folders (create these on host to use)
       - ./mounts/parhelion-energy:/app/mounts/parhelion-energy:ro
       - ./mounts/gdrive-root:/app/mounts/gdrive-root:ro

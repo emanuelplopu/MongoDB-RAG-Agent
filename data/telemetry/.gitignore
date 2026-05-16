@@ -1,0 +1,4 @@
+# Telemetry JSONL data files - do not commit
+*.jsonl
+!.gitignore
+!raw/

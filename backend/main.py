@@ -28,6 +28,7 @@ from fastapi.exceptions import RequestValidationError
 from backend.routers import chat, search, profiles, ingestion, system, sessions, auth
 from backend.routers import status, indexes, ingestion_queue, local_llm, prompts, model_versions
 from backend.routers import strategies, backup, embedding_benchmark, file_registry, tenant, support, debug
+from backend.routers import telemetry as telemetry_router_module
 from backend.routers.cloud_sources import (
     connections_router as cloud_connections,
     oauth_router as cloud_oauth,
@@ -39,6 +40,7 @@ from backend.routers.system import load_config_from_db, load_llm_config_from_db
 from backend.routers.ingestion import check_and_resume_interrupted_jobs, graceful_shutdown_handler
 from backend.routers.prompts import initialize_default_templates
 from backend.services.backup_service import BackupService
+from backend.services.telemetry_service import TelemetryService
 from backend.core.config import settings
 from backend.core.database import DatabaseManager
 from backend.core.security import (
@@ -224,6 +226,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         logger.info("Ensured TTL index on agent_activity_log")
     except Exception as e:
         logger.warning(f"Failed to create TTL index: {e}")
+    
+    # Initialize telemetry service
+    try:
+        telemetry_service = TelemetryService(
+            storage_path=settings.telemetry_storage_path,
+            enabled=settings.telemetry_enabled,
+            mode=settings.telemetry_mode,
+            pii_mode=settings.telemetry_pii_mode,
+            retention_days=settings.telemetry_retention_days,
+            pii_markers=settings.telemetry_pii_markers,
+        )
+        app.state.telemetry = telemetry_service
+        # Set module-level reference for coordinator telemetry emission
+        from backend.agent.coordinator import set_telemetry_service
+        set_telemetry_service(telemetry_service)
+    except Exception as e:
+        logger.warning(f"Failed to initialize telemetry service: {e}")
+        app.state.telemetry = None
     
     # Log resolved LLM configuration
     logger.info("LLM Configuration:")
@@ -615,6 +635,8 @@ app.include_router(
     prefix="/api/v1",
     tags=["Debug"]
 )
+
+app.include_router(telemetry_router_module.router)
 
 
 # Root endpoint

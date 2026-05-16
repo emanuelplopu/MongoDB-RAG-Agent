@@ -76,3 +76,9 @@ installer/tray-app/.vs/
 # Installer build outputs
 installer/output/
 installer/*.exe
+
+# Telemetry Viewer
+tools/telemetry-viewer/node_modules/
+tools/telemetry-viewer/dist/
+tools/telemetry-viewer/dist-electron/
+tools/telemetry-viewer/dist-package/

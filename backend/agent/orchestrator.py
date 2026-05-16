@@ -23,6 +23,7 @@ from backend.agent.schemas import (
 from backend.agent.tool_gate import ToolGate
 from backend.core.config import settings
 from backend.services.activity_logger import NullActivityLogger
+from backend.models.telemetry import LLMCall
 try:
     from backend.routers.prompts import get_agent_prompt_sync, DEFAULT_AGENT_PROMPTS
 except ImportError:
@@ -103,6 +104,7 @@ class Orchestrator:
         self.provider = provider or settings.orchestrator_provider
         self.strategy = strategy
         self.steps: List[OrchestratorStep] = []
+        self._llm_calls: List[LLMCall] = []
         self._client = None
         self.activity_logger = activity_logger or NullActivityLogger()
         self.req_id = req_id
@@ -131,6 +133,7 @@ class Orchestrator:
     def reset(self):
         """Reset steps for a new session."""
         self.steps = []
+        self._llm_calls = []
     
     def _get_prompt(self, phase: str) -> str:
         """Get prompt for a phase, using strategy if available.
@@ -291,6 +294,28 @@ class Orchestrator:
                 is_cold_start=is_cold_start
             )
             self.steps.append(step)
+
+            # Record telemetry LLM call
+            finish_reason = response.choices[0].finish_reason or ""
+            usage = response.usage
+            llm_record = LLMCall(
+                phase=phase_key,
+                model=self.model,
+                provider=self.provider,
+                temperature=llm_params.get("temperature", 0.7),
+                max_tokens=max_tokens_for_phase,
+                prompt_text=prompt,
+                response_text=content if content else "",
+                prompt_tokens=usage.prompt_tokens if usage and hasattr(usage, 'prompt_tokens') else 0,
+                response_tokens=usage.completion_tokens if usage and hasattr(usage, 'completion_tokens') else 0,
+                total_tokens=tokens_used,
+                latency_ms=int(duration_ms),
+                finish_reason=finish_reason,
+                success=True,
+                is_cold_start=is_cold_start,
+                repetition_detected=_detect_repetition(content) if content else False,
+            )
+            self._llm_calls.append(llm_record)
             
             return result
             
