@@ -2,7 +2,7 @@
 ; RecallHub Windows Installer - Inno Setup Script
 ; =============================================================================
 ; This script creates the Windows installer package for RecallHub.
-; It handles WSL2 setup, distribution import, and service configuration.
+; It handles Docker Desktop deployment, service configuration, and tray app launch.
 ; =============================================================================
 
 #define MyAppName "RecallHub"
@@ -73,8 +73,8 @@ Source: "scripts\*"; DestDir: "{app}\scripts"; Flags: ignoreversion recursesubdi
 ; Configuration files
 Source: "config\*"; DestDir: "{app}\config"; Flags: ignoreversion recursesubdirs
 
-; WSL2 distribution (large file)
-Source: "distro\recallhub.tar.gz"; DestDir: "{app}\distro"; Flags: ignoreversion
+; Docker images (exported tars)
+Source: "images\*"; DestDir: "{app}\images"; Flags: ignoreversion recursesubdirs; Check: DirExists(ExpandConstant('{src}\images'))
 
 ; Ollama models (large files)
 Source: "models\*"; DestDir: "{app}\models"; Flags: ignoreversion recursesubdirs; Check: FileExists(ExpandConstant('{src}\models\ollama-models.tar'))
@@ -86,7 +86,6 @@ Source: "assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs
 Name: "{app}\logs"
 Name: "{app}\backups"
 Name: "{app}\updates"
-Name: "{app}\wsl"
 
 [Icons]
 ; Start Menu entries
@@ -104,10 +103,8 @@ Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: st
 
 [Run]
 ; Post-installation tasks (output captured to log files)
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Install-WSL2.ps1' *> '{localappdata}\RecallHub\logs\install-wsl2-run.log'"""; StatusMsg: "Configuring WSL2..."; Description: "Configure WSL2"; Flags: runhidden waituntilterminated
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Import-Distro.ps1' -DistroPath '{app}\distro\recallhub.tar.gz' -InstallPath '{app}\wsl' -Force *> '{localappdata}\RecallHub\logs\import-distro-run.log'"""; StatusMsg: "Importing RecallHub distribution..."; Description: "Import WSL2 distribution"; Flags: runhidden waituntilterminated
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Configure-Firewall.ps1' *> '{localappdata}\RecallHub\logs\configure-firewall-run.log'"""; StatusMsg: "Configuring firewall..."; Description: "Configure firewall rules"; Flags: runhidden waituntilterminated
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Start-Services.ps1' -Wait *> '{localappdata}\RecallHub\logs\start-services-run.log'"""; StatusMsg: "Starting services..."; Description: "Start RecallHub services"; Flags: runhidden waituntilterminated
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Configure-Firewall.ps1' *> '{localappdata}\RecallHub\logs\configure-firewall-run.log'""" ; StatusMsg: "Configuring firewall..."; Description: "Configure firewall rules"; Flags: runhidden waituntilterminated
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Start-Services.ps1' -Wait *> '{localappdata}\RecallHub\logs\start-services-run.log'""" ; StatusMsg: "Starting services..."; Description: "Start RecallHub services"; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [Registry]
@@ -127,7 +124,6 @@ Root: HKCU; Subkey: "Software\Classes\RecallHub.Update\shell\open\command"; Valu
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\Uninstall.ps1"" -Force"; Flags: runhidden waituntilterminated
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{app}\wsl"
 Type: filesandordirs; Name: "{app}\logs"
 Type: files; Name: "{localappdata}\RecallHub\window-state.json"
 Type: files; Name: "{userdesktop}\{#MyAppName}.lnk"
@@ -135,7 +131,6 @@ Type: dirifempty; Name: "{app}"
 
 [Code]
 var
-  WSLRestartRequired: Boolean;
   InstallLogDir: String;
   InstallStartTime: String;
 
@@ -188,7 +183,6 @@ begin
     Manifest.Add('  "installDir": "' + ExpandConstant('{app}') + '",');
     Manifest.Add('  "logDir": "' + InstallLogDir + '",');
     Manifest.Add('  "components": {');
-    Manifest.Add('    "wsl2": true,');
     Manifest.Add('    "docker": true,');
     Manifest.Add('    "ollama": true,');
     Manifest.Add('    "backend": true,');
@@ -244,7 +238,6 @@ var
   WinVer: TWindowsVersion;
 begin
   Result := True;
-  WSLRestartRequired := False;
 
   // Initialize logging first
   InitializeLogDir();
@@ -300,27 +293,18 @@ begin
     ssPostInstall:
       begin
         LogTranscript('STEP: Post-installation tasks starting');
-        // Check if restart is needed for WSL2
-        if FileExists(ExpandConstant('{localappdata}\RecallHub\install-state.json')) then
-        begin
-          WSLRestartRequired := True;
-          LogTranscript('INFO: WSL2 restart will be required');
-        end;
       end;
     ssDone:
       begin
         LogTranscript('STEP: Installation completed successfully');
         CreateInstallManifest();
-        // Show error summary if any post-install log indicates failure
-        if WSLRestartRequired then
-          LogTranscript('INFO: System restart required for WSL2 activation');
       end;
   end;
 end;
 
 function NeedRestart(): Boolean;
 begin
-  Result := WSLRestartRequired;
+  Result := False;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
@@ -334,5 +318,5 @@ end;
 
 [Messages]
 WelcomeLabel1=Welcome to the [name] Setup Wizard
-WelcomeLabel2=This will install [name/ver] on your computer.%n%nRecallHub is a local-first RAG (Retrieval-Augmented Generation) application that runs entirely on your machine.%n%nRequirements:%n- Windows 10 version 2004 or later%n- 8 GB RAM minimum (16 GB recommended)%n- 5 GB free disk space%n%nThe installation will:%n1. Configure Windows Subsystem for Linux 2 (WSL2)%n2. Import the RecallHub environment%n3. Start all services%n%nThis may take 10-15 minutes depending on your system.
+WelcomeLabel2=This will install [name/ver] on your computer.%n%nRecallHub is a local-first RAG (Retrieval-Augmented Generation) application that runs entirely on your machine.%n%nRequirements:%n- Windows 10 version 2004 or later%n- Docker Desktop installed and running%n- 8 GB RAM minimum (16 GB recommended)%n- 5 GB free disk space%n%nThe installation will:%n1. Configure firewall rules%n2. Load Docker images and start services%n3. Launch the RecallHub tray application%n%nThis may take 5-10 minutes depending on your system.
 FinishedLabelNoIcons=Setup has finished installing [name] on your computer.%n%nRecallHub is now running!%n%nOpen your browser to: http://localhost:11080

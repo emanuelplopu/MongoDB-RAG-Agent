@@ -4,7 +4,7 @@
 
   "app": {
     "name": "RecallHub",
-    "version": "0.8.8"
+    "version": "0.8.8",
     "publisher": "RecallHub",
     "url": "https://recallhub.local",
     "description": "AI-powered document intelligence platform",
@@ -99,7 +99,13 @@
       "projects_data",
       "config_data",
       "logs_data"
-    ]
+    ],
+    "composeFile": "docker-compose.yml",
+    "installPath": "C:\\RecallHub",
+    "startupTimeout": 120,
+    "healthCheckInterval": 5,
+    "autoStart": true,
+    "desktopPath": "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe"
   },
 
   "ports": {
@@ -124,7 +130,7 @@
   "llm": {
     "provider": "ollama",
     "baseUrl": "http://ollama:11434/v1",
-    "model": "gemma4:26b"
+    "model": "gemma4:26b",
     "temperature": 0.7,
     "maxTokens": 2048
   },
@@ -208,10 +214,12 @@
     }
   },
 
-  "wsl": {
-    "distroName": "RecallHub",
-    "distroFile": "recallhub.tar.gz",
-    "minimumSizeMB": 500
+  "telemetry": {
+    "enabled": true,
+    "mode": "dev",
+    "piiMode": "both",
+    "retentionDays": 90,
+    "storagePath": "data/telemetry"
   },
 
   "installer": {

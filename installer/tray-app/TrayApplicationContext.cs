@@ -12,6 +12,7 @@ namespace RecallHub.TrayApp;
 public class TrayApplicationContext : ApplicationContext
 {
     private readonly NotifyIcon _trayIcon;
+    private readonly AppConfig _appConfig;
     private readonly ServiceManager _serviceManager;
     private readonly ContextMenuStrip _contextMenu;
     private readonly System.Windows.Forms.Timer _statusTimer;
@@ -28,7 +29,8 @@ public class TrayApplicationContext : ApplicationContext
 
     public TrayApplicationContext()
     {
-        _serviceManager = new ServiceManager();
+        _appConfig = LoadConfig();
+        _serviceManager = new ServiceManager(_appConfig);
 
         // Create context menu
         _contextMenu = CreateContextMenu();
@@ -609,6 +611,31 @@ public class TrayApplicationContext : ApplicationContext
     private void ShowError(string title, string message)
     {
         MessageBox.Show(message, title, MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
+
+    private static AppConfig LoadConfig()
+    {
+        // Try multiple config locations
+        var candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "config.json"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecallHub", "config.json"),
+        };
+
+        foreach (var path in candidates)
+        {
+            if (File.Exists(path))
+            {
+                try
+                {
+                    var json = File.ReadAllText(path);
+                    var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                    return JsonSerializer.Deserialize<AppConfig>(json, options) ?? new AppConfig();
+                }
+                catch { }
+            }
+        }
+        return new AppConfig();
     }
 
     protected override void Dispose(bool disposing)

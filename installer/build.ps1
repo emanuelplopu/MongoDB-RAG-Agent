@@ -12,9 +12,8 @@
     4. Exports images for bundling
     5. Builds the tray application
     6. Downloads Ollama models (optional)
-    7. Creates the WSL2 distribution
-    8. Packages everything into RecallHubSetup.exe
-    9. Cleans up build artifacts
+    7. Packages everything into RecallHubSetup.exe
+    8. Cleans up build artifacts
     
     Your development environment remains UNTOUCHED.
 
@@ -24,9 +23,6 @@
 .PARAMETER SkipModels
     Skip downloading Ollama models (use existing if available)
 
-.PARAMETER SkipDistro
-    Skip creating WSL2 distribution (use existing if available)
-
 .PARAMETER Clean
     Clean build artifacts before building
 
@@ -35,7 +31,7 @@
 
 .NOTES
     Requirements:
-    - Docker Desktop with WSL2 backend
+    - Docker Desktop running
     - .NET 8 SDK (for tray app)
     - Inno Setup 6+ (for installer)
     - PowerShell 5.1+
@@ -44,7 +40,6 @@
 param(
     [string]$Version = "1.0.0",
     [switch]$SkipModels,
-    [switch]$SkipDistro,
     [switch]$Clean,
     [switch]$Debug
 )
@@ -62,7 +57,7 @@ Import-Module (Join-Path $ScriptsDir "RecallHub-Logging.psm1") -Force
 # Initialize with build-specific log name
 $logFile = Initialize-InstallLog -LogName "build"
 Write-InstallLog "Starting RecallHub installer build" -Source "Build"
-Write-InstallLog "Build parameters: Version=$Version, SkipModels=$SkipModels, SkipDistro=$SkipDistro, Clean=$Clean, Debug=$Debug" -Level DEBUG -Source "Build"
+Write-InstallLog "Build parameters: Version=$Version, SkipModels=$SkipModels, Clean=$Clean, Debug=$Debug" -Level DEBUG -Source "Build"
 
 if ($Debug) {
     $env:RECALLHUB_DEBUG = "1"
@@ -90,7 +85,6 @@ $SCRIPT_DIR = $PSScriptRoot
 $PROJECT_ROOT = Split-Path $SCRIPT_DIR -Parent
 $BUILD_DIR = Join-Path $SCRIPT_DIR "build-temp"
 $OUTPUT_DIR = Join-Path $SCRIPT_DIR "output"
-$DISTRO_DIR = Join-Path $SCRIPT_DIR "distro"
 $MODELS_DIR = Join-Path $SCRIPT_DIR "models"
 $ASSETS_DIR = Join-Path $SCRIPT_DIR "assets"
 
@@ -258,7 +252,6 @@ function Initialize-Build {
     # Create directories
     New-Item -ItemType Directory -Path $BUILD_DIR -Force | Out-Null
     New-Item -ItemType Directory -Path $OUTPUT_DIR -Force | Out-Null
-    New-Item -ItemType Directory -Path $DISTRO_DIR -Force | Out-Null
     New-Item -ItemType Directory -Path $ASSETS_DIR -Force | Out-Null
     
     Write-Success "Build directories created"
@@ -506,37 +499,6 @@ function Download-Models {
     }
 }
 
-function Create-WSLDistro {
-    Write-Step "Creating WSL2 distribution..."
-    
-    Write-InstallLog "Building complete WSL2 distribution with all components..." -Source "Build"
-    Write-InstallLog "Includes: Ubuntu 22.04, Docker, pre-loaded images, Ollama models" -Level DEBUG -Source "Build"
-    
-    # Run the distro build script
-    $distroScript = Join-Path $SCRIPT_DIR "scripts\Build-Distro.ps1"
-    
-    if (Test-Path $distroScript) {
-        & $distroScript `
-            -OutputPath "$DISTRO_DIR\recallhub.tar.gz" `
-            -BackendImage "${BACKEND_IMAGE}:${Version}" `
-            -FrontendImage "${FRONTEND_IMAGE}:${Version}" `
-            -IncludeModels
-        
-        if (Test-Path "$DISTRO_DIR\recallhub.tar.gz") {
-            $size = (Get-Item "$DISTRO_DIR\recallhub.tar.gz").Length / 1GB
-            Write-Success "WSL2 distribution created ($([math]::Round($size, 2)) GB)"
-            Test-BuildArtifact -Path "$DISTRO_DIR\recallhub.tar.gz" -Name "WSL Distribution" -MinimumSize ($Config.wsl.minimumSizeMB * 1MB) | Out-Null
-        }
-        else {
-            throw "WSL2 distribution was not created"
-        }
-    }
-    else {
-        Write-BuildError "Build-Distro.ps1 script not found"
-        throw "Cannot create WSL2 distribution - missing build script"
-    }
-}
-
 function Create-Assets {
     Write-Step "Creating installer assets..."
     
@@ -617,7 +579,6 @@ function New-BuildManifest {
     $artifactPaths = @(
         (Join-Path $OUTPUT_DIR "images\backend.tar"),
         (Join-Path $OUTPUT_DIR "images\frontend.tar"),
-        (Join-Path $DISTRO_DIR "recallhub.tar.gz"),
         (Join-Path $MODELS_DIR "ollama-models.tar")
     )
     
@@ -654,11 +615,6 @@ function Show-Summary {
         Write-Host "  - $($_.Name): $([math]::Round($size, 2)) MB"
     }
     
-    if (Test-Path "$DISTRO_DIR\recallhub.tar.gz") {
-        $size = (Get-Item "$DISTRO_DIR\recallhub.tar.gz").Length / 1GB
-        Write-Host "  - recallhub.tar.gz (WSL distro): $([math]::Round($size, 2)) GB"
-    }
-    
     if (Test-Path "$MODELS_DIR\ollama-models.tar") {
         $size = (Get-Item "$MODELS_DIR\ollama-models.tar").Length / 1GB
         Write-Host "  - ollama-models.tar: $([math]::Round($size, 2)) GB"
@@ -667,7 +623,6 @@ function Show-Summary {
     Write-Host ""
     Write-Host "Included Components:" -ForegroundColor Yellow
     Write-Host "  - Hardened Docker images (backend + frontend)"
-    Write-Host "  - WSL2 distribution with Docker pre-installed"
     $modelNames = ($Config.models.ollama | ForEach-Object { $_.name }) -join ", "
     Write-Host "  - Ollama models ($modelNames)"
     Write-Host "  - MongoDB Atlas Local image"
@@ -689,7 +644,6 @@ function Main {
     Write-Host ""
     Write-Host "This build will create a COMPLETE installer including:"
     Write-Host "  - Hardened Docker images"
-    Write-Host "  - WSL2 distribution with all dependencies"
     Write-Host "  - Ollama LLM models (~2.3GB)"
     Write-Host ""
     
@@ -788,23 +742,6 @@ function Main {
             }
         }
         Complete-InstallSection -Name "Model Downloads" -Status Success
-        
-        # --- WSL Distribution ---
-        Start-InstallSection -Name "WSL Distribution"
-        $currentSection = "WSL Distribution"
-        if (-not $SkipDistro) {
-            Create-WSLDistro
-        }
-        else {
-            if (Test-Path "$DISTRO_DIR\recallhub.tar.gz") {
-                Write-InstallLog "Using existing WSL2 distribution (skipped creation)" -Source "Build"
-            }
-            else {
-                Write-BuildWarning "SkipDistro specified but no existing distro found - building anyway"
-                Create-WSLDistro
-            }
-        }
-        Complete-InstallSection -Name "WSL Distribution" -Status Success
         
         # --- Assets & Installer ---
         Start-InstallSection -Name "Installer Packaging"

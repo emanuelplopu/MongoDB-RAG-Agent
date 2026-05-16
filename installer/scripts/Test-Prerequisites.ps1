@@ -3,7 +3,7 @@
 .SYNOPSIS
     RecallHub pre-flight validation - checks system requirements before installation.
 .DESCRIPTION
-    Validates Windows version, disk space, RAM, WSL2, network, ports, GPU, and existing installations.
+    Validates Windows version, disk space, RAM, Docker Desktop, network, ports, GPU, and existing installations.
     Produces a structured report with PASS/WARN/FAIL for each check.
 .PARAMETER OutputPath
     Optional path for the JSON results file. Defaults to LOCALAPPDATA\RecallHub\logs\preflight-TIMESTAMP.json
@@ -146,28 +146,45 @@ $results.Add($ramResult) | Out-Null
 Complete-InstallSection -Name "System RAM Check" -Status $(if ($ramResult.Status -eq 'Fail') { 'Failed' } elseif ($ramResult.Status -eq 'Warn') { 'Success' } else { 'Success' })
 
 # ---------------------------------------------------------------------------
-# 4. WSL2 Feature Status
+# 4. Docker Desktop Status
 # ---------------------------------------------------------------------------
-Start-InstallSection -Name "WSL2 Features Check"
-$wslResult = Test-Prerequisite -Name "WSL2 Features" -Required $false -Description "WSL and VirtualMachinePlatform features needed for Docker/WSL2" -ScriptBlock {
-    $wslFeature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -ErrorAction Stop
-    $vmFeature = Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -ErrorAction Stop
-
-    $wslEnabled = $wslFeature.State -eq 'Enabled'
-    $vmEnabled = $vmFeature.State -eq 'Enabled'
-
-    if ($wslEnabled -and $vmEnabled) {
-        return "Both WSL and VirtualMachinePlatform enabled"
-    } elseif (-not $wslEnabled -and -not $vmEnabled) {
-        throw "WSL and VirtualMachinePlatform both disabled (will be enabled during install)"
-    } elseif (-not $wslEnabled) {
-        throw "WSL disabled (will be enabled during install)"
-    } else {
-        throw "VirtualMachinePlatform disabled (will be enabled during install)"
+Start-InstallSection -Name "Docker Desktop Check"
+$dockerResult = Test-Prerequisite -Name "Docker Desktop" -Required $true -Description "Docker Desktop must be installed and running" -ScriptBlock {
+    # Check if docker command is available
+    $dockerCmd = $null
+    try {
+        $dockerCmd = Get-Command docker -ErrorAction Stop
+    } catch {
+        throw "Docker is not installed. Please install Docker Desktop from https://www.docker.com/products/docker-desktop/"
     }
+
+    # Check if Docker daemon is running
+    try {
+        $dockerInfo = docker info 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Docker is installed but not running. Please start Docker Desktop."
+        }
+    } catch {
+        if ($_.Exception.Message -match 'not running') {
+            throw $_.Exception.Message
+        }
+        throw "Docker is installed but the daemon is not responding. Please start Docker Desktop."
+    }
+
+    # Check Docker Compose availability
+    try {
+        $composeVersion = docker compose version 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Docker Compose plugin not available. Please update Docker Desktop."
+        }
+    } catch {
+        throw "Docker Compose not available: $($_.Exception.Message)"
+    }
+
+    return "Docker Desktop running ($($dockerInfo | Select-String 'Server Version' | ForEach-Object { $_.ToString().Trim() }))"
 }
-$results.Add($wslResult) | Out-Null
-Complete-InstallSection -Name "WSL2 Features Check" -Status $(if ($wslResult.Status -eq 'Fail') { 'Failed' } else { 'Success' })
+$results.Add($dockerResult) | Out-Null
+Complete-InstallSection -Name "Docker Desktop Check" -Status $(if ($dockerResult.Status -eq 'Fail') { 'Failed' } else { 'Success' })
 
 # ---------------------------------------------------------------------------
 # 5. Network Connectivity
@@ -276,11 +293,12 @@ Start-InstallSection -Name "Existing Installation Check"
 $existResult = Test-Prerequisite -Name "Existing Installation" -Required $false -Description "Check for previous RecallHub installation" -ScriptBlock {
     $findings = @()
 
-    # Check WSL distro
+    # Check Docker containers and volumes
     try {
-        $wslList = wsl -l -q 2>$null
-        if ($wslList -match 'RecallHub') {
-            $findings += "WSL distro 'RecallHub' found"
+        $containers = docker ps -a --format "{{.Names}}" 2>$null
+        $rhContainers = $containers | Where-Object { $_ -match 'recallhub' }
+        if ($rhContainers) {
+            $findings += "Docker containers: $($rhContainers -join ', ')"
         }
     } catch { }
 
