@@ -1,0 +1,1107 @@
+﻿
+ RUN  v2.1.9 D:/dev/repos/MongoDB-RAG-Agent/frontend
+      Coverage enabled with v8
+
+ Γ£ô src/tenants/utils.test.ts > tenant utils > injects tenant CSS variables for colors, fonts, radius, and dark mode
+ Γ£ô src/tenants/utils.test.ts > tenant utils > creates and updates favicon links with inferred mime types
+ Γ£ô src/tenants/utils.test.ts > tenant utils > updates the document title directly
+ Γ£ô src/tenants/utils.test.ts > tenant utils > loads Google fonts once and skips system fonts
+ Γ£ô src/tenants/utils.test.ts > tenant utils > removes the font link and warns when font loading fails
+ Γ£ô src/tenants/utils.test.ts > tenant utils > applies i18n overrides and warns on nested key collisions
+ Γ£ô src/api/modelVersions.test.ts > modelVersionsApi > configures the axios client and auth interceptors 339ms
+ Γ£ô src/api/modelVersions.test.ts > modelVersionsApi > lists model versions with filters
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > useChatSidebar hook > should throw error when used outside provider
+ Γ£ô src/contexts/ThemeContext.test.tsx > ThemeContext > useTheme hook > should throw error when used outside ThemeProvider
+ Γ£ô src/contexts/ThemeContext.test.tsx > ThemeContext > Initial state > should default to system theme
+ Γ£ô src/contexts/ThemeContext.test.tsx > ThemeContext > Initial state > should load stored theme from localStorage
+ Γ£ô src/contexts/ThemeContext.test.tsx > ThemeContext > Initial state > should resolve system theme to light when prefers-color-scheme is light
+ Γ£ô src/contexts/ThemeContext.test.tsx > ThemeContext > Initial state > should resolve system theme to dark when prefers-color-scheme is dark
+ Γ£ô src/components/ModelVersionSelector.test.tsx > ModelVersionSelector > loads models, filters them, and switches models successfully 2443ms
+ Γ£ô src/api/modelVersions.test.ts > modelVersionsApi > fetches individual and derived model lists
+ Γ£ô src/contexts/ThemeContext.test.tsx > ThemeContext > Theme switching > should switch to light theme 326ms
+ Γ£ô src/api/modelVersions.test.ts > modelVersionsApi > switches model versions and checks compatibility 469ms
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Initial state > should load sessions on mount
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Initial state > should show loading state initially then load
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Initial state > should load collapsed folders from localStorage
+ Γ£ô src/components/ModelVersionSelector.test.tsx > ModelVersionSelector > shows empty state and switch errors from the callback 336ms
+ Γ£ô src/api/modelVersions.test.ts > modelVersionsApi > fetches recommendations with task constraints
+ Γ£ô src/contexts/AuthContext.test.tsx > AuthContext > useAuth hook > should throw error when used outside AuthProvider
+ Γ£ô src/contexts/ThemeContext.test.tsx > ThemeContext > Theme switching > should switch to dark theme
+ Γ£ô src/contexts/AuthContext.test.tsx > AuthContext > Initial state > should start with loading state
+ Γ£ô src/contexts/AuthContext.test.tsx > AuthContext > Initial state > should be unauthenticated when no token exists
+ Γ£ô src/contexts/AuthContext.test.tsx > AuthContext > Initial state > should validate token on mount if it exists
+ Γ£ô src/contexts/AuthContext.test.tsx > AuthContext > Initial state > should clear token if validation fails
+ Γ£ô src/contexts/ThemeContext.test.tsx > ThemeContext > Theme switching > should switch to system theme
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > New chat > should create a new session
+stdout | src/pages/DocumentsPage.test.tsx
+≡ƒîÉ i18next is maintained with support from Locize ΓÇö consider powering your project with managed localization (AI, CDN, integrations): https://locize.com ≡ƒÆÖ
+
+stdout | src/pages/ArchivedChatsPage.test.tsx
+≡ƒîÉ i18next is maintained with support from Locize ΓÇö consider powering your project with managed localization (AI, CDN, integrations): https://locize.com ≡ƒÆÖ
+
+stdout | src/pages/DocumentPreviewPage.test.tsx
+≡ƒîÉ i18next is maintained with support from Locize ΓÇö consider powering your project with managed localization (AI, CDN, integrations): https://locize.com ≡ƒÆÖ
+
+ Γ£ô src/contexts/AuthContext.test.tsx > AuthContext > Initial state > should skip rapid focus and visibility revalidation until the validation interval has passed
+ Γ£ô src/components/ModelVersionSelector.test.tsx > ModelVersionSelector > renders network errors and retries loading 508ms
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > New chat > should include the preferred default model and folder when creating a new chat in-chat 448ms
+ Γ£ô src/components/ModelVersionSelector.test.tsx > ModelVersionSelector > renders backend error messages when available
+ Γ£ô src/contexts/ThemeContext.test.tsx > ThemeContext > Dark class on document > should add dark class when theme is dark 397ms
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Session actions > should load and select a session and navigate when outside chat 421ms
+ Γ£ô src/contexts/AuthContext.test.tsx > AuthContext > Login > should login successfully 737ms
+ Γ£ô src/contexts/ThemeContext.test.tsx > ThemeContext > Dark class on document > should remove dark class when theme is light
+ Γ£ô src/contexts/ThemeContext.test.tsx > ThemeContext > System theme change listener > should update resolved theme when system preference changes
+ Γ£ô src/hooks/useSelection.test.tsx > useSelection > selects, toggles, clears, and tracks aggregate state
+ Γ£ô src/hooks/useSelection.test.tsx > useSelection > supports select-all, ranged selection, and click modifiers
+ Γ£ô src/hooks/useSelection.test.tsx > useSelection > enforces maxSelections across multi-select paths
+ Γ£ô src/hooks/useSelection.test.tsx > useSelection UI helpers > renders the bulk action bar only when something is selected 364ms
+ Γ£ô src/hooks/useSelection.test.tsx > useSelection UI helpers > renders bulk action buttons with variants and disabled state
+ Γ£ô src/hooks/useSelection.test.tsx > useSelection UI helpers > renders select-all checkbox states and calls onChange
+ Γ£ô src/contexts/ThemeContext.test.tsx > ThemeContext > Synced theme application > should apply a theme directly without syncing back
+stdout | src/App.test.tsx
+≡ƒîÉ i18next is maintained with support from Locize ΓÇö consider powering your project with managed localization (AI, CDN, integrations): https://locize.com ≡ƒÆÖ
+
+ Γ£ô src/hooks/useSettingsSync.test.tsx > useSettingsSync > reads and clears synced preferences from localStorage safely
+ Γ£ô src/hooks/useSettingsSync.test.tsx > useSettingsSync > pulls preferences from the backend, merges local cache, and falls back on errors
+ Γ£ô src/hooks/useSettingsSync.test.tsx > useSettingsSync > syncs preferences immediately to cache and debounces backend writes
+ Γ£ô src/hooks/useSettingsSync.test.tsx > useSettingsSync > flushes pending updates and re-queues failed writes
+ Γ£ô src/hooks/useSettingsSync.test.tsx > useSettingsSync > flushes pending updates on unmount
+ Γ£ô src/contexts/AuthContext.test.tsx > AuthContext > Login > should handle login failure
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Session actions > should delete a session, clear its draft, and reset current state 346ms
+ Γ£ô src/pages/APIKeysPage.test.tsx > APIKeysPage > renders the empty state and reloads on refresh 1065ms
+ Γ£ô src/contexts/AuthContext.test.tsx > AuthContext > Logout > should logout successfully
+ Γ£ô src/pages/LoginPage.test.tsx > LoginPage > Initial rendering > should render login form by default 619ms
+ Γ£ô src/pages/LoginPage.test.tsx > LoginPage > Initial rendering > should have name field hidden in login mode
+ Γ£ô src/contexts/ThemeContext.test.tsx > ThemeContext > Synced theme application > should apply a synced theme event and ignore invalid synced values
+ Γ£ô src/contexts/UserPreferencesContext.test.tsx > UserPreferencesContext > throws when the hook is used outside the provider
+ Γ£ô src/contexts/UserPreferencesContext.test.tsx > UserPreferencesContext > updates, resets, and syncs preferences 1043ms
+ Γ£ô src/contexts/UserPreferencesContext.test.tsx > UserPreferencesContext > applies synced preferences directly and listens for sync events
+ Γ£ô src/contexts/UserPreferencesContext.test.tsx > UserPreferences helper components > renders settings section content
+ Γ£ô src/contexts/UserPreferencesContext.test.tsx > UserPreferences helper components > renders and toggles settings controls
+ Γ£ô src/contexts/UserPreferencesContext.test.tsx > UserPreferences helper components > respects disabled control states
+ Γ£ô src/contexts/AuthContext.test.tsx > AuthContext > Logout > should handle logout error gracefully
+ Γ£ô src/contexts/AuthContext.test.tsx > AuthContext > Register > should register successfully
+ Γ£ô src/contexts/AuthContext.test.tsx > AuthContext > Session expired handling > should handle unauthorized events
+ Γ£ô src/components/FilePreviewModal.test.tsx > FilePreviewModal > returns null when closed
+ Γ£ô src/contexts/AuthContext.test.tsx > AuthContext > Session expired handling > should refresh the current user successfully
+ Γ£ô src/pages/LoginPage.test.tsx > LoginPage > Mode switching > should switch to register mode 588ms
+stdout | src/api/client.test.ts > systemApi > should fetch health status
+[API] GET /system/health
+
+stdout | src/api/client.test.ts > systemApi > should fetch system stats
+[API] GET /system/stats
+
+stdout | src/api/client.test.ts > systemApi > should fetch system config
+[API] GET /system/config
+
+stdout | src/api/client.test.ts > systemApi > should fetch system info
+[API] GET /system/info
+
+stdout | src/api/client.test.ts > systemApi > should fetch indexes status
+[API] GET /system/indexes
+
+stdout | src/api/client.test.ts > systemApi > should fetch database stats
+[API] GET /system/database-stats
+
+stdout | src/api/client.test.ts > searchApi > should perform hybrid search
+[API] POST /search
+
+stdout | src/api/client.test.ts > searchApi > should perform semantic search
+[API] POST /search/semantic
+
+stdout | src/api/client.test.ts > searchApi > should perform text search
+[API] POST /search/text
+
+stdout | src/api/client.test.ts > searchApi > should perform hybrid search via specific endpoint
+[API] POST /search/hybrid
+
+stdout | src/api/client.test.ts > searchApi > should include total results and timing
+[API] POST /search
+
+stdout | src/api/client.test.ts > chatApi > should send chat message
+[API] POST /chat
+
+stdout | src/api/client.test.ts > chatApi > should send chat with conversation ID
+[API] POST /chat
+
+stdout | src/api/client.test.ts > chatApi > should list conversations
+[API] GET /chat/conversations
+
+stdout | src/api/client.test.ts > chatApi > should get conversation by ID
+[API] GET /chat/conversations/conv_123
+
+stdout | src/api/client.test.ts > chatApi > should delete conversation
+[API] DELETE /chat/conversations/conv_123
+
+stdout | src/api/client.test.ts > profilesApi > should list all profiles
+[API] GET /profiles
+
+stdout | src/api/client.test.ts > profilesApi > should get active profile
+[API] GET /profiles/active
+
+stdout | src/api/client.test.ts > profilesApi > should switch profile
+[API] POST /profiles/switch
+
+stdout | src/api/client.test.ts > profilesApi > should create profile
+[API] POST /profiles/create
+
+stdout | src/api/client.test.ts > profilesApi > should delete profile
+[API] DELETE /profiles/test_profile
+
+stdout | src/api/client.test.ts > documentsApi > should list documents
+[API] GET /ingestion/documents
+
+stdout | src/api/client.test.ts > documentsApi > should list documents with pagination
+[API] GET /ingestion/documents
+
+stdout | src/api/client.test.ts > documentsApi > should get document by ID
+[API] GET /ingestion/documents/doc_1
+
+stdout | src/api/client.test.ts > documentsApi > should delete document
+[API] DELETE /ingestion/documents/doc_1
+
+stdout | src/api/client.test.ts > ingestionApi > should get ingestion status
+[API] GET /ingestion/status
+
+stdout | src/api/client.test.ts > ingestionApi > should start ingestion
+[API] POST /ingestion/start
+
+stdout | src/api/client.test.ts > ingestionApi > should setup indexes
+[API] POST /ingestion/setup-indexes
+
+ Γ£ô src/api/client.test.ts > systemApi > should fetch health status
+ Γ£ô src/api/client.test.ts > systemApi > should fetch system stats
+ Γ£ô src/api/client.test.ts > systemApi > should fetch system config
+ Γ£ô src/api/client.test.ts > systemApi > should fetch system info
+ Γ£ô src/api/client.test.ts > systemApi > should fetch indexes status
+ Γ£ô src/api/client.test.ts > systemApi > should fetch database stats
+ Γ£ô src/api/client.test.ts > searchApi > should perform hybrid search
+ Γ£ô src/api/client.test.ts > searchApi > should perform semantic search
+ Γ£ô src/api/client.test.ts > searchApi > should perform text search
+ Γ£ô src/api/client.test.ts > searchApi > should perform hybrid search via specific endpoint
+ Γ£ô src/api/client.test.ts > searchApi > should include total results and timing
+ Γ£ô src/api/client.test.ts > chatApi > should send chat message
+ Γ£ô src/api/client.test.ts > chatApi > should send chat with conversation ID
+ Γ£ô src/api/client.test.ts > chatApi > should list conversations
+ Γ£ô src/api/client.test.ts > chatApi > should get conversation by ID
+ Γ£ô src/api/client.test.ts > chatApi > should delete conversation
+ Γ£ô src/api/client.test.ts > profilesApi > should list all profiles
+ Γ£ô src/api/client.test.ts > profilesApi > should get active profile
+ Γ£ô src/api/client.test.ts > profilesApi > should switch profile
+ Γ£ô src/api/client.test.ts > profilesApi > should create profile
+ Γ£ô src/api/client.test.ts > profilesApi > should delete profile
+ Γ£ô src/api/client.test.ts > documentsApi > should list documents
+ Γ£ô src/api/client.test.ts > documentsApi > should list documents with pagination
+ Γ£ô src/api/client.test.ts > documentsApi > should get document by ID
+ Γ£ô src/api/client.test.ts > documentsApi > should delete document
+ Γ£ô src/api/client.test.ts > ingestionApi > should get ingestion status
+ Γ£ô src/api/client.test.ts > ingestionApi > should start ingestion
+ Γ£ô src/api/client.test.ts > ingestionApi > should setup indexes
+ Γ£ô src/api/client.test.ts > ApiError > should create ApiError with correct properties
+ Γ£ô src/api/client.test.ts > ApiError > should be an instance of Error
+node.exe : stderr | src/components/SearchSuggestions.test.tsx > 
+SearchSuggestions > renders trending and generated suggestions and handles 
+selection
+At C:\nvm4w\nodejs\npx.ps1:29 char:3
++   & $NODE_EXE $NPX_CLI_JS $args
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (stderr | src/co...ndles selection 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Warning: validateDOMNesting(...): <button> cannot appear as a descendant of 
+<button>.
+    at button
+    at button
+    at div
+    at div
+    at div
+    at SearchSuggestions (D:\dev\repos\MongoDB-RAG-Agent\frontend\src\component
+s\SearchSuggestions.tsx:10:3)
+
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Session actions > should toggle pins and update titles, including empty-title cancel handling 1186ms
+ Γ£ô src/contexts/AuthContext.test.tsx > AuthContext > Session expired handling > should show the session modal when refreshUser fails after login and allow dismissing it 495ms
+ Γ£ô src/components/SearchSuggestions.test.tsx > SearchSuggestions > renders trending and generated suggestions and handles selection 728ms
+ Γ£ô src/components/SearchSuggestions.test.tsx > SearchSuggestions > supports typing, clearing, removal, and keyboard navigation 350ms
+ Γ£ô src/components/SearchSuggestions.test.tsx > SearchSuggestions > opens on arrow down when closed and clears the query
+ Γ£ô src/components/SearchSuggestions.test.tsx > useSearchSuggestions > manages open/close/toggle and query state
+ Γ£ô src/contexts/AuthContext.test.tsx > AuthContext > Session expired handling > should continue as guest from the session expired modal
+ Γ£ô src/pages/LoginPage.test.tsx > LoginPage > Mode switching > should switch back to login mode 810ms
+ Γ£ô src/pages/DashboardPage.test.tsx > DashboardPage > shows a loading spinner while auth state is loading
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Folder actions and derived state > should create and delete folders and persist collapsed folder state 937ms
+ Γ£ô src/components/FilePreviewModal.test.tsx > FilePreviewModal > renders a text preview, opens download actions, and closes on Escape or overlay click 1252ms
+ Γ£ô src/components/SearchFilters.test.tsx > SearchFilters > renders groups, tracks active filters, and updates checkbox/radio/date values 919ms
+ Γ£ô src/components/SearchFilters.test.tsx > SearchFilters > supports compact open/close and collapsing individual groups 705ms
+ Γ£ô src/components/SearchFilters.test.tsx > ActiveFilters > renders chips for active values and supports removing and clearing
+ Γ£ô src/components/SearchFilters.test.tsx > ActiveFilters > returns null when there are no active filter chips
+ Γ£ô src/components/SearchFilters.test.tsx > useSearchFilters > updates, removes, and clears filter state
+ Γ£ô src/contexts/AuthContext.test.tsx > AuthContext > Session expired handling > should ignore unauthorized events when no authenticated user was previously loaded
+ Γ£ô src/components/FilePreviewModal.test.tsx > FilePreviewModal > renders markdown content through ReactMarkdown 389ms
+ Γ£ô src/components/FilePreviewModal.test.tsx > FilePreviewModal > renders code previews in a preformatted block
+stdout | src/test/integration.test.ts > Frontend-Backend Integration: System Flow > should complete health check flow
+[API] GET /system/health
+[API] GET /system/info
+[API] GET /system/config
+
+stdout | src/test/integration.test.ts > Frontend-Backend Integration: System Flow > should fetch all system stats in sequence
+[API] GET /system/health
+[API] GET /system/info
+[API] GET /system/config
+[API] GET /system/indexes
+[API] GET /system/database-stats
+
+stdout | src/test/integration.test.ts > Frontend-Backend Integration: Profile Flow > should complete profile management flow
+[API] GET /profiles
+[API] GET /profiles/active
+[API] POST /profiles/switch
+
+stdout | src/test/integration.test.ts > Frontend-Backend Integration: Profile Flow > should handle profile creation and deletion
+[API] POST /profiles/create
+[API] DELETE /profiles/integration_test_profile
+
+stdout | src/test/integration.test.ts > Frontend-Backend Integration: Search Flow > should complete full search flow
+[API] GET /system/health
+[API] POST /search
+
+stdout | src/test/integration.test.ts > Frontend-Backend Integration: Search Flow > should perform all search types
+[API] POST /search/hybrid
+[API] POST /search/semantic
+[API] POST /search/text
+
+stdout | src/test/integration.test.ts > Frontend-Backend Integration: Search Flow > should search and process results correctly
+[API] POST /search
+
+stdout | src/test/integration.test.ts > Frontend-Backend Integration: Chat Flow > should complete chat conversation flow
+[API] POST /chat
+[API] POST /chat
+
+stdout | src/test/integration.test.ts > Frontend-Backend Integration: Chat Flow > should handle chat response metadata
+[API] POST /chat
+
+stdout | src/test/integration.test.ts > Frontend-Backend Integration: Chat Flow > should list and manage conversations
+[API] POST /chat
+[API] GET /chat/conversations
+
+stdout | src/test/integration.test.ts > Frontend-Backend Integration: Ingestion Flow > should check ingestion status
+[API] GET /ingestion/status
+
+stdout | src/test/integration.test.ts > Frontend-Backend Integration: Ingestion Flow > should start ingestion job
+[API] POST /ingestion/start
+
+stdout | src/test/integration.test.ts > Frontend-Backend Integration: Combined Workflows > should complete profile-then-search workflow
+[API] GET /profiles/active
+[API] POST /search
+
+stdout | src/test/integration.test.ts > Frontend-Backend Integration: Combined Workflows > should complete health-config-chat workflow
+[API] GET /system/health
+[API] GET /system/config
+[API] POST /chat
+
+stdout | src/test/integration.test.ts > Frontend-Backend Integration: Combined Workflows > should handle parallel requests efficiently
+[API] GET /system/health
+[API] GET /profiles
+[API] GET /ingestion/status
+
+stdout | src/test/integration.test.ts > Frontend-Backend Integration: Error Handling > should handle API timeouts gracefully
+[API] GET /system/health
+
+stdout | src/test/integration.test.ts > Frontend-Backend Integration: Error Handling > should propagate API errors correctly
+[API] POST /profiles/switch
+
+stderr | src/test/integration.test.ts > Frontend-Backend Integration: Error 
+Handling > should propagate API errors correctly
+[API Error] 404 Profile not found: An error occurred {
+  errorId: undefined,
+  technicalDetails: undefined,
+  data: { error: 'Profile not found' }
+}
+
+ Γ£ô src/test/integration.test.ts > Frontend-Backend Integration: System Flow > should complete health check flow 723ms
+ Γ£ô src/test/integration.test.ts > Frontend-Backend Integration: System Flow > should fetch all system stats in sequence
+ Γ£ô src/test/integration.test.ts > Frontend-Backend Integration: Profile Flow > should complete profile management flow 313ms
+ Γ£ô src/test/integration.test.ts > Frontend-Backend Integration: Profile Flow > should handle profile creation and deletion
+ Γ£ô src/test/integration.test.ts > Frontend-Backend Integration: Search Flow > should complete full search flow
+ Γ£ô src/test/integration.test.ts > Frontend-Backend Integration: Search Flow > should perform all search types 319ms
+ Γ£ô src/test/integration.test.ts > Frontend-Backend Integration: Search Flow > should search and process results correctly
+ Γ£ô src/test/integration.test.ts > Frontend-Backend Integration: Chat Flow > should complete chat conversation flow
+ Γ£ô src/test/integration.test.ts > Frontend-Backend Integration: Chat Flow > should handle chat response metadata
+ Γ£ô src/test/integration.test.ts > Frontend-Backend Integration: Chat Flow > should list and manage conversations
+ Γ£ô src/test/integration.test.ts > Frontend-Backend Integration: Ingestion Flow > should check ingestion status
+ Γ£ô src/test/integration.test.ts > Frontend-Backend Integration: Ingestion Flow > should start ingestion job
+ Γ£ô src/test/integration.test.ts > Frontend-Backend Integration: Combined Workflows > should complete profile-then-search workflow
+ Γ£ô src/test/integration.test.ts > Frontend-Backend Integration: Combined Workflows > should complete health-config-chat workflow
+ Γ£ô src/test/integration.test.ts > Frontend-Backend Integration: Combined Workflows > should handle parallel requests efficiently
+ Γ£ô src/test/integration.test.ts > Frontend-Backend Integration: Error Handling > should handle API timeouts gracefully
+ Γ£ô src/test/integration.test.ts > Frontend-Backend Integration: Error Handling > should propagate API errors correctly
+ Γ£ô src/pages/DocumentsPage.test.tsx > DocumentsPage > renders folders, documents, and completed rebuild status on initial load 578ms
+ Γ£ô src/pages/DashboardPage.test.tsx > DashboardPage > renders the greeting and suggestion chips, and fills the composer from a suggestion 1197ms
+ Γ£ô src/components/FilePreviewModal.test.tsx > FilePreviewModal > falls back to extracted text for unknown file types and shows a download button when no fallback exists 441ms
+ Γ£ô src/components/FilePreviewModal.test.tsx > FilePreviewModal > renders direct media previews for pdf, image, audio, and video files
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Folder actions and derived state > should move selected sessions to a folder and expose pending message state 770ms
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Folder actions and derived state > should return matched model pricing when available
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Uncovered action branches > should handle ApiError branches for session and model loading
+ Γ£ô src/components/FilePreviewModal.test.tsx > FilePreviewModal > converts DOCX files with mammoth and shows fallback text when conversion fails
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Uncovered action branches > should support selecting and deselecting one session explicitly 340ms
+ Γ£ô src/pages/APIKeysPage.test.tsx > APIKeysPage > creates a key, shows the created secret, and copies it to the clipboard 3256ms
+ Γ£ô src/pages/DashboardPage.test.tsx > DashboardPage > supports attaching files, computing token estimates, and removing attachments 843ms
+ Γ£ô src/pages/ArchivedChatsPage.test.tsx > ArchivedChatsPage > loads archived sessions and restores a bulk selection 1903ms
+ Γ£ô src/components/FilePreviewModal.test.tsx > FilePreviewModal > converts spreadsheets to HTML and shows an error when XLSX loading fails
+ Γ£ô src/components/FilePreviewModal.test.tsx > FilePreviewModal > shows text fetch errors and uses fallback content for unsupported preview failures
+ Γ£ô src/pages/ArchivedChatsPage.test.tsx > ArchivedChatsPage > exports a session and supports cancelling permanent deletion 708ms
+ Γ£ô src/pages/APIKeysPage.test.tsx > APIKeysPage > toggles and revokes keys, reloading after each successful action 956ms
+ Γ£ô src/pages/DocumentsPage.test.tsx > DocumentsPage > supports debounced search and clearing the search term 2124ms
+ Γ£ô src/pages/LoginPage.test.tsx > LoginPage > Mode switching > should clear error when switching modes 2763ms
+ Γ£ô src/pages/APIKeysPage.test.tsx > APIKeysPage > shows and dismisses translated load errors
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Uncovered action branches > should keep non-target sessions untouched when pinning, renaming, and moving 1056ms
+ Γ£ô src/pages/ArchivedChatsPage.test.tsx > ArchivedChatsPage > surfaces loading failures and clears the error banner 341ms
+ Γ£ô src/pages/DashboardPage.test.tsx > DashboardPage > supports switching agent mode and closes the selector when clicking outside 1415ms
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Initial rendering > should render chat page with welcome message
+[API] GET /ingestion/documents
+
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Initial rendering > should render message input
+[API] GET /ingestion/documents
+
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Initial rendering > should render send button
+[API] GET /ingestion/documents
+
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Initial rendering > should have send button disabled when input is empty
+[API] GET /ingestion/documents
+
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Message input > should allow typing in the input
+[API] GET /ingestion/documents
+
+ Γ£ô src/pages/ChatPage.test.tsx > ChatPage > Initial rendering > should render chat page with welcome message 371ms
+ Γ£ô src/pages/ChatPage.test.tsx > ChatPage > Initial rendering > should render message input
+ Γ£ô src/pages/ChatPage.test.tsx > ChatPage > Initial rendering > should render send button 396ms
+ Γ£ô src/pages/ChatPage.test.tsx > ChatPage > Initial rendering > should have send button disabled when input is empty
+ Γ£ô src/pages/DocumentsPage.test.tsx > DocumentsPage > navigates folders, switches view modes, and paginates within a folder 1346ms
+ Γ£ô src/pages/DocumentPreviewPage.test.tsx > DocumentPreviewPage > renders local document details, expands chunks, opens previews, and navigates back 3125ms
+ Γ£ô src/pages/DocumentPreviewPage.test.tsx > DocumentPreviewPage > shows a docker host path message and copies the translated path 824ms
+ Γ£ô src/pages/DocumentsPage.test.tsx > DocumentsPage > starts metadata rebuilds and deletes documents after confirmation 819ms
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Uncovered action branches > should clear or update the current session when bulk actions affect it 2283ms
+ Γ£ô src/pages/ChatPage.test.tsx > ChatPage > Message input > should allow typing in the input 1507ms
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Message input > should enable send button when input has text
+[API] GET /ingestion/documents
+
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Uncovered action branches > should no-op when folder creation is blank and bulk actions have no selection 365ms
+ Γ£ô src/pages/DocumentPreviewPage.test.tsx > DocumentPreviewPage > renders cloud-source actions and falls back to the provider web view when caching fails 874ms
+ Γ£ô src/pages/LoginPage.test.tsx > LoginPage > Login flow > should call login on form submit 2832ms
+ Γ£ô src/pages/ChatPage.test.tsx > ChatPage > Message input > should enable send button when input has text 682ms
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Message input > should clear input after form submission
+[API] GET /ingestion/documents
+
+ Γ£ô src/pages/DocumentPreviewPage.test.tsx > DocumentPreviewPage > shows an error state when the document cannot be loaded
+ Γ£ô src/pages/DashboardPage.test.tsx > DashboardPage > creates a session, stores the pending message, and navigates to chat on submit 2960ms
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Message input > should clear input after form submission
+[API] POST /chat
+
+ Γ£ô src/pages/ChatPage.test.tsx > ChatPage > Message input > should clear input after form submission 781ms
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Chat flow > should display user message after sending
+[API] GET /ingestion/documents
+
+ Γ£ô src/pages/DocumentsPage.test.tsx > DocumentsPage > cycles sort state, refreshes data, and toggles the folder sidebar 2511ms
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Chat flow > should display user message after sending
+[API] POST /chat
+
+ Γ£ô src/pages/ChatPage.test.tsx > ChatPage > Chat flow > should display user message after sending 1215ms
+ Γ£ô src/pages/DocumentsPage.test.tsx > DocumentsPage > shows an error banner when document loading fails
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Chat flow > should display assistant response
+[API] GET /ingestion/documents
+
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Uncovered action branches > should surface errors for session, folder, and bulk actions 2755ms
+ Γ£ô src/App.test.tsx > App > Routing > should render landing page at root path
+ Γ£ô src/App.test.tsx > App > Routing > should render dashboard page at /dashboard
+ Γ£ô src/App.test.tsx > App > Routing > should render login page at /login
+ Γ£ô src/App.test.tsx > App > Routing > should render chat page at /chat
+ Γ£ô src/App.test.tsx > App > Routing > should render search page at /search
+ Γ£ô src/App.test.tsx > App > Routing > should render documents page at /documents
+ Γ£ô src/App.test.tsx > App > Routing > should render document preview page at /documents/:id
+ Γ£ô src/App.test.tsx > App > Routing > should render profiles page at /profiles
+ Γ£ô src/App.test.tsx > App > Routing > should render system page at /system
+ Γ£ô src/App.test.tsx > App > Routing > should render status page at /system/status
+ Γ£ô src/App.test.tsx > App > Routing > should render indexes page at /system/indexes
+ Γ£ô src/App.test.tsx > App > Routing > should render ingestion page at /system/ingestion
+ Γ£ô src/App.test.tsx > App > Routing > should render config page at /system/config
+ Γ£ô src/App.test.tsx > App > Routing > should render users page at /system/users
+ Γ£ô src/App.test.tsx > App > Routing > should render prompts page at /system/prompts
+ Γ£ô src/App.test.tsx > App > Routing > should render API keys page at /system/api-keys
+ Γ£ô src/App.test.tsx > App > Routing > should render archived chats page at /archived-chats
+ Γ£ô src/App.test.tsx > App > Routing > should render cloud sources page at /cloud-sources
+ Γ£ô src/App.test.tsx > App > Routing > should render connections page at /cloud-sources/connections
+ Γ£ô src/App.test.tsx > App > Routing > should render connect page at /cloud-sources/connect/:type
+ Γ£ô src/App.test.tsx > App > Routing > should render email config page at /email-cloud-config
+ Γ£ô src/App.test.tsx > App > Routing > should render API docs page at /api-docs
+ Γ£ô src/App.test.tsx > App > Routing > should render landing page for unknown routes after language redirect
+ Γ£ô src/App.test.tsx > App > Layout wrapper > should wrap dashboard page with Layout
+ Γ£ô src/App.test.tsx > App > Layout wrapper > should not wrap landing page with Layout
+ Γ£ô src/App.test.tsx > App > Layout wrapper > should not wrap login page with Layout
+ Γ£ô src/App.test.tsx > App > Layout wrapper > should not wrap api-docs page with Layout
+ Γ£ô src/App.test.tsx > App > Providers > should wrap app with AuthProvider
+ Γ£ô src/App.test.tsx > App > Providers > should wrap app with ChatSidebarProvider
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Select mode > should toggle select mode 321ms
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Select mode > should select all sessions
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Chat flow > should display assistant response
+[API] POST /chat
+
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Select mode > should clear selection 661ms
+ Γ£ô src/pages/ChatPage.test.tsx > ChatPage > Chat flow > should display assistant response 1541ms
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Chat flow > should show conversation ID after first message
+[API] GET /ingestion/documents
+
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Chat flow > should show conversation ID after first message
+[API] POST /chat
+
+ ├ù src/pages/LoginPage.test.tsx > LoginPage > Login flow > should show loading state during login 4424ms
+   ΓåÆ Unable to find an element with the text: Signing in.... This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"min-h-screen bg-background dark:bg-gray-900 flex items-center justify-center px-4"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"absolute top-4 right-4 z-50 flex items-center gap-2"[39m
+      [36m>[39m
+        [36m<div>[39m
+          [0mLanguage Switcher[0m
+        [36m</div>[39m
+        [36m<div>[39m
+          [0mTheme Switcher[0m
+        [36m</div>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"max-w-md w-full"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"text-center mb-8"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"inline-flex items-center justify-center mb-4"[39m
+          [36m>[39m
+            [36m<div>[39m
+              [0mTenant Logo[0m
+            [36m</div>[39m
+          [36m</div>[39m
+          [36m<h1[39m
+            [33mclass[39m=[32m"text-2xl font-display font-bold text-primary-900 dark:text-white"[39m
+          [36m>[39m
+            [0mRecallHub[0m
+          [36m</h1>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"text-primary-700 dark:text-gray-400 mt-2"[39m
+          [36m>[39m
+            [0mSign in to your account[0m
+          [36m</p>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"bg-surface dark:bg-gray-800 rounded-2xl shadow-xl p-8"[39m
+        [36m>[39m
+          [36m<form[39m
+            [33mclass[39m=[32m"space-y-6"[39m
+          [36m>[39m
+            [36m<div>[39m
+              [36m<label[39m
+                [33mclass[39m=[32m"block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2"[39m
+              [36m>[39m
+                [0mEmail[0m
+              [36m</label>[39m
+              [36m<input[39m
+                [33mclass[39m=[32m"w-full px-4 py-3 rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"[39m
+                [33mplaceholder[39m=[32m"you@example.com"[39m
+                [33mrequired[39m=[32m""[39m
+                [33mtype[39m=[32m"email"[39m
+                [33mvalue[39m=[32m"test@example.com"[39m
+              [36m/>[39m
+            [36m</div>[39m
+            [36m<div>[39m
+              [36m<label[39m
+                [33mclass[39m=[32m"block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2"[39m
+              [36m>[39m
+                [0mPassword[0m
+              [36m</label>[39m
+              [36m<input[39m
+                [33mclass[39m=[32m"w-full px-4 py-3 rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"[39m
+                [33mminlength[39m=[32m"6"[39m
+                [33mplaceholder[39m=[32m"ΓÇóΓÇóΓÇóΓÇóΓÇóΓÇóΓÇóΓÇó"[39m
+                [33mrequired[39m=[32m""[39m
+                [33mtype[39m=[32m"password"[39m
+                [33mvalue[39m=[32m"password123"[39m
+              [36m/>[39m
+            [36m</div>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"w-full py-3 px-4 rounded-xl bg-primary text-white font-medium hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"[39m
+              [33mtype[39m=[32m"submit"[39m
+            [36m>[39m
+              [0mSign in[0m
+            [36m</button>[39m
+          [36m</form>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"mt-6 text-center"[39m
+          [36m>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"text-sm text-primary hover:underline"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0mDon't have an account? Sign up[0m
+            [36m</button>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"mt-4 text-center"[39m
+        [36m>[39m
+          [36m<button[39m
+            [33mclass[39m=[32m"text-sm text-secondary dark:text-gray-500 hover:text-primary dark:hover:text-primary-300"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [0mContinue without account[0m
+          [36m</button>[39m
+        [36m</div>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Archive sessions > should archive selected sessions 983ms
+ Γ£ô src/pages/ChatPage.test.tsx > ChatPage > Chat flow > should show conversation ID after first message 919ms
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Chat flow > should show New Chat button after first message
+[API] GET /ingestion/documents
+
+ Γ£ô src/pages/DashboardPage.test.tsx > DashboardPage > keeps attachments with the pending message when creating a new session 4874ms
+ Γ£ô src/components/CopyButton.test.tsx > CopyButton > copies text and shows a success toast 748ms
+ Γ£ô src/components/CopyButton.test.tsx > CopyButton > shows an error toast when copy fails
+ Γ£ô src/components/CopyButton.test.tsx > CopyIconButton > uses navigator.clipboard when available
+ Γ£ô src/components/CopyButton.test.tsx > CopyIconButton > falls back to execCommand when clipboard access fails
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Chat flow > should show New Chat button after first message
+[API] POST /chat
+
+ Γ£ô src/components/CopyButton.test.tsx > CopyCodeButton > copies code and updates the button label
+ Γ£ô src/components/CopyButton.test.tsx > CopyCodeButton > uses the fallback path when the clipboard API rejects
+ Γ£ô src/pages/ChatPage.test.tsx > ChatPage > Chat flow > should show New Chat button after first message 1318ms
+stdout | src/pages/ChatPage.test.tsx > ChatPage > New Chat functionality > should clear messages when New Chat is clicked
+[API] GET /ingestion/documents
+
+ Γ£ô src/hooks/useLocalStorage.test.tsx > useLocalStorage > reads the initial value from localStorage and saves updates
+ Γ£ô src/hooks/useLocalStorage.test.tsx > useLocalStorage > supports updater functions, custom prefixes, and clearing
+ Γ£ô src/hooks/useLocalStorage.test.tsx > useLocalStorage > removes empty values and falls back gracefully on read/write errors
+ Γ£ô src/hooks/useLocalStorage.test.tsx > useFormDraft > tracks draft values and dirty state
+ Γ£ô src/hooks/useLocalStorage.test.tsx > useUnsavedChangesWarning > attaches a beforeunload warning only when changes exist
+ Γ£ô src/hooks/useLocalStorage.test.tsx > STORAGE_KEYS > exposes stable storage key constants
+ Γ£ô src/components/CommandPalette.test.tsx > CommandPalette > renders recent and navigation items, filters by query, and navigates on selection 349ms
+ Γ£ô src/components/CommandPalette.test.tsx > CommandPalette > supports keyboard navigation, empty state, and backdrop close
+ Γ£ô src/components/CommandPalette.test.tsx > CommandPalette > returns null when closed
+ Γ£ô src/components/CommandPalette.test.tsx > useCommandPalette > opens, closes, toggles, and responds to Ctrl+K
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Delete sessions > should delete selected sessions permanently 1080ms
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Error handling > should handle session load errors gracefully
+ Γ£ô src/contexts/SettingsSyncContext.test.tsx > SettingsSyncContext > throws when the required hook is used outside the provider
+ Γ£ô src/contexts/SettingsSyncContext.test.tsx > SettingsSyncContext > returns null from the optional hook outside the provider
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > Error handling > should handle new chat creation errors
+ Γ£ô src/hooks/useKeyboardShortcuts.test.tsx > useKeyboardShortcuts > fires matching shortcuts and respects preventDefault
+ Γ£ô src/hooks/useKeyboardShortcuts.test.tsx > useKeyboardShortcuts > ignores shortcuts when disabled or when inputs are focused
+ Γ£ô src/hooks/useKeyboardShortcuts.test.tsx > useEscapeKey > calls the handler only when enabled
+ Γ£ô src/hooks/useKeyboardShortcuts.test.tsx > useFocusTrap > focuses the first element and traps tab navigation
+ Γ£ô src/hooks/useKeyboardShortcuts.test.tsx > useRestoreFocus > restores focus to the previously active element on unmount
+ Γ£ô src/hooks/useKeyboardShortcuts.test.tsx > COMMON_SHORTCUTS > exposes shared shortcut definitions
+stdout | src/pages/DeveloperDocsPage.test.tsx
+≡ƒîÉ i18next is maintained with support from Locize ΓÇö consider powering your project with managed localization (AI, CDN, integrations): https://locize.com ≡ƒÆÖ
+
+ Γ£ô src/components/EmptyState.test.tsx > EmptyState > renders the default empty state with title and description
+ Γ£ô src/components/EmptyState.test.tsx > EmptyState > renders custom icons, size variants, and both action buttons 431ms
+ Γ£ô src/components/EmptyState.test.tsx > EmptyState presets > renders NoDocuments and calls the upload action
+ Γ£ô src/components/EmptyState.test.tsx > EmptyState presets > renders NoSearchResults with and without a query
+ Γ£ô src/components/EmptyState.test.tsx > EmptyState presets > renders chat, folder, cloud, and notification preset variants 356ms
+ Γ£ô src/components/EmptyState.test.tsx > EmptyState presets > renders the loading placeholder with default and custom messages
+stdout | src/pages/ChatPage.test.tsx > ChatPage > New Chat functionality > should clear messages when New Chat is clicked
+[API] POST /chat
+
+ Γ£ô src/contexts/SettingsSyncContext.test.tsx > SettingsSyncContext > pulls settings on login, dispatches sync events, and clears on logout
+ Γ£ô src/contexts/ChatSidebarContext.test.tsx > ChatSidebarContext > getPricing > should return default pricing when model not found
+ Γ£ô src/pages/ChatPage.test.tsx > ChatPage > New Chat functionality > should clear messages when New Chat is clicked 1005ms
+ Γ£ô src/pages/DashboardPage.test.tsx > DashboardPage > recovers from failed session creation and re-enables submit 1432ms
+ Γ£ô src/components/FolderPicker.test.tsx > FolderPicker > renders folder contents, shows files, and selects the current folder 819ms
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Error handling > should display error message when chat fails
+[API] GET /ingestion/documents
+
+ Γ£ô src/contexts/SettingsSyncContext.test.tsx > SettingsSyncContext > exposes sync, pull, clear, and beforeunload flushing behavior 530ms
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Error handling > should display error message when chat fails
+[API] POST /chat
+
+ Γ£ô src/pages/ChatPage.test.tsx > ChatPage > Error handling > should display error message when chat fails 783ms
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Sources panel > should display sources when response includes them
+[API] GET /ingestion/documents
+
+ Γ£ô src/pages/LoginPage.test.tsx > LoginPage > Login flow > should show error on login failure 3652ms
+ Γ£ô src/components/FolderPicker.test.tsx > FolderPicker > supports navigating folders and confirming multi-select choices 1050ms
+ Γ£ô src/components/FolderPicker.test.tsx > FolderPicker > shows empty and error states
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Sources panel > should display sources when response includes them
+[API] POST /chat
+
+ Γ£ô src/pages/DeveloperDocsPage.test.tsx > DeveloperDocsPage > loads the OpenAPI spec, groups endpoints by tag, and filters by tag/search 1861ms
+ Γ£ô src/pages/ChatPage.test.tsx > ChatPage > Sources panel > should display sources when response includes them 1938ms
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Loading state > should disable input while loading
+[API] GET /ingestion/documents
+
+ Γ£ô src/pages/DeveloperDocsPage.test.tsx > DeveloperDocsPage > shows a retryable error for invalid specifications and recovers on retry 379ms
+stdout | src/contexts/LanguageContext.test.tsx
+≡ƒîÉ i18next is maintained with support from Locize ΓÇö consider powering your project with managed localization (AI, CDN, integrations): https://locize.com ≡ƒÆÖ
+
+stdout | src/pages/ChatPage.test.tsx > ChatPage > Loading state > should disable input while loading
+[API] POST /chat
+
+ Γ£ô src/pages/LoginPage.test.tsx > LoginPage > Register flow > should call register on form submit in register mode 2257ms
+ Γ£ô src/pages/StatusPage.test.tsx > StatusPage > renders dashboard data and refreshes on demand for admins 929ms
+ Γ£ô src/contexts/LanguageContext.test.tsx > LanguageContext > reads the language from the route and localizes paths
+ Γ£ô src/contexts/LanguageContext.test.tsx > LanguageContext > updates i18n, local storage, navigation, and synced preferences when setting the language 350ms
+ Γ£ô src/pages/DeveloperDocsPage.test.tsx > DeveloperDocsPage > surfaces HTTP fetch failures and keeps the quick-start content visible
+ Γ£ô src/contexts/LanguageContext.test.tsx > LanguageContext > applies synced preferences from the settings event without writing back to sync
+ Γ£ô src/pages/StatusPage.test.tsx > StatusPage > shows a translated error when dashboard loading fails
+ Γ£ô src/pages/StatusPage.test.tsx > StatusPage > redirects non-admin users without requesting dashboard data
+ Γ£ô src/pages/ChatPage.test.tsx > ChatPage > Loading state > should disable input while loading 1141ms
+stdout | src/contexts/TenantContext.test.tsx > TenantContext > renders the build-time tenant when runtime config is unavailable
+[Tenant] Backend config endpoint unavailable, using build-time config.
+
+ Γ£ô src/components/ConnectionStatus.test.tsx > ConnectionStatus > shows a connected state with latency details and fixed positioning
+ Γ£ô src/contexts/TenantContext.test.tsx > TenantContext > renders the build-time tenant when runtime config is unavailable
+ Γ£ô src/contexts/TenantContext.test.tsx > TenantContext > applies the runtime tenant override when the backend returns a known tenant
+ Γ£ô src/components/ConnectionStatus.test.tsx > ConnectionStatus > shows slow and disconnected states based on the health check
+ Γ£ô src/components/ConnectionStatus.test.tsx > ConnectionStatus > responds to online and offline browser events
+ Γ£ô src/components/ConnectionStatus.test.tsx > ConnectionDot > tracks navigator connectivity changes
+stderr | src/components/ErrorBoundary.test.tsx > ErrorBoundary > renders a 
+custom fallback when provided
+Error: Uncaught [Error: boom failure]
+    at reportException (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modules\js
+dom\lib\jsdom\living\helpers\runtime-script-errors.js:66:24)
+    at innerInvokeEventListeners (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_
+modules\jsdom\lib\jsdom\living\events\EventTarget-impl.js:353:9)
+    at invokeEventListeners (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modul
+es\jsdom\lib\jsdom\living\events\EventTarget-impl.js:286:3)
+    at HTMLUnknownElementImpl._dispatch (D:\dev\repos\MongoDB-RAG-Agent\fronten
+d\node_modules\jsdom\lib\jsdom\living\events\EventTarget-impl.js:233:9)
+    at HTMLUnknownElementImpl.dispatchEvent (D:\dev\repos\MongoDB-RAG-Agent\fro
+ntend\node_modules\jsdom\lib\jsdom\living\events\EventTarget-impl.js:104:17)
+    at HTMLUnknownElement.dispatchEvent (D:\dev\repos\MongoDB-RAG-Agent\fronten
+d\node_modules\jsdom\lib\jsdom\living\generated\EventTarget.js:241:34)
+    at Object.invokeGuardedCallbackDev (D:\dev\repos\MongoDB-RAG-Agent\frontend
+\node_modules\react-dom\cjs\react-dom.development.js:4213:16)
+    at invokeGuardedCallback (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modu
+les\react-dom\cjs\react-dom.development.js:4277:31)
+    at beginWork$1 (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modules\react-
+dom\cjs\react-dom.development.js:27490:7)
+    at performUnitOfWork (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modules\
+react-dom\cjs\react-dom.development.js:26599:12) Error: boom failure
+    at Boom (D:\dev\repos\MongoDB-RAG-Agent\frontend\src\components\ErrorBounda
+ry.test.tsx:17:9)
+    at renderWithHooks (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modules\re
+act-dom\cjs\react-dom.development.js:15486:18)
+    at mountIndeterminateComponent (D:\dev\repos\MongoDB-RAG-Agent\frontend\nod
+e_modules\react-dom\cjs\react-dom.development.js:20103:13)
+    at beginWork (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modules\react-do
+m\cjs\react-dom.development.js:21626:16)
+    at HTMLUnknownElement.callCallback (D:\dev\repos\MongoDB-RAG-Agent\frontend
+\node_modules\react-dom\cjs\react-dom.development.js:4164:14)
+    at HTMLUnknownElement.callTheUserObjectsOperation (D:\dev\repos\MongoDB-RAG
+-Agent\frontend\node_modules\jsdom\lib\jsdom\living\generated\EventListener.js:
+26:30)
+    at innerInvokeEventListeners (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_
+modules\jsdom\lib\jsdom\living\events\EventTarget-impl.js:350:25)
+    at invokeEventListeners (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modul
+es\jsdom\lib\jsdom\living\events\EventTarget-impl.js:286:3)
+    at HTMLUnknownElementImpl._dispatch (D:\dev\repos\MongoDB-RAG-Agent\fronten
+d\node_modules\jsdom\lib\jsdom\living\events\EventTarget-impl.js:233:9)
+    at HTMLUnknownElementImpl.dispatchEvent (D:\dev\repos\MongoDB-RAG-Agent\fro
+ntend\node_modules\jsdom\lib\jsdom\living\events\EventTarget-impl.js:104:17)
+Error: Uncaught [Error: boom failure]
+    at reportException (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modules\js
+dom\lib\jsdom\living\helpers\runtime-script-errors.js:66:24)
+    at innerInvokeEventListeners (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_
+modules\jsdom\lib\jsdom\living\events\EventTarget-impl.js:353:9)
+    at invokeEventListeners (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modul
+es\jsdom\lib\jsdom\living\events\EventTarget-impl.js:286:3)
+    at HTMLUnknownElementImpl._dispatch (D:\dev\repos\MongoDB-RAG-Agent\fronten
+d\node_modules\jsdom\lib\jsdom\living\events\EventTarget-impl.js:233:9)
+    at HTMLUnknownElementImpl.dispatchEvent (D:\dev\repos\MongoDB-RAG-Agent\fro
+ntend\node_modules\jsdom\lib\jsdom\living\events\EventTarget-impl.js:104:17)
+    at HTMLUnknownElement.dispatchEvent (D:\dev\repos\MongoDB-RAG-Agent\fronten
+d\node_modules\jsdom\lib\jsdom\living\generated\EventTarget.js:241:34)
+    at Object.invokeGuardedCallbackDev (D:\dev\repos\MongoDB-RAG-Agent\frontend
+\node_modules\react-dom\cjs\react-dom.development.js:4213:16)
+    at invokeGuardedCallback (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modu
+les\react-dom\cjs\react-dom.development.js:4277:31)
+    at beginWork$1 (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modules\react-
+dom\cjs\react-dom.development.js:27490:7)
+    at performUnitOfWork (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modules\
+react-dom\cjs\react-dom.development.js:26599:12) Error: boom failure
+    at Boom (D:\dev\repos\MongoDB-RAG-Agent\frontend\src\components\ErrorBounda
+ry.test.tsx:17:9)
+    at renderWithHooks (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modules\re
+act-dom\cjs\react-dom.development.js:15486:18)
+    at mountIndeterminateComponent (D:\dev\repos\MongoDB-RAG-Agent\frontend\nod
+e_modules\react-dom\cjs\react-dom.development.js:20103:13)
+    at beginWork (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modules\react-do
+m\cjs\react-dom.development.js:21626:16)
+    at HTMLUnknownElement.callCallback (D:\dev\repos\MongoDB-RAG-Agent\frontend
+\node_modules\react-dom\cjs\react-dom.development.js:4164:14)
+    at HTMLUnknownElement.callTheUserObjectsOperation (D:\dev\repos\MongoDB-RAG
+-Agent\frontend\node_modules\jsdom\lib\jsdom\living\generated\EventListener.js:
+26:30)
+    at innerInvokeEventListeners (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_
+modules\jsdom\lib\jsdom\living\events\EventTarget-impl.js:350:25)
+    at invokeEventListeners (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modul
+es\jsdom\lib\jsdom\living\events\EventTarget-impl.js:286:3)
+    at HTMLUnknownElementImpl._dispatch (D:\dev\repos\MongoDB-RAG-Agent\fronten
+d\node_modules\jsdom\lib\jsdom\living\events\EventTarget-impl.js:233:9)
+    at HTMLUnknownElementImpl.dispatchEvent (D:\dev\repos\MongoDB-RAG-Agent\fro
+ntend\node_modules\jsdom\lib\jsdom\living\events\EventTarget-impl.js:104:17)
+The above error occurred in the <Boom> component:
+
+    at Boom (D:\dev\repos\MongoDB-RAG-Agent\frontend\src\components\ErrorBounda
+ry.test.tsx:23:9)
+    at ErrorBoundary 
+(D:\dev\repos\MongoDB-RAG-Agent\frontend\src\components\ErrorBoundary.tsx:10:5)
+
+React will try to recreate this component tree from scratch using the error 
+boundary you provided, ErrorBoundary.
+ErrorBoundary caught an error: Error: boom failure
+    at Boom (D:\dev\repos\MongoDB-RAG-Agent\frontend\src\components\ErrorBounda
+ry.test.tsx:17:9)
+    at renderWithHooks (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modules\re
+act-dom\cjs\react-dom.development.js:15486:18)
+    at mountIndeterminateComponent (D:\dev\repos\MongoDB-RAG-Agent\frontend\nod
+e_modules\react-dom\cjs\react-dom.development.js:20103:13)
+    at beginWork (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modules\react-do
+m\cjs\react-dom.development.js:21626:16)
+    at beginWork$1 (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modules\react-
+dom\cjs\react-dom.development.js:27465:14)
+    at performUnitOfWork (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modules\
+react-dom\cjs\react-dom.development.js:26599:12)
+    at workLoopSync (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modules\react
+-dom\cjs\react-dom.development.js:26505:5)
+    at renderRootSync (D:\dev\repos\MongoDB-RAG-Agent\frontend\node_modules\rea
+ct-dom\cjs\react-dom.development.js:26473:7)
+    at recoverFromConcurrentError (D:\dev\repos\MongoDB-RAG-Agent\frontend\node
+_modules\react-dom\cjs\react-dom.development.js:25889:20)
+    at performConcurrentWorkOnRoot (D:\dev\repos\MongoDB-RAG-Agent\frontend\nod
+e_modules\react-dom\cjs\react-dom.development.js:25789:22) {
+  componentStack: '\n' +
+    '    at Boom (D:\\dev\\repos\\MongoDB-RAG-Agent\\frontend\\src\\components\
+\ErrorBoundary.test.tsx:23:9)\n' +
+    '    at ErrorBoundary (D:\\dev\\repos\\MongoDB-RAG-Agent\\frontend\\src\\co
+mponents\\ErrorBoundary.tsx:10:5)'
+}
+
+ Γ£ô src/components/ErrorBoundary.test.tsx > ErrorBoundary > renders children when no error occurs
+ Γ£ô src/components/ErrorBoundary.test.tsx > ErrorBoundary > renders the fallback UI, reports errors, and supports reset/recovery actions 963ms
+ Γ£ô src/components/ErrorBoundary.test.tsx > ErrorBoundary > renders a custom fallback when provided
+ Γ£ô src/components/ErrorBoundary.test.tsx > ErrorBoundary helper components > renders error fallback details and retry button
+ Γ£ô src/components/ErrorBoundary.test.tsx > ErrorBoundary helper components > renders the network error variant
+stdout | src/components/MarkdownRenderer.test.tsx
+≡ƒîÉ i18next is maintained with support from Locize ΓÇö consider powering your project with managed localization (AI, CDN, integrations): https://locize.com ≡ƒÆÖ
+
+ Γ£ô src/components/ThemeControls.test.tsx > ThemeSwitcher > renders the resolved current icon and opens the theme menu
+ Γ£ô src/components/ThemeControls.test.tsx > ThemeSwitcher > changes theme and closes when an option or outside area is clicked
+ Γ£ô src/components/ThemeControls.test.tsx > ThemeSwitcher > uses the explicit dark theme icon when not in system mode
+ Γ£ô src/components/ThemeControls.test.tsx > ThemeToggle > renders all theme buttons and highlights the active one
+ Γ£ô src/components/ThemeControls.test.tsx > ThemeToggle > calls setTheme for the selected option
+ Γ£ô src/components/MarkdownRenderer.test.tsx > MarkdownRenderer > renders block code, links, and rich markdown wrappers 546ms
+ Γ£ô src/components/MarkdownRenderer.test.tsx > MarkdownRenderer > copies inline code and falls back to execCommand when clipboard write fails
+ Γ£ô src/pages/LoginPage.test.tsx > LoginPage > Register flow > should show error when name is only whitespace in register mode 3824ms
+ Γ£ô src/components/LoadingSkeleton.test.tsx > LoadingSkeleton primitives > renders the base skeleton with style and variant options
+ Γ£ô src/components/LoadingSkeleton.test.tsx > LoadingSkeleton primitives > renders text and avatar skeleton helpers
+ Γ£ô src/components/LoadingSkeleton.test.tsx > LoadingSkeleton composed components > renders card, message, and search result skeletons
+ Γ£ô src/components/LoadingSkeleton.test.tsx > LoadingSkeleton composed components > renders table, document list, and sidebar skeleton structures
+ Γ£ô src/components/SessionExpiredModal.test.tsx > SessionExpiredModal > stays hidden when closed
+ Γ£ô src/components/SessionExpiredModal.test.tsx > SessionExpiredModal > animates out after closing
+ Γ£ô src/components/SessionExpiredModal.test.tsx > SessionExpiredModal > logs in again, shows loading state, and ignores backdrop clicks
+ Γ£ô src/components/SessionExpiredModal.test.tsx > SessionExpiredModal > continues as guest and closes the modal
+ ├ù src/pages/LoginPage.test.tsx > LoginPage > Register flow > should show loading state during registration 3676ms
+   ΓåÆ Unable to find an element with the text: Creating account.... This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"min-h-screen bg-background dark:bg-gray-900 flex items-center justify-center px-4"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"absolute top-4 right-4 z-50 flex items-center gap-2"[39m
+      [36m>[39m
+        [36m<div>[39m
+          [0mLanguage Switcher[0m
+        [36m</div>[39m
+        [36m<div>[39m
+          [0mTheme Switcher[0m
+        [36m</div>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"max-w-md w-full"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"text-center mb-8"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"inline-flex items-center justify-center mb-4"[39m
+          [36m>[39m
+            [36m<div>[39m
+              [0mTenant Logo[0m
+            [36m</div>[39m
+          [36m</div>[39m
+          [36m<h1[39m
+            [33mclass[39m=[32m"text-2xl font-display font-bold text-primary-900 dark:text-white"[39m
+          [36m>[39m
+            [0mRecallHub[0m
+          [36m</h1>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"text-primary-700 dark:text-gray-400 mt-2"[39m
+          [36m>[39m
+            [0mCreate a new account[0m
+          [36m</p>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"bg-surface dark:bg-gray-800 rounded-2xl shadow-xl p-8"[39m
+        [36m>[39m
+          [36m<form[39m
+            [33mclass[39m=[32m"space-y-6"[39m
+          [36m>[39m
+            [36m<div>[39m
+              [36m<label[39m
+                [33mclass[39m=[32m"block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2"[39m
+              [36m>[39m
+                [0mName[0m
+              [36m</label>[39m
+              [36m<input[39m
+                [33mclass[39m=[32m"w-full px-4 py-3 rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"[39m
+                [33mplaceholder[39m=[32m"Your name"[39m
+                [33mrequired[39m=[32m""[39m
+                [33mtype[39m=[32m"text"[39m
+                [33mvalue[39m=[32m"Test User"[39m
+              [36m/>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"grid grid-cols-2 gap-3 mt-3"[39m
+              [36m>[39m
+                [36m<div>[39m
+                  [36m<label[39m
+                    [33mclass[39m=[32m"block text-xs text-secondary dark:text-gray-400 mb-1"[39m
+                  [36m>[39m
+                    [0mTitle (before)[0m
+                  [36m</label>[39m
+                  [36m<input[39m
+                    [33mclass[39m=[32m"w-full px-3 py-2 rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"[39m
+                    [33mplaceholder[39m=[32m"Mag., Dr., RA"[39m
+                    [33mtype[39m=[32m"text"[39m
+                    [33mvalue[39m=[32m""[39m
+                  [36m/>[39m
+                [36m</div>[39m
+                [36m<div>[39m
+                  [36m<label[39m
+                    [33mclass[39m=[32m"block text-xs text-secondary dark:text-gray-400 mb-1"[39m
+                  [36m>[39m
+                    [0mTitle (after)[0m
+                  [36m</label>[39m
+                  [36m<input[39m
+                    [33mclass[39m=[32m"w-full px-3 py-2 rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"[39m
+                    [33mplaceholder[39m=[32m"Rechtsanw├ñltin, LL.M."[39m
+                    [33mtype[39m=[32m"text"[39m
+                    [33mvalue[39m=[32m""[39m
+                  [36m/>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+            [36m</div>[39m
+            [36m<div>[39m
+              [36m<label[39m
+                [33mclass[39m=[32m"block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2"[39m
+              [36m>[39m
+                [0mEmail[0m
+              [36m</label>[39m
+              [36m<input[39m
+                [33mclass[39m=[32m"w-full px-4 py-3 rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"[39m
+                [33mplaceholder[39m=[32m"you@example.com"[39m
+                [33mrequired[39m=[32m""[39m
+                [33mtype[39m=[32m"email"[39m
+                [33mvalue[39m=[32m"test@example.com"[39m
+              [36m/>[39m
+            [36m</div>[39m
+            [36m<div>[39m
+              [36m<label[39m
+                [33mclass[39m=[32m"block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2"[39m
+              [36m>[39m
+                [0mPassword[0m
+              [36m</label>[39m
+              [36m<input[39m
+                [33mclass[39m=[32m"w-full px-4 py-3 rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"[39m
+                [33mminlength[39m=[32m"6"[39m
+                [33mplaceholder[39m=[32m"ΓÇóΓÇóΓÇóΓÇóΓÇóΓÇóΓÇóΓÇó"[39m
+                [33mrequired[39m=[32m""[39m
+                [33mtype[39m=[32m"password"[39m
+                [33mvalue[39m=[32m"password123"[39m
+              [36m/>[39m
+            [36m</div>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"w-full py-3 px-4 rounded-xl bg-primary text-white font-medium hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"[39m
+              [33mtype[39m=[32m"submit"[39m
+            [36m>[39m
+              [0mCreate account[0m
+            [36m</button>[39m
+          [36m</form>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"mt-6 text-center"[39m
+          [36m>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"text-sm text-primary hover:underline"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0mAlready have an account? Sign in[0m
+            [36m</button>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"mt-4 text-center"[39m
+        [36m>[39m
+          [36m<button[39m
+            [33mclass[39m=[32m"text-sm text-secondary dark:text-gray-500 hover:text-primary dark:hover:text-primary-300"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [0mContinue without account[0m
+          [36m</button>[39m
+        [36m</div>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+ Γ£ô src/hooks/useClipboard.test.tsx > useClipboard > copies text with the modern clipboard API and auto-resets
+ Γ£ô src/pages/LoginPage.test.tsx > LoginPage > Skip login > should navigate to home when skipping login 478ms
+ Γ£ô src/components/SidebarWarningToast.test.tsx > SidebarWarningToast > renders nothing without warnings
+ Γ£ô src/components/SidebarWarningToast.test.tsx > SidebarWarningToast > handles dismiss, navigation, actions, and keyboard activation 701ms
+ Γ£ô src/components/ProgressBar.test.tsx > ProgressBar > renders determinate progress with labels and clamped width
+ Γ£ô src/components/ProgressBar.test.tsx > ProgressBar > renders indeterminate progress
+ Γ£ô src/components/ProgressBar.test.tsx > CircularProgress > renders determinate and indeterminate circular progress
+ Γ£ô src/components/ProgressBar.test.tsx > StepProgress > renders step states and completed indicators
+ Γ£ô src/components/ProgressBar.test.tsx > OperationStatus > renders loading, success, error, and idle states
+ Γ£ô src/components/StreamingIndicator.test.tsx > StreamingIndicator > renders nothing when streaming is inactive
+ Γ£ô src/components/StreamingIndicator.test.tsx > StreamingIndicator > shows the phase, pulse, and elapsed time while streaming
+ Γ£ô src/components/StreamingIndicator.test.tsx > StreamingIndicator > supports pulse-less and timer-less display variants
+ Γ£ô src/components/StreamingIndicator.test.tsx > StreamingIndicator helpers > renders streaming dot only when active
+ Γ£ô src/components/StreamingIndicator.test.tsx > StreamingIndicator helpers > renders typing, processing, and completion indicators
+ Γ£ô src/hooks/useClipboard.test.tsx > useClipboard > falls back to execCommand and captures errors
+ Γ£ô src/hooks/useClipboard.test.tsx > copyToClipboard > returns true for modern clipboard success and false on failure
+ Γ£ô src/hooks/useClipboard.test.tsx > copyToClipboard > uses execCommand when the clipboard API is unavailable
+stderr | src/contexts/ToastContext.test.tsx > ToastContext > shows and 
+dismisses toasts
+Warning: An update to ToastProvider inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into 
+act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the 
+browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at ToastProvider 
+(D:\dev\repos\MongoDB-RAG-Agent\frontend\src\contexts\ToastContext.tsx:24:26)
+
+ Γ£ô src/contexts/ToastContext.test.tsx > ToastContext > throws when used outside the provider
+ Γ£ô src/contexts/ToastContext.test.tsx > ToastContext > shows and dismisses toasts 590ms
+ Γ£ô src/contexts/ToastContext.test.tsx > ToastContext > runs toast actions and removes the toast
+ Γ£ô src/contexts/ToastContext.test.tsx > ToastContext > auto-removes timed toasts and clears all toasts 397ms
+stdout | src/components/LocalizedLink.test.tsx
+≡ƒîÉ i18next is maintained with support from Locize ΓÇö consider powering your project with managed localization (AI, CDN, integrations): https://locize.com ≡ƒÆÖ
+
+ Γ£ô src/components/LocalizedLink.test.tsx > LocalizedLink helpers > prefixes plain paths with the current language
+ Γ£ô src/components/LocalizedLink.test.tsx > LocalizedLink helpers > replaces an existing language prefix
+ Γ£ô src/components/LocalizedLink.test.tsx > LocalizedLink helpers > renders links with localized destinations 369ms
+ Γ£ô src/components/LocalizedLink.test.tsx > LocalizedLink helpers > navigates with a localized path
+ Γ£ô src/pages/LoginPage.test.tsx > LoginPage > Error handling > should handle 401 error specially 3237ms
+ Γ£ô src/components/TenantLogo.test.tsx > TenantLogo > renders SVG logos inside the branded container
+ Γ£ô src/components/TenantLogo.test.tsx > TenantLogo > renders PNG logos directly and falls back when loading fails
+ Γ£ô src/components/TenantLogo.test.tsx > TenantLogo > uses the text fallback when no logo URL exists
+ Γ£ô src/components/LanguageSwitcher.test.tsx > LanguageSwitcher > renders the active language and opens the dropdown
+ Γ£ô src/components/LanguageSwitcher.test.tsx > LanguageSwitcher > changes language and closes for outside clicks
+stderr | src/pages/SystemPage.test.tsx > SystemPage > should render system 
+page with loading or content
+react-i18next:: useTranslation: You will need to pass in an i18next instance 
+by using initReactI18next { code: 'NO_I18NEXT_INSTANCE' }
+
+ Γ£ô src/pages/SystemPage.test.tsx > SystemPage > should render system page with loading or content
+ Γ£ô src/pages/SystemPage.test.tsx > SystemPage > should display health status section
+ Γ£ô src/pages/SystemPage.test.tsx > SystemPage > should display configuration section
+ Γ£ô src/pages/SystemPage.test.tsx > SystemPage > should have indexes section
+ Γ£ô src/pages/SystemPage.test.tsx > SystemPage > should show database statistics
+ Γ£ô src/hooks/index.test.ts > hooks index > re-exports clipboard helpers
+ Γ£ô src/components/FeatureGuard.test.tsx > FeatureGuard > renders children when the feature is enabled
+ Γ£ô src/components/FeatureGuard.test.tsx > FeatureGuard > redirects to the dashboard when the feature is disabled
+stderr | src/pages/SearchPage.test.tsx > SearchPage > should render search page
+react-i18next:: useTranslation: You will need to pass in an i18next instance 
+by using initReactI18next { code: 'NO_I18NEXT_INSTANCE' }
+
+ Γ£ô src/tenants/configs/index.test.ts > tenant configs > exports the known tenant configurations
+ Γ£ô src/tenants/configs/index.test.ts > tenant configs > returns the requested config and falls back for unknown tenants
+stdout | src/pages/SearchPage.test.tsx > SearchPage > should submit search on form submit
+[API] POST /search
+
+stdout | src/main.test.tsx > main entrypoint > creates the app root and renders the top-level providers
+≡ƒîÉ i18next is maintained with support from Locize ΓÇö consider powering your project with managed localization (AI, CDN, integrations): https://locize.com ≡ƒÆÖ
+
+ Γ£ô src/pages/LoginPage.test.tsx > LoginPage > Error handling > should handle 500 error specially 2434ms
+ Γ£ô src/pages/SearchPage.test.tsx > SearchPage > should render search page
+ Γ£ô src/pages/SearchPage.test.tsx > SearchPage > should have search type selector
+ Γ£ô src/pages/SearchPage.test.tsx > SearchPage > should allow entering search query
+ Γ£ô src/pages/SearchPage.test.tsx > SearchPage > should submit search on form submit
+ Γ£ô src/pages/SearchPage.test.tsx > SearchPage > should display results count selector
+ Γ£ô src/main.test.tsx > main entrypoint > creates the app root and renders the top-level providers 2007ms
+ Γ£ô src/pages/NotFoundPage.test.tsx > NotFoundPage > renders the translated 404 page shell and home link 454ms
+
+<--- Last few GCs --->
+
+[81672:00000211D2005000]  2766989 ms: Scavenge (interleaved) 4023.6 (4085.6) 
+-> 4015.3 (4117.6) MB, pooled: 0 MB, 7.16 / 0.00 ms  (average mu = 0.362, 
+current mu = 0.343) allocation failure; 
+[81672:00000211D2005000]  2768379 ms: Mark-Compact (reduce) 4030.2 (4117.6) -> 
+3993.2 (4053.6) MB, pooled: 0 MB, 35.48 / 0.00 ms  (+ 1173.8 ms in 235 steps 
+since start of marking, biggest step 7.3 ms, walltime since start of marking 
+1390 ms) (average mu =
+FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - 
+JavaScript heap out of memory
+----- Native stack trace -----
+
+ 1: 00007FF63E5ED9C9 node::OnFatalError+1193
+ 2: 00007FF63F21C077 v8::Function::NewInstance+423
+ 3: 00007FF63F01E337 
+v8::base::AddressSpaceReservation::AddressSpaceReservation+320967
+ 4: 00007FF63F022034 
+v8::base::AddressSpaceReservation::AddressSpaceReservation+336580
+ 5: 00007FF63F030EEC 
+v8::internal::StrongRootAllocatorBase::deallocate_impl+16300
+ 6: 00007FF63F03072B 
+v8::internal::StrongRootAllocatorBase::deallocate_impl+14315
+ 7: 00007FF64036CEED v8::base::UnsignedDivisionByConstant<unsigned 
+__int64>+2790701
+ 8: 00007FF63F01BE60 
+v8::base::AddressSpaceReservation::AddressSpaceReservation+311536
+ 9: 00007FF63F09F309 v8::Unlocker::~Unlocker+9273
+10: 00007FF63EC15A68 v8::String::Utf8Value::~Utf8Value+142664
+11: 00000211F9F7733A 
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ» Unhandled Error ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»
+Error: ENOENT: no such file or directory, open 
+'D:\dev\repos\MongoDB-RAG-Agent\frontend\.coverage\.tmp\coverage-0.json'
+ Γ¥» open node:internal/fs/promises:634:25
+ Γ¥» Object.readFile node:internal/fs/promises:1238:14
+ Γ¥» node_modules/vitest/dist/coverage.js:160:32
+ Γ¥» V8CoverageProvider.readCoverageFiles 
+node_modules/vitest/dist/coverage.js:158:11
+ Γ¥» V8CoverageProvider.generateCoverage 
+node_modules/@vitest/coverage-v8/dist/provider.js:2570:5
+ Γ¥» node_modules/vitest/dist/chunks/cli-api.DqsSTaIi.js:10831:24
+ Γ¥» Vitest.runFiles 
+node_modules/vitest/dist/chunks/cli-api.DqsSTaIi.js:10840:12
+ Γ¥» Vitest.start node_modules/vitest/dist/chunks/cli-api.DqsSTaIi.js:10682:7
+ Γ¥» startVitest node_modules/vitest/dist/chunks/cli-api.DqsSTaIi.js:11848:7
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»Γ
+Ä»ΓÄ»ΓÄ»ΓÄ»
+Serialized Error: { errno: -4058, code: 'ENOENT', syscall: 'open', path: 
+'D:\dev\repos\MongoDB-RAG-Agent\frontend\.coverage\.tmp\coverage-0.json' }
+
+
+
