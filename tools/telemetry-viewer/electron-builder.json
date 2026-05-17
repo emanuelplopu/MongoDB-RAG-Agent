@@ -1,0 +1,19 @@
+{
+  "appId": "com.recallhub.telemetry-viewer",
+  "productName": "RecallHub Telemetry Viewer",
+  "directories": {
+    "output": "dist-package"
+  },
+  "files": [
+    "dist/**/*",
+    "dist-electron/**/*"
+  ],
+  "win": {
+    "target": "nsis",
+    "icon": null
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true
+  }
+}
