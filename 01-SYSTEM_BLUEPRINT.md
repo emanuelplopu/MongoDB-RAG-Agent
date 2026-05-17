@@ -30,6 +30,7 @@
 - **25. Local LLM Management** — Ollama model discovery, pull, deletion, testing, and configuration for fully offline operation
 - **26. Update Service** — Offline update package management with integrity verification (SHA256 + Ed25519), pre-update backup, database migration, and rollback
 - **27. Frontend Application** — React + TypeScript SPA with Material-UI/Tailwind, i18n, chat interface, admin panels, search UI, ingestion management, profile switching
+- **28. Telemetry System** — Full interaction trace capture (LLM calls, search operations, tool executions), dual-mode PII protection (protected + raw for trusted partners), triple-engine pseudonymizer (regex + spaCy + Presidio), admin API for runtime configuration, JSONL storage with configurable retention, standalone Electron viewer app (`tools/telemetry-viewer/`)
 
 ---
 
@@ -183,8 +184,8 @@
 **Purpose:** Search across multiple isolated databases with access control, combining results transparently.
 
 **FederatedSearch class (federated_search.py):**
-- Constructor: `FederatedSearch(mongo_client: AsyncIOMotorClient)`
-- Uses a shared MongoDB client across all database searches
+- Constructor: `FederatedSearch(mongo_client: AsyncMongoClient)`
+- Uses a shared MongoDB async client (PyMongo Async) across all database searches
 
 **Data Source Types (DataSourceType enum):**
 - `PROFILE` — shared profile documents (database from profile config)
@@ -914,6 +915,21 @@
 - `src/i18n/` — Internationalization support
 
 **Deployment:** Served via nginx on port 11080, proxies API requests to backend port 11000.
+
+---
+
+### 28. Telemetry System
+
+**Purpose:** Full interaction trace capture for debugging, compliance, and analytics.
+
+**Capabilities:**
+- LLM calls, search operations, and tool executions recorded per request
+- Dual-mode PII protection: `protected` (pseudonymized) + `raw` (for trusted partners)
+- Triple-engine pseudonymizer: regex patterns + spaCy NER + Presidio analyzer
+- Admin API for runtime configuration (enable/disable, set PII mode, retention)
+- JSONL storage with configurable retention policies
+
+**Integration:** Standalone Electron viewer app at `tools/telemetry-viewer/`
 
 ---
 

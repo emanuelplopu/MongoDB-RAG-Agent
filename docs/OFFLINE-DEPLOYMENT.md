@@ -4,8 +4,8 @@
 
 RecallHub deploys as a fully self-contained offline package. Backups are **per-tenant** — each backup targets a single tenant (Quellex or RecallHub) and contains only the Docker images, database collections, and configuration for that tenant. A single backup folder contains everything needed to stand up the tenant on a fresh Windows machine with zero internet connectivity:
 
-- Docker Desktop + WSL2 runtime
-- Ollama with pre-loaded AI models
+- Docker Desktop (Hyper-V backend) runtime
+- Ollama running natively on the Windows host with pre-loaded AI models
 - Tenant-specific Docker images (backend + frontend)
 - Shared service images (ingestion worker, MongoDB)
 - Tenant-scoped MongoDB database dump
@@ -70,7 +70,7 @@ The `recallhub` database is always included — it holds the shared authenticati
 | Permissions | Administrator | Administrator |
 | CPU | 4 cores | 8+ cores |
 
-WSL2 and Hyper-V capable hardware required (most modern PCs).
+Hyper-V capable hardware required (most modern PCs). Docker Desktop uses the Hyper-V backend; WSL2 is not required.
 
 ## Quick Start (New Machine)
 
@@ -94,12 +94,11 @@ The installer runs in 3 phases:
 
 ### Phase 1: Prerequisites
 
-- Enables WSL2 and VirtualMachinePlatform Windows features
-- Creates `.wslconfig` with optimized resource limits (75% RAM, n-1 CPU cores)
-- Installs Docker Desktop silently from `apps/DockerDesktopInstaller.exe`
-- Installs Ollama silently from `apps/OllamaSetup.exe`
+- Enables Hyper-V and Containers Windows features
+- Installs Docker Desktop silently from `apps/DockerDesktopInstaller.exe` (configured for Hyper-V backend)
+- Installs Ollama silently from `apps/OllamaSetup.exe` (runs natively on the host)
 - Sets `OLLAMA_MODELS` environment variable
-- **Triggers restart** if WSL2 was freshly enabled
+- **Triggers restart** if Hyper-V was freshly enabled
 
 ### Phase 2: Model Restore
 
@@ -215,9 +214,8 @@ The uninstaller removes (in order):
 5. Ollama models (tenant-specific)
 6. Ollama application (if installed by us)
 7. Docker Desktop (if installed by us)
-8. WSL configuration (if created by us)
-9. WSL2 Windows features (if enabled by us)
-10. Install manifest and metadata
+8. Hyper-V/Containers features (if enabled by us)
+9. Install manifest and metadata
 
 ## Configuration
 
@@ -242,7 +240,7 @@ Override at install time:
 
 ### Docker Resource Allocation
 
-Automatically configured in `.wslconfig`:
+Automatically configured via Docker Desktop settings:
 - Memory: 75% of system RAM
 - CPU: Total cores minus 1
 - Swap: 8 GB
@@ -272,11 +270,11 @@ cd C:\RecallHub
 docker compose logs mongodb
 ```
 
-Common cause: insufficient RAM allocated to WSL2.
+Common cause: insufficient RAM allocated to Docker Desktop.
 
-### "WSL2 not enabled"
+### "Hyper-V not enabled"
 
-A restart is required after first-time WSL2 enablement. The installer will prompt for this automatically.
+A restart is required after first-time Hyper-V enablement. The installer will prompt for this automatically.
 
 ### "Script execution disabled"
 

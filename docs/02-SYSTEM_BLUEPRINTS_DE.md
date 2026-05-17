@@ -45,7 +45,7 @@
 **Architektur:**
 ```
 DatabaseManager
-├── async_client (AsyncIOMotorClient)
+├── async_client (pymongo.AsyncMongoClient)
 ├── sync_client (MongoClient)
 ├── current_database_name
 ├── documents_collection
