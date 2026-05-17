@@ -276,13 +276,14 @@ export default function LiveDebugPage() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [stateData, liveData] = await Promise.all([
+      const [stateData, activeData, recentData] = await Promise.all([
         debugApi.getSystemState(),
+        debugApi.getActiveRequests(),
         debugApi.getLiveActivity(),
       ])
       setSystemState(stateData)
-      setActiveRequests(liveData.active || [])
-      setRecentActivity(liveData.recent || [])
+      setActiveRequests(activeData.active || [])
+      setRecentActivity(recentData.activity || [])
       setLastRefresh(Date.now())
       setError('')
     } catch (err) {

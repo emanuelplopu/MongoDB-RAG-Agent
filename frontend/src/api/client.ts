@@ -3505,7 +3505,13 @@ export interface DebugActiveRequest {
   session_id: string
   model: string
   started_at: string
+  /** Elapsed time in seconds (returned by the backend). */
+  elapsed_seconds: number
+  /** Elapsed time in ms (computed client-side from elapsed_seconds). */
   elapsed_ms: number
+  user_id?: string
+  is_admin?: boolean
+  started_ts?: number
 }
 
 export interface DebugActivityEntry {
@@ -3534,9 +3540,16 @@ export interface DebugActivityItem {
   entries?: DebugActivityEntry[]
 }
 
+/** Backend response shape for GET /debug/activity/live. */
 export interface DebugLiveActivity {
+  activity: DebugActivityItem[]
+  count: number
+}
+
+/** Backend response shape for GET /debug/activity/active. */
+export interface DebugActiveRequestsResponse {
   active: DebugActiveRequest[]
-  recent: DebugActivityItem[]
+  count: number
 }
 
 export interface DebugRequestDetail {
@@ -3551,20 +3564,123 @@ export interface DebugRequestDetail {
   entries: DebugActivityEntry[]
 }
 
+// Internal raw shapes returned by the backend, used only inside debugApi wrappers.
+interface RawSystemState {
+  orchestrator?: string
+  worker?: string
+  ollama_url?: string
+  active_profile?: string
+  database?: string
+  uptime_seconds?: number
+  active_requests_count?: number
+  tenant_id?: string
+  timestamp?: string
+}
+
+interface RawActiveRequest {
+  request_id: string
+  session_id: string
+  user_id?: string
+  model: string
+  is_admin?: boolean
+  started_at: string
+  started_ts?: number
+  elapsed_seconds?: number
+}
+
+interface RawActivityItem {
+  request_id: string
+  session_id?: string
+  user_id?: string
+  is_admin?: boolean
+  started_at: string
+  completed_at?: string
+  duration_ms: number
+  summary?: {
+    total_tokens?: number
+    total_errors?: number
+    phases_completed?: string[]
+    models_used?: string[]
+    [key: string]: unknown
+  }
+}
+
+function splitProviderModel(combined?: string): { provider: string; model: string } {
+  if (!combined) return { provider: '', model: '' }
+  const idx = combined.indexOf('/')
+  if (idx < 0) return { provider: '', model: combined }
+  return { provider: combined.slice(0, idx), model: combined.slice(idx + 1) }
+}
+
+function normalizeActivityItem(raw: RawActivityItem): DebugActivityItem {
+  const summary = raw.summary || {}
+  const models = Array.isArray(summary.models_used) ? summary.models_used : []
+  const phases = Array.isArray(summary.phases_completed) ? summary.phases_completed : []
+  const errors = typeof summary.total_errors === 'number' ? summary.total_errors : 0
+  const status: DebugActivityItem['status'] = raw.completed_at
+    ? (errors > 0 ? 'error' : 'complete')
+    : 'in_progress'
+  return {
+    request_id: raw.request_id,
+    session_id: raw.session_id,
+    started_at: raw.started_at,
+    completed_at: raw.completed_at,
+    duration_ms: raw.duration_ms,
+    model: models[0],
+    total_tokens: typeof summary.total_tokens === 'number' ? summary.total_tokens : undefined,
+    phases_count: phases.length || undefined,
+    status,
+  }
+}
+
 export const debugApi = {
   getLiveActivity: async (): Promise<DebugLiveActivity> => {
     const response = await api.get('/debug/activity/live')
-    return response.data
+    const raw = response.data || {}
+    const items: RawActivityItem[] = Array.isArray(raw.activity) ? raw.activity : []
+    return {
+      activity: items.map(normalizeActivityItem),
+      count: typeof raw.count === 'number' ? raw.count : items.length,
+    }
   },
 
-  getActiveRequests: async (): Promise<DebugActiveRequest[]> => {
+  getActiveRequests: async (): Promise<DebugActiveRequestsResponse> => {
     const response = await api.get('/debug/activity/active')
-    return response.data
+    const raw = response.data || {}
+    const items: RawActiveRequest[] = Array.isArray(raw.active) ? raw.active : []
+    const active: DebugActiveRequest[] = items.map((r) => {
+      const elapsed_seconds = typeof r.elapsed_seconds === 'number' ? r.elapsed_seconds : 0
+      return {
+        request_id: r.request_id,
+        session_id: r.session_id,
+        model: r.model,
+        started_at: r.started_at,
+        elapsed_seconds,
+        elapsed_ms: Math.round(elapsed_seconds * 1000),
+        user_id: r.user_id,
+        is_admin: r.is_admin,
+        started_ts: r.started_ts,
+      }
+    })
+    return { active, count: typeof raw.count === 'number' ? raw.count : active.length }
   },
 
   getSystemState: async (): Promise<DebugSystemState> => {
     const response = await api.get('/debug/system-state')
-    return response.data
+    const raw: RawSystemState = response.data || {}
+    const orch = splitProviderModel(raw.orchestrator)
+    const wrk = splitProviderModel(raw.worker)
+    return {
+      orchestrator_provider: orch.provider,
+      orchestrator_model: orch.model,
+      worker_provider: wrk.provider,
+      worker_model: wrk.model,
+      ollama_url: raw.ollama_url || '',
+      active_profile: raw.active_profile || '',
+      database: raw.database || '',
+      uptime_seconds: raw.uptime_seconds || 0,
+      active_requests: raw.active_requests_count || 0,
+    }
   },
 
   getRequestDetail: async (requestId: string): Promise<DebugRequestDetail> => {
