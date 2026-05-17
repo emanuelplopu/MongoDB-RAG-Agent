@@ -1,0 +1,21 @@
+{
+  "name": "quellex_recallhub_strategy_operating_system_blueprints",
+  "created_at": "2026-05-17",
+  "purpose": "Implementation blueprints for business-layer prompt-to-response flexibility, Strategy Engine V2, automatic strategy testing/profiling, overnight exploration scheduling, and CLI/headless execution.",
+  "files": [
+    "00-README_AND_EXECUTIVE_ROADMAP.md",
+    "01-BUSINESS_LAYER_AND_PROMPT_PIPELINE.md",
+    "02-STRATEGY_ENGINE_V2.md",
+    "03-STRATEGY_PATTERN_LIBRARY.md",
+    "04-EVALUATION_TEST_CORPUS_AND_JUDGING.md",
+    "05-OVERNIGHT_EXPLORATION_SCHEDULER.md",
+    "06-HEADLESS_CLI_AND_BACKEND_ONLY_RUNNER.md",
+    "07-TELEMETRY_PROFILING_AND_ANALYTICS.md",
+    "08-RUNTIME_PERFORMANCE_AND_RESOURCE_ROUTING.md",
+    "09-DATABASE_AND_API_CONTRACTS.md",
+    "10-IMPLEMENTATION_AGENT_PACK.md",
+    "11-SECURITY_PRIVACY_AND_TENANT_GOVERNANCE.md",
+    "12-MVP_SEQUENCE_AND_ACCEPTANCE_TESTS.md",
+    "13G-DEPENDENCY_AND_PLATFORM_REQUIREMENTS.md"
+  ]
+}
