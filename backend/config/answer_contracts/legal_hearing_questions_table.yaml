@@ -1,0 +1,57 @@
+# Answer Contract: Legal Hearing Questions Table
+# Structured table output for Ergänzungsfragen
+format_id: legal_hearing_questions_table
+version: 1
+language: de
+tone: professional
+citation_granularity: chunk
+unsupported_claim_policy: flag
+max_length_tokens: 4000
+
+output_sections:
+  - section_id: context
+    title: Kontext
+    required: false
+    format: prose
+    description: Brief context about the legal matter and hearing purpose
+
+  - section_id: questions_table
+    title: Ergänzungsfragen
+    required: true
+    format: table
+    description: Structured table of supplementary questions
+
+table_schema:
+  columns:
+    - name: priority
+      display_name: Priorität
+      column_type: enum
+      required: true
+      enum_values: [hoch, mittel, niedrig]
+    - name: topic
+      display_name: Thema
+      column_type: text
+      required: true
+      description: Subject area the question addresses
+    - name: question
+      display_name: Frage
+      column_type: text
+      required: true
+      description: The actual question to ask
+    - name: fixation
+      display_name: Fixierung / Bezug
+      column_type: text
+      required: true
+      description: Reference to specific document section or fact
+    - name: follow_up
+      display_name: Folgefrage
+      column_type: text
+      required: false
+      description: Optional follow-up question if answer is unsatisfactory
+  row_source: evidence_cards
+  sort_by: priority
+  min_rows: 3
+  max_rows: 20
+
+required_fields:
+  - questions_table

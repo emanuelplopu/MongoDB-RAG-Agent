@@ -25,6 +25,8 @@ from backend.agent.schemas import (
 from backend.agent.orchestrator import Orchestrator
 from backend.agent.worker_pool import WorkerPool
 from backend.agent.federated_search import FederatedSearch, get_federated_search
+from backend.agent.strategy.business_context_resolver import BusinessContextResolver
+from backend.agent.strategy.models import SearchRequest as StrategySearchRequest, BusinessContext
 from backend.agent.strategies.base import BaseStrategy
 from backend.agent.strategies.registry import StrategyRegistry
 from backend.agent.tool_gate import ToolGate
@@ -123,6 +125,8 @@ class FederatedAgent:
         
         # Current trace
         self.trace: Optional[AgentTrace] = None
+        # Business context resolved by Strategy OS (set per-request)
+        self._business_context: Optional[BusinessContext] = None
     
     def _resolve_strategy(
         self,
@@ -311,6 +315,7 @@ class FederatedAgent:
             user_message=user_message,
             response=response,
             language=language,
+            business_context=self._business_context,
         )
         
         return response, self.trace
@@ -322,6 +327,7 @@ class FederatedAgent:
         user_message: str,
         response: str,
         language: Optional[str] = None,
+        business_context: Optional[BusinessContext] = None,
     ) -> None:
         """Emit telemetry record as a fire-and-forget background task.
 
@@ -414,6 +420,21 @@ class FederatedAgent:
                 prompt_tokens = int(self.trace.orchestrator_tokens * 0.7 + self.trace.worker_tokens * 0.5)
                 response_tokens = int(self.trace.orchestrator_tokens * 0.3 + self.trace.worker_tokens * 0.5)
 
+            # Strategy OS: Attach business context to telemetry metadata
+            strategy_os_metadata: Optional[Dict[str, Any]] = None
+            if business_context:
+                strategy_os_metadata = {
+                    "capability_id": business_context.capability_id,
+                    "capability_confidence": business_context.capability_confidence,
+                    "tenant_id": business_context.tenant_id,
+                    "profile_key": business_context.profile_key,
+                    "resolved_source_policy_from": (
+                        business_context.resolved_source_policy.resolved_from
+                        if business_context.resolved_source_policy
+                        else None
+                    ),
+                }
+
             asyncio.create_task(
                 telemetry.record_interaction(
                     session_id=session_id,
@@ -445,6 +466,7 @@ class FederatedAgent:
                     early_exit_confidence=early_exit_confidence,
                     total_sources_found=total_sources_found,
                     deduplicated_sources=deduplicated_sources,
+                    strategy_os_context=strategy_os_metadata,
                 )
             )
         except Exception as e:
@@ -487,6 +509,29 @@ class FederatedAgent:
                 except Exception as e:
                     logger.error(f"[req={self.req_id}] Error emitting event {event_type}: {e}")
         
+        # Strategy OS: Resolve business context (guarded by feature flag)
+        business_context: Optional[BusinessContext] = None
+        if settings.strategy_os_enabled:
+            try:
+                resolver = BusinessContextResolver(tenant_id=settings.tenant_id)
+                business_context = await resolver.resolve(
+                    query=user_message,
+                    profile_key=active_profile_key,
+                    accessible_profiles=accessible_profile_keys or [],
+                    matter_id=None,  # Phase 3 will add session-based matter_id
+                    strategy_source_policy=None,  # Phase 2 will add strategy-specific policy
+                )
+                self._business_context = business_context
+                logger.info(
+                    f"[req={self.req_id}] BusinessContext resolved: "
+                    f"capability={business_context.capability_id} "
+                    f"confidence={business_context.capability_confidence:.2f}"
+                )
+            except Exception as e:
+                logger.warning(f"[req={self.req_id}] BusinessContextResolver failed, falling back to standard search: {e}")
+                business_context = None
+                self._business_context = None
+        
         # Phase 1: Analyze
         await emit_event('phase', {'phase': 'analyze', 'status': 'started'})
         self.activity_logger.log_phase("analyze", "started")
@@ -513,6 +558,30 @@ class FederatedAgent:
             active_profile_database=active_profile_database,
             accessible_profile_keys=accessible_profile_keys
         )
+        
+        # Strategy OS: Execute policy-enforced search if business context resolved
+        policy_search_results = None
+        policy_omitted_results = None
+        if business_context and business_context.resolved_source_policy:
+            try:
+                search_request = StrategySearchRequest(
+                    query=user_message,
+                    profile_key=active_profile_key,
+                    resolved_policy=business_context.resolved_source_policy,
+                    max_results=10,
+                )
+                policy_search_results, policy_omitted_results = (
+                    await self.federated_search.search_with_policy(search_request)
+                )
+                logger.info(
+                    f"[req={self.req_id}] Policy search: "
+                    f"{len(policy_search_results)} valid, "
+                    f"{len(policy_omitted_results)} omitted"
+                )
+            except Exception as e:
+                logger.warning(f"[req={self.req_id}] search_with_policy failed, continuing with standard flow: {e}")
+                policy_search_results = None
+                policy_omitted_results = None
         
         # Phase 2: Plan
         await emit_event('phase', {'phase': 'plan', 'status': 'started'})

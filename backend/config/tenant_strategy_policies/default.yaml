@@ -1,0 +1,28 @@
+# Default Tenant Strategy Policy
+# Moderate defaults used when no tenant-specific policy exists
+tenant_id: default
+display_name: Default
+
+source_policy:
+  allow_cross_profile: false
+  allow_cross_matter: false
+  allow_web: false
+  allow_personal: true
+  allow_cloud_private: true
+  web_requires_sanitization: true
+  require_source_spans: false
+  prefer_latest_versions: true
+  exclude_boilerplate: false
+  primary_sources:
+    - documents
+  secondary_sources: []
+  excluded_sources: []
+
+language_policy:
+  primary_languages: [en, de]
+  supported_languages: [en, de]
+  fallback_language: en
+  detect_query_language: true
+  enforce_response_language: false
+
+default_capability: general_fast_rag

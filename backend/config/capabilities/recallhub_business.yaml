@@ -1,0 +1,55 @@
+# RecallHub Business Capabilities
+# Capability definitions for business knowledge management
+tenant_scope: recallhub
+
+capabilities:
+  - capability_id: business_summary
+    display_name: Business Summary
+    description: Summarize business documents, meetings, or reports
+    default_answer_contract_id: business_summary_report
+    detection_keywords:
+      - summary
+      - summarize
+      - zusammenfassung
+      - overview
+      - key points
+      - highlights
+      - takeaways
+    detection_patterns:
+      - "(?i)(?:summarize|summary|overview|key points).*(?:meeting|report|document)"
+      - "(?i)(?:zusammenfassung|überblick)"
+
+  - capability_id: project_lessons
+    display_name: Project Lessons Learned
+    description: Extract lessons, risks, and insights from project documentation
+    default_answer_contract_id: null
+    detection_keywords:
+      - lessons learned
+      - what went wrong
+      - risks
+      - improvements
+      - retrospective
+    detection_patterns:
+      - "(?i)(?:lessons|what.*(?:went wrong|learned|improved))"
+      - "(?i)(?:risk|failure|mistake).*(?:analysis|review)"
+
+  - capability_id: technical_architecture
+    display_name: Technical Architecture
+    description: Answer questions about system architecture and technical design
+    default_answer_contract_id: null
+    detection_keywords:
+      - architecture
+      - system design
+      - technical
+      - infrastructure
+      - deployment
+      - integration
+    detection_patterns:
+      - "(?i)(?:architecture|system design|infrastructure|deployment)"
+
+  - capability_id: general_fast_rag
+    display_name: General Q&A
+    description: General-purpose question answering with fast retrieval
+    default_answer_contract_id: null
+    detection_keywords: []
+    detection_patterns: []

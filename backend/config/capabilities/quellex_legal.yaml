@@ -1,0 +1,66 @@
+# Quellex Legal Capabilities
+# Capability definitions for legal domain with German detection keywords
+tenant_scope: quellex
+
+capabilities:
+  - capability_id: legal_hearing_questions
+    display_name: Ergänzungsfragen / Beweisfragen
+    description: Generate supplementary questions for court hearings
+    default_answer_contract_id: legal_hearing_questions_table
+    detection_keywords:
+      - ergänzungsfragen
+      - beweisfragen
+      - sachverständigenfragen
+      - fragen an den gutachter
+      - fragen für die verhandlung
+      - hearing questions
+      - gutachterfragen
+    detection_patterns:
+      - "(?i)fragen.*(?:gutachter|sachverständig|verhandlung|hearing)"
+      - "(?i)ergänzung.*fragen"
+      - "(?i)beweisbeschluss.*fragen"
+
+  - capability_id: legal_matter_qna
+    display_name: Rechtliche Sachfragen
+    description: Answer questions about a specific legal matter
+    default_answer_contract_id: null
+    detection_keywords:
+      - sachverhalt
+      - rechtslage
+      - anspruch
+      - frist
+      - verjährung
+      - was sagt
+      - wie ist der stand
+      - zusammenfassung
+    detection_patterns:
+      - "(?i)was.*(?:sagt|steht|ergibt).*(?:akte|dokument|gutachten)"
+      - "(?i)(?:zusammenfassung|überblick|stand).*(?:verfahren|mandat|akte)"
+
+  - capability_id: legal_contradiction_analysis
+    display_name: Widerspruchsanalyse
+    description: Identify contradictions between documents or statements
+    default_answer_contract_id: legal_contradiction_matrix
+    detection_keywords:
+      - widerspruch
+      - widersprüche
+      - contradiction
+      - gegensätzlich
+      - widerspricht
+      - inkonsistenz
+    detection_patterns:
+      - "(?i)(?:widerspruch|widersprüche|inkonsistenz).*(?:finden|suchen|analysieren)"
+      - "(?i)(?:widerspricht|gegensätzlich)"
+
+  - capability_id: legal_source_audit
+    display_name: Quellenprüfung
+    description: Audit and trace claims back to source documents
+    default_answer_contract_id: null
+    detection_keywords:
+      - quellenprüfung
+      - source audit
+      - nachweis
+      - belege
+      - woher stammt
+    detection_patterns:
+      - "(?i)(?:woher|welche.*quelle|nachweis|beleg).*(?:stammt|kommt|basiert)"

@@ -114,6 +114,7 @@ class TelemetryService:
         early_exit_confidence: float | None = None,
         total_sources_found: int = 0,
         deduplicated_sources: int = 0,
+        strategy_os_context: dict | None = None,
     ) -> Optional[str]:
         """Record a complete interaction with automatic PII pseudonymization.
 
@@ -188,6 +189,7 @@ class TelemetryService:
                     early_exit_confidence=early_exit_confidence,
                     total_sources_found=total_sources_found,
                     deduplicated_sources=deduplicated_sources,
+                    capability_id=strategy_os_context.get("capability_id") if strategy_os_context else None,
                 )
                 await self._write_raw_record(raw_record)
 
@@ -314,6 +316,7 @@ class TelemetryService:
                     early_exit_confidence=early_exit_confidence,
                     total_sources_found=total_sources_found,
                     deduplicated_sources=deduplicated_sources,
+                    capability_id=strategy_os_context.get("capability_id") if strategy_os_context else None,
                 )
 
                 # Write to daily JSONL file

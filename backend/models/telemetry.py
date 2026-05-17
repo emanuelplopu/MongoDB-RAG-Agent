@@ -89,6 +89,22 @@ class PhaseMetrics(BaseModel):
     error: Optional[str] = None
 
 
+class StrategyNodeMetric(BaseModel):
+    """Metrics for a single strategy DAG node execution."""
+    node_id: str
+    node_type: str
+    duration_ms: float = 0.0
+    model_role: Optional[str] = None
+    model_used: Optional[str] = None
+    tokens_in: int = 0
+    tokens_out: int = 0
+    search_count: int = 0
+    sources_in: int = 0
+    sources_out: int = 0
+    success: bool = True
+    error: Optional[str] = None
+
+
 class TelemetryRecord(BaseModel):
     """Complete telemetry record for a single interaction.
 
@@ -166,3 +182,15 @@ class TelemetryRecord(BaseModel):
     early_exit_confidence: Optional[float] = None
     total_sources_found: int = 0
     deduplicated_sources: int = 0
+
+    # Strategy OS fields (Phase 0 - all optional for backward compat)
+    strategy_id: Optional[str] = None
+    strategy_version: Optional[str] = None
+    strategy_spec_hash: Optional[str] = None
+    strategy_status: Optional[str] = None
+    capability_id: Optional[str] = None
+    answer_contract_id: Optional[str] = None
+    telemetry_schema_version: int = 1  # 1=legacy, 2=strategy_os
+    strategy_node_metrics: Optional[list[StrategyNodeMetric]] = None
+    experiment_id: Optional[str] = None
+    trace_id: Optional[str] = None

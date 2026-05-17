@@ -1,0 +1,71 @@
+# Answer Contract: Legal Contradiction Matrix
+# Structured analysis of contradictions between sources
+format_id: legal_contradiction_matrix
+version: 1
+language: de
+tone: analytical
+citation_granularity: span
+unsupported_claim_policy: flag
+max_length_tokens: 6000
+
+output_sections:
+  - section_id: summary
+    title: Zusammenfassung der Widersprüche
+    required: true
+    format: prose
+    description: Brief summary of key contradictions found
+
+  - section_id: contradiction_table
+    title: Widerspruchsmatrix
+    required: true
+    format: table
+    description: Detailed contradiction analysis table
+
+  - section_id: assessment
+    title: Bewertung
+    required: false
+    format: prose
+    description: Overall assessment of contradiction severity and impact
+
+table_schema:
+  columns:
+    - name: issue
+      display_name: Streitpunkt
+      column_type: text
+      required: true
+      description: The factual claim or issue in dispute
+    - name: source_a_statement
+      display_name: Aussage Quelle A
+      column_type: text
+      required: true
+      description: Statement from first source
+    - name: source_a_ref
+      display_name: Quelle A
+      column_type: text
+      required: true
+      description: Reference to source A document and location
+    - name: source_b_statement
+      display_name: Aussage Quelle B
+      column_type: text
+      required: true
+      description: Contradicting statement from second source
+    - name: source_b_ref
+      display_name: Quelle B
+      column_type: text
+      required: true
+      description: Reference to source B document and location
+    - name: contradiction_type
+      display_name: Art des Widerspruchs
+      column_type: enum
+      required: true
+      enum_values: [faktisch, zeitlich, bewertung, auslassung]
+    - name: severity
+      display_name: Schweregrad
+      column_type: enum
+      required: true
+      enum_values: [kritisch, erheblich, gering]
+  row_source: evidence_cards
+  sort_by: severity
+
+required_fields:
+  - contradiction_table

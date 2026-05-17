@@ -245,6 +245,29 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         logger.warning(f"Failed to initialize telemetry service: {e}")
         app.state.telemetry = None
     
+    # Strategy OS initialization (Phase 0)
+    if settings.strategy_os_enabled:
+        try:
+            from backend.core.model_roles import ModelRoleRegistry
+            from scripts.migrate_strategy_os_collections import migrate_strategy_os_collections
+
+            # Run idempotent collection migration
+            migration_result = await migrate_strategy_os_collections(db_manager.db)
+
+            # Initialize model role registry
+            app.state.model_role_registry = ModelRoleRegistry(settings)
+
+            logger.info(
+                f"Strategy OS v0 initialized: "
+                f"{len(migration_result)} collections, "
+                f"{len(app.state.model_role_registry)} model roles"
+            )
+        except Exception as e:
+            logger.warning(f"Strategy OS initialization failed (non-fatal): {e}")
+            app.state.model_role_registry = None
+    else:
+        app.state.model_role_registry = None
+
     # Log resolved LLM configuration
     logger.info("LLM Configuration:")
     logger.info(f"  Orchestrator: provider={settings.orchestrator_provider}, model={settings.orchestrator_model}")

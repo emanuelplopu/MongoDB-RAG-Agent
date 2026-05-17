@@ -1,0 +1,38 @@
+# Answer Contract: Business Summary Report
+# Prose + structured sections for business document summaries
+format_id: business_summary_report
+version: 1
+language: en
+tone: professional
+citation_granularity: document
+unsupported_claim_policy: allow
+max_length_tokens: 3000
+
+output_sections:
+  - section_id: executive_summary
+    title: Executive Summary
+    required: true
+    format: prose
+    description: 2-3 sentence high-level summary
+
+  - section_id: key_findings
+    title: Key Findings
+    required: true
+    format: list
+    description: Bullet-point list of main findings or takeaways
+
+  - section_id: details
+    title: Details
+    required: false
+    format: prose
+    description: Expanded discussion of findings with context
+
+  - section_id: action_items
+    title: Action Items
+    required: false
+    format: list
+    description: Recommended next steps or actions
+
+required_fields:
+  - executive_summary
+  - key_findings

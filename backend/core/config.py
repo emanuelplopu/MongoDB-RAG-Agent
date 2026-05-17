@@ -2,7 +2,7 @@
 
 from pydantic_settings import BaseSettings
 from pydantic import Field
-from typing import List, Set
+from typing import List, Optional, Set
 import os
 
 
@@ -280,6 +280,16 @@ class BackendSettings(BaseSettings):
     telemetry_pii_markers: bool = Field(
         default=True,
         description="Wrap PII replacements with [PII:TYPE]...[/PII] markers in protected telemetry"
+    )
+    
+    # Strategy OS configuration
+    strategy_os_enabled: bool = Field(
+        default=True,
+        description="Enable Strategy OS initialization at startup"
+    )
+    model_roles_config: Optional[str] = Field(
+        default=None,
+        description="Path to optional model_roles.yaml override"
     )
     
     # Web Search Settings (Brave Search API)

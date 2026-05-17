@@ -1,0 +1,39 @@
+# RecallHub Tenant Strategy Policy
+# Permissive business defaults for knowledge management
+tenant_id: recallhub
+display_name: RecallHub Business
+
+source_policy:
+  allow_cross_profile: true
+  allow_cross_matter: false
+  allow_web: true
+  allow_personal: false
+  allow_cloud_private: true
+  web_requires_sanitization: false
+  require_source_spans: false
+  prefer_latest_versions: true
+  exclude_boilerplate: true
+  primary_sources:
+    - documents
+    - cloud
+  secondary_sources:
+    - web
+  excluded_sources: []
+
+language_policy:
+  primary_languages: [en]
+  supported_languages: [en, de, fr]
+  fallback_language: en
+  detect_query_language: true
+  enforce_response_language: true
+  terminology_preservation:
+    en:
+      - ROI
+      - KPI
+      - SLA
+      - API
+    de:
+      - Datenschutz
+      - Betriebsrat
+
+default_capability: business_summary
