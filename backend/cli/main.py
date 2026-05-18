@@ -120,6 +120,10 @@ def cli_entry():
     if not HAS_TYPER:
         print("Error: typer and rich packages are required. Install with: pip install typer rich")
         sys.exit(1)
+    # Ensure sub-command modules are registered before dispatching.
+    import backend.cli.strategy_commands  # noqa: F401
+    import backend.cli.eval_commands  # noqa: F401
+    import backend.cli.phase6_commands  # noqa: F401
     app()
 
 

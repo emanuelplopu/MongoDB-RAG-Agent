@@ -256,15 +256,91 @@ if HAS_TYPER:
             "-s",
             help="Comma-separated strategy IDs to compare",
         ),
-        dataset: str = typer.Option(
-            "default", "--dataset", "-d", help="Test case dataset ID"
+        dataset: list[str] = typer.Option(
+            ["default"],
+            "--dataset",
+            "-d",
+            help="Test case dataset ID (repeatable in --mode runs)",
+        ),
+        mode: Optional[str] = typer.Option(
+            None,
+            "--mode",
+            help=(
+                "Phase 6 exploration mode (grid|regression|smoke|exploration|"
+                "bandit). When set, creates a StrategyExperimentJob and "
+                "invokes the runner instead of the legacy comparison path."
+            ),
+        ),
+        tenant: str = typer.Option(
+            "recallhub", "--tenant", "-t", help="Tenant scope (--mode runs)"
+        ),
+        profile_key: Optional[str] = typer.Option(
+            None, "--profile", "--profile-key", help="Profile key (--mode runs)"
+        ),
+        candidate_generator: Optional[str] = typer.Option(
+            None,
+            "--candidate-generator",
+            help="Candidate generator id (exploration mode)",
+        ),
+        max_cpu_pct: Optional[int] = typer.Option(
+            None, "--max-cpu-pct", help="CPU ceiling (% utilisation)"
+        ),
+        max_ram_pct: Optional[int] = typer.Option(
+            None, "--max-ram-pct", help="RAM ceiling (% usage)"
+        ),
+        max_runtime_min: Optional[int] = typer.Option(
+            None, "--max-runtime-min", help="Max runtime in minutes"
+        ),
+        dry_run: bool = typer.Option(
+            False, "--dry-run", help="Build candidates only; do not execute"
+        ),
+        watch: bool = typer.Option(
+            False, "--watch", help="Stream progress updates to stdout"
+        ),
+        no_profile: bool = typer.Option(
+            False, "--no-profile", help="Disable per-candidate runtime profiling"
+        ),
+        out: Optional[str] = typer.Option(
+            None, "--out", help="Optional path to write JSON results"
         ),
         output_format: str = typer.Option(
             "table", "--format", "-f", help="Output format: table or json"
         ),
     ):
-        """Compare multiple strategies (A/B testing)."""
+        """Compare strategies or run a Phase 6 experiment job (with ``--mode``)."""
         strategy_ids = [s.strip() for s in strategies.split(",")]
+        # Normalise the datasets list (Typer hands back a list when the
+        # option is declared as ``list[str]``; tolerate ``str`` too).
+        if isinstance(dataset, str):
+            dataset_ids = [dataset]
+        else:
+            dataset_ids = [d for d in dataset if d]
+
+        if mode is not None:
+            # Phase 6 dispatch — defer to the dedicated entrypoint so
+            # eval_commands stays focused on the legacy comparison path.
+            from backend.cli.phase6_commands import dispatch_experiment_run_mode
+
+            dispatch_experiment_run_mode(
+                mode=mode,
+                strategies=strategy_ids,
+                datasets=dataset_ids,
+                tenant=tenant,
+                profile_key=profile_key,
+                candidate_generator=candidate_generator,
+                max_cpu_pct=max_cpu_pct,
+                max_ram_pct=max_ram_pct,
+                max_runtime_min=max_runtime_min,
+                dry_run=dry_run,
+                watch=watch,
+                no_profile=no_profile,
+                out=out,
+                output_format=output_format,
+            )
+            return
+
+        # Legacy Phase 4 comparison path (unchanged behaviour).
+        legacy_dataset = dataset_ids[0] if dataset_ids else "default"
         if len(strategy_ids) < 2:
             console.print(
                 "[red]Error:[/red] Provide at least 2 comma-separated strategy IDs."
@@ -273,7 +349,7 @@ if HAS_TYPER:
 
         fmt = OutputFormatter(output_format)
         try:
-            comparison = run_async(_run_comparison(strategy_ids, dataset))
+            comparison = run_async(_run_comparison(strategy_ids, legacy_dataset))
         except Exception as exc:
             fmt.print_error(f"Experiment failed: {exc}")
             raise typer.Exit(code=1)
@@ -282,7 +358,7 @@ if HAS_TYPER:
 
         if not summaries or all(s["runs"] == 0 for s in summaries):
             console.print(
-                f"[yellow]No test cases found for dataset '{dataset}'.[/yellow]\n"
+                f"[yellow]No test cases found for dataset '{legacy_dataset}'.[/yellow]\n"
                 "Create test cases first via the API or test case manager."
             )
             raise typer.Exit(code=0)
@@ -291,7 +367,7 @@ if HAS_TYPER:
             print(json.dumps(comparison, indent=2, default=str))
         else:
             table = Table(
-                title=f"Experiment Comparison: dataset={dataset}"
+                title=f"Experiment Comparison: dataset={legacy_dataset}"
             )
             table.add_column("Strategy ID", style="cyan")
             table.add_column("Avg Score", justify="right")

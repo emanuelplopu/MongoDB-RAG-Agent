@@ -291,6 +291,71 @@ class BackendSettings(BaseSettings):
         default=None,
         description="Path to optional model_roles.yaml override"
     )
+    strategy_spec_auto_seed: bool = Field(
+        default=True,
+        description="Auto-seed strategy_specs collection from bundled YAMLs at startup"
+    )
+    strategy_spec_dir: Optional[str] = Field(
+        default=None,
+        description="Override directory for YAML strategy specs (default: backend/config/strategy_specs)"
+    )
+    strategy_scheduler_auto_resume: bool = Field(
+        default=True,
+        description="On startup, rebuild scheduler state from MongoDB so schedules survive restarts"
+    )
+    strategy_scheduler_tick_interval_seconds: int = Field(
+        default=60,
+        description="Scheduler daemon main-loop tick interval in seconds"
+    )
+    adaptive_decisions_ttl_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        description="Retention period for adaptive_selection_decisions in days."
+    )
+    strategy_nightly_report_enabled: bool = Field(
+        default=True,
+        description="Enable the daily Strategy OS nightly report generator inside the scheduler daemon"
+    )
+    strategy_nightly_report_hour_local: int = Field(
+        default=3,
+        ge=0,
+        le=23,
+        description="Local-time hour (0-23) at which the nightly report runs each day"
+    )
+    strategy_nightly_report_timezone: str = Field(
+        default="UTC",
+        description=(
+            "IANA timezone for the nightly report cron (e.g. 'Europe/Vienna'). "
+            "Resolved via ScheduleTimezoneResolver so the configured hour is "
+            "interpreted in local wall-clock time, with DST-safe handling."
+        ),
+    )
+    strategy_nightly_report_dir: Optional[str] = Field(
+        default=None,
+        description="Override directory for the Markdown nightly reports (default: data/reports/strategy/)"
+    )
+    strategy_nightly_report_regression_threshold: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=1.0,
+        description="Composite-score drop required to flag a (strategy, capability) pair as a regression"
+    )
+    strategy_nightly_report_lookback_hours: int = Field(
+        default=24,
+        ge=1,
+        le=168,
+        description="Lookback window (hours) the nightly report aggregates over"
+    )
+    strategy_runs_ttl_days: int = Field(
+        default=7,
+        ge=1,
+        le=365,
+        description=(
+            "Retention period for strategy_runs collection in days; "
+            "controls TTL index on created_at."
+        ),
+    )
     
     # Web Search Settings (Brave Search API)
     brave_search_api_key: str = Field(

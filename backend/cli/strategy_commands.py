@@ -110,7 +110,7 @@ async def _quick_prompt(
             accessible_profiles=[profile],
         )
 
-        selector = StrategySpecSelector(db=None)
+        selector = StrategySpecSelector(store=None)
         spec = await selector.select(
             capability_id=context.capability_id,
             agent_mode="auto",
