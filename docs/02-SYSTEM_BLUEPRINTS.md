@@ -9,10 +9,12 @@
 6. [i18n System](#6-i18n-system)
 7. [Docker Deployment Strategy](#7-docker-deployment-strategy)
 8. [Additional Database Collections](#8-additional-database-collections)
-9. [Agent Strategies System](#9-agent-strategies-system)
+9. [Legacy Agent Strategies System](#9-legacy-agent-strategies-system)
 10. [File Registry Service](#10-file-registry-service)
 11. [Backup Service](#11-backup-service)
 12. [Embedding Benchmark Service](#12-embedding-benchmark-service)
+
+> **Strategy OS:** The config-driven DAG runtime, evaluation, and overnight exploration scheduler are documented in dedicated blueprints [07-STRATEGY_OS_OVERVIEW.md](./07-STRATEGY_OS_OVERVIEW.md) → [11-EXPLORATION_AND_SCHEDULER.md](./11-EXPLORATION_AND_SCHEDULER.md). This file covers backend service infrastructure that Strategy OS builds on.
 
 ---
 
@@ -1169,16 +1171,20 @@ ingestion-worker:
 
 ---
 
-## 9. Agent Strategies System
+## 9. Legacy Agent Strategies System
+
+> **Current architecture:** The primary strategy subsystem is now **Strategy OS** — a config-driven DAG runtime documented in detail under [07-STRATEGY_OS_OVERVIEW.md](./07-STRATEGY_OS_OVERVIEW.md), [08-STRATEGY_DAG_AND_NODES.md](./08-STRATEGY_DAG_AND_NODES.md), [09-STRATEGY_SPECS_AND_GOVERNANCE.md](./09-STRATEGY_SPECS_AND_GOVERNANCE.md), [10-EVALUATION_AND_JUDGE.md](./10-EVALUATION_AND_JUDGE.md), and [11-EXPLORATION_AND_SCHEDULER.md](./11-EXPLORATION_AND_SCHEDULER.md).
+>
+> The legacy `BaseStrategy` system described in this section still lives in `backend/agent/strategies/` (note the plural) and remains reachable from `/api/v1/strategies/...` and through the `legacy_orchestrator_pipeline` node inside a Strategy OS spec. New behavior should be authored as a Strategy OS spec, not as a new `BaseStrategy` subclass.
 
 ### 9.1 Overview
 
-The Agent Strategies system provides configurable execution patterns for different use cases and domains. Each strategy defines custom prompts, parameters, and behavior for the orchestrator.
+The legacy Agent Strategies system provides configurable execution patterns for different use cases and domains. Each strategy defines custom prompts, parameters, and behavior for the original orchestrator pipeline.
 
 **Purpose:**
 - Enable A/B testing of different agent approaches
 - Optimize performance for specific query domains
-- Provide fine-grained control over agent behavior
+- Provide fine-grained control over orchestrator behavior
 - Track and measure strategy effectiveness
 
 ---

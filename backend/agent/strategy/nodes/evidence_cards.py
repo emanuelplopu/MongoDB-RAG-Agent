@@ -5,7 +5,7 @@ Transforms retrieved chunks into structured EvidenceCard objects.  When an
 falls back to deterministic rule-based heuristics on failure.  Without a
 helper the behaviour is purely rule-based (original Phase 2 logic).
 
-Reference: docs/quellex_recallhub_strategy_blueprints/13A-STRATEGY_RUN_STATE_AND_DAG_SEMANTICS.md
+Reference: docs/08-STRATEGY_DAG_AND_NODES.md
 """
 from __future__ import annotations
 
