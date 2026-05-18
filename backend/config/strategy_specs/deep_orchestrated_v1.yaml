@@ -1,0 +1,83 @@
+# Strategy Spec: Deep Orchestrated v1
+# 8-node DAG for deep, validated, and refined answers.
+strategy_id: "deep_orchestrated_v1"
+version: "1.0.0"
+display_name: "Deep Orchestrated Strategy v1"
+description: "8-node DAG with query expansion, reranking, citation validation, and refinement"
+status: "active"
+tenant_scope: "shared"
+spec_hash: "deep_orchestrated_v1_h1"
+tags:
+  - "deep"
+  - "orchestrated"
+  - "validated"
+  - "legal_matter_qna"
+  - "business_summary"
+
+graph:
+  entry_node: "n_normalize"
+  terminal_nodes:
+    - "n_refine"
+  nodes:
+    - node_id: "n_normalize"
+      node_type: "normalize_query"
+      config: {}
+    - node_id: "n_expand"
+      node_type: "query_expand"
+      config:
+        max_variants: 3
+    - node_id: "n_retrieve"
+      node_type: "retrieve"
+      config:
+        top_k: 30
+    - node_id: "n_rerank"
+      node_type: "rerank"
+      config:
+        top_k: 20
+    - node_id: "n_evidence"
+      node_type: "evidence_cards"
+      config:
+        max_cards: 20
+        min_confidence: 0.5
+    - node_id: "n_synthesize"
+      node_type: "synthesize"
+      config:
+        model_role: "synthesizer_deep"
+        max_output_tokens: 4000
+    - node_id: "n_validate_citations"
+      node_type: "validate_citations"
+      config: {}
+    - node_id: "n_refine"
+      node_type: "refine"
+      config:
+        model_role: "synthesizer_deep"
+        max_output_tokens: 4000
+  edges:
+    - from_node: "n_normalize"
+      to_node: "n_expand"
+    - from_node: "n_expand"
+      to_node: "n_retrieve"
+    - from_node: "n_retrieve"
+      to_node: "n_rerank"
+    - from_node: "n_rerank"
+      to_node: "n_evidence"
+    - from_node: "n_evidence"
+      to_node: "n_synthesize"
+    - from_node: "n_synthesize"
+      to_node: "n_validate_citations"
+    - from_node: "n_validate_citations"
+      to_node: "n_refine"
+
+budgets:
+  latency_target_ms: 15000
+  latency_hard_limit_ms: 60000
+  max_context_tokens: 32000
+  max_output_tokens: 4000
+  max_llm_calls: 30
+  max_cost_usd: 0.50
+  local_only: false
+
+model_roles:
+  synthesizer_deep: "orchestrator"
+  worker: "worker"
+  orchestrator: "orchestrator"

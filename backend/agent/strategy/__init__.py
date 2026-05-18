@@ -22,6 +22,25 @@ from backend.agent.strategy.legacy_adapter import (
     LEGACY_STRATEGY_ID,
     LEGACY_STRATEGY_VERSION,
 )
+from backend.agent.strategy.strategy_runner import (
+    StrategyRunner,
+    StrategyExecutionError,
+    StateViolationError,
+)
+from backend.agent.strategy.graph_compiler import (
+    compile_graph,
+    CompiledGraph,
+    GraphCompilationError,
+)
+from backend.agent.strategy.condition_evaluator import (
+    restricted_eval,
+    ConditionEvaluationError,
+)
+from backend.agent.strategy.nodes import (
+    NodeRegistry,
+    create_default_registry,
+    NODE_TYPE_REGISTRY,
+)
 
 __all__ = [
     "StrategyRunState",
@@ -37,4 +56,15 @@ __all__ = [
     "LegacyStrategyAdapter",
     "LEGACY_STRATEGY_ID",
     "LEGACY_STRATEGY_VERSION",
+    "StrategyRunner",
+    "StrategyExecutionError",
+    "StateViolationError",
+    "compile_graph",
+    "CompiledGraph",
+    "GraphCompilationError",
+    "restricted_eval",
+    "ConditionEvaluationError",
+    "NodeRegistry",
+    "create_default_registry",
+    "NODE_TYPE_REGISTRY",
 ]

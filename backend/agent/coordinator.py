@@ -27,6 +27,10 @@ from backend.agent.worker_pool import WorkerPool
 from backend.agent.federated_search import FederatedSearch, get_federated_search
 from backend.agent.strategy.business_context_resolver import BusinessContextResolver
 from backend.agent.strategy.models import SearchRequest as StrategySearchRequest, BusinessContext
+from backend.agent.strategy.strategy_runner import StrategyRunner, StrategyExecutionError
+from backend.agent.strategy.spec_selector import StrategySpecSelector
+from backend.agent.strategy.nodes import create_default_registry, NODE_TYPE_REGISTRY
+from backend.evaluation.contradiction_detector import ContradictionDetector
 from backend.agent.strategies.base import BaseStrategy
 from backend.agent.strategies.registry import StrategyRegistry
 from backend.agent.tool_gate import ToolGate
@@ -532,6 +536,44 @@ class FederatedAgent:
                 business_context = None
                 self._business_context = None
         
+        # Phase 3: Strategy spec selection based on capability
+        strategy_spec = None
+        if settings.strategy_os_enabled and business_context and business_context.capability_id:
+            try:
+                selector = StrategySpecSelector(db=self.db if hasattr(self, 'db') else None)
+                strategy_spec = await selector.select(
+                    capability_id=business_context.capability_id,
+                    agent_mode=getattr(settings, 'agent_mode', 'auto'),
+                    tenant_id=getattr(settings, 'tenant_id', 'recallhub'),
+                    privacy_mode=getattr(settings, 'privacy_mode', 'standard'),
+                    business_context=business_context,
+                )
+                if strategy_spec:
+                    logger.info(f"[req={self.req_id}] Selected strategy spec: {strategy_spec.strategy_id}")
+            except Exception as e:
+                logger.warning(f"[req={self.req_id}] Strategy spec selection failed: {e}")
+                strategy_spec = None
+        
+        # Strategy DAG execution (when a non-legacy spec is available)
+        if strategy_spec and strategy_spec.strategy_id != "legacy_orchestrator_v1":
+            try:
+                registry = create_default_registry()
+                runner = StrategyRunner(registry=registry)
+                result = await runner.run(spec=strategy_spec, context=business_context)
+                
+                if result.success and result.state and result.state.synthesis_result:
+                    # Use DAG result instead of legacy path
+                    synthesis_text = result.state.synthesis_result
+                    logger.info(
+                        f"[req={self.req_id}] Strategy DAG completed: "
+                        f"{result.nodes_executed} nodes, {result.total_duration_ms}ms"
+                    )
+                    return synthesis_text
+            except StrategyExecutionError as e:
+                logger.warning(f"[req={self.req_id}] Strategy DAG execution failed, falling back to legacy: {e}")
+            except Exception as e:
+                logger.warning(f"[req={self.req_id}] Unexpected error in Strategy DAG, falling back to legacy: {e}")
+        
         # Phase 1: Analyze
         await emit_event('phase', {'phase': 'analyze', 'status': 'started'})
         self.activity_logger.log_phase("analyze", "started")
@@ -840,6 +882,36 @@ class FederatedAgent:
             'tokens': synth_tokens
         })
         
+        # Contradiction detection for multi-turn sessions
+        # Derive turn count and previous response from conversation history
+        turn = len(conversation_history) // 2 + 1 if conversation_history else 1
+        previous_response: Optional[str] = None
+        if conversation_history:
+            # Find the last assistant message in history
+            for msg in reversed(conversation_history):
+                if msg.get("role") == "assistant":
+                    previous_response = msg.get("content", "")
+                    break
+
+        if settings.strategy_os_enabled and turn > 1 and previous_response:
+            try:
+                detector = ContradictionDetector()
+                contradiction_result = await detector.detect(
+                    previous_response=previous_response,
+                    current_response=response,
+                    session_id=self.trace.session_id or "",
+                    turn=turn,
+                )
+                if contradiction_result.has_contradictions:
+                    logger.warning(
+                        f"[req={self.req_id}] Contradictions detected in session "
+                        f"{self.trace.session_id} turn {turn}: "
+                        f"{len(contradiction_result.contradictions)} conflicts"
+                    )
+                    # Store for telemetry (don't block response)
+            except Exception as e:
+                logger.debug(f"[req={self.req_id}] Contradiction detection skipped: {e}")
+
         return response
     
     async def _process_fast(
