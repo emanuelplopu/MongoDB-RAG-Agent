@@ -923,11 +923,12 @@ class StrategyExperimentRunner:
                         if isinstance(extra_metrics, dict):
                             for k, v in extra_metrics.items():
                                 try:
-                                    bucket["metrics_accum"].setdefault(
-                                        k, []
-                                    ).append(float(v))
+                                    metric_value = float(v)
                                 except (TypeError, ValueError):
                                     continue
+                                bucket["metrics_accum"].setdefault(
+                                    k, []
+                                ).append(metric_value)
                         bucket["success"] += 1
                         progress.completed_runs += 1
                         try:
@@ -1070,9 +1071,10 @@ class StrategyExperimentRunner:
                     if isinstance(extra_metrics, dict):
                         for k, v in extra_metrics.items():
                             try:
-                                metrics_accum.setdefault(k, []).append(float(v))
+                                metric_value = float(v)
                             except (TypeError, ValueError):
                                 continue
+                            metrics_accum.setdefault(k, []).append(metric_value)
                     success_count += 1
                     progress.completed_runs += 1
 
