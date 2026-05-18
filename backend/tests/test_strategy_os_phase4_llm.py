@@ -587,3 +587,106 @@ class TestRegistryLLMInjection:
         # Plain nodes should not have llm_helper, or it should be None
         llm_attr = getattr(norm_executor, "llm_helper", None)
         assert llm_attr is None
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 6. ContextBudgeter ↔ SynthesizeExecutor integration (Task 72)
+# ════════════════════════════════════════════════════════════════════════════
+
+
+class TestSynthesizeContextBudgeter:
+    """Verify the synthesize node applies the ContextBudgeter and emits trace."""
+
+    @pytest.mark.asyncio
+    async def test_synthesize_node_applies_context_budgeter(self):
+        """max_context_tokens=200 + 10 long evidence cards → dropped non-empty."""
+        from backend.agent.strategy.nodes.synthesize import SynthesizeExecutor
+
+        # Ten cards, each ~400 chars (~100 tokens) so the 200-token cap
+        # cannot fit them all once the user prompt is in.
+        long_excerpt = "x" * 400
+        cards = [
+            EvidenceCard(
+                card_type="fact",
+                topic=f"Topic {i}",
+                source_id=f"src_{i}",
+                document_title=f"Doc {i}",
+                source_excerpt=long_excerpt,
+                factual_basis="basis",
+                confidence=0.9 - (i * 0.05),
+            )
+            for i in range(10)
+        ]
+        long_chunk_content = "raw " * 200  # never actually consulted (cards exist)
+        chunk = RetrievedChunk(
+            chunk_id="chunk_0",
+            document_id="doc_0",
+            document_title="Doc 0",
+            source_id="src_0",
+            content=long_chunk_content,
+            score=0.9,
+            search_type="semantic",
+        )
+
+        mock_helper = make_mock_llm_helper(
+            response_text="Answer based on [Card 1].",
+        )
+        executor = SynthesizeExecutor(llm_helper=mock_helper)
+        node = make_node(
+            "synthesize",
+            config={"max_context_tokens": 200},
+        )
+        state = StrategyRunState(
+            query="What is the answer to this constrained question?",
+            evidence_cards=cards,
+            retrieved_chunks=[chunk],
+        )
+
+        output = await executor.execute(node, state)
+        assert output.status == "success"
+
+        # The trace event must have been emitted into state metadata.
+        events = state.metadata.get("trace_events", [])
+        budget_events = [
+            e for e in events if e.get("event") == "context_budget_applied"
+        ]
+        assert len(budget_events) == 1, (
+            f"Expected exactly one context_budget_applied event, got {events}"
+        )
+        payload = budget_events[0]["payload"]
+        assert payload["total_budget_tokens"] == 200
+        assert payload["total_tokens_used"] <= 200
+        # 10 cards × ~100 tokens each cannot fit a 200-token cap, so at
+        # least some cards must end up in `dropped`.
+        assert payload["dropped"], (
+            "Expected dropped items when 10 long cards exceed a 200-token cap"
+        )
+        dropped_kinds = {d["kind"] for d in payload["dropped"]}
+        assert "evidence_card" in dropped_kinds
+        for entry in payload["dropped"]:
+            assert entry["reason"] == "budget_exhausted"
+
+        # The LLM must still have been invoked once with the trimmed
+        # prompt (the budgeter never blocks the request entirely).
+        mock_helper.complete.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_synthesize_template_path_does_not_emit_budget_event(self):
+        """Template-only path (no llm_helper) skips the budgeter entirely."""
+        from backend.agent.strategy.nodes.synthesize import SynthesizeExecutor
+
+        executor = SynthesizeExecutor(llm_helper=None)
+        node = make_node("synthesize")
+        cards = make_test_evidence_cards(2)
+        state = StrategyRunState(query="q", evidence_cards=cards)
+
+        output = await executor.execute(node, state)
+        assert output.status == "success"
+
+        # Template path keeps existing behaviour — no budget trace event.
+        events = state.metadata.get("trace_events", [])
+        budget_events = [
+            e for e in events if e.get("event") == "context_budget_applied"
+        ]
+        assert budget_events == []
+

@@ -1,0 +1,1 @@
+"""Strategy OS test package."""

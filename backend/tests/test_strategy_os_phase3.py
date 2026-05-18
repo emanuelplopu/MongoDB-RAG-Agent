@@ -559,10 +559,16 @@ class TestEvaluationRunner:
 class TestStrategySpecSelector:
     """Tests for StrategySpecSelector."""
 
-    def _make_selector(self, db=None):
+    def _make_selector(self, store=None, *, with_legacy: bool = False):
         from backend.agent.strategy.spec_selector import StrategySpecSelector
 
-        return StrategySpecSelector(db=db)
+        # Tests in this class assert ``select`` returns ``None`` on miss
+        # rather than falling back to the legacy adapter, so we disable
+        # the adapter unless explicitly requested.
+        return StrategySpecSelector(
+            store=store,
+            legacy_adapter=None,
+        )
 
     def _make_spec(self, strategy_id="spec-1", status="active", capability_id=None,
                    local_only=False, latency_target_ms=8000, tags=None, tenant_scope="default"):
@@ -590,29 +596,50 @@ class TestStrategySpecSelector:
             tenant_scope=tenant_scope,
         )
 
+    def _seed_store(self, *specs):
+        """Seed an :class:`InMemorySpecStore` with the given specs."""
+        from backend.agent.strategy.spec_store import InMemorySpecStore
+
+        store = InMemorySpecStore()
+        for spec in specs:
+            spec_data = spec.model_dump(mode="json")
+            store._snapshots.setdefault(spec.strategy_id, []).append(
+                {
+                    "spec_data": spec_data,
+                    "version": spec.version,
+                    "version_counter": 1,
+                    "status": spec.status,
+                    "created_at": spec.created_at,
+                    "spec_hash": spec.spec_hash or "",
+                }
+            )
+        return store
+
     @pytest.mark.asyncio
     async def test_returns_none_without_db(self):
-        """No DB → always returns None."""
-        selector = self._make_selector(db=None)
+        """No store and no legacy adapter -> ``None``."""
+        selector = self._make_selector(store=None)
         result = await selector.select(capability_id="legal_qa")
         assert result is None
 
     @pytest.mark.asyncio
     async def test_returns_none_without_capability(self):
-        """No capability_id and no matching specs → None."""
-        selector = self._make_selector(db=None)
+        """No capability_id and no matching specs -> ``None``."""
+        selector = self._make_selector(store=None)
         result = await selector.select(capability_id=None)
         assert result is None
 
     @pytest.mark.asyncio
     async def test_filters_draft_specs(self):
-        """Draft specs excluded."""
-        selector = self._make_selector(db=None)
-        # Manually inject cache
-        draft_spec = self._make_spec(strategy_id="draft-1", status="draft")
-        active_spec = self._make_spec(strategy_id="active-1", status="active", capability_id="qa")
-        selector._cache = [draft_spec, active_spec]
-        selector._cache_loaded_at = time.time()
+        """Draft specs are excluded by the ``status='active'`` filter."""
+        draft_spec = self._make_spec(
+            strategy_id="draft-1", status="draft", capability_id="qa"
+        )
+        active_spec = self._make_spec(
+            strategy_id="active-1", status="active", capability_id="qa"
+        )
+        store = self._seed_store(draft_spec, active_spec)
+        selector = self._make_selector(store=store)
 
         result = await selector.select(capability_id="qa")
         assert result is not None
@@ -620,12 +647,15 @@ class TestStrategySpecSelector:
 
     @pytest.mark.asyncio
     async def test_ranks_by_capability_match(self):
-        """Matching capability scores higher."""
-        selector = self._make_selector(db=None)
-        generic = self._make_spec(strategy_id="generic", status="active", capability_id=None)
-        matched = self._make_spec(strategy_id="matched", status="active", capability_id="legal_qa")
-        selector._cache = [generic, matched]
-        selector._cache_loaded_at = time.time()
+        """The store filters by ``capability_id`` so unrelated specs do not surface."""
+        generic = self._make_spec(
+            strategy_id="generic", status="active", capability_id=None
+        )
+        matched = self._make_spec(
+            strategy_id="matched", status="active", capability_id="legal_qa"
+        )
+        store = self._seed_store(generic, matched)
+        selector = self._make_selector(store=store)
 
         result = await selector.select(capability_id="legal_qa")
         assert result is not None
@@ -633,14 +663,25 @@ class TestStrategySpecSelector:
 
     @pytest.mark.asyncio
     async def test_privacy_mode_filters_non_local(self):
-        """local_only mode filters cloud specs."""
-        selector = self._make_selector(db=None)
-        cloud_spec = self._make_spec(strategy_id="cloud", status="active", local_only=False)
-        local_spec = self._make_spec(strategy_id="local", status="active", local_only=True)
-        selector._cache = [cloud_spec, local_spec]
-        selector._cache_loaded_at = time.time()
+        """``privacy_mode='local_only'`` filters out cloud-only specs."""
+        cloud_spec = self._make_spec(
+            strategy_id="cloud",
+            status="active",
+            capability_id="qa",
+            local_only=False,
+        )
+        local_spec = self._make_spec(
+            strategy_id="local",
+            status="active",
+            capability_id="qa",
+            local_only=True,
+        )
+        store = self._seed_store(cloud_spec, local_spec)
+        selector = self._make_selector(store=store)
 
-        result = await selector.select(capability_id=None, privacy_mode="local_only")
+        result = await selector.select(
+            capability_id="qa", privacy_mode="local_only"
+        )
         assert result is not None
         assert result.strategy_id == "local"
 
