@@ -13,19 +13,27 @@ import logging
 import re
 from typing import Any, Optional
 
+from backend.agent.strategy.context_budgeter import (
+    DEFAULT_TOTAL_BUDGET_TOKENS,
+    BudgetBreakdown,
+    ContextBudgeter,
+)
 from backend.agent.strategy.models import (
     AnswerContract,
     CitationRef,
     EvidenceCard,
     NodeOutput,
     OutputSection,
+    ResolvedSourcePolicy,
     RetrievedChunk,
+    SourcePolicy,
     StrategyNode,
     StrategyRunState,
     SynthesisResult,
     TableSchema,
 )
 from backend.agent.strategy.nodes.base import NodeExecutor, StateAccessor
+from backend.agent.strategy.operational_trace import emit_trace_event
 from backend.agent.strategy.prompts import build_synthesis_prompt
 
 logger = logging.getLogger(__name__)
@@ -39,6 +47,9 @@ _MODEL_NAME_TEMPLATE = "template_v1"
 
 _DEFAULT_MAX_OUTPUT_TOKENS = 2000
 """Soft ceiling for template output length (in approximate word count)."""
+
+_BUDGET_TRACE_EVENT = "context_budget_applied"
+"""Trace event name emitted by the budgeter when it allocates context."""
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Citation helpers
@@ -403,10 +414,23 @@ class SynthesizeExecutor(NodeExecutor):
         Returns ``None`` if the LLM produces an empty response so the
         caller can fall through to the template path.
         """
+        # Apply the context budgeter so large local models never get
+        # 20k tokens for a 4k-token-worth task. The budgeter
+        # deterministically drops the lowest-priority items first and
+        # records the breakdown for telemetry.
+        budgeted_cards, budgeted_chunks = self._apply_context_budget(
+            node=node,
+            accessor=accessor,
+            evidence_cards=evidence_cards,
+            chunks=chunks,
+            query=query,
+            answer_contract=answer_contract,
+        )
+
         # Serialize evidence cards for the prompt
         cards_data = [
             c.model_dump() if hasattr(c, "model_dump") else c
-            for c in evidence_cards
+            for c in budgeted_cards
         ]
         contract_data = (
             answer_contract.model_dump()
@@ -436,7 +460,7 @@ class SynthesizeExecutor(NodeExecutor):
 
         # Extract citations from [Card N] references in the response
         citations = self._extract_citations_from_response(
-            response_text, evidence_cards,
+            response_text, budgeted_cards or evidence_cards,
         )
 
         # Build result
@@ -464,6 +488,251 @@ class SynthesizeExecutor(NodeExecutor):
             model_used=role,
             tokens_used=tokens_used,
         )
+
+    # ── context budgeting ────────────────────────────────────────────────────
+
+    def _apply_context_budget(
+        self,
+        *,
+        node: StrategyNode,
+        accessor: StateAccessor,
+        evidence_cards: list[EvidenceCard],
+        chunks: list[RetrievedChunk],
+        query: str,
+        answer_contract: Optional[AnswerContract],
+    ) -> tuple[list[EvidenceCard], list[RetrievedChunk]]:
+        """Run the :class:`ContextBudgeter` and return the items that fit.
+
+        The budgeter is fed, in priority order:
+
+        1. The active ``AnswerContract`` (if any).
+        2. The user prompt / normalized query (always).
+        3. A short summary of the active ``SourcePolicy`` (if any).
+        4. Each ``EvidenceCard`` in score / confidence order.
+        5. Each raw chunk span (used only when no evidence cards exist).
+        6. Recent conversation snippets (when surfaced by upstream
+           nodes via ``state.metadata['conversation_history']``).
+
+        The breakdown is emitted as a ``context_budget_applied`` trace
+        event for diagnostics, and only the included evidence cards /
+        chunks are returned for downstream prompt assembly.
+
+        Args:
+            node: The current strategy node (for config overrides).
+            accessor: Read-only state accessor.
+            evidence_cards: Score-ordered evidence cards from upstream.
+            chunks: Raw retrieved chunks (fallback when no cards).
+            query: User prompt / normalized query.
+            answer_contract: Active answer contract, if any.
+
+        Returns:
+            ``(included_cards, included_chunks)`` — the subset of the
+            inputs that fit within the active context budget. When the
+            budget is large enough to fit everything, the inputs are
+            returned unchanged.
+        """
+        budget_cap = self._resolve_context_budget(node, accessor)
+        budgeter = ContextBudgeter(total_budget_tokens=budget_cap)
+
+        # Track originals so we can map the budgeter's `included` list
+        # back to the actual model instances.
+        card_by_signature: dict[str, EvidenceCard] = {}
+        chunk_by_signature: dict[str, RetrievedChunk] = {}
+
+        # 1. Answer contract (highest priority).
+        if answer_contract is not None:
+            budgeter.add(
+                "answer_contract",
+                self._format_answer_contract(answer_contract),
+            )
+
+        # 2. User prompt — always included if non-empty.
+        if query:
+            budgeter.add("user_prompt", query)
+
+        # 3. Source policy summary, if reachable from business context.
+        policy_text = self._format_source_policy(accessor)
+        if policy_text:
+            budgeter.add("source_policy", policy_text)
+
+        # 4. Evidence cards in their incoming order (already
+        #    score-sorted by upstream nodes).
+        for idx, card in enumerate(evidence_cards):
+            content = self._format_evidence_card(idx, card)
+            sig = f"card::{idx}"
+            card_by_signature[sig] = card
+            budgeter.add(
+                "evidence_card",
+                content,
+                metadata={"signature": sig, "card_id": card.card_id},
+            )
+
+        # 5. Raw spans — only meaningful when there are no evidence
+        #    cards (otherwise they're redundant with the cards).
+        if not evidence_cards and chunks:
+            for idx, chunk in enumerate(chunks):
+                content = self._format_raw_span(idx, chunk)
+                sig = f"chunk::{idx}"
+                chunk_by_signature[sig] = chunk
+                budgeter.add(
+                    "raw_span",
+                    content,
+                    metadata={"signature": sig, "chunk_id": chunk.chunk_id},
+                )
+
+        # 6. Conversation context, if upstream nodes attached any.
+        for snippet in self._collect_conversation_snippets(accessor):
+            budgeter.add("conversation", snippet)
+
+        _, breakdown = budgeter.build()
+
+        # Telemetry — emit a structured trace event with the breakdown.
+        self._emit_budget_trace(node, accessor, breakdown)
+
+        # Map the budgeter's included items back to the originals so
+        # we can hand them to ``build_synthesis_prompt``.
+        included_cards: list[EvidenceCard] = []
+        included_chunks: list[RetrievedChunk] = []
+        for item in breakdown.included:
+            if item.kind == "evidence_card":
+                sig = item.metadata.get("signature")
+                if sig and sig in card_by_signature:
+                    included_cards.append(card_by_signature[sig])
+            elif item.kind == "raw_span":
+                sig = item.metadata.get("signature")
+                if sig and sig in chunk_by_signature:
+                    included_chunks.append(chunk_by_signature[sig])
+
+        # If nothing was dropped, hand back the originals so we don't
+        # alter ordering or identity for callers that compare by ref.
+        if not breakdown.dropped:
+            return evidence_cards, chunks
+        return included_cards, included_chunks
+
+    @staticmethod
+    def _resolve_context_budget(
+        node: StrategyNode,
+        accessor: StateAccessor,
+    ) -> int:
+        """Resolve the active context budget cap in tokens.
+
+        Resolution order:
+
+        1. ``node.config['max_context_tokens']`` — explicit override.
+        2. ``state.metadata['strategy_budgets']['max_context_tokens']``
+           — populated by the runner when a strategy spec is active.
+        3. :data:`DEFAULT_TOTAL_BUDGET_TOKENS` (6000) — safe default.
+
+        Args:
+            node: Current strategy node.
+            accessor: Read-only state accessor.
+
+        Returns:
+            A positive integer token budget.
+        """
+        node_override = node.config.get("max_context_tokens")
+        if isinstance(node_override, int) and node_override > 0:
+            return node_override
+
+        meta_budgets = accessor.get_metadata("strategy_budgets") or {}
+        if isinstance(meta_budgets, dict):
+            cap = meta_budgets.get("max_context_tokens")
+            if isinstance(cap, int) and cap > 0:
+                return cap
+
+        return DEFAULT_TOTAL_BUDGET_TOKENS
+
+    @staticmethod
+    def _format_answer_contract(contract: AnswerContract) -> str:
+        """Render an :class:`AnswerContract` as a compact textual blob."""
+        sections = ", ".join(
+            f"{s.title}({s.format})" for s in contract.output_sections
+        ) or "-"
+        table = (
+            ", ".join(c.name for c in contract.table_schema.columns)
+            if contract.table_schema
+            else "-"
+        )
+        return (
+            f"format_id={contract.format_id} | language={contract.language} | "
+            f"tone={contract.tone} | citation_granularity={contract.citation_granularity} | "
+            f"sections=[{sections}] | table_columns=[{table}]"
+        )
+
+    @staticmethod
+    def _format_evidence_card(idx: int, card: EvidenceCard) -> str:
+        """Render an :class:`EvidenceCard` for budget accounting."""
+        return (
+            f"[Card {idx + 1}] {card.topic} (src={card.document_title}, "
+            f"conf={card.confidence:.2f})\n{card.source_excerpt}"
+        )
+
+    @staticmethod
+    def _format_raw_span(idx: int, chunk: RetrievedChunk) -> str:
+        """Render a :class:`RetrievedChunk` for budget accounting."""
+        return (
+            f"[Span {idx + 1}] src={chunk.document_title} "
+            f"score={chunk.score:.2f}\n{chunk.content}"
+        )
+
+    @staticmethod
+    def _format_source_policy(accessor: StateAccessor) -> Optional[str]:
+        """Render the active source policy as a single-line summary."""
+        bctx = accessor.get_business_context()
+        if not bctx:
+            return None
+        policy = getattr(bctx, "resolved_source_policy", None)
+        if not isinstance(policy, ResolvedSourcePolicy):
+            return None
+        return (
+            f"primary={policy.primary_sources or []} | "
+            f"secondary={policy.secondary_sources or []} | "
+            f"web={policy.allow_web} | personal={policy.allow_personal} | "
+            f"cross_matter={policy.allow_cross_matter}"
+        )
+
+    @staticmethod
+    def _collect_conversation_snippets(
+        accessor: StateAccessor,
+    ) -> list[str]:
+        """Pull conversation history snippets from state metadata."""
+        history = accessor.get_metadata("conversation_history") or []
+        snippets: list[str] = []
+        if isinstance(history, list):
+            for msg in history:
+                if not isinstance(msg, dict):
+                    continue
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if content:
+                    snippets.append(f"[{role}] {content}")
+        return snippets
+
+    @staticmethod
+    def _emit_budget_trace(
+        node: StrategyNode,
+        accessor: StateAccessor,
+        breakdown: BudgetBreakdown,
+    ) -> None:
+        """Emit the ``context_budget_applied`` trace event."""
+        # Count included items by kind so the payload stays compact.
+        counts: dict[str, int] = {}
+        for item in breakdown.included:
+            counts[item.kind] = counts.get(item.kind, 0) + 1
+
+        payload = {
+            "node_id": node.node_id,
+            "total_budget_tokens": breakdown.total_budget_tokens,
+            "total_tokens_used": breakdown.total_tokens_used,
+            "included_count_by_kind": counts,
+            "included_total": len(breakdown.included),
+            "dropped": list(breakdown.dropped),
+        }
+        # ``StateAccessor`` exposes the underlying state as ``_state``.
+        # Falling back to ``None`` keeps the helper safe when accessor
+        # is somehow detached.
+        state = getattr(accessor, "_state", None)
+        emit_trace_event(state, _BUDGET_TRACE_EVENT, payload)
 
     # ── citation extraction ──────────────────────────────────────────────────
 

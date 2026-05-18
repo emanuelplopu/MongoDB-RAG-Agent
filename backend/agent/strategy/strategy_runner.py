@@ -13,6 +13,7 @@ import asyncio
 import logging
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Optional, Any
 
 from backend.agent.strategy.models import (
@@ -39,6 +40,11 @@ from backend.agent.strategy.condition_evaluator import (
 )
 from backend.agent.strategy.nodes.registry import NodeRegistry
 from backend.agent.strategy.checkpoint_manager import CheckpointManager
+from backend.agent.strategy.run_trace_store import (
+    MongoRunTraceStore,
+    RunTraceDoc,
+    RunTraceStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +107,7 @@ class StrategyRunner:
         db=None,
         llm_helper=None,
         checkpoint_manager: Optional[CheckpointManager] = None,
+        run_trace_store: Optional[RunTraceStore] = None,
     ):
         """
         Initialize the strategy runner.
@@ -113,6 +120,12 @@ class StrategyRunner:
                         reference; nodes receive it via the registry).
             checkpoint_manager: Optional CheckpointManager for run resilience.
                 If not provided but ``db`` is, a default one is created.
+            run_trace_store: Optional :class:`RunTraceStore` used to persist
+                per-run trace docs to ``strategy_runs`` for the nightly
+                report generator (Phase 5 / Task 68). When ``None`` and
+                ``db`` is provided, a default :class:`MongoRunTraceStore`
+                is instantiated. When both are ``None``, persistence is
+                skipped silently.
         """
         self.registry = registry
         self.model_registry = model_registry
@@ -121,6 +134,15 @@ class StrategyRunner:
         self.checkpoint_manager = checkpoint_manager
         if self.checkpoint_manager is None and db is not None:
             self.checkpoint_manager = CheckpointManager(db=db)
+        self.run_trace_store = run_trace_store
+        if self.run_trace_store is None and db is not None:
+            try:
+                self.run_trace_store = MongoRunTraceStore(db)
+            except Exception as e:  # noqa: BLE001 - best effort
+                logger.debug(
+                    "Default MongoRunTraceStore could not be constructed: %s", e
+                )
+                self.run_trace_store = None
         self._cancelled = False
 
     async def run(
@@ -141,7 +163,9 @@ class StrategyRunner:
             StrategyRunResult with success/failure, state, timing, and halt_reason
         """
         run_start = time.perf_counter()
+        started_at = datetime.now(timezone.utc)
         halt_reason: Optional[str] = None
+        run_exception: Optional[BaseException] = None
 
         try:
             # 1. Initialize state
@@ -174,6 +198,7 @@ class StrategyRunner:
 
         except StrategyExecutionError as e:
             logger.error("Strategy execution error: %s", e)
+            run_exception = e
             if "state" not in locals():
                 state = StrategyRunState(
                     query=query,
@@ -184,6 +209,7 @@ class StrategyRunner:
 
         except Exception as e:
             logger.exception("Unexpected error during strategy execution")
+            run_exception = e
             if "state" not in locals():
                 state = StrategyRunState(
                     query=query,
@@ -192,11 +218,111 @@ class StrategyRunner:
             state.elapsed_ms = (time.perf_counter() - run_start) * 1000
             halt_reason = f"unexpected_error: {type(e).__name__}: {e}"
 
-        return self._finalize(state, halt_reason, spec)
+        result = self._finalize(state, halt_reason, spec)
+        completed_at = datetime.now(timezone.utc)
+
+        # Best-effort trace persistence — never fails the user-visible run.
+        await self._persist_trace(
+            result,
+            spec=spec,
+            started_at=started_at,
+            completed_at=completed_at,
+            halt_reason=halt_reason,
+            had_exception=run_exception is not None,
+        )
+
+        return result
 
     def cancel(self) -> None:
         """Request cancellation of the current run."""
         self._cancelled = True
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Trace Persistence (Phase 5 / Task 68)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _map_run_status(
+        *, halt_reason: Optional[str], had_exception: bool
+    ) -> str:
+        """Map runner outcome to the canonical persisted status.
+
+        Aligned with
+        :data:`backend.agent.strategy.report_generator.EXPECTED_RUN_DOC`:
+        ``success | failed | timed_out | cancelled``.
+        """
+        if halt_reason is None and not had_exception:
+            return "success"
+        if had_exception:
+            return "failed"
+        reason = (halt_reason or "").lower()
+        if reason.startswith("execution_error") or reason.startswith(
+            "unexpected_error"
+        ) or reason.startswith("state_violation"):
+            return "failed"
+        if (
+            reason.startswith("latency_hard_limit")
+            or "timed_out" in reason
+            or "timeout" in reason
+        ):
+            return "timed_out"
+        # Budget halts, node halts, explicit cancellation -> cancelled.
+        return "cancelled"
+
+    async def _persist_trace(
+        self,
+        result: StrategyRunResult,
+        *,
+        spec: StrategySpec,
+        started_at: datetime,
+        completed_at: datetime,
+        halt_reason: Optional[str],
+        had_exception: bool,
+    ) -> None:
+        """Persist a per-run trace doc to the configured store.
+
+        Best-effort: errors are logged and swallowed so a persistence
+        failure cannot fail an otherwise-successful user-visible run.
+        """
+        if self.run_trace_store is None:
+            return
+        try:
+            status = self._map_run_status(
+                halt_reason=halt_reason, had_exception=had_exception
+            )
+            state = result.state
+            metadata = state.metadata or {}
+            node_outputs_payload = [
+                {
+                    "node_id": out.node_id,
+                    "node_type": out.node_type,
+                    "status": out.status,
+                    "duration_ms": float(out.duration_ms or 0.0),
+                    "error": out.error_message,
+                }
+                for out in state.node_outputs.values()
+            ]
+            trace_doc = RunTraceDoc(
+                trace_id=state.trace_id,
+                run_id=state.run_id,
+                strategy_id=result.strategy_id or spec.strategy_id,
+                strategy_version=getattr(spec, "version", None),
+                capability_id=metadata.get("capability_id"),
+                tenant_id=metadata.get("tenant_id"),
+                status=status,  # type: ignore[arg-type]
+                started_at=started_at,
+                completed_at=completed_at,
+                duration_ms=float(result.total_duration_ms or 0.0),
+                node_outputs=node_outputs_payload,
+                halt_reason=halt_reason,
+            )
+            await self.run_trace_store.save(trace_doc)
+        except Exception as e:  # noqa: BLE001 - best effort
+            logger.warning(
+                "Run-trace persistence failed (non-fatal) for strategy_id=%s: %s",
+                spec.strategy_id,
+                e,
+            )
 
     # ═══════════════════════════════════════════════════════════════════════════
     # State Initialization

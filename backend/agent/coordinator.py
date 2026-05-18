@@ -28,7 +28,10 @@ from backend.agent.federated_search import FederatedSearch, get_federated_search
 from backend.agent.strategy.business_context_resolver import BusinessContextResolver
 from backend.agent.strategy.models import SearchRequest as StrategySearchRequest, BusinessContext
 from backend.agent.strategy.strategy_runner import StrategyRunner, StrategyExecutionError
-from backend.agent.strategy.spec_selector import StrategySpecSelector
+from backend.agent.strategy.spec_selector import (
+    AdaptiveSelector,
+    StrategySpecSelector,
+)
 from backend.agent.strategy.nodes import create_default_registry, NODE_TYPE_REGISTRY
 from backend.evaluation.contradiction_detector import ContradictionDetector
 from backend.agent.strategies.base import BaseStrategy
@@ -49,6 +52,20 @@ logger = logging.getLogger(__name__)
 # Module-level telemetry service reference, set during app lifespan
 _telemetry_service = None
 
+# Module-level shared SpecStore reference, set during app lifespan.
+# Bound to the same MongoSpecStore instance that powers the strategy-specs
+# router, the promotion manager, and the seeding flow so the cache and
+# version views stay coherent across the process.
+_spec_store = None
+# Module-level shared StrategySpecSelector reused across requests so the
+# 5-minute TTL cache survives between calls. Re-instantiated on every
+# call to ``set_spec_store``.
+_spec_selector = None
+# Module-level shared RunTraceStore reference, set during app lifespan
+# (Phase 5 / Task 68). Persists per-run trace docs to ``strategy_runs``
+# so the nightly report generator consumes real run data.
+_run_trace_store = None
+
 
 def set_telemetry_service(service) -> None:
     """Set the module-level telemetry service reference.
@@ -58,6 +75,77 @@ def set_telemetry_service(service) -> None:
     """
     global _telemetry_service
     _telemetry_service = service
+
+
+def set_spec_store(
+    store,
+    *,
+    runtime_profile_store=None,
+    resource_collector=None,
+    evaluation_results_db=None,
+    decision_store=None,
+) -> None:
+    """Set the shared :class:`SpecStore` used for strategy spec selection.
+
+    Called during FastAPI lifespan startup with the same
+    :class:`backend.agent.strategy.spec_store.MongoSpecStore` instance
+    that backs the strategy-specs router. Resets the module-level
+    selector so subsequent requests pick up the new store.
+
+    Phase 6 / Task 78: when any of ``runtime_profile_store``,
+    ``resource_collector``, or ``evaluation_results_db`` is provided,
+    the module wraps the base :class:`StrategySpecSelector` in an
+    :class:`AdaptiveSelector` so adaptive routing applies. Backward
+    compatible — with no extras the basic selector behaviour is
+    preserved.
+
+    F8 / Task 85: optional ``decision_store`` enables persistence of
+    every adaptive routing decision into the
+    ``adaptive_selection_decisions`` collection for post-hoc analysis.
+    Persistence is best-effort and never blocks selection.
+    """
+    global _spec_store, _spec_selector
+    _spec_store = store
+    if store is None:
+        _spec_selector = None
+        return
+    base = StrategySpecSelector(store=store)
+    if (
+        runtime_profile_store is not None
+        or resource_collector is not None
+        or evaluation_results_db is not None
+        or decision_store is not None
+    ):
+        _spec_selector = AdaptiveSelector(
+            base_selector=base,
+            runtime_profile_store=runtime_profile_store,
+            resource_collector=resource_collector,
+            evaluation_results_db=evaluation_results_db,
+            decision_store=decision_store,
+        )
+    else:
+        _spec_selector = base
+
+
+def get_spec_selector():
+    """Return the shared selector (basic or adaptive), if configured."""
+    return _spec_selector
+
+
+def set_run_trace_store(store) -> None:
+    """Set the shared :class:`RunTraceStore` used to persist run traces.
+
+    Called during FastAPI lifespan startup with the
+    :class:`backend.agent.strategy.run_trace_store.MongoRunTraceStore`
+    instance bound to ``app.state.run_trace_store``.
+    """
+    global _run_trace_store
+    _run_trace_store = store
+
+
+def get_run_trace_store():
+    """Return the shared :class:`RunTraceStore`, or ``None`` if unset."""
+    return _run_trace_store
 
 
 class FederatedAgent:
@@ -536,11 +624,19 @@ class FederatedAgent:
                 business_context = None
                 self._business_context = None
         
-        # Phase 3: Strategy spec selection based on capability
+        # Phase 3 / Phase 5: Strategy spec selection based on capability.
+        # The selector reads from the shared MongoSpecStore wired in the
+        # FastAPI lifespan and falls back to the legacy adapter when no
+        # active spec exists for the requested capability.
         strategy_spec = None
         if settings.strategy_os_enabled and business_context and business_context.capability_id:
             try:
-                selector = StrategySpecSelector(db=self.db if hasattr(self, 'db') else None)
+                selector = _spec_selector
+                if selector is None:
+                    # No app-state spec store wired yet (e.g. CLI smoke
+                    # tests): build a transient legacy-only selector so
+                    # the call site still gets a deterministic result.
+                    selector = StrategySpecSelector(store=None)
                 strategy_spec = await selector.select(
                     capability_id=business_context.capability_id,
                     agent_mode=getattr(settings, 'agent_mode', 'auto'),
@@ -558,7 +654,10 @@ class FederatedAgent:
         if strategy_spec and strategy_spec.strategy_id != "legacy_orchestrator_v1":
             try:
                 registry = create_default_registry()
-                runner = StrategyRunner(registry=registry)
+                runner = StrategyRunner(
+                    registry=registry,
+                    run_trace_store=_run_trace_store,
+                )
                 result = await runner.run(spec=strategy_spec, context=business_context)
                 
                 if result.success and result.state and result.state.synthesis_result:

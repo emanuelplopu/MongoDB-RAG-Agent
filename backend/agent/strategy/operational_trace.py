@@ -6,13 +6,52 @@ mapping internal OmittedReason codes to user-facing i18n messages.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# State.metadata key under which per-run trace events are accumulated.
+# Each entry is a dict with at least {"event", "payload"}.
+TRACE_EVENTS_METADATA_KEY = "trace_events"
+
+
+def emit_trace_event(
+    state: Any,
+    event: str,
+    payload: dict,
+) -> dict:
+    """Append a structured trace event to the run state's metadata.
+
+    This is the lightweight, in-process observability channel used by
+    node executors to record decisions that don't fit cleanly into
+    ``NodeOutput.output_data`` (e.g. budgeter decisions, partial
+    fallbacks, retry signals).  The event is also logged at INFO
+    level so it shows up in normal application logs.
+
+    Args:
+        state: A :class:`~backend.agent.strategy.models.StrategyRunState`
+            (or any object exposing a mutable ``metadata`` dict).
+            Passing ``None`` is tolerated and turns the call into a
+            log-only no-op.
+        event: Short snake_case event name, e.g.
+            ``"context_budget_applied"``.
+        payload: Arbitrary serialisable dict describing the event.
+
+    Returns:
+        The event entry that was appended (or would have been if
+        ``state`` was ``None``).
+    """
+    entry = {"event": event, "payload": payload}
+    logger.info("strategy_trace_event=%s payload=%s", event, payload)
+    if state is not None and hasattr(state, "metadata"):
+        events = state.metadata.setdefault(TRACE_EVENTS_METADATA_KEY, [])
+        events.append(entry)
+    return entry
 
 
 # OmittedReason i18n message registry
