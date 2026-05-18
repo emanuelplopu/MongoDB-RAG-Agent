@@ -5,7 +5,7 @@ response shaped by the active AnswerContract.  Uses LLM-driven synthesis
 when a NodeLLMHelper is provided; falls back to deterministic template
 assembly otherwise.
 
-Reference: docs/quellex_recallhub_strategy_blueprints/13A-STRATEGY_RUN_STATE_AND_DAG_SEMANTICS.md
+Reference: docs/08-STRATEGY_DAG_AND_NODES.md
 """
 from __future__ import annotations
 

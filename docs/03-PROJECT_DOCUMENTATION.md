@@ -1,13 +1,22 @@
 # RecallHub - Complete Project Documentation
 
 > **Related Documentation:**
-> - [System Blueprints (EN)](./02-SYSTEM_BLUEPRINTS.md) - Detailed technical blueprints for all system components
-> - [Systemblaupausen (DE)](./02-SYSTEM_BLUEPRINTS_DE.md) - Deutsche Version der technischen Blaupausen
-> - [Embedding and Query System](./04-EMBEDDING_AND_QUERY_SYSTEM.md) - RAG pipeline deep dive
-> - [Run Blueprint](./05-RUN_BLUEPRINT.md) - Build, start, and service access reference
-> - [Cloud Sources Architecture](./architecture/06-cloud-sources-architecture.md) - Cloud integration design
-> - [Docker Build Guide](./docker-build-guide.md) - Container build strategies
-> - [Airbyte Troubleshooting Guide](./airbyte-troubleshooting-guide.md) - Airbyte operations reference
+> - [System Blueprint (master)](../01-SYSTEM_BLUEPRINT.md) — Product-wide functional spec
+> - [System Blueprints (EN)](./02-SYSTEM_BLUEPRINTS.md) — Detailed technical blueprints for backend services
+> - [Systemblaupausen (DE)](./02-SYSTEM_BLUEPRINTS_DE.md) — Deutsche Version der technischen Blaupausen
+> - [Embedding and Query System](./04-EMBEDDING_AND_QUERY_SYSTEM.md) — RAG pipeline deep dive
+> - [Run Blueprint](./05-RUN_BLUEPRINT.md) — Build, start, and service access reference
+> - [Cloud Sources Architecture](./06-CLOUD_SOURCES_ARCHITECTURE.md) — Cloud integration design
+> - [Strategy OS Overview](./07-STRATEGY_OS_OVERVIEW.md) — Config-driven prompt-to-response pipeline
+> - [Strategy DAG & Nodes](./08-STRATEGY_DAG_AND_NODES.md) — Runtime engine and node catalog
+> - [Strategy Specs & Governance](./09-STRATEGY_SPECS_AND_GOVERNANCE.md) — Spec lifecycle, capabilities, answer contracts, source policies
+> - [Evaluation & Judge](./10-EVALUATION_AND_JUDGE.md) — Composite scoring, judge calibration, contradiction detection
+> - [Exploration & Scheduler](./11-EXPLORATION_AND_SCHEDULER.md) — Grid/regression/bandit/evolutionary exploration, overnight scheduler, nightly reports
+> - [Telemetry System](./12-TELEMETRY_SYSTEM.md) — Telemetry capture & PII pseudonymization
+> - [Desktop App](./13-DESKTOP_APP.md) — Windows tray app + WebView2 host
+> - [Offline Deployment](./14-OFFLINE_DEPLOYMENT.md) — Air-gapped installer packages
+> - [Docker Build Guide](./15-DOCKER_BUILD_GUIDE.md) — Container build strategies
+> - [Airbyte Troubleshooting Guide](./16-AIRBYTE_TROUBLESHOOTING_GUIDE.md) — Airbyte operations reference
 
 ## Table of Contents
 1. [Project Overview](#1-project-overview)
@@ -1388,138 +1397,66 @@ AIRBYTE_MONGODB_HOST=mongodb
 
 ---
 
-## 14. Agent Strategies
+## 14. Agent Strategies (Strategy OS)
+
+> **Detailed coverage:** This section is a summary. For the full Strategy OS architecture, runtime, governance, evaluation, and overnight exploration, see blueprints [07-STRATEGY_OS_OVERVIEW.md](./07-STRATEGY_OS_OVERVIEW.md) through [11-EXPLORATION_AND_SCHEDULER.md](./11-EXPLORATION_AND_SCHEDULER.md).
 
 ### 14.1 Overview
 
-Agent Strategies provide configurable execution patterns for different use cases and domains. Each strategy defines custom prompts, parameters, and behavior for the orchestrator.
+The active strategy subsystem is **Strategy OS** — a config-driven prompt-to-response pipeline. A `StrategySpec` declaratively defines a DAG of nodes (retrieve, rerank, evidence_cards, synthesize, refine, validate, judge, …) plus typed budgets and policies. The `StrategyRunner` compiles the spec and executes the DAG level-by-level, accumulating a typed `StrategyRunState` and producing a `StrategyRunResult`.
 
-**Key Features:**
-- A/B testing of different agent approaches
-- Domain-specific optimization (general, software_dev, legal, hr)
-- Performance tracking and metrics
-- Auto-detection based on query intent
+A legacy `BaseStrategy` registry remains in `backend/agent/strategies/` (note the plural directory) with the pre-Strategy-OS strategies (`enhanced`, `legacy`, `software_dev`, `legal`, `hr`). Those are still reachable from `/api/v1/strategies/...` and via the `legacy_orchestrator_pipeline` node, but new development should target Strategy OS in `backend/agent/strategy/` (singular).
 
----
+### 14.2 Layers (summary)
 
-### 14.2 Strategy Domains
+| Layer | Code | Purpose |
+|---|---|---|
+| Spec & governance | `backend/agent/strategy/spec_store.py`, `spec_loader.py`, `spec_selector.py`, `promotion_manager.py` | Declarative specs in `backend/config/strategy_specs/*.yaml`; versioned in `strategy_specs` collection |
+| DAG runtime | `backend/agent/strategy/strategy_runner.py`, `graph_compiler.py`, `nodes/` (18 node types) | Level-sync DAG executor; produces `RunTraceDoc` in `strategy_runs` |
+| Evaluation | `backend/evaluation/runner.py`, `composite_scorer.py`, `judge_calibrator.py`, `contradiction_detector.py` | 7-dimension composite scoring; results in `evaluation_results` |
+| Exploration & Scheduler | `backend/agent/strategy/exploration_modes.py`, `experiment_runner.py`, `backend/scheduler/scheduler_daemon.py` | Grid/regression/smoke/bandit/evolutionary modes, overnight scheduler, nightly reports |
 
-| Domain | Description | Use Cases |
-|--------|-------------|-----------|
-| `general` | General-purpose knowledge retrieval | Business docs, FAQs, general queries |
-| `software_dev` | Software development queries | Code, APIs, debugging, architecture |
-| `legal` | Legal document analysis | Contracts, compliance, policies |
-| `hr` | Human resources queries | Employee handbook, benefits, policies |
+### 14.3 REST endpoints (summary)
 
----
+Strategy OS exposes four router groups (see the linked blueprints for full tables):
 
-### 14.3 Strategy Configuration
+| Prefix | Router | Purpose |
+|---|---|---|
+| `/api/v1/strategies` | `routers/strategies.py` | Legacy strategy listing, metrics, A/B compare, feedback |
+| `/api/v1/strategy-specs` | `routers/strategy_specs.py` | `StrategySpec` CRUD + promote/deprecate/archive/rollback |
+| `/api/v1/evaluation` | `routers/evaluation.py` | Run evaluations, leaderboard, test-case CRUD |
+| `/api/v1/scheduler` | `routers/scheduler.py` | Schedule CRUD, daemon status, pause/resume, reports |
 
-Each strategy defines:
+### 14.4 CLI (summary)
 
-```python
-@dataclass
-class StrategyConfig:
-    max_iterations: int = 3          # Maximum orchestrator loops
-    confidence_threshold: float = 0.75  # Early exit threshold
-    early_exit_enabled: bool = True   # Allow early termination
-    cross_search_boost: float = 1.2   # Boost cross-profile results
-    content_length_penalty: float = 0.1  # Penalize verbosity
+`quellexctl` is the Strategy OS CLI (`backend/cli/`):
+
+```
+quellexctl strategy run|list|inspect
+quellexctl prompt
+quellexctl eval run|leaderboard
+quellexctl experiment run|list|get|report
+quellexctl schedule list|get|add|run-now|pause|resume|daemon
+quellexctl profiler model-test|strategy-profile
 ```
 
----
+### 14.5 MongoDB collections added by Strategy OS
 
-### 14.4 Built-in Strategies
-
-**General Purpose (Default)**
-- ID: `general_purpose`
-- Max iterations: 3
-- Confidence threshold: 0.75
-- Optimized for balanced performance
-
-**Software Development**
-- ID: `software_dev`
-- Max iterations: 4
-- Confidence threshold: 0.8
-- Enhanced cross-search boosting
-
-**Legal Analysis**
-- ID: `legal`
-- Max iterations: 5
-- Confidence threshold: 0.85
-- Allows more detailed responses
-
-**HR Assistant**
-- ID: `hr`
-- Max iterations: 3
-- Confidence threshold: 0.7
-- Fast response times
-
----
-
-### 14.5 A/B Testing
-
-Strategies support A/B testing with:
-
-**Metrics Tracked:**
-- Execution count
-- Average latency (ms)
-- Average iterations
-- Confidence scores
-- Quality scores (0-100)
-- User feedback (1-5 rating)
-
-**Comparison Methods:**
-1. **Statistical Comparison**: Compare latency, iterations, confidence
-2. **LLM-Based Evaluation**: LLM judges response quality
-3. **User Feedback**: Collect explicit ratings
-
-**A/B Test Flow:**
-```
-1. Split traffic between Strategy A and B
-2. Execute both on similar queries
-3. Collect metrics and feedback
-4. Statistical analysis
-5. Declare winner with confidence level
-```
-
----
-
-### 14.6 Strategy API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/strategies` | List all strategies |
-| GET | `/strategies?domain={domain}` | Filter by domain |
-| GET | `/strategies/default` | Get default strategy |
-| GET | `/strategies/{id}` | Get strategy details |
-| GET | `/strategies/{id}/metrics` | Get performance metrics |
-| POST | `/strategies/compare` | Compare two strategies |
-| POST | `/strategies/auto-detect` | Detect from query |
-| POST | `/strategies/feedback` | Record user feedback |
-| POST | `/strategies/ab-compare-responses` | LLM response comparison |
-
----
-
-### 14.7 Strategy Metrics Collection
-
-**Database Schema (`strategy_metrics` collection):**
-```javascript
-{
-  "_id": ObjectId,
-  "strategy_id": "software_dev",
-  "session_id": "uuid",
-  "query": "How to implement OAuth authentication?",
-  "execution_time_ms": 1250,
-  "iterations": 2,
-  "confidence_score": 0.85,
-  "quality_score": 92,
-  "sources_retrieved": 8,
-  "user_feedback_score": 5,
-  "user_feedback_text": "Very helpful!",
-  "timestamp": ISODate
-}
-```
+| Collection | Purpose |
+|---|---|
+| `strategy_specs` | Versioned spec documents with optimistic locking |
+| `strategy_runs` | Per-run DAG execution traces (TTL configurable via `strategy_runs_ttl_days`) |
+| `strategy_run_reports` | Nightly aggregated run summaries |
+| `strategy_experiment_jobs` | Lifecycle for scheduled or ad-hoc experiments |
+| `strategy_schedules` | Cron-driven schedule definitions |
+| `strategy_bandit_state` | Multi-armed bandit arm statistics |
+| `strategy_evolution_state` | Generation/mutation history for evolutionary runs |
+| `adaptive_selection_decisions` | Cached spec selections (TTL via `adaptive_decisions_ttl_days`) |
+| `evaluation_results` | Per-run composite scores |
+| `runtime_model_profiles` | Per-model latency / token / cost profiles |
+| `scheduler_results`, `scheduler_reports` | Scheduler per-run outcomes + summaries |
+| `runtime_signals` | Shared chat-activity + resource-pressure signals (24h TTL) |
+| `activity_log` | Audit trail of user/system events |
 
 ---
 

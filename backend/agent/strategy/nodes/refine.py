@@ -5,7 +5,7 @@ When an ``llm_helper`` is provided the executor attempts an LLM refinement
 first; if the call fails or no helper is configured the original rule-based
 fixes are applied instead.
 
-Reference: docs/quellex_recallhub_strategy_blueprints/13A-STRATEGY_RUN_STATE_AND_DAG_SEMANTICS.md
+Reference: docs/08-STRATEGY_DAG_AND_NODES.md
 """
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 # RecallHub Development Instructions
 
-Last reviewed: 2026-04-18
+Last reviewed: 2026-05-18
 
 `AGENTS.md` and `CLAUDE.md` must stay functionally identical. Update both in the same change.
 
@@ -14,7 +14,9 @@ RecallHub is no longer just the original `examples/` RAG prototype. The active p
 - `src/`: still important shared Python code for ingestion, profiles, CLI tooling, and settings integration used by the worker and some backend flows.
 - `docker-compose.yml`: the main multi-tenant dev/runtime stack.
 - `backend/providers/` and `backend/routers/cloud_sources/`: Google Drive, Dropbox, WebDAV, email, Airbyte-backed sources, OAuth, sync, and cache flows.
-- `backend/agent/`: orchestrator-worker agent system with strategies and federated search.
+- `backend/agent/`: orchestrator-worker agent system with the legacy strategies registry and federated search.
+- `backend/agent/strategy/`: **Strategy OS** — config-driven DAG runtime, business context resolver, exploration modes, spec/state stores. The active strategy subsystem.
+- `backend/scheduler/`, `backend/evaluation/`, `backend/cli/`: Strategy OS overnight exploration scheduler, evaluation/judging system, and `quellexctl` CLI.
 
 Treat these as supporting or reference material unless the task explicitly targets them:
 
@@ -33,7 +35,13 @@ If docs and code disagree, trust the current code first, then fix the docs.
 - DB manager: `backend/core/database.py`
 - Search endpoints: `backend/routers/search.py`
 - Chat/session APIs: `backend/routers/chat.py`, `backend/routers/sessions.py`
-- Federated/orchestrated agent: `backend/agent/`
+- Federated/orchestrated agent (legacy): `backend/agent/orchestrator.py`, `backend/agent/strategies/` (plural, legacy `BaseStrategy` registry)
+- Strategy OS runtime: `backend/agent/strategy/` (singular), `backend/agent/strategy/nodes/`, `backend/agent/strategy/strategy_runner.py`, `backend/agent/strategy/spec_store.py`
+- Strategy OS routers: `backend/routers/strategy_specs.py`, `backend/routers/evaluation.py`, `backend/routers/scheduler.py`
+- Strategy OS configs: `backend/config/strategy_specs/`, `backend/config/capabilities/`, `backend/config/answer_contracts/`, `backend/config/tenant_strategy_policies/`
+- Strategy OS scheduler & evaluation: `backend/scheduler/scheduler_daemon.py`, `backend/evaluation/runner.py`, `backend/evaluation/composite_scorer.py`
+- Strategy OS observability: `backend/services/runtime_profiler.py`, `backend/services/activity_tracker.py`, `backend/services/resource_snapshot.py`
+- `quellexctl` CLI: `backend/cli/main.py`, `backend/cli/strategy_commands.py`, `backend/cli/eval_commands.py`, `backend/cli/phase6_commands.py`
 - Ingestion API: `backend/routers/ingestion.py`
 - Ingestion worker: `backend/workers/ingestion_worker.py`
 - Ingestion pipeline and chunking: `src/ingestion/`
@@ -43,6 +51,7 @@ If docs and code disagree, trust the current code first, then fix the docs.
 - Frontend API client: `frontend/src/api/client.ts`
 - Frontend tenants: `frontend/src/tenants/configs/`
 - Frontend tests and MSW setup: `frontend/src/test/`
+- Documentation: top-level master spec `01-SYSTEM_BLUEPRINT.md`; numbered blueprint set in `docs/` (`02-SYSTEM_BLUEPRINTS.md` … `18-RESPONSE_QUALITY_IMPROVEMENTS.md`). Strategy OS deep-dive is `docs/07-STRATEGY_OS_OVERVIEW.md` through `docs/11-EXPLORATION_AND_SCHEDULER.md`.
 
 ## Non-Negotiable Rules
 

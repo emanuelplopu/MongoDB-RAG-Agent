@@ -4,9 +4,8 @@ This module defines the :class:`ResourceLimits` Pydantic v2 model that the
 overnight exploration scheduler and the strategy experiment runner consult
 when deciding whether it is safe to start (or continue) a strategy run.
 
-The shape mirrors blueprint
-``docs/quellex_recallhub_strategy_blueprints/05-OVERNIGHT_EXPLORATION_SCHEDULER.md``
-section 5. It is intentionally separate from the legacy
+The shape mirrors blueprint ``docs/11-EXPLORATION_AND_SCHEDULER.md`` §5.
+It is intentionally separate from the legacy
 :class:`backend.scheduler.models.SchedulerBudget` /
 :class:`backend.scheduler.models.PauseConfig` pair so the strategy-engine
 code path can evolve its gating policy without disturbing the scheduler-run

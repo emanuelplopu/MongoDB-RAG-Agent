@@ -13,7 +13,7 @@
 - **8. Ingestion Queue & Scheduling** — Priority-based queue, scheduled ingestion (hourly/daily/weekly/monthly), selective retry by failure category, file type filtering
 - **9. Embedding Provider System** — Multi-provider embedding (OpenAI, Google Gemini, Voyage AI, Ollama) with task-type optimization, adjustable dimensions, cost tracking
 - **10. LLM Provider System** — Multi-provider LLM support (OpenAI, Google Gemini, Anthropic Claude, Ollama, OpenAI-compatible) via LiteLLM with per-provider API key management
-- **11. Agent Strategy System** — Pluggable strategy pattern for domain-specific behavior (enhanced, legacy, software_dev, legal, HR) with auto-detection and A/B metrics
+- **11. Strategy OS** — Config-driven prompt-to-response pipeline: declarative `StrategySpec` DAGs with 18 built-in node types, a level-synchronous runner, per-tenant capability detection, answer contracts, source-policy intersection, 7-dimension evaluation, overnight exploration (grid/regression/smoke/bandit/evolutionary) with pause/stop gating and nightly reports. Legacy `BaseStrategy` registry remains for backward compatibility.
 - **12. Cloud Source Integration** — OAuth2-based connections for Google Drive, Dropbox, WebDAV, with delta sync, file caching (LFU eviction), and folder browsing
 - **13. Email Integration** — Email sync via IMAP, Gmail API, and Outlook API with attachment extraction and incremental sync
 - **14. Airbyte Connector Integration** — Confluence, Jira, and generic API source integration via Airbyte for structured data ingestion
@@ -462,54 +462,44 @@
 
 ---
 
-### 11. Agent Strategy System
+### 11. Strategy OS
 
-**Purpose:** Customize agent behavior for different domains without changing core orchestration logic.
+**Purpose:** Replace the hard-coded orchestrator pipeline with a config-driven DAG runtime. Authoring a new behavior is a YAML edit + promotion, not a code change. Every request produces a typed run trace that the evaluation system can score and the overnight scheduler can use to find better specs.
 
-**BaseStrategy abstract class:**
-- `metadata: StrategyMetadata` — `{id: string, name: string, description: string, version: string, domain: string, is_default: bool}`
-- `get_analyze_prompt() -> string`
-- `get_plan_prompt() -> string`
-- `get_evaluate_prompt() -> string`
-- `get_synthesize_prompt() -> string`
-- `process_analysis(analysis_result: dict) -> dict` — post-process analysis output
-- `get_custom_rrf_weights() -> dict|null` — custom RRF scoring weights
-- `get_search_config() -> dict` — search parameter overrides
+**Full reference:** See [docs/07-STRATEGY_OS_OVERVIEW.md](./docs/07-STRATEGY_OS_OVERVIEW.md) for the architecture overview and the four sibling blueprints — [08-STRATEGY_DAG_AND_NODES.md](./docs/08-STRATEGY_DAG_AND_NODES.md), [09-STRATEGY_SPECS_AND_GOVERNANCE.md](./docs/09-STRATEGY_SPECS_AND_GOVERNANCE.md), [10-EVALUATION_AND_JUDGE.md](./docs/10-EVALUATION_AND_JUDGE.md), [11-EXPLORATION_AND_SCHEDULER.md](./docs/11-EXPLORATION_AND_SCHEDULER.md) — for the granular contracts.
 
-**Built-in Strategies:**
-| ID | Name | Domain | Description |
-|---|---|---|---|
-| `legacy` | Legacy Strategy | general | Original behavior, baseline compatibility |
-| `enhanced` | Enhanced Strategy | general | Query classification, entity extraction, source prioritization (default) |
-| `software_dev` | Software Development | software | Code-aware search, technical documentation focus |
-| `legal` | Legal Analysis | legal | Legal document analysis, compliance focus |
-| `hr` | HR Processes | hr | Employee data, policy lookup |
+**Four layers:**
+1. **Spec & governance** (`backend/agent/strategy/spec_store.py`, `spec_loader.py`, `spec_selector.py`, `promotion_manager.py`). A `StrategySpec` is a versioned document in `strategy_specs` with optimistic locking and a promotion workflow (`draft → active → candidate → deprecated → archived`).
+2. **DAG runtime** (`backend/agent/strategy/strategy_runner.py`, `graph_compiler.py`, `nodes/`). Level-synchronous executor over 18 built-in node types. Reads/writes a typed `StrategyRunState`. Persists every run to `strategy_runs` (TTL via `strategy_runs_ttl_days`).
+3. **Evaluation** (`backend/evaluation/`). 7-dimension composite scorer (`groundedness`, `citation_quality`, `directness`, `completeness`, `format_adherence`, `domain_value`, `conciseness`) multiplied by latency / fatal / privacy gates. LLM-judge calibration gate enforces correlation ≥ 0.75 with human grading before a judge may score production runs.
+4. **Exploration & scheduler** (`backend/agent/strategy/exploration_modes.py`, `experiment_runner.py`, `backend/scheduler/`). Five exploration modes (`grid`, `regression`, `smoke`, `bandit`, `evolutionary`). Overnight scheduler daemon with cron + window + pause-on-user-activity + circuit breaker + resource gating + nightly Markdown report.
 
-**StrategyRegistry (static):**
-- `register(strategy: BaseStrategy)` — register strategy instance
-- `get(strategy_id: string) -> BaseStrategy`
-- `get_default() -> BaseStrategy`
-- `list_all() -> list[StrategyMetadata]`
+**18 built-in node types** (full catalog in [08-STRATEGY_DAG_AND_NODES.md](./docs/08-STRATEGY_DAG_AND_NODES.md)): `business_context`, `normalize_query`, `intent_classify`, `query_expand`, `plan`, `retrieve`, `rerank`, `dedupe_versions`, `boilerplate_filter`, `evidence_cards`, `synthesize`, `refine`, `compare_candidates`, `validate_contract`, `validate_citations`, `judge_quality`, `emit_telemetry`, `legacy_orchestrator_pipeline` (bridge to the pre-Strategy-OS pipeline).
 
-**Strategy Resolution Priority (in FederatedAgent):**
-1. Explicit `strategy` instance parameter
-2. Explicit `strategy_id` parameter
-3. `config.strategy_override` (direct ID)
-4. `config.strategy` (StrategySelection enum mapping)
-5. Default strategy from registry
+**Bundled specs** (auto-seeded from `backend/config/strategy_specs/`):
+| Strategy id | Purpose |
+|---|---|
+| `deep_orchestrated_v1` | 8-node DAG: normalize → expand → retrieve(top_k=30) → rerank(top_k=20) → evidence_cards → synthesize → validate_citations → refine. 15s target / 60s hard limit / $0.50 cap. |
+| `fast_evidence_v1` | Lean evidence-grounded DAG for low-latency answers. |
 
-**Strategy Metrics (strategies/metrics.py):**
-- Tracks per-strategy performance: response time, token usage, result quality
-- Used for A/B testing and strategy comparison
+**Legacy `BaseStrategy` registry** is retained in `backend/agent/strategies/` (note the plural directory) and still drives `/api/v1/strategies/...`. Built-in legacy strategies: `legacy`, `enhanced`, `software_dev`, `legal`, `hr`. A Strategy OS spec can embed the entire legacy pipeline via the `legacy_orchestrator_pipeline` node for incremental adoption.
 
-**API Endpoints:**
+**Key API endpoints:**
 | Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/strategies/` | List available strategies |
-| GET | `/api/v1/strategies/{id}` | Get strategy details |
-| GET | `/api/v1/strategies/active` | Get currently active strategy |
-| POST | `/api/v1/strategies/select` | Select active strategy |
-| GET | `/api/v1/strategies/metrics` | Get strategy performance metrics |
+|---|---|---|
+| GET | `/api/v1/strategies/` | List legacy strategies + metrics |
+| POST | `/api/v1/strategies/compare` | A/B compare two legacy strategies |
+| POST/GET/PUT/DELETE | `/api/v1/strategy-specs/...` | Strategy OS spec CRUD |
+| POST | `/api/v1/strategy-specs/{id}/versions/{v}/promote\|deprecate\|archive` | Lifecycle transitions |
+| POST | `/api/v1/strategy-specs/{id}/rollback` | Revert to previous active version |
+| POST/GET | `/api/v1/evaluation/run\|compare\|leaderboard\|results\|test-cases` | Evaluation surface |
+| POST/GET | `/api/v1/scheduler/schedules\|status\|pause\|resume\|reports` | Scheduler surface |
+
+**CLI:** `quellexctl strategy {run,list,inspect}`, `quellexctl prompt`, `quellexctl eval {run,leaderboard}`, `quellexctl experiment {run,list,get,report}`, `quellexctl schedule {list,get,add,run-now,pause,resume,daemon}`, `quellexctl profiler {model-test,strategy-profile}`. Entry point: `python -m backend.cli.main`.
+
+**Settings (`backend/core/config.py`):** `strategy_os_enabled`, `strategy_spec_auto_seed`, `strategy_spec_dir`, `strategy_scheduler_auto_resume`, `strategy_scheduler_tick_interval_seconds`, `strategy_nightly_report_*`, `strategy_runs_ttl_days`, `adaptive_decisions_ttl_days`, `model_roles_config`.
+
+**Collections introduced:** `strategy_specs`, `strategy_runs` (TTL), `strategy_run_reports`, `strategy_experiment_jobs`, `strategy_schedules`, `strategy_bandit_state`, `strategy_evolution_state`, `adaptive_selection_decisions` (TTL), `runtime_model_profiles`, `evaluation_results`, `scheduler_results`, `scheduler_reports`, `runtime_signals` (24h TTL), `activity_log`.
 
 ---
 
@@ -952,6 +942,20 @@
 | `cloud_source_syncs` | Active DB | Sync status and delta tokens |
 | `backup_config` | Active DB | Backup settings |
 | `backups_metadata` | Active DB | Backup records |
+| `strategy_specs` | Active DB | Strategy OS — versioned spec documents |
+| `strategy_runs` | Active DB | Strategy OS — per-run DAG traces (TTL via `strategy_runs_ttl_days`) |
+| `strategy_run_reports` | Active DB | Strategy OS — nightly aggregated summaries |
+| `strategy_experiment_jobs` | Active DB | Strategy OS — experiment job lifecycle |
+| `strategy_schedules` | Active DB | Strategy OS — scheduler cron definitions |
+| `strategy_bandit_state` | Active DB | Strategy OS — UCB1 arm statistics |
+| `strategy_evolution_state` | Active DB | Strategy OS — evolutionary population state |
+| `adaptive_selection_decisions` | Active DB | Strategy OS — cached spec selections (TTL via `adaptive_decisions_ttl_days`) |
+| `runtime_model_profiles` | Active DB | Strategy OS — per-model latency/token/cost profiles |
+| `evaluation_results` | Active DB | Strategy OS — per-run composite scores |
+| `scheduler_results` | Active DB | Strategy OS — per-schedule run outcomes |
+| `scheduler_reports` | Active DB | Strategy OS — per-schedule aggregated summaries |
+| `runtime_signals` | Active DB | Strategy OS — chat-activity + resource snapshots (24h TTL) |
+| `activity_log` | Active DB | Strategy OS — audit trail |
 
 ## Appendix B: Environment Variables Reference
 
@@ -996,6 +1000,25 @@
 | `AIRBYTE_API_URL` | `http://airbyte-server:8001` | Airbyte API URL |
 | `INGESTION_MAX_CONCURRENT_FILES` | `2` | Max parallel file processing |
 | `INGESTION_PROCESS_ISOLATION` | `true` | Separate worker process |
+| `STRATEGY_OS_ENABLED` | `true` | Strategy OS master switch |
+| `STRATEGY_SPEC_AUTO_SEED` | `true` | Auto-seed `strategy_specs` from bundled YAMLs at startup |
+| `STRATEGY_SPEC_DIR` | `backend/config/strategy_specs` | Override directory for YAML specs |
+| `MODEL_ROLES_CONFIG` | — | Path to optional `model_roles.yaml` override |
+| `STRATEGY_SCHEDULER_AUTO_RESUME` | `true` | Rebuild scheduler state from Mongo on startup |
+| `STRATEGY_SCHEDULER_TICK_INTERVAL_SECONDS` | `60` | Scheduler daemon main-loop interval |
+| `STRATEGY_NIGHTLY_REPORT_ENABLED` | `true` | Run daily Strategy OS nightly report |
+| `STRATEGY_NIGHTLY_REPORT_HOUR_LOCAL` | `3` | Local-time hour for the nightly report |
+| `STRATEGY_NIGHTLY_REPORT_TIMEZONE` | `UTC` | IANA timezone for the report cron |
+| `STRATEGY_NIGHTLY_REPORT_DIR` | `data/reports/strategy/` | Markdown output directory |
+| `STRATEGY_NIGHTLY_REPORT_LOOKBACK_HOURS` | `24` | Report lookback window |
+| `STRATEGY_NIGHTLY_REPORT_REGRESSION_THRESHOLD` | `0.05` | Composite-score drop that flags a regression |
+| `STRATEGY_RUNS_TTL_DAYS` | `7` | TTL for `strategy_runs` documents |
+| `ADAPTIVE_DECISIONS_TTL_DAYS` | `30` | TTL for cached spec selections |
+| `TELEMETRY_ENABLED` | `true` | Master switch for telemetry collection |
+| `TELEMETRY_MODE` | `dev` | Telemetry operating mode: dev/beta/production/disabled |
+| `TELEMETRY_PII_MODE` | `both` | PII handling: both/protected_only/raw_only/disabled |
+| `TELEMETRY_RETENTION_DAYS` | `90` | JSONL retention |
+| `TELEMETRY_STORAGE_PATH` | `data/telemetry` | Telemetry storage directory |
 
 ## Appendix C: Docker Services
 
@@ -1026,7 +1049,11 @@
 | `/api/v1/indexes` | Search Indexes | `routers/indexes.py` |
 | `/api/v1/prompts` | Prompt Management | `routers/prompts.py` |
 | `/api/v1/model-versions` | Model Versions | `routers/model_versions.py` |
-| `/api/v1/strategies` | Agent Strategies | `routers/strategies.py` |
+| `/api/v1/strategies` | Legacy Strategies | `routers/strategies.py` |
+| `/api/v1/strategy-specs` | Strategy OS Specs | `routers/strategy_specs.py` |
+| `/api/v1/evaluation` | Strategy OS Evaluation | `routers/evaluation.py` |
+| `/api/v1/scheduler` | Strategy OS Scheduler | `routers/scheduler.py` |
+| `/api/v1/telemetry` | Telemetry | `routers/telemetry.py` |
 | `/api/v1/backups` | Backup & Restore | `routers/backup.py` |
 | `/api/v1/benchmark` | Embedding Benchmark | `routers/embedding_benchmark.py` |
 | `/api/v1/local-llm` | Local LLM | `routers/local_llm.py` |

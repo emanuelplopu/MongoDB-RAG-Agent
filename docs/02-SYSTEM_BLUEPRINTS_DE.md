@@ -10,6 +10,8 @@
 7. [Docker-Deployment-Strategie](#7-docker-deployment-strategie)
 8. [Zusätzliche Datenbanksammlungen](#8-zusätzliche-datenbanksammlungen)
 
+> **Strategy OS:** Die konfigurationsgetriebene DAG-Laufzeit, das Evaluations- und das nächtliche Explorations-System sind in separaten englischsprachigen Blueprints dokumentiert: [07-STRATEGY_OS_OVERVIEW.md](./07-STRATEGY_OS_OVERVIEW.md) → [11-EXPLORATION_AND_SCHEDULER.md](./11-EXPLORATION_AND_SCHEDULER.md). Diese Datei beschreibt die Backend-Service-Infrastruktur, auf die Strategy OS aufbaut.
+
 ---
 
 ## 1. Backend-Kerndienste

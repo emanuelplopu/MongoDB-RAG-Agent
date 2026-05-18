@@ -3,7 +3,7 @@
 Defines the full type hierarchy for strategy specifications, run-state
 accumulation, execution results, and supporting policy / contract models.
 
-Reference: docs/quellex_recallhub_strategy_blueprints/13A-STRATEGY_RUN_STATE_AND_DAG_SEMANTICS.md
+Reference: docs/08-STRATEGY_DAG_AND_NODES.md
 """
 
 from __future__ import annotations
