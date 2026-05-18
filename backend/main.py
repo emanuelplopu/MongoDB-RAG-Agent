@@ -248,6 +248,53 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         logger.warning(f"Failed to initialize telemetry service: {e}")
         app.state.telemetry = None
     
+    # Chat-activity tracker + resource snapshot collector wiring
+    # (Task 86 / F9 — bridges chat endpoints into Jimmy's P2
+    # ResourceSnapshotCollector so ``interactive_users_detected``
+    # reflects real user-visible chat traffic across all Uvicorn
+    # workers via the shared Mongo ``runtime_signals`` collection).
+    try:
+        from backend.services.activity_tracker import ChatActivityTracker
+        from backend.services.resource_snapshot import ResourceSnapshotCollector
+
+        activity_tracker = ChatActivityTracker(
+            db=db_manager.db,
+            mode="mongo",
+        )
+        await activity_tracker.ensure_indexes()
+        app.state.activity_tracker = activity_tracker
+
+        # Instantiate the strategy resource snapshot collector with the
+        # live activity tracker so ``_detect_interactive_users`` flips
+        # to True on recent chat traffic. Safe to re-bind here even if
+        # other Phase 6 follow-ups also touch app.state — we own this
+        # field per the F9 brief.
+        resource_snapshot_collector = ResourceSnapshotCollector(
+            db=db_manager.db,
+            activity_tracker=activity_tracker,
+        )
+        await resource_snapshot_collector.ensure_indexes()
+        app.state.resource_snapshot_collector = resource_snapshot_collector
+
+        logger.info(
+            "ChatActivityTracker wired (mode=mongo, host_id=%s) and "
+            "ResourceSnapshotCollector activated",
+            activity_tracker.host_id,
+        )
+    except Exception as e:
+        logger.warning(
+            "ChatActivityTracker / ResourceSnapshotCollector wiring failed "
+            "(non-fatal): %s",
+            e,
+        )
+        # Preserve legacy attributes so getattr(..., None) callers and
+        # the stub-fallback path in ResourceSnapshotCollector continue
+        # to work without surprises.
+        if not hasattr(app.state, "activity_tracker"):
+            app.state.activity_tracker = None
+        if not hasattr(app.state, "resource_snapshot_collector"):
+            app.state.resource_snapshot_collector = None
+
     # Strategy OS initialization (Phase 0)
     if settings.strategy_os_enabled:
         try:
@@ -270,6 +317,166 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
             app.state.model_role_registry = None
     else:
         app.state.model_role_registry = None
+
+    # Strategy spec store: a single shared MongoSpecStore instance is
+    # built here and reused by:
+    #   * the strategy-specs CRUD router (DI),
+    #   * the promotion manager (via the store's snapshots view),
+    #   * the strategy spec selector (Phase 5 / Task 65), and
+    #   * any future seeding/maintenance flows that need the same view.
+    if settings.strategy_os_enabled:
+        try:
+            from backend.agent.strategy.spec_store import MongoSpecStore
+            from backend.agent.strategy.adaptive_decision_store import (
+                MongoAdaptiveDecisionStore,
+            )
+            from backend.agent.coordinator import set_spec_store
+
+            spec_store = MongoSpecStore(db_manager.db)
+            await spec_store.ensure_loaded()
+            app.state.spec_store = spec_store
+
+            # Phase 6 / Task 78: pass the shared P1 runtime profile store
+            # and P2 resource collector through to the coordinator so
+            # adaptive routing is enabled when both signals are
+            # available. Backward-compatible: missing extras fall back
+            # to the basic StrategySpecSelector.
+            adaptive_runtime_profile_store = getattr(
+                app.state, "runtime_profile_store", None
+            )
+            adaptive_resource_collector = getattr(
+                app.state, "resource_snapshot_collector", None
+            )
+
+            # F8 / Task 85: persist every adaptive routing decision into
+            # the ``adaptive_selection_decisions`` collection so
+            # operators can analyze selection patterns post-hoc. The
+            # TTL retention window is configurable via
+            # ``settings.adaptive_decisions_ttl_days``.
+            try:
+                adaptive_decision_store = MongoAdaptiveDecisionStore(
+                    db_manager.db,
+                    ttl_days=settings.adaptive_decisions_ttl_days,
+                )
+                await adaptive_decision_store.ensure_indexes()
+                app.state.adaptive_decision_store = adaptive_decision_store
+            except Exception as e:
+                logger.warning(
+                    f"Failed to initialize MongoAdaptiveDecisionStore (non-fatal): {e}"
+                )
+                adaptive_decision_store = None
+                app.state.adaptive_decision_store = None
+
+            set_spec_store(
+                spec_store,
+                runtime_profile_store=adaptive_runtime_profile_store,
+                resource_collector=adaptive_resource_collector,
+                evaluation_results_db=db_manager.db,
+                decision_store=adaptive_decision_store,
+            )
+            logger.info(
+                "Shared MongoSpecStore initialized and wired to coordinator + router DI "
+                "(adaptive=%s, decision_store=%s)",
+                bool(
+                    adaptive_runtime_profile_store
+                    or adaptive_resource_collector
+                ),
+                bool(adaptive_decision_store),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to initialize shared MongoSpecStore: {e}")
+            app.state.spec_store = None
+    else:
+        app.state.spec_store = None
+
+    # Strategy run-trace store (Phase 5 / Task 68). Persists per-run
+    # trace docs into ``strategy_runs`` so the nightly report generator
+    # consumes real run data instead of an empty placeholder.
+    if settings.strategy_os_enabled:
+        try:
+            from backend.agent.strategy.run_trace_store import MongoRunTraceStore
+            from backend.agent.coordinator import set_run_trace_store
+
+            run_trace_store = MongoRunTraceStore(
+                db_manager.db,
+                ttl_seconds=settings.strategy_runs_ttl_days * 86400,
+            )
+            await run_trace_store.ensure_indexes()
+            app.state.run_trace_store = run_trace_store
+            set_run_trace_store(run_trace_store)
+            logger.info(
+                "Shared MongoRunTraceStore initialized and wired to coordinator"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to initialize shared MongoRunTraceStore: {e}")
+            app.state.run_trace_store = None
+    else:
+        app.state.run_trace_store = None
+
+    # Strategy spec auto-seed (Phase 5 / Task 60)
+    if settings.strategy_os_enabled and settings.strategy_spec_auto_seed:
+        try:
+            from backend.scripts.seed_strategy_specs import seed_strategy_specs
+
+            seed_summary = await seed_strategy_specs(
+                db_manager.db,
+                spec_dir=settings.strategy_spec_dir,
+            )
+            logger.info(
+                "Strategy spec seed: loaded=%d inserted=%d updated=%d "
+                "skipped=%d activated=%s errors=%d",
+                seed_summary.get("loaded", 0),
+                seed_summary.get("inserted", 0),
+                seed_summary.get("updated", 0),
+                seed_summary.get("skipped", 0),
+                seed_summary.get("activated", []),
+                len(seed_summary.get("errors", [])),
+            )
+        except Exception as e:
+            logger.warning(f"Strategy spec auto-seed failed (non-fatal): {e}")
+
+    # Strategy scheduler persistence + auto-resume (Phase 5 / Task 61)
+    if settings.strategy_os_enabled:
+        try:
+            from backend.agent.strategy.scheduler_store import MongoSchedulerStore
+            from backend.scheduler.scheduler_daemon import SchedulerDaemon
+
+            scheduler_store = MongoSchedulerStore(db_manager.db)
+            await scheduler_store.ensure_indexes()
+            app.state.scheduler_store = scheduler_store
+
+            scheduler_daemon = SchedulerDaemon(
+                db=db_manager.db,
+                ollama_base_url=settings.ollama_base_url
+                or "http://host.docker.internal:11434",
+                store=scheduler_store,
+                tick_interval_seconds=settings.strategy_scheduler_tick_interval_seconds,
+                nightly_report_enabled=settings.strategy_nightly_report_enabled,
+                nightly_report_hour_local=settings.strategy_nightly_report_hour_local,
+                nightly_report_timezone=settings.strategy_nightly_report_timezone,
+                nightly_report_dir=settings.strategy_nightly_report_dir,
+                nightly_report_regression_threshold=settings.strategy_nightly_report_regression_threshold,
+                nightly_report_lookback_hours=settings.strategy_nightly_report_lookback_hours,
+            )
+            app.state.scheduler_daemon = scheduler_daemon
+
+            if settings.strategy_scheduler_auto_resume:
+                resume_summary = await scheduler_daemon.resume_from_store()
+                logger.info(
+                    "Scheduler resumed: %d schedules loaded, %d paused, %d with open circuit breakers",
+                    resume_summary.get("loaded", 0),
+                    resume_summary.get("paused", 0),
+                    resume_summary.get("open_breakers", 0),
+                )
+            else:
+                logger.info("Scheduler auto-resume disabled by configuration")
+        except Exception as e:
+            logger.warning(f"Scheduler persistence init failed (non-fatal): {e}")
+            app.state.scheduler_store = None
+            app.state.scheduler_daemon = None
+    else:
+        app.state.scheduler_store = None
+        app.state.scheduler_daemon = None
 
     # Log resolved LLM configuration
     logger.info("LLM Configuration:")
@@ -311,6 +518,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         await graceful_shutdown_handler(db_manager)
     except Exception as e:
         logger.warning(f"Error during graceful shutdown: {e}")
+    
+    # Persist any final scheduler state before closing the DB connection
+    try:
+        scheduler_daemon = getattr(app.state, "scheduler_daemon", None)
+        if scheduler_daemon is not None and scheduler_daemon._current_run is not None:
+            run = scheduler_daemon._current_run
+            await scheduler_daemon.store.update_runtime_state(
+                run.schedule_id,
+                last_run_status=run.status.value,
+                circuit_breaker=scheduler_daemon.circuit_breaker.state.value,
+            )
+    except Exception as e:
+        logger.warning(f"Error persisting final scheduler state: {e}")
     
     await db_manager.disconnect()
     logger.info("Database connection closed")

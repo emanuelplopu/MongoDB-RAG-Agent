@@ -874,6 +874,17 @@ async def send_message(
     start_time = time.time()
     db = request.app.state.db
     collection = await get_sessions_collection(request)
+
+    # Stamp interactive-chat activity for the strategy resource snapshot
+    # collector (Task 86 / F9). Best-effort; never breaks the request.
+    tracker = getattr(request.app.state, "activity_tracker", None)
+    if tracker is not None:
+        try:
+            await tracker.mark_active()
+        except Exception as _exc:  # noqa: BLE001 - never break chat
+            logger.debug(
+                "activity_tracker.mark_active failed (non-fatal): %s", _exc
+            )
     
     # Log the incoming request
     logger.info(
@@ -1226,6 +1237,17 @@ async def send_message_stream(
     
     db = request.app.state.db
     collection = await get_sessions_collection(request)
+
+    # Stamp interactive-chat activity for the strategy resource snapshot
+    # collector (Task 86 / F9). Best-effort; never breaks the SSE setup.
+    tracker = getattr(request.app.state, "activity_tracker", None)
+    if tracker is not None:
+        try:
+            await tracker.mark_active()
+        except Exception as _exc:  # noqa: BLE001 - never break chat
+            logger.debug(
+                "activity_tracker.mark_active failed (non-fatal): %s", _exc
+            )
     
     # Validate session
     query = {"_id": session_id}

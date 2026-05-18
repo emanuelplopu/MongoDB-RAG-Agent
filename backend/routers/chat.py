@@ -709,6 +709,23 @@ Remember: You have access to the user's company documents. Search them! Multiple
     )
 
 
+async def _stamp_chat_activity(request: Request) -> None:
+    """Best-effort stamp on ``app.state.activity_tracker``.
+
+    Centralised so every chat-producing endpoint (this router plus
+    :mod:`backend.routers.sessions`) records activity identically and
+    never breaks the request when the tracker is missing or Mongo is
+    transiently unavailable. See Task 86 / F9.
+    """
+    tracker = getattr(request.app.state, "activity_tracker", None)
+    if tracker is None:
+        return
+    try:
+        await tracker.mark_active()
+    except Exception as exc:  # noqa: BLE001 - never break a chat call
+        logger.debug("activity_tracker.mark_active failed (non-fatal): %s", exc)
+
+
 @router.post("", response_model=ChatResponse)
 @router.post("/", response_model=ChatResponse)
 async def chat(request: Request, chat_request: ChatRequest):
@@ -723,6 +740,10 @@ async def chat(request: Request, chat_request: ChatRequest):
     start_time = time.time()
     
     db = request.app.state.db
+
+    # Stamp interactive-chat activity for the strategy resource snapshot
+    # collector (Task 86 / F9). Best-effort; never breaks the request.
+    await _stamp_chat_activity(request)
     
     # Create activity logger for the legacy chat path
     chat_req_id = uuid.uuid4().hex[:8]
