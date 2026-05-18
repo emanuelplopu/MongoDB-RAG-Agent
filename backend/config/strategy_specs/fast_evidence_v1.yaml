@@ -1,0 +1,58 @@
+# Strategy Spec: Fast Evidence v1
+# 4-node linear DAG for fast evidence-based answers.
+strategy_id: "fast_evidence_v1"
+version: "1.0.0"
+display_name: "Fast Evidence Strategy v1"
+description: "4-node linear DAG for fast evidence-based answers"
+status: "active"
+tenant_scope: "shared"
+spec_hash: "fast_evidence_v1_h1"
+tags:
+  - "fast"
+  - "evidence_based"
+  - "legal_hearing_questions"
+  - "legal_matter_qna"
+  - "business_summary"
+
+graph:
+  entry_node: "n_normalize"
+  terminal_nodes:
+    - "n_synthesize"
+  nodes:
+    - node_id: "n_normalize"
+      node_type: "normalize_query"
+      config: {}
+    - node_id: "n_retrieve"
+      node_type: "retrieve"
+      config:
+        top_k: 20
+    - node_id: "n_evidence"
+      node_type: "evidence_cards"
+      config:
+        max_cards: 10
+        min_confidence: 0.5
+    - node_id: "n_synthesize"
+      node_type: "synthesize"
+      config:
+        model_role: "synthesizer_fast"
+        max_output_tokens: 2000
+  edges:
+    - from_node: "n_normalize"
+      to_node: "n_retrieve"
+    - from_node: "n_retrieve"
+      to_node: "n_evidence"
+    - from_node: "n_evidence"
+      to_node: "n_synthesize"
+
+budgets:
+  latency_target_ms: 5000
+  latency_hard_limit_ms: 15000
+  max_context_tokens: 8000
+  max_output_tokens: 2000
+  max_llm_calls: 10
+  max_cost_usd: 0.10
+  local_only: false
+
+model_roles:
+  synthesizer_fast: "worker"
+  worker: "worker"

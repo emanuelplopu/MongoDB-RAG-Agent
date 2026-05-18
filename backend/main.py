@@ -28,6 +28,9 @@ from fastapi.exceptions import RequestValidationError
 from backend.routers import chat, search, profiles, ingestion, system, sessions, auth
 from backend.routers import status, indexes, ingestion_queue, local_llm, prompts, model_versions
 from backend.routers import strategies, backup, embedding_benchmark, file_registry, tenant, support, debug
+from backend.routers import strategy_specs as strategy_specs_router_module
+from backend.routers import evaluation as evaluation_router_module
+from backend.routers import scheduler as scheduler_router_module
 from backend.routers import telemetry as telemetry_router_module
 from backend.routers.cloud_sources import (
     connections_router as cloud_connections,
@@ -659,7 +662,25 @@ app.include_router(
     tags=["Debug"]
 )
 
+app.include_router(
+    evaluation_router_module.router,
+    prefix="/api/v1/evaluation",
+    tags=["Evaluation"]
+)
+
+app.include_router(
+    scheduler_router_module.router,
+    prefix="/api/v1/scheduler",
+    tags=["Scheduler"]
+)
+
 app.include_router(telemetry_router_module.router)
+
+app.include_router(
+    strategy_specs_router_module.router,
+    prefix="/api/v1",
+    tags=["Strategy Specs"]
+)
 
 
 # Root endpoint
