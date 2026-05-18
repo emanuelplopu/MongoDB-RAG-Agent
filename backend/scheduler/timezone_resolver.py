@@ -89,6 +89,32 @@ class ScheduleTimezoneResolver:
 
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def to_local(dt_utc: datetime, tz_name: str) -> datetime:
+        """Convert a UTC datetime to local wall-clock time in *tz_name*.
+
+        Uses :class:`zoneinfo.ZoneInfo` so DST transitions are honoured
+        correctly: converting UTC -> local is unambiguous even during
+        spring-forward gaps and fall-back overlaps.
+
+        Args:
+            dt_utc: A timezone-aware datetime. Naive inputs are assumed
+                to already be in UTC.
+            tz_name: An IANA timezone identifier (e.g. ``"Europe/Vienna"``).
+
+        Returns:
+            A timezone-aware datetime expressed in *tz_name*.
+
+        Raises:
+            zoneinfo.ZoneInfoNotFoundError: If *tz_name* is not a valid
+                IANA timezone.
+        """
+        if dt_utc.tzinfo is None:
+            dt_utc = dt_utc.replace(tzinfo=timezone.utc)
+        return dt_utc.astimezone(ZoneInfo(tz_name))
+
+    # ------------------------------------------------------------------
+
     def is_in_allowed_window(
         self,
         dt: datetime,

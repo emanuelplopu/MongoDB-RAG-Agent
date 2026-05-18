@@ -6,10 +6,12 @@ import asyncio
 import logging
 import signal
 import time
+import uuid
 from datetime import datetime, timezone
-from typing import Any, Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Optional
 
-from backend.scheduler.circuit_breaker import MongoDBCircuitBreaker
+from backend.scheduler.circuit_breaker import CircuitState, MongoDBCircuitBreaker
 from backend.scheduler.contention_manager import ResourceContentionManager
 from backend.scheduler.models import (
     CandidateResult,
@@ -24,35 +26,100 @@ from backend.scheduler.pause_evaluator import PauseConditionEvaluator
 from backend.scheduler.stop_evaluator import StopConditionEvaluator
 from backend.scheduler.timezone_resolver import ScheduleTimezoneResolver
 
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from backend.agent.strategy.scheduler_store import SchedulerStore
+
 logger = logging.getLogger(__name__)
 
 TICK_INTERVAL_SECONDS = 60
+
+
+class SchedulePausedError(RuntimeError):
+    """Raised when a run is requested for a schedule that is paused."""
+
+
+class CircuitBreakerOpenError(RuntimeError):
+    """Raised when a run is requested while the circuit breaker is OPEN."""
+
+
+class ScheduleNotFoundError(LookupError):
+    """Raised when a schedule id cannot be located in the store."""
 
 
 class SchedulerDaemon:
     """Main overnight exploration scheduler.
 
     Lifecycle:
-    1. Every 60s: evaluate if any schedule should run.
-    2. If schedule triggers: start exploration run.
-    3. During run: iterate candidates, check pause/stop conditions.
-    4. After run: generate nightly report.
+        1. Every tick: load due schedules from the store.
+        2. If a schedule triggers: start an exploration run.
+        3. During the run: iterate candidates, check pause/stop conditions.
+        4. After the run: persist runtime state and emit a nightly report.
 
-    Supports graceful shutdown via SIGTERM/SIGINT.
+    The daemon is wired against an injected :class:`SchedulerStore`. When
+    one is not provided, a :class:`MongoSchedulerStore` is created from
+    the supplied database handle, falling back to an in-memory store when
+    the database is also absent. Supports graceful shutdown via
+    SIGTERM/SIGINT.
+
+    Args:
+        db: Optional async Mongo database handle. Used to construct a
+            :class:`MongoSchedulerStore` when ``store`` is not provided.
+        ollama_base_url: Base URL for the local Ollama server.
+        store: Optional pre-built :class:`SchedulerStore` to use. Takes
+            precedence over ``db`` when supplied (recommended for tests).
+        tick_interval_seconds: Override the main-loop tick interval.
     """
 
     def __init__(
         self,
         db: Any = None,
         ollama_base_url: str = "http://localhost:11434",
+        store: Optional["SchedulerStore"] = None,
+        tick_interval_seconds: int = TICK_INTERVAL_SECONDS,
+        *,
+        nightly_report_enabled: bool = True,
+        nightly_report_hour_local: int = 3,
+        nightly_report_timezone: str = "UTC",
+        nightly_report_dir: Optional[str] = None,
+        nightly_report_regression_threshold: float = 0.05,
+        nightly_report_lookback_hours: int = 24,
+        timezone_resolver: Optional[ScheduleTimezoneResolver] = None,
     ):
         self.db = db
         self._running = False
         self._shutdown_requested = False
         self._current_run: Optional[SchedulerRunState] = None
+        self._tick_interval = max(1, int(tick_interval_seconds))
+
+        # Nightly-report cron config (Phase 5 / Task 62; tz-aware in F3).
+        self._nightly_report_enabled = bool(nightly_report_enabled)
+        self._nightly_report_hour_local = int(nightly_report_hour_local)
+        self._nightly_report_timezone = str(nightly_report_timezone or "UTC")
+        self._nightly_report_dir = (
+            Path(nightly_report_dir) if nightly_report_dir else None
+        )
+        self._nightly_report_regression_threshold = float(
+            nightly_report_regression_threshold
+        )
+        self._nightly_report_lookback_hours = int(nightly_report_lookback_hours)
+        self._last_nightly_report_date: Optional[str] = None
+
+        # Persistence (imported lazily to avoid a circular dependency
+        # between ``backend.scheduler`` and ``backend.agent.strategy``).
+        from backend.agent.strategy.scheduler_store import (
+            InMemorySchedulerStore,
+            MongoSchedulerStore,
+            SchedulerStore as _SchedulerStore,
+        )
+        if store is not None:
+            self.store: "SchedulerStore" = store
+        elif db is not None:
+            self.store = MongoSchedulerStore(db)
+        else:
+            self.store = InMemorySchedulerStore()
 
         # Sub-components
-        self.timezone_resolver = ScheduleTimezoneResolver()
+        self.timezone_resolver = timezone_resolver or ScheduleTimezoneResolver()
         self.ollama_manager = OllamaResidencyManager(ollama_base_url)
         self.circuit_breaker = MongoDBCircuitBreaker()
 
@@ -64,6 +131,41 @@ class SchedulerDaemon:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    async def resume_from_store(self) -> dict[str, int]:
+        """Rebuild in-memory state from the persistent store.
+
+        Restores the circuit breaker state from the last persisted value
+        (best-effort; OPEN states are re-armed by recording the configured
+        ``failure_threshold`` failures so the breaker auto-recovers via
+        its normal HALF_OPEN probe path). Returns a small summary dict
+        suitable for startup logging.
+        """
+        await self.store.ensure_indexes()
+        schedules = await self.store.list()
+        paused = sum(1 for s in schedules if s.paused)
+        open_breakers = sum(
+            1 for s in schedules if (s.circuit_breaker_state or "").lower() == "open"
+        )
+        # Restore the daemon-level breaker if any schedule was OPEN.
+        if open_breakers:
+            for _ in range(self.circuit_breaker.failure_threshold):
+                self.circuit_breaker.record_failure()
+        # Refresh next_run_at for active, unpaused schedules so list_due works.
+        now = datetime.now(timezone.utc)
+        for schedule in schedules:
+            if schedule.paused or schedule.status != "active":
+                continue
+            next_run = self.timezone_resolver.evaluate_next_run(schedule, now=now)
+            if next_run is not None and next_run != schedule.next_run_at:
+                await self.store.update_runtime_state(
+                    schedule.id, next_run_at=next_run
+                )
+        return {
+            "loaded": len(schedules),
+            "paused": paused,
+            "open_breakers": open_breakers,
+        }
 
     async def start(self) -> None:
         """Start the daemon loop. Runs until shutdown is requested."""
@@ -89,70 +191,137 @@ class SchedulerDaemon:
         logger.info("SchedulerDaemon shutdown requested")
         self._shutdown_requested = True
 
+    async def run_now(self, schedule_id: str) -> str:
+        """Trigger an immediate exploration run for ``schedule_id``.
+
+        Bypasses cron evaluation. Spawns the run as an asyncio task so
+        the caller (typically an HTTP handler) can return the trace id
+        without blocking. Respects the persisted pause flag and the
+        per-schedule circuit breaker state.
+
+        Args:
+            schedule_id: The id of the schedule to execute.
+
+        Returns:
+            The trace id (== run id) of the freshly spawned run.
+
+        Raises:
+            ScheduleNotFoundError: ``schedule_id`` does not exist.
+            SchedulePausedError: The schedule is currently paused.
+            CircuitBreakerOpenError: The schedule's persisted circuit
+                breaker state is ``open``.
+        """
+        schedule = await self.store.get(schedule_id)
+        if schedule is None:
+            raise ScheduleNotFoundError(schedule_id)
+        if schedule.paused:
+            raise SchedulePausedError(
+                f"Schedule {schedule_id} is paused: "
+                f"{schedule.paused_reason or 'no reason recorded'}"
+            )
+        if (schedule.circuit_breaker_state or "").lower() == CircuitState.OPEN.value:
+            raise CircuitBreakerOpenError(
+                f"Schedule {schedule_id} circuit breaker is OPEN"
+            )
+
+        trace_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        await self.store.update_runtime_state(
+            schedule_id,
+            last_run_at=now,
+            last_run_status=SchedulerRunStatus.RUNNING.value,
+        )
+        # Fire-and-forget the actual exploration so the HTTP path returns fast.
+        asyncio.create_task(
+            self._run_now_task(schedule, trace_id),
+            name=f"scheduler-run-now-{trace_id[:8]}",
+        )
+        return trace_id
+
+    async def _run_now_task(
+        self, schedule: StrategySchedule, trace_id: str
+    ) -> None:
+        """Background task body for :meth:`run_now`."""
+        try:
+            await self._execute_exploration_run(schedule, run_id=trace_id)
+        except Exception as exc:  # noqa: BLE001 - keep the daemon alive
+            logger.exception(
+                "run_now task for schedule %s (%s) failed: %s",
+                schedule.id,
+                trace_id,
+                exc,
+            )
+
     # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
 
     async def _main_loop(self) -> None:
-        """Main tick loop (every 60 seconds).
+        """Main tick loop.
 
-        1. Load active schedules from DB (or cache).
-        2. For each schedule: check if it should trigger.
-        3. If trigger: start exploration run.
-        4. Sleep until next tick.
+        On every tick:
+            1. Ask the store for due schedules.
+            2. Trigger an exploration run for each.
+            3. Flush the circuit breaker buffer when recovered.
+            4. Sleep until the next tick (interruptible).
         """
         while not self._shutdown_requested:
             try:
-                schedules = await self._load_schedules()
+                now = datetime.now(timezone.utc)
+                due = await self.store.list_due(now)
 
-                for schedule in schedules:
+                for schedule in due:
                     if self._shutdown_requested:
                         break
-
-                    next_run = self.timezone_resolver.evaluate_next_run(schedule)
-                    if next_run is None:
-                        continue
-
-                    now = datetime.now(timezone.utc)
-                    # If next run is within the tick interval, trigger it
-                    if (next_run - now).total_seconds() <= TICK_INTERVAL_SECONDS:
-                        logger.info(
-                            "Triggering exploration run for schedule '%s' (%s)",
-                            schedule.name,
-                            schedule.id,
+                    logger.info(
+                        "Triggering exploration run for schedule '%s' (%s)",
+                        schedule.name,
+                        schedule.id,
+                    )
+                    await self._execute_exploration_run(schedule)
+                    next_run = self.timezone_resolver.evaluate_next_run(
+                        schedule, now=datetime.now(timezone.utc)
+                    )
+                    if next_run is not None:
+                        await self.store.update_runtime_state(
+                            schedule.id, next_run_at=next_run
                         )
-                        await self._execute_exploration_run(schedule)
 
                 # Flush circuit breaker buffer if recovered
-                if self.circuit_breaker.state.value == "closed" and self.circuit_breaker.buffer_size > 0:
+                if (
+                    self.circuit_breaker.state.value == "closed"
+                    and self.circuit_breaker.buffer_size > 0
+                ):
                     flushed = await self.circuit_breaker.flush_buffer(self.db)
                     if flushed > 0:
-                        logger.info("Flushed %d buffered operations after recovery", flushed)
+                        logger.info(
+                            "Flushed %d buffered operations after recovery",
+                            flushed,
+                        )
+
+                # Daily nightly-report cron tick (Phase 5 / Task 62).
+                await self._maybe_run_nightly_report(now)
 
             except Exception as exc:
                 logger.exception("Error in scheduler main loop: %s", exc)
 
             # Sleep for the tick interval (interruptible)
-            await self._interruptible_sleep(TICK_INTERVAL_SECONDS)
+            await self._interruptible_sleep(self._tick_interval)
 
     # ------------------------------------------------------------------
     # Exploration run
     # ------------------------------------------------------------------
 
-    async def _execute_exploration_run(self, schedule: StrategySchedule) -> None:
-        """Execute a full exploration run for a schedule.
+    async def _execute_exploration_run(
+        self,
+        schedule: StrategySchedule,
+        run_id: Optional[str] = None,
+    ) -> None:
+        """Execute a full exploration run for ``schedule``.
 
-        Flow:
-        1. Initialize run state.
-        2. Prewarm models.
-        3. Get candidate strategies.
-        4. For each candidate:
-            a. Check pause conditions → pause/resume loop.
-            b. Check stop conditions → break if stop.
-            c. Check resource contention.
-            d. Execute strategy evaluation.
-            e. Record result.
-        5. Generate nightly report.
+        See class docstring for the high-level flow. ``run_id`` is
+        accepted so callers (e.g. :meth:`run_now`) can emit a stable
+        trace id ahead of time.
         """
         # 1. Initialize run state
         run_state = SchedulerRunState(
@@ -161,7 +330,16 @@ class SchedulerDaemon:
             started_at=datetime.now(timezone.utc),
             candidates_total=len(schedule.candidate_strategy_ids),
         )
+        if run_id is not None:
+            run_state.run_id = run_id
         self._current_run = run_state
+
+        # Persist that the run has started.
+        await self._safe_update_runtime(
+            schedule.id,
+            last_run_at=run_state.started_at,
+            last_run_status=SchedulerRunStatus.RUNNING.value,
+        )
 
         # Initialize per-run evaluators
         self._pause_evaluator = PauseConditionEvaluator(schedule.pause_config)
@@ -235,6 +413,10 @@ class SchedulerDaemon:
         run_state.completed_at = datetime.now(timezone.utc)
         self._current_run = None
 
+        # Persist final runtime state immediately so a crash here doesn't
+        # leave the schedule stuck on RUNNING.
+        await self._persist_post_run_state(schedule, run_state)
+
         # Generate and persist nightly report
         report = self._generate_report(run_state)
         await self._persist_report(report)
@@ -247,6 +429,39 @@ class SchedulerDaemon:
             run_state.candidates_total,
             run_state.current_leader or "none",
         )
+
+    async def _persist_post_run_state(
+        self, schedule: StrategySchedule, run_state: SchedulerRunState
+    ) -> None:
+        """Write the post-run runtime state and circuit-breaker snapshot."""
+        consecutive_failures = (
+            schedule.consecutive_failures + 1
+            if run_state.status == SchedulerRunStatus.FAILED
+            else 0
+        )
+        new_breaker_state = self.circuit_breaker.state.value
+        await self._safe_update_runtime(
+            schedule.id,
+            last_run_at=run_state.completed_at,
+            last_run_status=run_state.status.value,
+            consecutive_failures=consecutive_failures,
+            circuit_breaker=new_breaker_state,
+        )
+
+    async def _safe_update_runtime(self, schedule_id: str, **fields: Any) -> None:
+        """Persist a runtime-state update, swallowing storage failures.
+
+        Storage faults must never crash the daemon — they are logged at
+        WARNING level and the in-memory loop continues.
+        """
+        try:
+            await self.store.update_runtime_state(schedule_id, **fields)
+        except Exception as exc:  # noqa: BLE001 - persistence is best-effort
+            logger.warning(
+                "Failed to persist runtime state for schedule %s: %s",
+                schedule_id,
+                exc,
+            )
 
     # ------------------------------------------------------------------
     # Candidate evaluation
@@ -455,26 +670,96 @@ class SchedulerDaemon:
         await self.circuit_breaker.execute(_write_report)
 
     # ------------------------------------------------------------------
-    # Schedule loading
+    # Nightly report cron (Phase 5 / Task 62)
+    # ------------------------------------------------------------------
+
+    async def _maybe_run_nightly_report(self, now: datetime) -> None:
+        """Run the day-grained nightly report once per day, in local time.
+
+        The trigger fires when ``now`` (UTC) maps to the configured local
+        hour in ``self._nightly_report_timezone`` (an IANA tz string).
+        Local time is resolved through :class:`ScheduleTimezoneResolver`
+        so DST spring-forward and fall-back transitions are handled
+        without bespoke arithmetic.
+
+        De-duplication uses the local calendar date so a fall-back
+        repeat of 03:xx only triggers once, and a spring-forward jump
+        over 03:xx still only triggers once on the following day.
+
+        If the configured timezone is invalid we log a warning and fall
+        back to UTC behaviour rather than crashing the daemon.
+
+        Errors from the underlying generator are logged at WARNING and
+        never propagate so a bad report cycle cannot crash the daemon.
+
+        Args:
+            now: The current UTC time (must be timezone-aware in
+                production; naive inputs are coerced to UTC).
+        """
+        if not self._nightly_report_enabled:
+            return
+        if self.db is None:
+            return
+
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+
+        tz_name = self._nightly_report_timezone
+        try:
+            local_now = self.timezone_resolver.to_local(now, tz_name)
+        except Exception as exc:  # noqa: BLE001 - tz lookup must not crash
+            logger.warning(
+                "Invalid nightly-report timezone %r — falling back to UTC: %s",
+                tz_name,
+                exc,
+            )
+            local_now = now
+
+        if local_now.hour != self._nightly_report_hour_local:
+            return
+        date_key = local_now.date().isoformat()
+        if self._last_nightly_report_date == date_key:
+            return
+
+        try:
+            from backend.agent.strategy.report_generator import (
+                NightlyReportGenerator,
+            )
+
+            generator = NightlyReportGenerator(
+                self.db,
+                lookback_hours=self._nightly_report_lookback_hours,
+                regression_threshold=self._nightly_report_regression_threshold,
+                output_dir=self._nightly_report_dir,
+            )
+            summary = await generator.generate(run_date=now)
+            self._last_nightly_report_date = date_key
+            logger.info(
+                "Nightly report written for %s (markdown=%s, runs=%d, regressions=%d)",
+                summary.report_date,
+                summary.markdown_path,
+                summary.total_runs,
+                len(summary.regressions),
+            )
+        except Exception as exc:  # noqa: BLE001 - daemon must not crash
+            logger.warning(
+                "Nightly report generation failed (non-fatal): %s", exc
+            )
+
+    # ------------------------------------------------------------------
+    # Schedule loading (legacy — kept as a fallback path for callers
+    # that still inspect ``self.db`` directly)
     # ------------------------------------------------------------------
 
     async def _load_schedules(self) -> list[StrategySchedule]:
-        """Load active schedules from DB. Returns empty list if DB unavailable."""
-        if self.db is None:
-            return []
+        """Return all known schedules via the configured store.
 
+        Retained for backwards compatibility with external callers.
+        """
         try:
-            collection = self.db["strategy_schedules"]
-            cursor = collection.find({"status": "active"})
-            schedules: list[StrategySchedule] = []
-            async for doc in cursor:
-                try:
-                    schedules.append(StrategySchedule(**doc))
-                except Exception as exc:
-                    logger.warning("Failed to parse schedule document: %s", exc)
-            return schedules
-        except Exception as exc:
-            logger.warning("Failed to load schedules from DB: %s", exc)
+            return await self.store.list()
+        except Exception as exc:  # noqa: BLE001 - tolerate transient errors
+            logger.warning("Failed to load schedules from store: %s", exc)
             return []
 
     # ------------------------------------------------------------------

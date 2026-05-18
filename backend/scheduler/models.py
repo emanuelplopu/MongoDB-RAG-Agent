@@ -5,9 +5,26 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
+
+# Source of truth: ``StrategyExperimentJob.mode`` in
+# ``backend/agent/strategy/experiment_job_models.py`` (Phase 6 / Task 73).
+# Duplicated verbatim here to keep ``backend.scheduler`` foundationally
+# decoupled from ``backend.agent.strategy`` (which already imports from
+# this module via :mod:`backend.agent.strategy.scheduler_store`).
+# Keep the two literal definitions in lock-step on every Phase 6 mode
+# change.
+StrategyScheduleMode = Literal[
+    "regression",
+    "exploration",
+    "profiling",
+    "smoke",
+    "grid",
+    "bandit",
+    "evolutionary",
+]
 
 
 class SchedulerRunStatus(str, Enum):
@@ -117,6 +134,65 @@ class StrategySchedule(BaseModel):
     status: str = Field(default="active")  # active, paused, disabled
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # Runtime state (Phase 5 / Task 61 — persisted by SchedulerStore)
+    paused: bool = Field(
+        default=False,
+        description="Manual or operator pause flag — survives restarts",
+    )
+    paused_reason: Optional[str] = Field(
+        default=None, description="Free-form reason captured when paused=True"
+    )
+    last_run_at: Optional[datetime] = Field(
+        default=None,
+        description="Last time a run was triggered for this schedule",
+    )
+    last_run_status: Optional[str] = Field(
+        default=None,
+        description="Status of the most recent run (e.g. completed, failed, deferred)",
+    )
+    next_run_at: Optional[datetime] = Field(
+        default=None,
+        description="Computed next-run time (UTC). Used by list_due()",
+    )
+    consecutive_failures: int = Field(
+        default=0,
+        description="Consecutive failed runs since last success — feeds circuit breaker",
+    )
+    circuit_breaker_state: Optional[str] = Field(
+        default=None,
+        description="Persisted circuit breaker state: closed | open | half_open",
+    )
+
+    # Phase 6 dispatch metadata (Task 83). All four default to ``None`` so
+    # legacy persisted documents (predating Phase 6) round-trip cleanly
+    # through :class:`backend.agent.strategy.scheduler_store.MongoSchedulerStore`.
+    mode: Optional[StrategyScheduleMode] = Field(
+        default=None,
+        description=(
+            "Experiment mode the scheduler dispatches when this schedule fires. "
+            "Mirrors :attr:`backend.agent.strategy.experiment_job_models."
+            "StrategyExperimentJob.mode`."
+        ),
+    )
+    tenant: Optional[str] = Field(
+        default=None,
+        description="Tenant context for the scheduled experiment.",
+    )
+    profile_key: Optional[str] = Field(
+        default=None,
+        description=(
+            "Tenant profile key (e.g. ``rag_test_law``) for the scheduled "
+            "experiment."
+        ),
+    )
+    candidate_generator_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Identifier of the candidate generator preset to use "
+            "(grid/bandit/evolutionary)."
+        ),
+    )
 
 
 class OllamaModelState(BaseModel):
