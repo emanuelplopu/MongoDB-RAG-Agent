@@ -207,6 +207,12 @@ class StrategyRunState(BaseModel):
     elapsed_ms: float = 0.0
     cancelled: bool = False
 
+    # ── Telemetry cross-references (Task 90 / T2) ──
+    # Collected from :class:`backend.agent.strategy.llm_helper.NodeLLMHelper`
+    # capture context after each node executes; joins back to
+    # ``strategy_llm_calls.call_id`` for full prompt/response traces.
+    llm_call_ids: list[str] = Field(default_factory=list)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Strategy Spec — Budgets & Policies

@@ -32,6 +32,15 @@ from backend.agent.strategy.spec_selector import (
     AdaptiveSelector,
     StrategySpecSelector,
 )
+from backend.agent.strategy.strategy_trace import (
+    ROUTING_REASON_ADAPTIVE,
+    ROUTING_REASON_CAPABILITY_NOT_MATCHED,
+    ROUTING_REASON_DAG_FAILED,
+    ROUTING_REASON_DISABLED,
+    ROUTING_REASON_LEGACY_FALLBACK,
+    StrategyTraceResponse,
+    build_strategy_trace,
+)
 from backend.agent.strategy.nodes import create_default_registry, NODE_TYPE_REGISTRY
 from backend.evaluation.contradiction_detector import ContradictionDetector
 from backend.agent.strategies.base import BaseStrategy
@@ -65,6 +74,11 @@ _spec_selector = None
 # (Phase 5 / Task 68). Persists per-run trace docs to ``strategy_runs``
 # so the nightly report generator consumes real run data.
 _run_trace_store = None
+# Module-level shared LLMCallStore reference, set during app lifespan
+# (Task 90 / T2). Captures every LLM invocation made by strategy node
+# executors into ``strategy_llm_calls`` for the telemetry viewer and
+# admin trace UI. ``None`` disables capture silently.
+_llm_call_store = None
 
 
 def set_telemetry_service(service) -> None:
@@ -148,6 +162,23 @@ def get_run_trace_store():
     return _run_trace_store
 
 
+def set_llm_call_store(store) -> None:
+    """Set the shared :class:`LLMCallStore` used to capture LLM calls.
+
+    Called during FastAPI lifespan startup with the
+    :class:`backend.agent.strategy.llm_call_store.MongoLLMCallStore`
+    instance bound to ``app.state.llm_call_store``. Mirrors the
+    existing ``set_run_trace_store`` plumbing (Task 90 / T2).
+    """
+    global _llm_call_store
+    _llm_call_store = store
+
+
+def get_llm_call_store():
+    """Return the shared :class:`LLMCallStore`, or ``None`` if unset."""
+    return _llm_call_store
+
+
 class FederatedAgent:
     """Main agent coordinator for orchestrator-worker architecture."""
     
@@ -219,6 +250,10 @@ class FederatedAgent:
         self.trace: Optional[AgentTrace] = None
         # Business context resolved by Strategy OS (set per-request)
         self._business_context: Optional[BusinessContext] = None
+        # Strategy OS execution trace (T3 / Task 91). Populated per-request
+        # by _process_with_orchestrator and consumed by the response builder
+        # in :mod:`backend.routers.sessions` and the SSE expansion (T4).
+        self._strategy_trace: Optional[StrategyTraceResponse] = None
     
     def _resolve_strategy(
         self,
@@ -365,6 +400,10 @@ class FederatedAgent:
         
         # Create trace
         self.trace = self._create_trace(user_id, session_id)
+        # Reset Strategy OS trace; populated downstream when the DAG runs
+        # (T3 / Task 91). Kept ``None`` for the fast path so callers can
+        # distinguish "strategy did not run at all" from "strategy ran".
+        self._strategy_trace = None
         
         # Determine execution mode
         use_thinking = self.config.should_use_thinking(user_message)
@@ -603,6 +642,22 @@ class FederatedAgent:
         
         # Strategy OS: Resolve business context (guarded by feature flag)
         business_context: Optional[BusinessContext] = None
+        # Initialize the per-request Strategy OS trace (T3 / Task 91) with
+        # the most pessimistic outcome; the strategy block below upgrades
+        # it as more is known. Keeping the trace populated even on the
+        # legacy/disabled path gives the frontend a uniform shape.
+        if not settings.strategy_os_enabled:
+            self._strategy_trace = build_strategy_trace(
+                spec=None,
+                run_result=None,
+                routing_reason=ROUTING_REASON_DISABLED,
+            )
+        else:
+            self._strategy_trace = build_strategy_trace(
+                spec=None,
+                run_result=None,
+                routing_reason=ROUTING_REASON_LEGACY_FALLBACK,
+            )
         if settings.strategy_os_enabled:
             try:
                 resolver = BusinessContextResolver(tenant_id=settings.tenant_id)
@@ -619,6 +674,12 @@ class FederatedAgent:
                     f"capability={business_context.capability_id} "
                     f"confidence={business_context.capability_confidence:.2f}"
                 )
+                if not business_context.capability_id:
+                    self._strategy_trace = build_strategy_trace(
+                        spec=None,
+                        run_result=None,
+                        routing_reason=ROUTING_REASON_CAPABILITY_NOT_MATCHED,
+                    )
             except Exception as e:
                 logger.warning(f"[req={self.req_id}] BusinessContextResolver failed, falling back to standard search: {e}")
                 business_context = None
@@ -657,8 +718,40 @@ class FederatedAgent:
                 runner = StrategyRunner(
                     registry=registry,
                     run_trace_store=_run_trace_store,
+                    llm_call_store=_llm_call_store,
                 )
-                result = await runner.run(spec=strategy_spec, context=business_context)
+
+                async def _on_strategy_node(
+                    node_id: str,
+                    node_type: str,
+                    status: str,
+                    duration_ms: float,
+                ) -> None:
+                    """Forward per-node Strategy DAG progress to the SSE stream.
+
+                    Best-effort: any failure inside ``emit_event`` is
+                    already swallowed by that helper, but we wrap a
+                    second time defensively so the runner's strict
+                    contract ("never raise from on_node_complete") is
+                    honoured even if the indirection ever changes.
+                    """
+                    try:
+                        await emit_event('strategy_node', {
+                            'node_id': node_id,
+                            'node_type': node_type,
+                            'status': status,
+                            'duration_ms': round(float(duration_ms or 0.0), 1),
+                        })
+                    except Exception as cb_exc:  # noqa: BLE001 - best effort
+                        logger.debug(
+                            f"[req={self.req_id}] strategy_node emit failed (non-fatal): {cb_exc}"
+                        )
+
+                result = await runner.run(
+                    spec=strategy_spec,
+                    context=business_context,
+                    on_node_complete=_on_strategy_node,
+                )
                 
                 if result.success and result.state and result.state.synthesis_result:
                     # Use DAG result instead of legacy path
@@ -667,11 +760,40 @@ class FederatedAgent:
                         f"[req={self.req_id}] Strategy DAG completed: "
                         f"{result.nodes_executed} nodes, {result.total_duration_ms}ms"
                     )
+                    # Build the Strategy OS trace (T3 / Task 91) before
+                    # the early return so callers can read it from
+                    # ``self.strategy_trace``.
+                    adaptive_scores, fast_path_eligible = (
+                        await self._fetch_adaptive_scores(
+                            business_context.capability_id
+                            if business_context
+                            else None
+                        )
+                    )
+                    self._strategy_trace = build_strategy_trace(
+                        spec=strategy_spec,
+                        run_result=result,
+                        routing_reason=ROUTING_REASON_ADAPTIVE,
+                        adaptive_scores=adaptive_scores,
+                        fast_path_eligible=fast_path_eligible,
+                    )
                     return synthesis_text
             except StrategyExecutionError as e:
                 logger.warning(f"[req={self.req_id}] Strategy DAG execution failed, falling back to legacy: {e}")
+                self._strategy_trace = build_strategy_trace(
+                    spec=strategy_spec,
+                    run_result=None,
+                    routing_reason=ROUTING_REASON_DAG_FAILED,
+                    fallback_reason=str(e),
+                )
             except Exception as e:
                 logger.warning(f"[req={self.req_id}] Unexpected error in Strategy DAG, falling back to legacy: {e}")
+                self._strategy_trace = build_strategy_trace(
+                    spec=strategy_spec,
+                    run_result=None,
+                    routing_reason=ROUTING_REASON_DAG_FAILED,
+                    fallback_reason=str(e),
+                )
         
         # Phase 1: Analyze
         await emit_event('phase', {'phase': 'analyze', 'status': 'started'})
@@ -1239,6 +1361,67 @@ class FederatedAgent:
     async def cleanup(self):
         """Cleanup resources."""
         await self.worker_pool.cleanup()
+
+    async def _fetch_adaptive_scores(
+        self,
+        capability_id: Optional[str],
+    ) -> Tuple[Optional[List[Dict[str, Any]]], bool]:
+        """Read the most recent :class:`AdaptiveDecisionDoc` for ``capability_id``.
+
+        Used to enrich :class:`StrategyTraceResponse` with the per-candidate
+        score breakdown that the :class:`AdaptiveSelector` produced for
+        this request. Reads from the ``decision_store`` attached to the
+        module-level selector — a query, not a transient cache, since
+        the selector returns only the chosen :class:`StrategySpec` and
+        the brief constrains us not to widen its return type.
+
+        Best-effort: any exception is logged at DEBUG and the call
+        returns ``(None, False)`` so the trace is still emitted.
+
+        Args:
+            capability_id: Capability the spec was selected for. ``None``
+                returns ``(None, False)`` immediately.
+
+        Returns:
+            ``(candidate_scores, fast_path_eligible)`` from the most
+            recent persisted decision, or ``(None, False)`` when no
+            decision is available.
+        """
+        if not capability_id:
+            return None, False
+        selector = _spec_selector
+        if not isinstance(selector, AdaptiveSelector):
+            return None, False
+        store = getattr(selector, "decision_store", None)
+        if store is None:
+            return None, False
+        try:
+            recent = await store.list_recent(
+                capability_id=capability_id,
+                limit=1,
+            )
+        except Exception as exc:  # noqa: BLE001 - trace is best-effort
+            logger.debug(
+                f"[req={self.req_id}] adaptive decision lookup skipped: {exc}"
+            )
+            return None, False
+        if not recent:
+            return None, False
+        latest = recent[0]
+        return list(latest.candidate_scores), bool(latest.fast_path_eligible)
+
+    @property
+    def strategy_trace(self) -> Optional[StrategyTraceResponse]:
+        """Return the Strategy OS trace from the most recent request.
+
+        Populated by :meth:`_process_with_orchestrator` when the strategy
+        path runs (or attempts to run); ``None`` for the fast path or
+        before :meth:`process` has been invoked.
+
+        Consumers (response builder in ``backend.routers.sessions`` and
+        the SSE expansion in T4) MUST treat the trace as read-only.
+        """
+        return self._strategy_trace
 
 
 # Factory function

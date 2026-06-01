@@ -356,6 +356,16 @@ class BackendSettings(BaseSettings):
             "controls TTL index on created_at."
         ),
     )
+    strategy_llm_calls_ttl_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        description=(
+            "Retention period for strategy_llm_calls collection in days. "
+            "Full LLM prompts + responses are stored; set lower for "
+            "storage-constrained environments."
+        ),
+    )
     
     # Web Search Settings (Brave Search API)
     brave_search_api_key: str = Field(

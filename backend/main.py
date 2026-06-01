@@ -32,6 +32,7 @@ from backend.routers import strategy_specs as strategy_specs_router_module
 from backend.routers import evaluation as evaluation_router_module
 from backend.routers import scheduler as scheduler_router_module
 from backend.routers import telemetry as telemetry_router_module
+from backend.routers import telemetry_strategy as telemetry_strategy_router_module
 from backend.routers.cloud_sources import (
     connections_router as cloud_connections,
     oauth_router as cloud_oauth,
@@ -412,6 +413,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
             app.state.run_trace_store = None
     else:
         app.state.run_trace_store = None
+
+    # Strategy LLM-call store (Task 90 / T2). Captures every LLM
+    # invocation made by strategy node executors into
+    # ``strategy_llm_calls`` for the telemetry viewer and admin trace
+    # UI. Best-effort: failures here never block the lifespan.
+    if settings.strategy_os_enabled:
+        try:
+            from backend.agent.strategy.llm_call_store import MongoLLMCallStore
+            from backend.agent.coordinator import set_llm_call_store
+
+            llm_call_store = MongoLLMCallStore(
+                db_manager.db,
+                ttl_seconds=settings.strategy_llm_calls_ttl_days * 86400,
+            )
+            await llm_call_store.ensure_indexes()
+            app.state.llm_call_store = llm_call_store
+            set_llm_call_store(llm_call_store)
+            logger.info(
+                "Shared MongoLLMCallStore initialized and wired to coordinator"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to initialize shared MongoLLMCallStore: {e}")
+            app.state.llm_call_store = None
+    else:
+        app.state.llm_call_store = None
 
     # Strategy spec auto-seed (Phase 5 / Task 60)
     if settings.strategy_os_enabled and settings.strategy_spec_auto_seed:
@@ -895,6 +921,7 @@ app.include_router(
 )
 
 app.include_router(telemetry_router_module.router)
+app.include_router(telemetry_strategy_router_module.router)
 
 app.include_router(
     strategy_specs_router_module.router,

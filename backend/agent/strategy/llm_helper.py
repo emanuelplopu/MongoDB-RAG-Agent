@@ -1,18 +1,148 @@
-"""Shared LLM integration helper for Strategy OS node executors."""
+"""Shared LLM integration helper for Strategy OS node executors.
+
+In addition to the original model-resolution / completion / JSON-extraction
+helpers, this module exposes a *capture context* (Task 90 / T2) that
+records every LLM invocation made via :meth:`NodeLLMHelper.complete`
+into an :class:`~backend.agent.strategy.llm_call_store.LLMCallStore`.
+
+The capture is fully transparent to node executors:
+
+* When :class:`backend.agent.strategy.strategy_runner.StrategyRunner`
+  is configured with an ``llm_call_store`` it pushes a fresh
+  :class:`LLMCaptureContext` (via :func:`set_capture_context`) into a
+  :class:`contextvars.ContextVar` before each node runs and pops it
+  again afterwards.
+* :meth:`NodeLLMHelper.complete` reads the active context, persists a
+  :class:`~backend.agent.strategy.llm_call_store.LLMCallDoc`, and
+  appends the resulting ``call_id`` to the context's ``call_ids``
+  list. The runner then extends ``state.llm_call_ids`` with that
+  list so the run trace carries cross-references to every captured
+  prompt/response.
+
+The capture path is *best-effort*: store failures are logged and
+swallowed, the LLM result is always returned to the caller unchanged,
+and absence of a context (or store) makes capture a no-op. Node
+executors require zero code changes.
+"""
 from __future__ import annotations
 
 import json
 import logging
 import os
 import re
+import time
+from contextvars import ContextVar, Token
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from litellm import acompletion
 
 from backend.core.model_roles import ModelRoleConfig, ModelRoleRegistry
 from backend.core.llm_providers import LLMProvider
+from backend.agent.strategy.llm_call_store import LLMCallDoc, LLMCallStore
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "NodeLLMHelper",
+    "LLMCaptureContext",
+    "set_capture_context",
+    "reset_capture_context",
+    "get_capture_context",
+]
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Capture context (Task 90 / T2)
+# ════════════════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class LLMCaptureContext:
+    """Per-node telemetry capture envelope for LLM invocations.
+
+    Pushed into :data:`_capture_ctx` by
+    :class:`~backend.agent.strategy.strategy_runner.StrategyRunner`
+    immediately before a node executes. Read by
+    :meth:`NodeLLMHelper.complete` to persist the call and to record
+    the resulting ``call_id`` for cross-reference on the run state.
+
+    Attributes:
+        trace_id: Strategy run trace identifier.
+        node_id: Stable DAG node identifier.
+        node_type: Node type token (``synthesize`` etc.).
+        store: Backend used to persist the constructed
+            :class:`LLMCallDoc`. ``None`` disables capture entirely.
+        call_ids: Mutable list that accumulates persisted call ids
+            (in invocation order) so the runner can copy them onto
+            ``state.llm_call_ids`` once the node returns.
+    """
+
+    trace_id: str
+    node_id: str
+    node_type: str
+    store: Optional[LLMCallStore] = None
+    call_ids: list[str] = field(default_factory=list)
+
+
+#: ContextVar holding the active capture context for the current
+#: asyncio task. ``None`` means "no capture" (the default; preserves
+#: backwards compatibility for code paths that construct
+#: :class:`NodeLLMHelper` directly outside a strategy run).
+_capture_ctx: ContextVar[Optional[LLMCaptureContext]] = ContextVar(
+    "strategy_llm_capture_ctx", default=None
+)
+
+
+def set_capture_context(ctx: Optional[LLMCaptureContext]) -> Token:
+    """Install ``ctx`` as the active capture context.
+
+    Returns:
+        A reset token suitable for :func:`reset_capture_context`.
+    """
+    return _capture_ctx.set(ctx)
+
+
+def reset_capture_context(token: Token) -> None:
+    """Restore the capture context to its prior value."""
+    _capture_ctx.reset(token)
+
+
+def get_capture_context() -> Optional[LLMCaptureContext]:
+    """Return the active capture context, or ``None``."""
+    return _capture_ctx.get()
+
+
+def _extract_prompts(messages: list[dict]) -> tuple[Optional[str], str]:
+    """Split ``messages`` into (system_prompt, user_prompt) for capture.
+
+    The full system prompt is the concatenation of all ``system``
+    messages (separated by ``\\n\\n``); the user prompt is every other
+    message rendered as ``ROLE:\\n<content>`` so multi-turn dialogues
+    are preserved verbatim. No truncation is performed — telemetry
+    must capture the complete prompt that was actually sent.
+    """
+    system_parts: list[str] = []
+    other_parts: list[str] = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role", "") or "")
+        content = msg.get("content", "") or ""
+        if not isinstance(content, str):
+            try:
+                content = json.dumps(content, ensure_ascii=False)
+            except Exception:  # noqa: BLE001 - best-effort serialise
+                content = str(content)
+        if role == "system":
+            system_parts.append(content)
+        elif len(messages) == 1 or role == "":
+            other_parts.append(content)
+        else:
+            other_parts.append(f"{role.upper()}:\n{content}")
+    system_prompt = "\n\n".join(system_parts) if system_parts else None
+    user_prompt = "\n\n".join(other_parts)
+    return system_prompt, user_prompt
 
 
 class NodeLLMHelper:
@@ -155,14 +285,127 @@ class NodeLLMHelper:
 
         logger.debug(f"NodeLLMHelper.complete: role={role}, model={litellm_model}, provider={provider}")
 
+        # Telemetry capture (Task 90 / T2): a no-op when no capture
+        # context is active or the bound store is ``None``.
+        capture = get_capture_context()
+        capture_active = capture is not None and capture.store is not None
+        start_perf = time.perf_counter()
+        prompt_tokens: Optional[int] = None
+        completion_tokens: Optional[int] = None
+        total_tokens: Optional[int] = None
+        text: str = ""
+        success: bool = True
+        error_message: Optional[str] = None
+
         try:
             response = await acompletion(**params)
             text = response.choices[0].message.content or ""
-            tokens = response.usage.total_tokens if response.usage else self._estimate_tokens(text)
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                total_tokens = getattr(usage, "total_tokens", None)
+                prompt_tokens = getattr(usage, "prompt_tokens", None)
+                completion_tokens = getattr(usage, "completion_tokens", None)
+            tokens = total_tokens if total_tokens is not None else self._estimate_tokens(text)
             return (text, tokens)
         except Exception as e:
+            success = False
+            error_message = f"{type(e).__name__}: {e}"
             logger.error(f"NodeLLMHelper LLM call failed: role={role}, model={litellm_model}, error={e}")
             raise
+        finally:
+            if capture_active:
+                latency_ms = (time.perf_counter() - start_perf) * 1000.0
+                await self._record_call(
+                    capture=capture,  # type: ignore[arg-type]
+                    role=role,
+                    provider=provider,
+                    model=model,
+                    messages=messages,
+                    response_text=text,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    latency_ms=latency_ms,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    success=success,
+                    error=error_message,
+                )
+
+    async def _record_call(
+        self,
+        *,
+        capture: LLMCaptureContext,
+        role: str,
+        provider: str,
+        model: str,
+        messages: list[dict],
+        response_text: str,
+        prompt_tokens: Optional[int],
+        completion_tokens: Optional[int],
+        total_tokens: Optional[int],
+        latency_ms: float,
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+        success: bool,
+        error: Optional[str],
+    ) -> None:
+        """Persist one :class:`LLMCallDoc` for the active capture context.
+
+        Best-effort: any failure constructing or saving the document is
+        logged at warning level and swallowed so a telemetry write
+        never breaks the actual strategy run. The persisted ``call_id``
+        is appended to ``capture.call_ids`` so the runner can
+        cross-reference the call from ``state.llm_call_ids``.
+        """
+        store = capture.store
+        if store is None:  # pragma: no cover - defensive
+            return
+        try:
+            system_prompt, user_prompt = _extract_prompts(messages)
+            doc = LLMCallDoc(
+                trace_id=capture.trace_id,
+                node_id=capture.node_id,
+                node_type=capture.node_type,
+                model=model,
+                provider=provider,
+                model_role=role,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                assistant_response=response_text or "",
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                latency_ms=max(0.0, float(latency_ms)),
+                temperature=temperature,
+                max_tokens=max_tokens,
+                success=success,
+                error=error,
+            )
+        except Exception as exc:  # noqa: BLE001 - never break the run
+            logger.warning(
+                "LLM-call telemetry: failed to build LLMCallDoc "
+                "(node_id=%s, trace_id=%s): %s",
+                capture.node_id,
+                capture.trace_id,
+                exc,
+            )
+            return
+        try:
+            await store.save(doc)
+        except Exception as exc:  # noqa: BLE001 - best-effort sink
+            logger.warning(
+                "LLM-call telemetry: store.save failed "
+                "(node_id=%s, trace_id=%s): %s",
+                capture.node_id,
+                capture.trace_id,
+                exc,
+            )
+            return
+        try:
+            capture.call_ids.append(doc.call_id)
+        except Exception:  # noqa: BLE001 - defensive
+            pass
 
     async def complete_json(
         self,

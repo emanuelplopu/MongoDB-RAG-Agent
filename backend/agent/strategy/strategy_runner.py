@@ -14,7 +14,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Any
+from typing import Optional, Any, Awaitable, Callable
 
 from backend.agent.strategy.models import (
     StrategySpec,
@@ -45,6 +45,12 @@ from backend.agent.strategy.run_trace_store import (
     RunTraceDoc,
     RunTraceStore,
 )
+from backend.agent.strategy.llm_call_store import LLMCallStore
+from backend.agent.strategy.llm_helper import (
+    LLMCaptureContext,
+    reset_capture_context,
+    set_capture_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +58,12 @@ __all__ = [
     "StrategyRunner",
     "StrategyExecutionError",
     "StateViolationError",
+    "NodeCompleteCallback",
 ]
+
+
+# (node_id, node_type, status, duration_ms)
+NodeCompleteCallback = Callable[[str, str, str, float], Awaitable[None]]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -108,6 +119,7 @@ class StrategyRunner:
         llm_helper=None,
         checkpoint_manager: Optional[CheckpointManager] = None,
         run_trace_store: Optional[RunTraceStore] = None,
+        llm_call_store: Optional[LLMCallStore] = None,
     ):
         """
         Initialize the strategy runner.
@@ -126,6 +138,12 @@ class StrategyRunner:
                 ``db`` is provided, a default :class:`MongoRunTraceStore`
                 is instantiated. When both are ``None``, persistence is
                 skipped silently.
+            llm_call_store: Optional :class:`LLMCallStore` used to capture
+                every LLM invocation made by node executors via the
+                shared :class:`NodeLLMHelper`. Plumbed through a
+                per-node :class:`LLMCaptureContext` so node executors
+                require zero code changes (Task 90 / T2). When
+                ``None`` LLM-call capture is silently disabled.
         """
         self.registry = registry
         self.model_registry = model_registry
@@ -143,13 +161,17 @@ class StrategyRunner:
                     "Default MongoRunTraceStore could not be constructed: %s", e
                 )
                 self.run_trace_store = None
+        self.llm_call_store = llm_call_store
         self._cancelled = False
+        # Per-run callback wired via run(); cleared after each run.
+        self._on_node_complete: Optional[NodeCompleteCallback] = None
 
     async def run(
         self,
         spec: StrategySpec,
         context: BusinessContext,
         query: str = "",
+        on_node_complete: Optional[NodeCompleteCallback] = None,
     ) -> StrategyRunResult:
         """
         Main entry point: execute a full strategy DAG.
@@ -158,6 +180,11 @@ class StrategyRunner:
             spec: The strategy specification with graph, budgets, policies
             context: Resolved business context (capability, policy, language, etc.)
             query: The user query to process
+            on_node_complete: Optional best-effort async callback invoked
+                after each node finishes (post state-merge). Receives
+                ``(node_id, node_type, status, duration_ms)``. Exceptions
+                raised by the callback are swallowed so streaming
+                telemetry can never fail the run (Task 92 / T4).
 
         Returns:
             StrategyRunResult with success/failure, state, timing, and halt_reason
@@ -166,6 +193,9 @@ class StrategyRunner:
         started_at = datetime.now(timezone.utc)
         halt_reason: Optional[str] = None
         run_exception: Optional[BaseException] = None
+        # Stash the callback for _execute_levels; cleared in the finally
+        # block so the runner remains reusable across runs.
+        self._on_node_complete = on_node_complete
 
         try:
             # 1. Initialize state
@@ -217,6 +247,10 @@ class StrategyRunner:
                 )
             state.elapsed_ms = (time.perf_counter() - run_start) * 1000
             halt_reason = f"unexpected_error: {type(e).__name__}: {e}"
+
+        # Always clear the per-run callback before returning so the
+        # runner instance can be reused safely across requests.
+        self._on_node_complete = None
 
         result = self._finalize(state, halt_reason, spec)
         completed_at = datetime.now(timezone.utc)
@@ -444,6 +478,30 @@ class StrategyRunner:
                     logger.error("State violation: %s", e)
                     return f"state_violation: {e}"
 
+                # Best-effort per-node telemetry callback. Fired after
+                # the merge so the SSE stream can surface progress.
+                # Skip ``pending`` outputs (defensive — should never
+                # happen here since execute_single_node always returns
+                # a terminal status). Never let callback failures
+                # affect the run.
+                if (
+                    self._on_node_complete is not None
+                    and output.status != "pending"
+                ):
+                    try:
+                        await self._on_node_complete(
+                            output.node_id,
+                            output.node_type,
+                            output.status,
+                            float(output.duration_ms or 0.0),
+                        )
+                    except Exception as cb_exc:  # noqa: BLE001 - best effort
+                        logger.debug(
+                            "on_node_complete callback failed for node %s (non-fatal): %s",
+                            output.node_id,
+                            cb_exc,
+                        )
+
                 # Check on_error="halt" policy
                 if output.status in _TERMINAL_STATUSES:
                     node = compiled.node_map.get(output.node_id)
@@ -482,12 +540,40 @@ class StrategyRunner:
     ) -> NodeOutput:
         """Execute a single node with timeout handling.
 
+        When :attr:`llm_call_store` is configured, a fresh
+        :class:`LLMCaptureContext` is pushed for the duration of the
+        node so any LLM invocation routed through
+        :class:`NodeLLMHelper` is persisted automatically. Captured
+        ``call_id`` values are appended to ``state.llm_call_ids`` so
+        the run trace cross-references every prompt/response.
+
         Returns:
             NodeOutput with appropriate status (success, error, timed_out, skipped).
         """
         timeout_s = (
             node.timeout_ms / 1000.0 if node.timeout_ms else _DEFAULT_NODE_TIMEOUT_S
         )
+
+        capture: Optional[LLMCaptureContext] = None
+        capture_token = None
+        if self.llm_call_store is not None:
+            capture = LLMCaptureContext(
+                trace_id=state.trace_id,
+                node_id=node.node_id,
+                node_type=node.node_type,
+                store=self.llm_call_store,
+                call_ids=[],
+            )
+            try:
+                capture_token = set_capture_context(capture)
+            except Exception as exc:  # noqa: BLE001 - never break the run
+                logger.debug(
+                    "set_capture_context failed for node %s (non-fatal): %s",
+                    node.node_id,
+                    exc,
+                )
+                capture = None
+                capture_token = None
 
         try:
             output = await asyncio.wait_for(
@@ -523,6 +609,25 @@ class StrategyRunner:
                 tokens_used=0,
                 retry_count=0,
             )
+        finally:
+            if capture_token is not None:
+                try:
+                    reset_capture_context(capture_token)
+                except Exception as exc:  # noqa: BLE001 - never break the run
+                    logger.debug(
+                        "reset_capture_context failed for node %s (non-fatal): %s",
+                        node.node_id,
+                        exc,
+                    )
+            if capture is not None and capture.call_ids:
+                try:
+                    state.llm_call_ids.extend(capture.call_ids)
+                except Exception as exc:  # noqa: BLE001 - never break the run
+                    logger.debug(
+                        "Could not append captured llm_call_ids for node %s: %s",
+                        node.node_id,
+                        exc,
+                    )
 
     async def _execute_node_with_retry(
         self,

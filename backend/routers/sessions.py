@@ -249,6 +249,7 @@ class Message(BaseModel):
     attachments: Optional[List[Dict[str, Any]]] = None  # Attached files for multimodal
     thinking: Optional[AgentThinkingResponse] = None  # Search and tool operations performed
     agent_trace: Optional[Dict[str, Any]] = None  # Federated agent full trace
+    strategy_trace: Optional[Dict[str, Any]] = None  # Strategy OS execution trace (T3 / Task 91)
 
 
 class SessionStats(BaseModel):
@@ -1047,6 +1048,18 @@ async def send_message(
     
     # Convert trace to response format
     trace_response = trace.to_response_dict()
+
+    # Strategy OS trace (T3 / Task 91): when the coordinator ran the
+    # Strategy DAG (or attempted to) it stashes a StrategyTraceResponse
+    # on ``agent.strategy_trace``. Serialise here so persistence and
+    # the frontend payload pick it up alongside the legacy trace.
+    strategy_trace_payload: Optional[Dict[str, Any]] = None
+    if agent.strategy_trace is not None:
+        try:
+            strategy_trace_payload = agent.strategy_trace.model_dump(mode="json")
+        except Exception as e:  # noqa: BLE001 - trace serialisation must not fail the request
+            logger.warning(f"Failed to serialise strategy_trace for session={session_id}: {e}")
+            strategy_trace_payload = None
     
     # Build sources from trace
     sources = []
@@ -1073,6 +1086,7 @@ async def send_message(
         model=session_model,
         sources=sources if sources else None,
         agent_trace=trace_response,
+        strategy_trace=strategy_trace_payload,
         stats=MessageStats(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -1427,6 +1441,9 @@ async def send_message_stream(
                         yield f"data: {json.dumps({'type': 'orchestrator_step', **event['data']})}\n\n"
                     elif event['type'] == 'worker_step':
                         yield f"data: {json.dumps({'type': 'worker_step', **event['data']})}\n\n"
+                    elif event['type'] == 'strategy_node':
+                        # Per-node Strategy DAG progress (Task 92 / T4)
+                        yield f"data: {json.dumps({'type': 'strategy_node', **event['data']})}\n\n"
                     else:
                         yield f"data: {json.dumps(event)}\n\n"
 
@@ -1482,7 +1499,19 @@ async def send_message_stream(
             
             # Send final response
             trace_response = trace.to_response_dict()
-            
+
+            # Strategy OS trace (Task 92 / T4): mirror the non-streaming
+            # path so SSE clients receive the same trace shape.
+            strategy_trace_sse: Optional[Dict[str, Any]] = None
+            if agent.strategy_trace is not None:
+                try:
+                    strategy_trace_sse = agent.strategy_trace.model_dump(mode="json")
+                except Exception as e:  # noqa: BLE001 - never fail the stream
+                    logger.warning(
+                        f"[req={stream_req_id}] Failed to serialise strategy_trace: {e}"
+                    )
+                    strategy_trace_sse = None
+
             # Build sources
             sources = []
             for doc_ref in trace.all_documents[:10]:
@@ -1507,7 +1536,8 @@ async def send_message_stream(
                     'tokens_per_second': round(tokens_per_second, 1),
                     'latency_ms': round(generation_time * 1000, 0)
                 },
-                'trace': trace_response
+                'trace': trace_response,
+                'strategy_trace': strategy_trace_sse,
             }
             yield f"data: {json.dumps(final_event)}\n\n"
             
@@ -1524,6 +1554,7 @@ async def send_message_stream(
                 model=session_model,
                 sources=sources if sources else None,
                 agent_trace=trace_response,
+                strategy_trace=strategy_trace_sse,
                 stats=MessageStats(
                     input_tokens=trace.orchestrator_tokens,
                     output_tokens=trace.worker_tokens,
