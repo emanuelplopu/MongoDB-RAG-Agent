@@ -237,7 +237,7 @@ export function DataSourceProvider({ children }: { children: React.ReactNode }) 
       source,
       filesLoaded,
       connectionInfo: connectionInfo
-        ? { url: connectionInfo.url, connected: connectionInfo.connected }
+        ? { url: connectionInfo.url, token: connectionInfo.token, connected: connectionInfo.connected }
         : undefined,
     }),
     [records, loading, error, source, filesLoaded, connectionInfo],

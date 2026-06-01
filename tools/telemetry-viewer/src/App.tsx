@@ -7,6 +7,7 @@ import BrowserPage from './pages/BrowserPage'
 import ComparePage from './pages/ComparePage'
 import ImportPage from './pages/ImportPage'
 import StatsPage from './pages/StatsPage'
+import StrategyRunsPage from './pages/StrategyRunsPage'
 
 type Theme = 'light' | 'dark' | 'system'
 
@@ -49,6 +50,7 @@ export default function App() {
     { path: '/compare', labelKey: 'nav.compare', icon: '⚖️' },
     { path: '/import', labelKey: 'nav.import', icon: '📥' },
     { path: '/stats', labelKey: 'nav.stats', icon: '📊' },
+    { path: '/strategy', labelKey: 'nav.strategy', icon: '🧠' },
   ]
 
   return (
@@ -131,6 +133,7 @@ export default function App() {
           <Route path="/compare" element={<ComparePage />} />
           <Route path="/import" element={<ImportPage />} />
           <Route path="/stats" element={<StatsPage />} />
+          <Route path="/strategy" element={<StrategyRunsPage />} />
         </Routes>
       </main>
     </div>

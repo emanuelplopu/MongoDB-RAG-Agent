@@ -6,7 +6,7 @@ export interface DataSourceState {
   loading: boolean
   error: string | null
   source: 'local' | 'remote' | 'none'
-  connectionInfo?: { url: string; connected: boolean }
+  connectionInfo?: { url: string; token: string; connected: boolean }
   filesLoaded: string[]
 }
 

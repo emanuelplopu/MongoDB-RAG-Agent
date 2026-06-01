@@ -38,4 +38,61 @@ export const remoteApi = {
     const response = await client.get('/stats', { params: { range } })
     return response.data
   },
+
+  // -- Strategy OS endpoints --------------------------------------------
+
+  fetchStrategyRuns: async (
+    url: string,
+    token: string,
+    params: {
+      since?: string
+      until?: string
+      strategy_id?: string
+      status?: string
+      limit?: number
+      offset?: number
+    }
+  ) => {
+    const client = createClient(url, token)
+    const response = await client.get('/strategy/runs', { params })
+    return response.data
+  },
+
+  fetchStrategyRun: async (url: string, token: string, traceId: string) => {
+    const client = createClient(url, token)
+    const response = await client.get(`/strategy/runs/${traceId}`)
+    return response.data
+  },
+
+  fetchStrategyLLMCalls: async (
+    url: string,
+    token: string,
+    traceId: string
+  ) => {
+    const client = createClient(url, token)
+    const response = await client.get(`/strategy/runs/${traceId}/llm-calls`)
+    return response.data
+  },
+
+  fetchAdaptiveDecisions: async (
+    url: string,
+    token: string,
+    params: {
+      since?: string
+      until?: string
+      capability_id?: string
+      limit?: number
+      offset?: number
+    }
+  ) => {
+    const client = createClient(url, token)
+    const response = await client.get('/strategy/decisions', { params })
+    return response.data
+  },
+
+  fetchStrategyStats: async (url: string, token: string, range = '7d') => {
+    const client = createClient(url, token)
+    const response = await client.get('/strategy/stats', { params: { range } })
+    return response.data
+  },
 }
