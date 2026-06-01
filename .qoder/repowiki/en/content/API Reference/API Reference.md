@@ -16,6 +16,9 @@
 - [backend/routers/backup.py](file://backend/routers/backup.py)
 - [backend/routers/embedding_benchmark.py](file://backend/routers/embedding_benchmark.py)
 - [backend/routers/strategies.py](file://backend/routers/strategies.py)
+- [backend/routers/strategy_specs.py](file://backend/routers/strategy_specs.py)
+- [backend/routers/evaluation.py](file://backend/routers/evaluation.py)
+- [backend/routers/scheduler.py](file://backend/routers/scheduler.py)
 - [backend/core/model_versions.py](file://backend/core/model_versions.py)
 - [backend/models/backup_schemas.py](file://backend/models/backup_schemas.py)
 - [frontend/src/pages/SystemPage.tsx](file://frontend/src/pages/SystemPage.tsx)
@@ -24,13 +27,10 @@
 
 ## Update Summary
 **Changes Made**
-- Added new Admin Panel API section documenting system health, user management, configuration, logs, and statistics endpoints
-- Added new Backup Management API section documenting full/incremental/checkpoint backup operations and restore functionality
-- Added new Embedding Benchmark API section documenting provider comparison, connectivity testing, and historical results
-- Added new Strategy Management API section documenting A/B testing, performance metrics, and LLM-based response comparison
-- Updated Project Structure diagram to include new routers for admin, backup, embedding benchmark, and strategies
-- Enhanced Frontend Integration section with new admin pages and backup management interfaces
-- Added comprehensive error handling and security considerations for new admin-protected endpoints
+- Added new Strategy OS API section documenting strategy specifications, evaluation, and scheduler endpoints
+- Updated Project Structure diagram to include new routers for strategy_specs, evaluation, and scheduler
+- Enhanced Frontend Integration section with new Strategy Management interfaces
+- Added comprehensive error handling and security considerations for new Strategy OS endpoints
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -45,7 +45,7 @@
 10. [Appendices](#appendices)
 
 ## Introduction
-This document provides comprehensive API documentation for the RecallHub backend. It covers authentication, chat and search, ingestion management, system configuration, model version management, admin panel operations, backup management, embedding benchmarking, and strategy management with A/B testing. For each endpoint, you will find HTTP methods, URL patterns, request/response schemas, authentication requirements, error handling strategies, status codes, and practical usage examples. It also documents rate limiting, security considerations, and API versioning.
+This document provides comprehensive API documentation for the RecallHub backend. It covers authentication, chat and search, ingestion management, system configuration, model version management, admin panel operations, backup management, embedding benchmarking, strategy management with A/B testing, and the new Strategy OS APIs including strategy specifications, evaluation system, and scheduler management. For each endpoint, you will find HTTP methods, URL patterns, request/response schemas, authentication requirements, error handling strategies, status codes, and practical usage examples. It also documents rate limiting, security considerations, and API versioning.
 
 ## Project Structure
 The backend is a FastAPI application that mounts multiple routers under a common base path. The main application initializes middleware, exception handlers, and includes routers for:
@@ -60,10 +60,9 @@ The backend is a FastAPI application that mounts multiple routers under a common
 - Local LLM and prompts
 - Cloud sources (connections, OAuth, sync, providers, cache)
 - Model Versions
-- **New**: Admin Panel (system health, user management, configuration, logs, statistics)
-- **New**: Backup Management (full/incremental/checkpoint operations)
-- **New**: Embedding Benchmark (provider comparison and testing)
-- **New**: Strategy Management (A/B testing and performance metrics)
+- **New**: Strategy Specifications (CRUD with optimistic locking)
+- **New**: Evaluation System (strategy testing and comparison)
+- **New**: Scheduler (overnight exploration management)
 
 ```mermaid
 graph TB
@@ -81,19 +80,18 @@ B --> B10["/api/v1/local-llm"]
 B --> B11["/api/v1/prompts"]
 B --> B12["/api/v1/cloud-sources/*"]
 B --> B13["/api/v1/model-versions"]
-B --> B14["/api/v1/admin/*"]
-B --> B15["/api/v1/backups/*"]
-B --> B16["/api/v1/benchmark/*"]
-B --> B17["/api/v1/strategies/*"]
+B --> B14["/api/v1/evaluation/*"]
+B --> B15["/api/v1/scheduler/*"]
+B --> B16["/api/v1 (strategy-specs)"]
 ```
 
 **Diagram sources**
-- [backend/main.py:534-550](file://backend/main.py#L534-L550)
-- [backend/main.py:418-550](file://backend/main.py#L418-L550)
+- [backend/main.py:911-930](file://backend/main.py#L911-L930)
+- [backend/main.py:759-930](file://backend/main.py#L759-L930)
 
 **Section sources**
 - [backend/main.py:28-37](file://backend/main.py#L28-L37)
-- [backend/main.py:418-550](file://backend/main.py#L418-L550)
+- [backend/main.py:759-930](file://backend/main.py#L759-L930)
 
 ## Core Components
 - Authentication: JWT bearer and API key support, user registration/login/logout/me, admin user management, and profile access controls.
@@ -104,10 +102,9 @@ B --> B17["/api/v1/strategies/*"]
 - System: Health checks, stats, configuration, index management, and model listings.
 - Status/Index Dashboards: System metrics, profile KPIs, and index performance insights.
 - Model Versions: Comprehensive model registry, version management, compatibility checking, and configuration switching.
-- **New**: Admin Panel: System health monitoring, user management, configuration updates, log viewing, and statistics collection.
-- **New**: Backup Management: Full/incremental/checkpoint backup operations, restore functionality, and storage management.
-- **New**: Embedding Benchmark: Provider comparison, connectivity testing, and historical performance analysis.
-- **New**: Strategy Management: A/B testing framework, performance metrics, and LLM-based response evaluation.
+- **New**: Strategy Specifications: Full CRUD operations for strategy definitions with optimistic concurrency control and version management.
+- **New**: Evaluation System: Automated strategy testing, comparison, and performance benchmarking with test case management.
+- **New**: Scheduler: Overnight exploration scheduling, run management, and execution control.
 
 **Section sources**
 - [backend/routers/auth.py:192-285](file://backend/routers/auth.py#L192-L285)
@@ -119,17 +116,16 @@ B --> B17["/api/v1/strategies/*"]
 - [backend/routers/status.py:74-132](file://backend/routers/status.py#L74-L132)
 - [backend/routers/indexes.py:78-108](file://backend/routers/indexes.py#L78-L108)
 - [backend/routers/model_versions.py:1-459](file://backend/routers/model_versions.py#L1-L459)
-- [backend/routers/admin.py:121-172](file://backend/routers/admin.py#L121-L172)
-- [backend/routers/backup.py:39-93](file://backend/routers/backup.py#L39-L93)
-- [backend/routers/embedding_benchmark.py:131-216](file://backend/routers/embedding_benchmark.py#L131-L216)
-- [backend/routers/strategies.py:76-111](file://backend/routers/strategies.py#L76-L111)
+- [backend/routers/strategy_specs.py:248-422](file://backend/routers/strategy_specs.py#L248-L422)
+- [backend/routers/evaluation.py:91-204](file://backend/routers/evaluation.py#L91-L204)
+- [backend/routers/scheduler.py:151-335](file://backend/routers/scheduler.py#L151-L335)
 
 ## Architecture Overview
 The API follows a layered architecture:
 - Application layer: FastAPI app with middleware and exception handlers.
 - Router layer: Feature-based routers exposing REST endpoints.
-- Domain layer: Business logic for chat, search, ingestion, system operations, model management, admin operations, backup management, embedding benchmarking, and strategy management.
-- Persistence layer: MongoDB collections for users, API keys, ingestion jobs, system config, model configurations, backups, benchmark results, and strategy metrics.
+- Domain layer: Business logic for chat, search, ingestion, system operations, model management, admin operations, backup management, embedding benchmarking, strategy management, strategy specifications, evaluation system, and scheduler management.
+- Persistence layer: MongoDB collections for users, API keys, ingestion jobs, system config, model configurations, backups, benchmark results, strategy metrics, evaluation runs, and scheduler schedules.
 
 ```mermaid
 graph TB
@@ -150,20 +146,18 @@ RSystem["System Router"]
 RStatus["Status Router"]
 RIndexes["Indexes Router"]
 RModels["Model Versions Router"]
-RAdmin["Admin Router"]
-RBackup["Backup Router"]
-RBenchmark["Embedding Benchmark Router"]
-RStrategies["Strategies Router"]
+RStrategySpecs["Strategy Specs Router"]
+REvaluation["Evaluation Router"]
+RScheduler["Scheduler Router"]
 end
 subgraph "Domain & Persistence"
 DB["MongoDB Collections"]
 PM["Profile Manager"]
 IP["Ingestion Pipeline"]
 MR["Model Registry"]
-AS["Admin Services"]
-BS["Backup Service"]
-EB["Embedding Benchmark Service"]
-SM["Strategy Manager"]
+SS["Strategy Specs Store"]
+ES["Evaluation Runner"]
+SD["Scheduler Daemon"]
 end
 M --> MW1 --> MW2 --> MW3 --> MW4 --> RAuth
 MW4 --> RChat --> DB
@@ -174,19 +168,17 @@ MW4 --> RSystem --> DB
 MW4 --> RStatus --> DB
 MW4 --> RIndexes --> DB
 MW4 --> RModels --> MR --> DB
-MW4 --> RAdmin --> AS --> DB
-MW4 --> RBackup --> BS --> DB
-MW4 --> RBenchmark --> EB --> DB
-MW4 --> RStrategies --> SM --> DB
+MW4 --> RStrategySpecs --> SS --> DB
+MW4 --> REvaluation --> ES --> DB
+MW4 --> RScheduler --> SD --> DB
 ```
 
 **Diagram sources**
 - [backend/main.py:227-255](file://backend/main.py#L227-L255)
-- [backend/main.py:418-550](file://backend/main.py#L418-L550)
-- [backend/routers/admin.py:1-598](file://backend/routers/admin.py#L1-L598)
-- [backend/routers/backup.py:1-459](file://backend/routers/backup.py#L1-L459)
-- [backend/routers/embedding_benchmark.py:1-442](file://backend/routers/embedding_benchmark.py#L1-L442)
-- [backend/routers/strategies.py:1-659](file://backend/routers/strategies.py#L1-L659)
+- [backend/main.py:759-930](file://backend/main.py#L759-L930)
+- [backend/routers/strategy_specs.py:137-182](file://backend/routers/strategy_specs.py#L137-L182)
+- [backend/routers/evaluation.py:17-20](file://backend/routers/evaluation.py#L17-L20)
+- [backend/routers/scheduler.py:111-144](file://backend/routers/scheduler.py#L111-L144)
 
 ## Detailed Component Analysis
 
@@ -264,268 +256,256 @@ Error Handling:
 - [backend/routers/auth.py:289-422](file://backend/routers/auth.py#L289-L422)
 - [backend/routers/auth.py:517-800](file://backend/routers/auth.py#L517-L800)
 
-### Admin Panel API Endpoints
-- Base Path: /api/v1/admin
+### Strategy Specifications API Endpoints
+- Base Path: /api/v1 (strategy-specs router)
 - **All endpoints require admin privileges** and are protected by the `require_admin` dependency.
 
-#### System Health and Monitoring
-- GET /api/v1/admin/dashboard
-  - Response: SystemHealth
-  - Description: Comprehensive system health dashboard with CPU, memory, disk usage, service status, and MongoDB/Ollama connectivity.
-- GET /api/v1/admin/health/detailed
-  - Response: Detailed health check results for MongoDB, Ollama, disk, and memory.
-  - Description: Provides detailed component health status and metrics.
+#### Strategy Specification CRUD Operations
+- POST /api/v1/strategy-specs
+  - Request: StrategySpec (JSON payload)
+  - Response: StrategySpec
+  - Description: Create a new strategy specification with optimistic locking.
+  - Notes: Validates spec using validate_spec function; raises 409 if spec already exists.
+- GET /api/v1/strategy-specs
+  - Query: status, capability_id, tenant_id, limit
+  - Response: SpecListResponse
+  - Description: List latest versions of all strategy specifications with optional filters.
+- GET /api/v1/strategy-specs/{spec_id}
+  - Query: version (optional semantic version)
+  - Response: StrategySpec with metadata
+  - Description: Retrieve a specific strategy specification by ID and optional version.
+- PUT /api/v1/strategy-specs/{spec_id}
+  - Request: StrategySpec (JSON payload)
+  - Header: X-Expected-Version (optimistic locking)
+  - Response: StrategySpec
+  - Description: Update an existing strategy specification with version conflict detection.
+- DELETE /api/v1/strategy-specs/{spec_id}
+  - Response: SpecDeleteResponse
+  - Description: Soft-delete a strategy specification by marking latest version as archived.
 
-#### Configuration Management
-- GET /api/v1/admin/config
-  - Response: Current system configuration (with sensitive values redacted).
-  - Description: Returns current configuration including LLM provider, embedding provider, cloud sources, remote access, backup retention, and log level.
-- POST /api/v1/admin/config
-  - Request: AdminConfig
-  - Response: Update result with restart requirement indicator.
-  - Description: Updates system configuration. Some changes require service restart.
+#### Version History and Validation
+- POST /api/v1/strategy-specs/{spec_id}/validate
+  - Response: SpecValidationResponse
+  - Description: Validate a stored strategy specification using validate_spec function.
+- GET /api/v1/strategy-specs/{spec_id}/history
+  - Response: SpecHistoryResponse
+  - Description: Retrieve complete version history for a strategy specification.
 
-#### User Management
-- GET /api/v1/admin/users
-  - Response: List of all users with basic information.
-  - Description: Lists all system users for administrative oversight.
-- POST /api/v1/admin/users/{user_id}/role
-  - Query: role (user or admin)
-  - Response: Success message with updated role.
-  - Description: Updates user role assignment.
+#### Lifecycle Management (Promotion/Deprecation/Archive/Rollback)
+- POST /api/v1/strategy-specs/{spec_id}/versions/{version}/promote
+  - Request: PromotionRequest (actor, reason)
+  - Response: StrategySpec
+  - Description: Promote a draft specification to active status.
+- POST /api/v1/strategy-specs/{spec_id}/versions/{version}/deprecate
+  - Request: PromotionRequest (actor, reason)
+  - Response: StrategySpec
+  - Description: Deprecate an active specification.
+- POST /api/v1/strategy-specs/{spec_id}/versions/{version}/archive
+  - Request: PromotionRequest (actor, reason)
+  - Response: StrategySpec
+  - Description: Archive a deprecated specification.
+- POST /api/v1/strategy-specs/{spec_id}/rollback
+  - Request: RollbackRequest (target_version, actor, reason)
+  - Response: StrategySpec
+  - Description: Rollback active specification to a previous version.
 
-#### Statistics and Metrics
-- GET /api/v1/admin/stats
-  - Response: System statistics including document counts, chunk counts, session counts, user counts, and database size metrics.
-  - Description: Provides comprehensive system usage statistics and storage metrics.
-
-#### Version Management
-- GET /api/v1/admin/version
-  - Response: SystemVersion
-  - Description: Returns current system version information including installed version, installation timestamp, previous version, and update history.
-
-Common Schemas:
-- SystemHealth: status, uptime_seconds, cpu_percent, memory_percent, disk_percent, mongodb_status, ollama_status, services
-- AdminConfig: llm_provider, llm_model, embedding_provider, embedding_model, enable_cloud_sources, enable_remote_access, backup_retention_days, log_level
-- LogEntry: timestamp, level, message, logger
-- SystemVersion: version, installed_at, previous_version, update_history
-
-Example Requests:
-- System Dashboard:
-  - Method: GET
-  - URL: /api/v1/admin/dashboard
-  - Headers: Authorization: Bearer <ADMIN_JWT>
-  - Response: SystemHealth with current system metrics
-
-Error Handling:
-- 401 Unauthorized for invalid or missing admin credentials.
-- 403 Forbidden for non-admin users attempting admin operations.
-- 500 Internal Server Error for system health check failures.
-
-**Section sources**
-- [backend/routers/admin.py:121-172](file://backend/routers/admin.py#L121-L172)
-- [backend/routers/admin.py:175-228](file://backend/routers/admin.py#L175-L228)
-- [backend/routers/admin.py:235-309](file://backend/routers/admin.py#L235-L309)
-- [backend/routers/admin.py:430-473](file://backend/routers/admin.py#L430-L473)
-- [backend/routers/admin.py:480-510](file://backend/routers/admin.py#L480-L510)
-- [backend/routers/admin.py:517-538](file://backend/routers/admin.py#L517-L538)
-
-### Backup Management API Endpoints
-- Base Path: /api/v1/backups
-- **All endpoints require admin privileges** and are protected by the `require_admin` dependency.
-
-#### Backup Creation Operations
-- POST /api/v1/backups/create
-  - Request: CreateBackupRequest
-  - Response: BackupMetadata
-  - Description: Creates new backups with support for full, incremental, and checkpoint types.
-  - Notes: Full and incremental backups run asynchronously; use status endpoint for progress.
-- POST /api/v1/backups/checkpoint
-  - Request: CreateCheckpointRequest
-  - Response: BackupMetadata
-  - Description: Creates lightweight checkpoint snapshots for quick recovery points.
-
-#### Backup Listing and Management
-- GET /api/v1/backups/
-  - Query: profile_key, backup_type, limit, skip
-  - Response: BackupListResponse
-  - Description: Lists all backups with optional filtering by profile and type.
-- GET /api/v1/backups/checkpoints
-  - Query: profile_key, limit, skip
-  - Response: BackupListResponse
-  - Description: Lists all checkpoints specifically.
-
-#### Configuration and Status
-- GET /api/v1/backups/config
-  - Response: BackupConfig
-  - Description: Retrieves current backup system configuration.
-- PUT /api/v1/backups/config
-  - Request: UpdateBackupConfigRequest
-  - Response: BackupConfig
-  - Description: Updates backup configuration including retention policies, compression, and scheduling.
-- GET /api/v1/backups/status
-  - Response: BackupProgress or null
-  - Description: Returns current backup operation progress or null if idle.
-- GET /api/v1/backups/storage
-  - Response: StorageStats
-  - Description: Returns backup storage statistics including total size, backup counts, and available space.
-
-#### Individual Backup Operations
-- GET /api/v1/backups/{backup_id}
-  - Response: BackupMetadata
-  - Description: Retrieves detailed information about a specific backup.
-- GET /api/v1/backups/{backup_id}/chain
-  - Response: List[BackupMetadata]
-  - Description: Returns the backup chain for incremental backups from full to specified backup.
-- POST /api/v1/backups/{backup_id}/restore
-  - Request: RestoreBackupRequest
-  - Response: RestoreResult
-  - Description: Restores database from backup with support for full, merge, and selective modes.
-- DELETE /api/v1/backups/{backup_id}
-  - Response: Success message
-  - Description: Deletes a backup and its associated files.
-
-Backup Types and Behaviors:
-- **Full**: Complete database backup with all collections and data
-- **Incremental**: Changes since last backup (requires parent full backup)
-- **Checkpoint**: Lightweight state snapshot with collection counts and hashes
-- **Post-Ingestion**: Automatic backup triggered after successful ingestion
-
-Restore Modes:
-- **Full**: Replace all data with backup data (irreversible)
-- **Merge**: Add missing documents only (preserves existing data)
-- **Selective**: Restore specific collections only
+Strategy Specification Management Features:
+- **Optimistic Concurrency Control**: Uses X-Expected-Version header for conflict detection
+- **Version Tracking**: Maintains complete version history with spec_hash verification
+- **Lifecycle States**: draft → active → deprecated → archived
+- **Validation**: Built-in spec validation using validate_spec function
+- **Cache Invalidation**: Automatic cache clearing for spec selector on state changes
 
 Common Schemas:
-- BackupType: full, incremental, checkpoint, post_ingestion
-- BackupStatus: pending, in_progress, completed, failed
-- RestoreMode: full, merge, selective
-- CreateBackupRequest: backup_type, profile_key, name, include_embeddings, include_system_collections
-- CreateCheckpointRequest: name, profile_key, description
-- RestoreBackupRequest: backup_id, restore_mode, collections, skip_users, skip_sessions, target_database
-- BackupMetadata: comprehensive backup information including timing, size, collections, and status
-- BackupConfig: system-wide backup configuration
-- StorageStats: backup storage usage metrics
-- RestoreResult: detailed restore operation results
-- BackupProgress: current backup operation progress
+- StrategySpec: Complete strategy definition with metadata (strategy_id, version, status, config, etc.)
+- SpecValidationResponse: { valid: boolean, errors: string[] }
+- SpecVersionInfo: { version, version_counter, status, created_at, spec_hash }
+- SpecHistoryResponse: { spec_id, versions: SpecVersionInfo[] }
+- SpecListResponse: { specs: array, total: number }
+- SpecDeleteResponse: { spec_id, status, message }
+- PromotionRequest: { actor: string, reason: string }
+- RollbackRequest: { target_version: string, actor: string, reason: string }
 
 Example Requests:
-- Create Full Backup:
+- Create Strategy Spec:
   - Method: POST
-  - URL: /api/v1/backups/create
-  - Headers: Authorization: Bearer <ADMIN_JWT>
-  - Body: { "backup_type": "full", "profile_key": "default", "include_embeddings": true, "include_system_collections": true }
-- List Backups:
-  - Method: GET
-  - URL: /api/v1/backups/?backup_type=incremental&limit=10
-  - Headers: Authorization: Bearer <ADMIN_JWT>
-
-Error Handling:
-- 401 Unauthorized for invalid or missing admin credentials.
-- 404 Not Found for non-existent backup IDs.
-- 400 Bad Request for invalid restore parameters or backup type mismatches.
-- 500 Internal Server Error for backup/restore operation failures.
-
-**Section sources**
-- [backend/routers/backup.py:39-93](file://backend/routers/backup.py#L39-L93)
-- [backend/routers/backup.py:96-124](file://backend/routers/backup.py#L96-L124)
-- [backend/routers/backup.py:129-195](file://backend/routers/backup.py#L129-L195)
-- [backend/routers/backup.py:201-251](file://backend/routers/backup.py#L201-L251)
-- [backend/routers/backup.py:256-298](file://backend/routers/backup.py#L256-L298)
-- [backend/routers/backup.py:304-426](file://backend/routers/backup.py#L304-L426)
-- [backend/models/backup_schemas.py:9-193](file://backend/models/backup_schemas.py#L9-L193)
-
-### Embedding Benchmark API Endpoints
-- Base Path: /api/v1/benchmark
-- **All endpoints require admin privileges** and are protected by the `require_admin` dependency.
-
-#### Benchmark Operations
-- POST /api/v1/benchmark/run
-  - Request: BenchmarkRequest (base64 file content)
-  - Response: BenchmarkResultResponse
-  - Description: Runs comprehensive benchmark comparing multiple embedding providers with detailed metrics.
-- POST /api/v1/benchmark/run-file
-  - Request: Multipart form with file upload
-  - Response: BenchmarkResultResponse
-  - Description: Alternative endpoint accepting direct file uploads instead of base64 encoding.
-
-#### Provider Management
-- GET /api/v1/benchmark/providers
-  - Response: AvailableProvidersResponse
-  - Description: Returns available embedding providers including OpenAI, Ollama, vLLM, and custom endpoints.
-- POST /api/v1/benchmark/test-provider
-  - Request: ProviderTestRequest
-  - Response: ProviderTestResponse
-  - Description: Tests connectivity to an embedding provider and returns latency and dimension information.
-
-#### Historical Results
-- GET /api/v1/benchmark/results
-  - Query: limit (default: 20)
-  - Response: Results container with benchmark results array.
-  - Description: Retrieves historical benchmark results from the database.
-- GET /api/v1/benchmark/results/{benchmark_id}
-  - Response: Individual benchmark result document.
-  - Description: Retrieves a specific benchmark result by ID.
-- DELETE /api/v1/benchmark/results/{benchmark_id}
-  - Response: Success message
-  - Description: Deletes a benchmark result from the database.
-
-Benchmark Metrics and Analysis:
-- **Total Time**: Complete benchmark execution time
-- **Chunking Time**: Time spent on document chunking
-- **Embedding Time**: Time spent generating embeddings
-- **Average Latency**: Per-chunk processing latency
-- **Tokens Processed**: Total tokens processed during benchmark
-- **Chunks Created**: Number of document chunks generated
-- **Memory Usage**: CPU and memory consumption before, during, and after benchmark
-- **Cost Estimate**: Estimated USD cost for the operation
-
-Provider Information:
-- **Provider Name**: OpenAI, Ollama, vLLM, or custom
-- **Model**: Specific model being tested
-- **URL**: Endpoint URL (for custom providers)
-- **Available**: Connectivity status
-- **Models**: Available model variants with dimensions
-
-Common Schemas:
-- BenchmarkRequest: providers array, file_content (base64), file_name, chunk_config
-- BenchmarkResultResponse: comprehensive benchmark results with winner determination
-- ProviderConfigRequest: provider configuration for benchmarking
-- ChunkConfigRequest: chunking parameters (size, overlap, max_tokens)
-- BenchmarkMetricsResponse: detailed metrics for individual provider
-- ProviderTestRequest: provider connectivity test parameters
-- ProviderTestResponse: connectivity test results
-- AvailableProvidersResponse: structured provider information
-- ProviderInfo: individual provider details
-- ProviderModelInfo: model information with dimensions
-
-Example Requests:
-- Run Benchmark:
-  - Method: POST
-  - URL: /api/v1/benchmark/run
+  - URL: /api/v1/strategy-specs
   - Headers: Authorization: Bearer <ADMIN_JWT>
   - Body: {
-    "providers": [
-      {"provider_type": "openai", "model": "text-embedding-3-small"},
-      {"provider_type": "ollama", "model": "nomic-embed-text"}
-    ],
-    "file_content": "base64_encoded_file_content",
-    "file_name": "sample.txt",
-    "chunk_config": {"chunk_size": 1000, "chunk_overlap": 200, "max_tokens": 512}
+    "strategy_id": "enhanced-strategy-v1",
+    "version": "1.0.0",
+    "status": "draft",
+    "capability_id": "legal_research",
+    "config": { /* strategy configuration */ },
+    "promotable": true
+  }
+- Update Strategy Spec:
+  - Method: PUT
+  - URL: /api/v1/strategy-specs/enhanced-strategy-v1
+  - Headers: Authorization: Bearer <ADMIN_JWT>, X-Expected-Version: 1
+  - Body: { /* updated spec */ }
+
+Error Handling:
+- 400 Bad Request for invalid spec payloads or validation failures
+- 401 Unauthorized for invalid or missing admin credentials
+- 404 Not Found for non-existent specs or versions
+- 409 Conflict for version conflicts or invalid state transitions
+- 500 Internal Server Error for persistence failures
+
+**Section sources**
+- [backend/routers/strategy_specs.py:248-422](file://backend/routers/strategy_specs.py#L248-L422)
+- [backend/routers/strategy_specs.py:424-466](file://backend/routers/strategy_specs.py#L424-L466)
+- [backend/routers/strategy_specs.py:527-641](file://backend/routers/strategy_specs.py#L527-L641)
+
+### Evaluation System API Endpoints
+- Base Path: /api/v1/evaluation
+- **All endpoints require admin privileges** and are protected by the `require_admin` dependency.
+
+#### Evaluation Execution
+- POST /api/v1/evaluation/run
+  - Request: RunEvaluationRequest (strategy_id, dataset_id, judge_model)
+  - Response: RunEvaluationResponse
+  - Description: Execute evaluation run for a strategy against specified dataset.
+- POST /api/v1/evaluation/compare
+  - Request: CompareRequest (strategy_ids[], dataset_id)
+  - Response: CompareResponse
+  - Description: Compare multiple strategies against the same dataset.
+
+#### Leaderboard and Results
+- GET /api/v1/evaluation/leaderboard
+  - Query: dataset_id (default: "default"), limit (default: 10)
+  - Response: LeaderboardResponse
+  - Description: Get strategy rankings by average composite score.
+- GET /api/v1/evaluation/results/{strategy_id}
+  - Response: StrategyResultsResponse
+  - Description: Retrieve historical evaluation results for a specific strategy.
+
+#### Test Case Management
+- POST /api/v1/evaluation/test-cases
+  - Request: CreateTestCaseRequest (user_prompt, expected_source_ids, expected_topics, scoring_profile, dataset_id, tags, notes)
+  - Response: EvaluationTestCase
+  - Description: Create a new evaluation test case.
+- GET /api/v1/evaluation/test-cases
+  - Query: dataset_id (default: "default"), include_deprecated (default: false)
+  - Response: TestCaseListResponse
+  - Description: List test cases in a dataset.
+- DELETE /api/v1/evaluation/test-cases/{test_case_id}
+  - Response: { status: "deprecated" }
+  - Description: Deprecate (soft-delete) a test case.
+
+Evaluation System Capabilities:
+- **Automated Testing**: Run evaluations against configurable datasets
+- **Multi-Strategy Comparison**: Statistical comparison of strategy performance
+- **Leaderboard Generation**: Ranking system based on composite scores
+- **Test Case Management**: Creation, listing, and deprecation of evaluation test cases
+- **Scoring Profiles**: Configurable scoring criteria for different evaluation types
+
+Common Schemas:
+- RunEvaluationRequest: { strategy_id, dataset_id: "default", judge_model: string|null }
+- RunEvaluationResponse: { run_count: number, results: EvaluationRun[] }
+- CompareRequest: { strategy_ids: string[], dataset_id: "default" }
+- CompareResponse: { comparison: { [strategy_id: string]: EvaluationRun[] } }
+- LeaderboardResponse: { rankings: array }
+- StrategyResultsResponse: { strategy_id: string, results: EvaluationRun[] }
+- CreateTestCaseRequest: { user_prompt, expected_source_ids, expected_topics, scoring_profile, dataset_id, tags, notes }
+- TestCaseListResponse: { test_cases: EvaluationTestCase[] }
+
+Example Requests:
+- Run Evaluation:
+  - Method: POST
+  - URL: /api/v1/evaluation/run
+  - Headers: Authorization: Bearer <ADMIN_JWT>
+  - Body: {
+    "strategy_id": "enhanced-strategy-v1",
+    "dataset_id": "legal_case_reviews",
+    "judge_model": "gpt-4-turbo"
   }
 
 Error Handling:
-- 401 Unauthorized for invalid or missing admin credentials.
-- 400 Bad Request for invalid provider configurations or file content.
-- 500 Internal Server Error for benchmark execution failures.
+- 400 Bad Request for invalid strategy IDs or empty strategy lists
+- 404 Not Found for non-existent test cases
+- 500 Internal Server Error for evaluation execution failures
 
 **Section sources**
-- [backend/routers/embedding_benchmark.py:131-216](file://backend/routers/embedding_benchmark.py#L131-L216)
-- [backend/routers/embedding_benchmark.py:219-302](file://backend/routers/embedding_benchmark.py#L219-L302)
-- [backend/routers/embedding_benchmark.py:305-322](file://backend/routers/embedding_benchmark.py#L305-L322)
-- [backend/routers/embedding_benchmark.py:325-356](file://backend/routers/embedding_benchmark.py#L325-L356)
-- [backend/routers/embedding_benchmark.py:359-408](file://backend/routers/embedding_benchmark.py#L359-L408)
-- [backend/routers/embedding_benchmark.py:411-441](file://backend/routers/embedding_benchmark.py#L411-L441)
+- [backend/routers/evaluation.py:91-204](file://backend/routers/evaluation.py#L91-L204)
+
+### Scheduler API Endpoints
+- Base Path: /api/v1/scheduler
+- **All endpoints require admin privileges** and are protected by the `require_admin` dependency.
+
+#### Schedule Management
+- GET /api/v1/scheduler/schedules
+  - Response: ScheduleListResponse
+  - Description: List all configured schedules.
+- POST /api/v1/scheduler/schedules
+  - Request: CreateScheduleRequest (name, cron, timezone, allowed_window_start, allowed_window_end, dataset_id, candidate_strategy_ids[], status)
+  - Response: StrategySchedule
+  - Description: Create or update a schedule definition.
+- GET /api/v1/scheduler/schedules/{schedule_id}
+  - Response: StrategySchedule
+  - Description: Get details of a specific schedule.
+- DELETE /api/v1/scheduler/schedules/{schedule_id}
+  - Response: { status: "disabled" }
+  - Description: Disable a schedule (soft-delete by setting status to "disabled").
+
+#### Immediate Execution and Control
+- POST /api/v1/scheduler/schedules/{schedule_id}/run-now
+  - Response: RunNowResponse (trace_id, schedule_id)
+  - Description: Trigger immediate exploration run for a schedule (returns 202 Accepted).
+- POST /api/v1/scheduler/pause
+  - Response: { status: "paused" }
+  - Description: Manually pause the scheduler daemon.
+- POST /api/v1/scheduler/resume
+  - Response: { status: "resumed" }
+  - Description: Resume scheduler from manual pause.
+
+#### Scheduler Status and Reports
+- GET /api/v1/scheduler/status
+  - Response: SchedulerStatusResponse
+  - Description: Get current scheduler daemon run status.
+- GET /api/v1/scheduler/reports
+  - Query: limit (default: 10)
+  - Response: ReportsResponse
+  - Description: Get recent nightly reports.
+
+Scheduler Management Features:
+- **Persistence**: Mongo-backed schedule storage with restart-safe state
+- **Immediate Execution**: Run-now endpoint for manual triggering
+- **Pause/Resume Control**: Manual control over scheduler execution
+- **Status Monitoring**: Real-time scheduler daemon status
+- **Report Generation**: Nightly exploration reports with regression tracking
+
+Common Schemas:
+- ScheduleListResponse: { schedules: StrategySchedule[] }
+- CreateScheduleRequest: { name, cron, timezone, allowed_window_start, allowed_window_end, dataset_id, candidate_strategy_ids[], status }
+- SchedulerStatusResponse: { running: boolean, current_run: SchedulerRunState|null }
+- ReportsResponse: { reports: NightlyReport[] }
+- RunNowResponse: { trace_id: string, schedule_id: string }
+
+Example Requests:
+- Create Schedule:
+  - Method: POST
+  - URL: /api/v1/scheduler/schedules
+  - Headers: Authorization: Bearer <ADMIN_JWT>
+  - Body: {
+    "name": "Weekly Legal Strategy Evaluation",
+    "cron": "0 22 * * 1-5",
+    "timezone": "America/New_York",
+    "allowed_window_start": "22:00",
+    "allowed_window_end": "06:00",
+    "dataset_id": "legal_case_reviews",
+    "candidate_strategy_ids": ["enhanced-strategy-v1", "legacy-strategy-v2"],
+    "status": "active"
+  }
+
+Error Handling:
+- 404 Not Found for non-existent schedules
+- 409 Conflict for paused schedules or circuit breaker open states
+- 500 Internal Server Error for scheduler daemon failures
+- 503 Service Unavailable for circuit breaker open states
+
+**Section sources**
+- [backend/routers/scheduler.py:151-335](file://backend/routers/scheduler.py#L151-L335)
 
 ### Strategy Management API Endpoints
 - Base Path: /api/v1/strategies
@@ -656,7 +636,7 @@ Search Endpoints:
 - POST /api/v1/search
   - Request: SearchRequest
   - Response: SearchResponse
-  - Behavior: Routes to semantic/text/hybrid based on search_type.
+- Behavior: Routes to semantic/text/hybrid based on search_type.
 
 Common Schemas:
 - SearchRequest/SearchResponse/SearchResultItem: query, search_type, results, total_results, processing_time_ms
@@ -935,17 +915,17 @@ Indexes Dashboard (Admin):
   - Profiles router depends on src.profile for profile management.
   - Ingestion router depends on src.ingestion for pipeline operations.
   - Model Versions router depends on backend.core.model_versions for model registry and business logic.
-  - **New**: Admin router depends on system monitoring utilities and database operations.
-  - **New**: Backup router depends on backup_service for backup operations and file system management.
-  - **New**: Embedding Benchmark router depends on embedding_benchmark service for provider testing.
-  - **New**: Strategies router depends on strategy registry and metrics collection.
+  - **New**: Strategy Specs router depends on backend.agent.strategy.spec_store and backend.agent.strategy.promotion_manager.
+  - **New**: Evaluation router depends on backend.evaluation.runner and backend.evaluation.test_case_manager.
+  - **New**: Scheduler router depends on backend.scheduler.scheduler_daemon and backend.agent.strategy.scheduler_store.
+  - All three new routers share the same admin-only access pattern as other admin-protected endpoints.
 - Cross-Router Coupling:
   - Profiles switching updates database collections used by chat/search.
   - Ingestion writes to chunks/documents collections used by search.
   - Model switching updates runtime configuration and persists to database.
-  - **New**: Backup operations affect database collections and file system storage.
-  - **New**: Strategy metrics collection integrates with chat/session data.
-  - **New**: Admin operations provide centralized access to all system components.
+  - **New**: Strategy Specs updates spec selector cache and persistence layers.
+  - **New**: Evaluation System integrates with strategy execution and metrics collection.
+  - **New**: Scheduler coordinates with strategy execution and overnight exploration runs.
 
 ```mermaid
 graph LR
@@ -958,17 +938,18 @@ Main --> System["system.py"]
 Main --> Status["status.py"]
 Main --> Indexes["indexes.py"]
 Main --> Models["model_versions.py"]
-Main --> Admin["admin.py"]
-Main --> Backup["backup.py"]
-Main --> Benchmark["embedding_benchmark.py"]
-Main --> Strategies["strategies.py"]
+Main --> StrategySpecs["strategy_specs.py"]
+Main --> Evaluation["evaluation.py"]
+Main --> Scheduler["scheduler.py"]
+StrategySpecs --> SpecStore["spec_store.py"]
+StrategySpecs --> PromotionMgr["promotion_manager.py"]
+Evaluation --> EvalRunner["evaluation/runner.py"]
+Evaluation --> TestCaseMgr["evaluation/test_case_manager.py"]
+Scheduler --> SchedStore["agent/strategy/scheduler_store.py"]
+Scheduler --> SchedDaemon["scheduler/scheduler_daemon.py"]
 Profiles --> PM["src.profile"]
 Ingest --> IP["src.ingestion"]
 Models --> MR["backend.core.model_versions"]
-Admin --> SM["System Monitoring"]
-Backup --> BS["Backup Service"]
-Benchmark --> EBS["Embedding Benchmark Service"]
-Strategies --> SR["Strategy Registry"]
 Chat --> DB["MongoDB"]
 Search --> DB
 Ingest --> DB
@@ -976,22 +957,20 @@ System --> DB
 Status --> DB
 Indexes --> DB
 Models --> DB
-Admin --> DB
-Backup --> DB
-Benchmark --> DB
-Strategies --> DB
+StrategySpecs --> DB
+Evaluation --> DB
+Scheduler --> DB
 ```
 
 **Diagram sources**
-- [backend/main.py:418-550](file://backend/main.py#L418-L550)
-- [backend/routers/admin.py:1-598](file://backend/routers/admin.py#L1-L598)
-- [backend/routers/backup.py:1-459](file://backend/routers/backup.py#L1-L459)
-- [backend/routers/embedding_benchmark.py:1-442](file://backend/routers/embedding_benchmark.py#L1-L442)
-- [backend/routers/strategies.py:1-659](file://backend/routers/strategies.py#L1-L659)
+- [backend/main.py:759-930](file://backend/main.py#L759-L930)
+- [backend/routers/strategy_specs.py:137-182](file://backend/routers/strategy_specs.py#L137-L182)
+- [backend/routers/evaluation.py:17-20](file://backend/routers/evaluation.py#L17-L20)
+- [backend/routers/scheduler.py:111-144](file://backend/routers/scheduler.py#L111-L144)
 
 **Section sources**
 - [backend/main.py:227-255](file://backend/main.py#L227-L255)
-- [backend/main.py:418-550](file://backend/main.py#L418-L550)
+- [backend/main.py:759-930](file://backend/main.py#L759-L930)
 
 ## Performance Considerations
 - Indexes:
@@ -1005,14 +984,16 @@ Strategies --> DB
 - Logging and Monitoring:
   - Ingestion logs are captured and exposed; use /api/v1/ingestion/logs for live monitoring.
   - Index dashboard provides performance history and optimization suggestions.
-  - **New**: Admin dashboard provides comprehensive system health monitoring.
-  - **New**: Backup operations can be monitored via status endpoint for progress tracking.
+  - **New**: Strategy Specs router supports optimistic concurrency with minimal lock contention.
+  - **New**: Evaluation System provides asynchronous execution with configurable judge models.
+  - **New**: Scheduler manages execution windows and circuit breaker states for controlled resource usage.
 - Model Selection:
   - Use /api/v1/model-versions/cost-effective for cost optimization.
   - Use /api/v1/model-versions/recommendations for intelligent model selection based on requirements.
 - **New**: Strategy Performance:
   - Use /api/v1/strategies/metrics/all to monitor strategy performance across the system.
   - Implement A/B testing via /api/v1/strategies/compare for strategy optimization.
+  - **New**: Use /api/v1/evaluation/leaderboard for automated strategy ranking and selection.
 
 ## Troubleshooting Guide
 Common Issues and Resolutions:
@@ -1030,17 +1011,29 @@ Common Issues and Resolutions:
   - 404 Model not found: Verify model_id exists in the registry.
   - Compatibility errors: Use /api/v1/model-versions/check-compatibility to validate parameter compatibility.
   - Switch failures: Check database connectivity for persistence operations.
-- **New**: Admin Panel Issues:
+- **New**: Strategy Specs Issues:
+  - 409 Conflict on create/update: Check for existing specs or version conflicts using X-Expected-Version header.
+  - Validation failures: Use /api/v1/strategy-specs/{spec_id}/validate to debug spec issues.
+  - State transition errors: Verify spec lifecycle state and use proper promotion endpoints.
+- **New**: Evaluation System Issues:
+  - 400 Bad Request for invalid strategy IDs or empty comparison lists.
+  - Test case deprecation errors: Verify test case existence and deprecation status.
+  - Evaluation failures: Check judge model configuration and dataset availability.
+- **New**: Scheduler Issues:
+  - 404 Not Found for non-existent schedules or run-now failures.
+  - 409 Conflict for paused schedules or circuit breaker open states.
+  - 503 Service Unavailable for circuit breaker open conditions.
+- Admin Panel Issues:
   - 401/403 errors on admin endpoints: Verify admin credentials and role.
   - Health check failures: Check MongoDB connectivity, Ollama service status, and disk space availability.
-- **New**: Backup Management Issues:
+- Backup Management Issues:
   - 409 Conflict on backup creation: Check for existing in-progress backups via /api/v1/backups/status.
   - Restore failures: Verify backup integrity and sufficient disk space for restore operations.
   - Storage quota exceeded: Use /api/v1/backups/storage to check available space and adjust retention policies.
-- **New**: Embedding Benchmark Issues:
+- Embedding Benchmark Issues:
   - Provider connectivity errors: Use /api/v1/benchmark/test-provider to diagnose network issues.
   - Benchmark timeouts: Reduce chunk size or increase max_tokens for large documents.
-- **New**: Strategy Management Issues:
+- Strategy Management Issues:
   - Strategy comparison failures: Verify strategy IDs exist and have sufficient execution data.
   - LLM evaluation errors: Check LLM provider configuration and API key validity.
 
@@ -1048,28 +1041,28 @@ Logging and Diagnostics:
 - Use /api/v1/system/health and /api/v1/status/health/detailed for component health.
 - Inspect ingestion logs via /api/v1/ingestion/logs.
 - Monitor model version switching via application logs.
-- **New**: Use /api/v1/admin/logs for system-level logging and /api/v1/admin/stats for usage analytics.
-- **New**: Monitor backup progress via /api/v1/backups/status and benchmark results via /api/v1/benchmark/results.
+- **New**: Use /api/v1/strategy-specs/{spec_id}/validate for spec debugging.
+- **New**: Monitor evaluation runs via /api/v1/evaluation/results/{strategy_id}.
+- **New**: Check scheduler status via /api/v1/scheduler/status and manage execution via /api/v1/scheduler/run-now.
 
 **Section sources**
 - [backend/routers/system.py:88-145](file://backend/routers/system.py#L88-L145)
 - [backend/routers/status.py:295-353](file://backend/routers/status.py#L295-L353)
 - [backend/routers/ingestion.py:703-793](file://backend/routers/ingestion.py#L703-L793)
 - [backend/routers/model_versions.py:215-307](file://backend/routers/model_versions.py#L215-L307)
-- [backend/routers/admin.py:316-390](file://backend/routers/admin.py#L316-L390)
-- [backend/routers/backup.py:256-298](file://backend/routers/backup.py#L256-L298)
-- [backend/routers/embedding_benchmark.py:325-356](file://backend/routers/embedding_benchmark.py#L325-L356)
-- [backend/routers/strategies.py:271-324](file://backend/routers/strategies.py#L271-L324)
+- [backend/routers/strategy_specs.py:424-466](file://backend/routers/strategy_specs.py#L424-L466)
+- [backend/routers/evaluation.py:160-204](file://backend/routers/evaluation.py#L160-L204)
+- [backend/routers/scheduler.py:233-264](file://backend/routers/scheduler.py#L233-L264)
 
 ## Conclusion
-This API provides a production-ready foundation for conversational RAG, search, ingestion, system administration, comprehensive model version management, admin panel operations, backup management, embedding benchmarking, and strategy management with A/B testing. It emphasizes robust authentication, performance-aware search, reliable ingestion with persistence, intelligent model selection and switching, comprehensive observability through dashboards and logs, and advanced operational capabilities for system administrators. Use the documented endpoints and schemas to integrate clients and automate operations securely and efficiently.
+This API provides a production-ready foundation for conversational RAG, search, ingestion, system administration, comprehensive model version management, admin panel operations, backup management, embedding benchmarking, strategy management with A/B testing, and the new Strategy OS APIs including strategy specifications, evaluation system, and scheduler management. It emphasizes robust authentication, performance-aware search, reliable ingestion with persistence, intelligent model selection and switching, comprehensive observability through dashboards and logs, and advanced operational capabilities for system administrators. The new Strategy OS APIs enable comprehensive strategy lifecycle management, automated evaluation and comparison, and controlled execution scheduling for overnight exploration runs. Use the documented endpoints and schemas to integrate clients and automate operations securely and efficiently.
 
 ## Appendices
 
 ### API Versioning
 - Version: 1.0.0
 - Base Paths: All endpoints are prefixed with /api/v1.
-- **New**: Admin Panel, Backup Management, Embedding Benchmark, and Strategy Management endpoints added in version 1.0.0.
+- **New**: Strategy Specifications, Evaluation System, and Scheduler endpoints added in version 1.0.0.
 
 **Section sources**
 - [backend/main.py:208-225](file://backend/main.py#L208-L225)
@@ -1080,32 +1073,42 @@ This API provides a production-ready foundation for conversational RAG, search, 
 - CORS: Configured origins include development and production domains.
 - JWT Secret: Validated on startup; errors are logged but do not block startup.
 - **New**: Admin endpoints require explicit admin privileges with comprehensive access control.
+- **New**: Strategy OS endpoints implement the same admin-only access pattern as other admin-protected endpoints.
 
 **Section sources**
 - [backend/main.py:227-255](file://backend/main.py#L227-L255)
 - [backend/main.py:73-81](file://backend/main.py#L73-L81)
-- [backend/routers/admin.py:28-28](file://backend/routers/admin.py#L28-L28)
+- [backend/routers/strategy_specs.py:424-424](file://backend/routers/strategy_specs.py#L424-L424)
+- [backend/routers/evaluation.py:91-91](file://backend/routers/evaluation.py#L91-L91)
+- [backend/routers/scheduler.py:151-151](file://backend/routers/scheduler.py#L151-L151)
 
 ### Error Handling Strategy
 - Validation errors: 422 with user-friendly message and error_id.
 - HTTP exceptions: Propagate status codes with structured response and error_id.
 - Global exceptions: 500 with user-friendly message; admin users receive technical details; extensive logs include stack traces.
 - **New**: Admin-specific error handling provides detailed technical information to authorized users while maintaining security.
+- **New**: Strategy OS endpoints implement consistent error handling with appropriate status codes and error messages.
 
 **Section sources**
 - [backend/main.py:289-396](file://backend/main.py#L289-L396)
 - [backend/main.py:392-415](file://backend/main.py#L392-L415)
 
 ### Frontend Integration Examples
-- **New**: System Management Hub: Centralized access point for admin features with navigation to Status, Search Indexes, Ingestion, Configuration, and Embedding Benchmark pages.
+- **New**: System Management Hub: Centralized access point for admin features with navigation to Status, Search Indexes, Ingestion, Configuration, Embedding Benchmark, Strategy Specifications, Evaluation System, and Scheduler pages.
 - **New**: Backup Management Interface: Comprehensive backup management with creation, listing, restoration, and configuration capabilities including progress monitoring and storage statistics.
-- **New**: Strategy Management Pages: Dedicated interfaces for strategy comparison, performance metrics visualization, and A/B testing workflows.
+- **New**: Strategy Management Pages: Dedicated interfaces for strategy comparison, performance metrics visualization, A/B testing workflows, strategy specification management, evaluation result viewing, and scheduler control panels.
+- **New**: Strategy Specifications Editor: Specialized interface for creating, editing, validating, and managing strategy specifications with version history tracking.
+- **New**: Evaluation Dashboard: Interface for running strategy evaluations, comparing performance, viewing leaderboards, and managing test cases.
+- **New**: Scheduler Control Panel: Interface for configuring exploration schedules, monitoring execution status, and controlling overnight runs.
 
 Integration Patterns:
 - Admin authentication required for all new admin endpoints
 - Real-time backup progress updates via status polling
 - Strategy performance charts and comparative analytics
 - Embedded benchmark result visualization and provider comparison
+- **New**: Strategy specification validation with real-time feedback
+- **New**: Evaluation run monitoring with asynchronous status updates
+- **New**: Scheduler execution control with immediate run capabilities
 
 **Section sources**
 - [frontend/src/pages/SystemPage.tsx:1-114](file://frontend/src/pages/SystemPage.tsx#L1-L114)
@@ -1174,106 +1177,73 @@ Models-->>Client : Success response with updates
 - [backend/routers/model_versions.py:215-307](file://backend/routers/model_versions.py#L215-L307)
 - [backend/core/model_versions.py:464-468](file://backend/core/model_versions.py#L464-L468)
 
-#### Admin Panel Operations
+#### Strategy Specifications Lifecycle
 ```mermaid
 sequenceDiagram
 participant Admin as "Admin Client"
-participant AdminAPI as "Admin Panel API"
-participant DB as "Database"
-participant System as "System Components"
-Admin->>AdminAPI : GET /api/v1/admin/dashboard
-AdminAPI->>System : Check health (CPU, memory, disk)
-System-->>AdminAPI : Component statuses
-AdminAPI->>DB : Query user statistics
-DB-->>AdminAPI : User and document counts
-AdminAPI-->>Admin : SystemHealth + Stats
-Admin->>AdminAPI : POST /api/v1/admin/config
-AdminAPI->>DB : Update system configuration
-DB-->>AdminAPI : Confirmation
-AdminAPI-->>Admin : Success with restart requirement
+participant Specs as "Strategy Specs API"
+participant Store as "Spec Store"
+participant Selector as "Spec Selector"
+Admin->>Specs : POST /api/v1/strategy-specs
+Specs->>Store : validate_spec + upsert (version=1)
+Store-->>Specs : Success
+Specs-->>Admin : StrategySpec (draft)
+Admin->>Specs : POST /api/v1/strategy-specs/{id}/promote
+Specs->>Store : flush_snapshot + state transition
+Store->>Selector : clear_cache
+Selector-->>Store : refresh active spec
+Specs-->>Admin : StrategySpec (active)
 ```
 
 **Diagram sources**
-- [backend/routers/admin.py:121-172](file://backend/routers/admin.py#L121-L172)
-- [backend/routers/admin.py:235-309](file://backend/routers/admin.py#L235-L309)
+- [backend/routers/strategy_specs.py:248-287](file://backend/routers/strategy_specs.py#L248-L287)
+- [backend/routers/strategy_specs.py:527-551](file://backend/routers/strategy_specs.py#L527-L551)
 
-#### Backup Management Workflow
+#### Evaluation System Workflow
 ```mermaid
 sequenceDiagram
 participant Admin as "Admin Client"
-participant BackupAPI as "Backup Management API"
-participant BackupService as "Backup Service"
-participant FS as "File System"
-participant DB as "Database"
-Admin->>BackupAPI : POST /api/v1/backups/create
-BackupAPI->>BackupService : start_full_backup()
-BackupService->>DB : Lock collections
-BackupService->>FS : Write backup files
-BackupService-->>BackupAPI : BackupMetadata
-BackupAPI-->>Admin : Backup started (status : in_progress)
-Admin->>BackupAPI : GET /api/v1/backups/status
-BackupAPI->>BackupService : get_current_progress()
-BackupService-->>BackupAPI : Progress percentage
-BackupAPI-->>Admin : BackupProgress
-Admin->>BackupAPI : POST /api/v1/backups/{id}/restore
-BackupAPI->>BackupService : restore_from_backup()
-BackupService->>DB : Restore data
-BackupService-->>BackupAPI : RestoreResult
-BackupAPI-->>Admin : Restore completed
+participant Eval as "Evaluation API"
+participant Runner as "Evaluation Runner"
+participant Judge as "LLM Judge"
+Admin->>Eval : POST /api/v1/evaluation/run
+Eval->>Runner : run_evaluation(strategy_id, dataset_id, judge_model)
+Runner->>Judge : Evaluate responses
+Judge-->>Runner : Evaluation results
+Runner-->>Eval : EvaluationRun[]
+Eval-->>Admin : RunEvaluationResponse
+Admin->>Eval : GET /api/v1/evaluation/leaderboard
+Eval->>Runner : get_leaderboard()
+Runner-->>Eval : Rankings
+Eval-->>Admin : LeaderboardResponse
 ```
 
 **Diagram sources**
-- [backend/routers/backup.py:39-93](file://backend/routers/backup.py#L39-L93)
-- [backend/routers/backup.py:256-298](file://backend/routers/backup.py#L256-L298)
-- [backend/routers/backup.py:351-401](file://backend/routers/backup.py#L351-L401)
+- [backend/routers/evaluation.py:91-107](file://backend/routers/evaluation.py#L91-L107)
+- [backend/routers/evaluation.py:128-139](file://backend/routers/evaluation.py#L128-L139)
 
-#### Embedding Benchmark Workflow
+#### Scheduler Execution Workflow
 ```mermaid
 sequenceDiagram
 participant Admin as "Admin Client"
-participant BenchmarkAPI as "Embedding Benchmark API"
-participant BenchmarkService as "Benchmark Service"
-participant Providers as "Embedding Providers"
-Admin->>BenchmarkAPI : POST /api/v1/benchmark/run
-BenchmarkAPI->>BenchmarkService : run_benchmark()
-BenchmarkService->>Providers : Test provider connectivity
-Providers-->>BenchmarkService : Provider info
-BenchmarkService->>Providers : Generate embeddings
-Providers-->>BenchmarkService : Embedding results
-BenchmarkService->>BenchmarkService : Calculate metrics
-BenchmarkService-->>BenchmarkAPI : BenchmarkResultResponse
-BenchmarkAPI-->>Admin : Winner + detailed metrics
-Admin->>BenchmarkAPI : GET /api/v1/benchmark/results
-BenchmarkAPI->>BenchmarkService : get_results()
-BenchmarkService-->>BenchmarkAPI : Historical results
-BenchmarkAPI-->>Admin : Results list
+participant Sched as "Scheduler API"
+participant Daemon as "Scheduler Daemon"
+participant Store as "Scheduler Store"
+Admin->>Sched : POST /api/v1/scheduler/schedules
+Sched->>Store : upsert(StrategySchedule)
+Store-->>Sched : Persisted schedule
+Admin->>Sched : POST /api/v1/scheduler/schedules/{id}/run-now
+Sched->>Daemon : run_now(schedule_id)
+Daemon->>Daemon : Execute exploration run
+Daemon-->>Sched : trace_id
+Sched-->>Admin : RunNowResponse
+Admin->>Sched : GET /api/v1/scheduler/status
+Sched->>Daemon : _running + _current_run
+Daemon-->>Sched : Status info
+Sched-->>Admin : SchedulerStatusResponse
 ```
 
 **Diagram sources**
-- [backend/routers/embedding_benchmark.py:131-216](file://backend/routers/embedding_benchmark.py#L131-L216)
-- [backend/routers/embedding_benchmark.py:359-374](file://backend/routers/embedding_benchmark.py#L359-L374)
-
-#### Strategy Management and A/B Testing
-```mermaid
-sequenceDiagram
-participant User as "User Client"
-participant StrategyAPI as "Strategy Management API"
-participant StrategyRegistry as "Strategy Registry"
-participant Metrics as "Metrics Collection"
-User->>StrategyAPI : GET /api/v1/strategies
-StrategyAPI->>StrategyRegistry : list_strategies()
-StrategyRegistry-->>StrategyAPI : StrategyInfo[]
-StrategyAPI-->>User : Strategy list
-User->>StrategyAPI : POST /api/v1/strategies/compare
-StrategyAPI->>Metrics : compare_strategies()
-Metrics-->>StrategyAPI : Statistical comparison
-StrategyAPI-->>User : StrategyComparison with winner
-User->>StrategyAPI : POST /api/v1/strategies/ab-compare-responses
-StrategyAPI->>StrategyAPI : LLM-based evaluation
-StrategyAPI-->>User : Detailed scoring and recommendation
-```
-
-**Diagram sources**
-- [backend/routers/strategies.py:76-111](file://backend/routers/strategies.py#L76-L111)
-- [backend/routers/strategies.py:271-324](file://backend/routers/strategies.py#L271-L324)
-- [backend/routers/strategies.py:542-658](file://backend/routers/strategies.py#L542-L658)
+- [backend/routers/scheduler.py:166-192](file://backend/routers/scheduler.py#L166-L192)
+- [backend/routers/scheduler.py:233-264](file://backend/routers/scheduler.py#L233-L264)
+- [backend/routers/scheduler.py:267-281](file://backend/routers/scheduler.py#L267-L281)
