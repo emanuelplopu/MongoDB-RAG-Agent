@@ -93,13 +93,17 @@ try {
     exit 1
 }
 
-try {
-    docker info 2>&1 | Out-Null
-    Write-OK "Docker daemon is running"
-} catch {
+# Docker info writes to stderr even on success; avoid $ErrorActionPreference trapping it
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$null = docker info 2>&1
+$dockerInfoExit = $LASTEXITCODE
+$ErrorActionPreference = $prevEAP
+if ($dockerInfoExit -ne 0) {
     Write-Err "Docker daemon is not running. Start Docker Desktop first."
     exit 1
 }
+Write-OK "Docker daemon is running"
 
 # Disk space check deferred until after InstallPath is resolved (see Step 3)
 
@@ -460,22 +464,11 @@ if (-not (Test-Path $dockerComposePath)) {
 }
 
 Write-Info "Stopping any existing containers..."
-try {
-    $null = docker compose --profile $Tenant down 2>&1
-} catch {
-    # Docker writes informational messages to stderr (e.g., "Container ... Stopping")
-}
-if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne $null) {
-    Write-Warn "docker compose --profile $Tenant down returned exit code $LASTEXITCODE"
-}
-try {
-    $null = docker compose down 2>&1
-} catch {
-    # Docker writes informational messages to stderr
-}
-if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne $null) {
-    Write-Warn "docker compose down returned exit code $LASTEXITCODE"
-}
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$null = docker compose --profile $Tenant down 2>&1
+$null = docker compose down 2>&1
+$ErrorActionPreference = $prevEAP
 Write-OK "Docker environment cleared"
 
 # Step 9: Start MongoDB and restore dump
@@ -483,22 +476,31 @@ Write-Step "Starting MongoDB and restoring databases..."
 
 Write-Info "Starting MongoDB container..."
 $mongoStarted = $false
-try {
-    $output = docker compose --profile $Tenant up -d mongodb 2>&1
-    $output | ForEach-Object { Write-Info "$_" }
-    if ($LASTEXITCODE -eq 0) { $mongoStarted = $true }
-} catch {
-    # Docker stderr is informational, check exit code instead
-    if ($LASTEXITCODE -eq 0) { $mongoStarted = $true }
-}
+# Temporarily allow stderr output from Docker without terminating
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$LASTEXITCODE = 0
+
+$output = docker compose --profile $Tenant up -d mongodb 2>&1
+$startExitCode = $LASTEXITCODE
+$output | ForEach-Object { Write-Info "$_" }
+if ($startExitCode -eq 0) { $mongoStarted = $true }
 
 if (-not $mongoStarted) {
-    try {
-        $output = docker compose up -d mongodb 2>&1
-        $output | ForEach-Object { Write-Info "$_" }
-        if ($LASTEXITCODE -eq 0) { $mongoStarted = $true }
-    } catch {
-        if ($LASTEXITCODE -eq 0) { $mongoStarted = $true }
+    $output = docker compose up -d mongodb 2>&1
+    $startExitCode = $LASTEXITCODE
+    $output | ForEach-Object { Write-Info "$_" }
+    if ($startExitCode -eq 0) { $mongoStarted = $true }
+}
+
+$ErrorActionPreference = $prevEAP
+
+# Even if exit code was non-zero, check if container is actually running
+if (-not $mongoStarted) {
+    $containerState = docker inspect rag-mongodb --format "{{.State.Running}}" 2>$null
+    if ($containerState -match "true") {
+        Write-Info "Container is running despite non-zero exit code (Docker stderr noise)"
+        $mongoStarted = $true
     }
 }
 
@@ -514,12 +516,10 @@ Write-Info "  (timeout: ${maxWait}s)"
 
 $waited = 0
 $mongoReady = $false
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 while ($waited -lt $maxWait) {
-    try {
-        $svcHealth = docker compose --profile $Tenant exec -T mongodb mongosh --eval "db.adminCommand('ping')" --quiet 2>&1 | Out-String
-    } catch {
-        $svcHealth = ""
-    }
+    $svcHealth = docker compose --profile $Tenant exec -T mongodb mongosh --eval "db.adminCommand('ping')" --quiet 2>&1 | Out-String
     # Match any variant: { ok: 1 }, ok: 1, "ok" : 1, etc.
     if ($svcHealth -match 'ok.*:.*1' -or ($LASTEXITCODE -eq 0 -and $svcHealth -and $svcHealth.Trim())) {
         $mongoReady = $true
@@ -529,6 +529,7 @@ while ($waited -lt $maxWait) {
     $waited += 3
     Write-Host "." -NoNewline -ForegroundColor Gray
 }
+$ErrorActionPreference = $prevEAP
 Write-Host ""
 
 if (-not $mongoReady) {
@@ -574,16 +575,15 @@ if (Test-Path $mongoDumpDir) {
     Write-Info "Using network: $network"
 
     $restoreContainer = "recallhub-mongorestore-temp"
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     try {
-        try { $null = docker rm -f $restoreContainer 2>&1 } catch {}
+        $null = docker rm -f $restoreContainer 2>&1
         Write-Info "Pulling mongo:8.0 image (if needed)..."
-        try {
-            $pullOutput = docker pull mongo:8.0 2>&1
-            $pullOutput | Select-Object -Last 3 | ForEach-Object { Write-Info "$_" }
-        } catch {
-            Write-Info "(pull output suppressed)"
-        }
-        try { $null = docker run -d --name $restoreContainer --network $network mongo:8.0 sleep 300 2>&1 } catch {}
+        $pullOutput = docker pull mongo:8.0 2>&1 | Out-String
+        $pullOutput.Trim() -split "`n" | Select-Object -Last 3 | ForEach-Object { Write-Info "$_" }
+
+        $null = docker run -d --name $restoreContainer --network $network mongo:8.0 sleep 300 2>&1
 
         # Copy dump into container
         Write-Info "Copying dump into container via docker cp..."
@@ -592,19 +592,21 @@ if (Test-Path $mongoDumpDir) {
         # Restore inside container
         Write-Info "Running mongorestore (parallel, gzipped)..."
         $restoreOutput = docker exec $restoreContainer mongorestore --host=mongodb --port=27017 --dir=/dump --gzip --drop --numParallelCollections=4 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0) {
-            Write-Err "MongoDB restore failed (exit code: $LASTEXITCODE)"
-            if ($restoreOutput) { $restoreOutput.Trim() -split "`n" | Select-Object -Last 10 | ForEach-Object { Write-Err "  $_" } }
-            throw "mongorestore failed"
-        }
+        $restoreExitCode = $LASTEXITCODE
         if ($restoreOutput) {
             $restoreOutput.Trim() -split "`n" | Select-Object -Last 5 | ForEach-Object { Write-Info $_.Trim() }
+        }
+        if ($restoreExitCode -ne 0) {
+            Write-Err "MongoDB restore failed (exit code: $restoreExitCode)"
+            if ($restoreOutput) { $restoreOutput.Trim() -split "`n" | Select-Object -Last 10 | ForEach-Object { Write-Err "  $_" } }
+        } else {
+            Write-OK "mongorestore completed successfully"
         }
 
         # Verify databases were actually restored
         Write-Info "Verifying restored databases..."
         $dbCount = docker compose --profile $Tenant exec -T mongodb mongosh --eval "db.adminCommand('listDatabases').databases.length" --quiet 2>&1 | Out-String
-        $dbCountTrimmed = $dbCount.Trim()
+        $dbCountTrimmed = ($dbCount.Trim() -split "`n" | Select-Object -Last 1).Trim()
         if ($dbCountTrimmed -match '^\d+$' -and [int]$dbCountTrimmed -gt 2) {
             Write-OK "MongoDB restored ($dbCountTrimmed databases)"
         } else {
@@ -613,7 +615,8 @@ if (Test-Path $mongoDumpDir) {
     } catch {
         Write-Err "MongoDB restore failed: $_"
     } finally {
-        try { $null = docker rm -f $restoreContainer 2>&1 } catch {}
+        $null = docker rm -f $restoreContainer 2>&1
+        $ErrorActionPreference = $prevEAP
     }
 } elseif (Test-Path $mongoArchive) {
     # Legacy archive format
@@ -768,13 +771,13 @@ if (Test-Path $trayScriptsSource) {
 Write-Step "Starting all services and verifying health..."
 
 Write-Info "Starting all $tenantName services..."
-try {
-    $null = docker compose --profile $Tenant up -d 2>&1
-} catch {
-    # Docker stderr is informational (e.g., "Container ... Starting")
-}
-if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne $null) {
-    Write-Warn "Some services may have failed to start (exit code: $LASTEXITCODE)"
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$null = docker compose --profile $Tenant up -d 2>&1
+$upExitCode = $LASTEXITCODE
+$ErrorActionPreference = $prevEAP
+if ($upExitCode -ne 0) {
+    Write-Warn "Some services may have failed to start (exit code: $upExitCode)"
 }
 
 Write-Info "Waiting for services to initialize (30s)..."
