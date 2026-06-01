@@ -819,6 +819,7 @@ export interface SessionMessage {
   attachments?: Array<AttachmentInfo>
   thinking?: AgentThinking
   agent_trace?: FederatedAgentTrace
+  strategy_trace?: StrategyTraceResponse | null
 }
 
 // Federated Agent Trace - new orchestrator-worker system
@@ -950,6 +951,50 @@ export interface SendMessageResponse {
   session_stats: SessionStats
   title?: string | null  // Updated session title if changed
   agent_trace?: FederatedAgentTrace  // Full trace for transparency
+  strategy_trace?: StrategyTraceResponse | null  // Strategy OS execution trace (Task 91/92)
+}
+
+// ── Strategy OS streaming/trace types (Task 92 / T4) ───────────────────────
+
+export interface StrategyNodeEvent {
+  node_id: string
+  node_type: string
+  status: 'success' | 'skipped' | 'failed' | 'error' | 'timed_out' | 'empty' | string
+  duration_ms: number
+}
+
+export interface NodeTraceEntry {
+  node_id: string
+  node_type: string
+  status: string
+  duration_ms: number
+  tokens_used: number
+  llm_call_ids: string[]
+  error: string | null
+}
+
+export interface ContextBudgetSummary {
+  total_budget_tokens: number
+  tokens_used: number
+  included_count: number
+  dropped_count: number
+  dropped_items: Array<{ kind: string; tokens: number; reason: string }>
+}
+
+export interface StrategyTraceResponse {
+  active: boolean
+  spec_selected: string | null
+  spec_version: string | null
+  routing_reason: string
+  adaptive_scores: Array<Record<string, unknown>> | null
+  fast_path_eligible: boolean
+  nodes_executed: NodeTraceEntry[]
+  total_duration_ms: number
+  context_budget: ContextBudgetSummary | null
+  trace_id: string | null
+  llm_call_count: number
+  total_llm_tokens: number
+  fallback_reason: string | null
 }
 
 // API Functions
@@ -1502,7 +1547,9 @@ export const sessionsApi = {
           latency_ms: number
         }
         trace: FederatedAgentTrace
+        strategy_trace?: StrategyTraceResponse | null
       }) => void
+      onStrategyNode?: (data: StrategyNodeEvent) => void
       onError?: (error: string) => void
       onDone?: () => void
       onTitleUpdate?: (title: string) => void
@@ -1562,6 +1609,9 @@ export const sessionsApi = {
                     break
                   case 'worker_step':
                     callbacks?.onWorkerStep?.(data)
+                    break
+                  case 'strategy_node':
+                    callbacks?.onStrategyNode?.(data as StrategyNodeEvent)
                     break
                   case 'response':
                     callbacks?.onResponse?.(data)

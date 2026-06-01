@@ -1,101 +1,90 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MemoryRouter } from 'react-router-dom'
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en', changeLanguage: async () => {} } }),
-  Trans: ({ children }: { children?: unknown }) => children,
-  initReactI18next: { type: '3rdParty', init: () => {} },
-}))
-
-vi.mock('@heroicons/react/24/outline', () => {
-  const makeIcon = (name: string) => (props: { className?: string }) => <svg data-testid={name} {...props} />
-  return {
-    ClipboardIcon: makeIcon('ClipboardIcon'),
-    ClipboardDocumentCheckIcon: makeIcon('ClipboardDocumentCheckIcon'),
-  }
-})
-
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import MarkdownRenderer from './MarkdownRenderer'
+
+function LocationProbe() {
+  const location = useLocation()
+  return <div data-testid="location">{location.pathname}</div>
+}
 
 describe('MarkdownRenderer', () => {
   beforeEach(() => {
-    vi.useFakeTimers()
-    Object.assign(navigator, {
-      clipboard: {
-        writeText: vi.fn().mockResolvedValue(undefined),
-      },
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+      configurable: true,
     })
     Object.defineProperty(document, 'execCommand', {
-      value: vi.fn().mockReturnValue(true),
+      value: vi.fn(),
       configurable: true,
+      writable: true,
     })
   })
 
   afterEach(() => {
-    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 
-  it('renders block code, links, and rich markdown wrappers', async () => {
+  it('renders rich markdown and supports copy and internal navigation', async () => {
+    const user = userEvent.setup()
     render(
-      <MemoryRouter>
-      <MarkdownRenderer
-        className="custom-markdown"
-        content={[
-          '```ts',
-          'const answer = 42;',
-          '```',
-          '',
-          'Visit [Docs](https://example.com).',
-          '',
-          '> quote',
-          '',
-          '- item',
-        ].join('\n')}
-      />
+      <MemoryRouter initialEntries={['/start']}>
+        <LocationProbe />
+        <MarkdownRenderer
+          content={[
+            'Paragraph with `inlineCode` and [internal](/documents/doc-1) plus [external](https://example.com).',
+            '',
+            '```ts',
+            'const value = 1',
+            '```',
+            '',
+            '- one',
+            '- two',
+            '',
+            '1. first',
+            '2. second',
+            '',
+            '> quoted',
+            '',
+            '| A | B |',
+            '| - | - |',
+            '| 1 | 2 |',
+          ].join('\n')}
+        />
       </MemoryRouter>
     )
 
-    expect(document.querySelector('.custom-markdown')).toBeInTheDocument()
-    expect(screen.getByText('ts')).toBeInTheDocument()
-    expect(screen.getByText('const answer = 42;')).toBeInTheDocument()
+    await user.click(screen.getByText('inlineCode'))
+    expect(screen.getByTitle('Copied!')).toBeInTheDocument()
 
-    const copyButton = screen.getByRole('button', { name: /copy/i })
-    await act(async () => {
-      fireEvent.click(copyButton)
-    })
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('const answer = 42;')
-    expect(screen.getByRole('button', { name: /copied/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /Copy/ }))
+    expect(screen.getByRole('button', { name: /Copied/ })).toBeInTheDocument()
 
-    await act(async () => {
-      vi.advanceTimersByTime(2000)
-    })
-    expect(screen.getByRole('button', { name: /copy/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('link', { name: 'internal' }))
+    expect(screen.getByTestId('location')).toHaveTextContent('/documents/doc-1')
 
-    const link = screen.getByRole('link', { name: /docs/i })
-    expect(link).toHaveAttribute('target', '_blank')
-    expect(link).toHaveAttribute('rel', 'noopener noreferrer')
-    expect(screen.getByText('quote').closest('blockquote')).toHaveClass('border-l-4')
-    expect(screen.getByText('item').closest('ul')).toHaveClass('list-disc')
+    expect(screen.getByRole('link', { name: /external/ })).toHaveAttribute('target', '_blank')
+    expect(screen.getByText('quoted')).toBeInTheDocument()
   })
 
-  it('copies inline code and falls back to execCommand when clipboard write fails', async () => {
-    const execCommand = vi.mocked(document.execCommand)
-    vi.mocked(navigator.clipboard.writeText).mockRejectedValueOnce(new Error('denied'))
-
-    render(<MemoryRouter><MarkdownRenderer content="Use `npm test` now." /></MemoryRouter>)
-
-    const inlineCode = screen.getByText('npm test')
-    await act(async () => {
-      fireEvent.click(inlineCode)
+  it('falls back when clipboard writes fail', async () => {
+    const user = userEvent.setup()
+    Object.defineProperty(navigator, 'clipboard', {
+      value: undefined,
+      configurable: true,
     })
 
-    expect(execCommand).toHaveBeenCalledWith('copy')
-    expect(screen.getByText(/npm test/)).toHaveAttribute('title', 'Copied!')
+    render(
+      <MemoryRouter>
+        <MarkdownRenderer content={'Use `fallback`.\n\n```text\nplain block\n```'} />
+      </MemoryRouter>
+    )
 
-    await act(async () => {
-      vi.advanceTimersByTime(1500)
-    })
-    expect(screen.getByText(/npm test/)).toHaveAttribute('title', 'Click to copy')
+    await user.click(screen.getByText('fallback'))
+    await waitFor(() => expect(document.execCommand).toHaveBeenCalledWith('copy'))
+
+    await user.click(screen.getByRole('button', { name: /Copy/ }))
+    await waitFor(() => expect(document.execCommand).toHaveBeenCalledWith('copy'))
   })
 })

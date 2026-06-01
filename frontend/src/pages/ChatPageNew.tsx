@@ -35,6 +35,7 @@ import {
   ApiError,
   AttachmentInfo,
   ModelCapability,
+  StrategyNodeEvent,
 } from '../api/client'
 import { useChatSidebar } from '../contexts/ChatSidebarContext'
 import { useAuth } from '../contexts/AuthContext'
@@ -48,6 +49,7 @@ import SimplifiedAgentPanel from '../components/SimplifiedAgentPanel'
 import SimplifiedThinkingPanel from '../components/SimplifiedThinkingPanel'
 import SimplifiedLiveTrace from '../components/SimplifiedLiveTrace'
 import MarkdownRenderer from '../components/MarkdownRenderer'
+import StrategyTracePanel from '../components/StrategyTracePanel'
 
 // Format cost for display
 const formatCost = (cost: number): string => {
@@ -124,6 +126,7 @@ export default function ChatPage() {
   const [liveTrace, setLiveTrace] = useState<{
     orchestrator_steps: Array<{ phase: string; reasoning: string; output: string; duration_ms: number; tokens: number; tasks?: Array<{ id: string; type: string; query: string }> }>
     worker_steps: Array<{ task_id: string; task_type: string; tool: string; duration_ms: number; success: boolean; documents: Array<{ title: string; score: number; excerpt: string }> }>
+    strategy_nodes: StrategyNodeEvent[]
     stats: { total_tokens: number; orchestrator_tokens: number; worker_tokens: number; cost_usd: number }
     startTime: number
     currentPhase: string
@@ -411,6 +414,7 @@ export default function ChatPage() {
       const accumulated = {
         orchestrator_steps: [] as Array<{ phase: string; reasoning: string; output: string; duration_ms: number; tokens: number; tasks?: Array<{ id: string; type: string; query: string }> }>,
         worker_steps: [] as Array<{ task_id: string; task_type: string; tool: string; duration_ms: number; success: boolean; documents: Array<{ title: string; score: number; excerpt: string }> }>,
+        strategy_nodes: [] as StrategyNodeEvent[],
         stats: { total_tokens: 0, orchestrator_tokens: 0, worker_tokens: 0, cost_usd: 0 },
         startTime,
         currentPhase: 'starting'
@@ -425,6 +429,7 @@ export default function ChatPage() {
             // Reset accumulated data
             accumulated.orchestrator_steps = []
             accumulated.worker_steps = []
+            accumulated.strategy_nodes = []
             accumulated.currentPhase = 'starting'
             setLiveTrace({ ...accumulated })
           },
@@ -439,6 +444,10 @@ export default function ChatPage() {
           onWorkerStep: (step) => {
             accumulated.worker_steps.push(step as typeof accumulated.worker_steps[0])
             accumulated.currentPhase = 'executing'
+            setLiveTrace({ ...accumulated })
+          },
+          onStrategyNode: (data) => {
+            accumulated.strategy_nodes.push(data)
             setLiveTrace({ ...accumulated })
           },
           onResponse: (response) => {
@@ -461,6 +470,7 @@ export default function ChatPage() {
                 latency_ms: response.stats?.latency_ms || 0,
               },
               agent_trace: response.trace,
+              strategy_trace: response.strategy_trace ?? null,
             }
             
             setCurrentSession(prev => {
@@ -1064,6 +1074,12 @@ export default function ChatPage() {
                             <span>{liveTrace.stats.total_tokens.toLocaleString()} tokens</span>
                             <span>🧠 {liveTrace.stats.orchestrator_tokens.toLocaleString()}</span>
                             <span>⚡ {liveTrace.stats.worker_tokens.toLocaleString()}</span>
+                            {liveTrace.strategy_nodes.length > 0 && (
+                              <span className="flex items-center gap-1 text-primary-600 dark:text-primary-300">
+                                <span className="h-1.5 w-1.5 rounded-full bg-primary-500 animate-pulse" />
+                                {t('chatPage.strategyNodes', { defaultValue: 'Strategy OS: {{count}} nodes', count: liveTrace.strategy_nodes.length })}
+                              </span>
+                            )}
                           </div>
                           <button
                             onClick={handleStopGeneration}
@@ -1596,6 +1612,11 @@ function MessageBubble({ message, viewMode }: { message: SessionMessage; viewMod
           viewMode === 'admin'
             ? <FederatedAgentPanel trace={message.agent_trace} />
             : <SimplifiedAgentPanel trace={message.agent_trace} />
+        )}
+
+        {/* Strategy OS Trace Panel - admin only, only when strategy was active */}
+        {viewMode === 'admin' && message.strategy_trace && message.strategy_trace.active && (
+          <StrategyTracePanel trace={message.strategy_trace} />
         )}
         
         {/* Sources */}

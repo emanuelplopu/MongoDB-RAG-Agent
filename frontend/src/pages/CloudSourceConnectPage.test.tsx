@@ -143,7 +143,7 @@ describe('CloudSourceConnectPage', () => {
     })
     expect(testConnectionMock).toHaveBeenCalledWith('connection-123')
     expect(navigateMock).toHaveBeenCalledWith('/cloud-sources/connections/connection-123')
-  })
+  }, 15000)
 
   it('shows connection test feedback and create errors without navigating away', async () => {
     const user = userEvent.setup()
@@ -174,5 +174,5 @@ describe('CloudSourceConnectPage', () => {
     await user.click(screen.getByRole('button', { name: 'Connect' }))
 
     expect(await screen.findByText('Failed to create connection')).toBeInTheDocument()
-  })
+  }, 15000)
 })

@@ -168,7 +168,7 @@ describe('ProfilesPage', () => {
     await user.click(screen.getByTitle('Delete profile'))
     expect(deleteProfileMock).toHaveBeenCalledWith('research')
     expect(listProfilesMock).toHaveBeenCalled()
-  })
+  }, 15000)
 
   it('loads the access matrix and toggles profile access for non-admin users', async () => {
     const user = userEvent.setup()

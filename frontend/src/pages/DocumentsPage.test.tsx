@@ -61,15 +61,45 @@ vi.mock('react-arborist', () => ({
   Tree: ({
     data,
     onSelect,
+    children,
   }: {
-    data: Array<{ id: string; name: string }>
+    data: Array<{ id: string; name: string; count?: number }>
     onSelect?: (nodes: Array<{ id: string }>) => void
+    children?: (props: {
+      node: {
+        data: { id: string; name: string; isFolder: boolean; documentCount?: number }
+        isSelected: boolean
+        isOpen: boolean
+        select: () => void
+        toggle: () => void
+      }
+      style: React.CSSProperties
+      dragHandle: null
+    }) => React.ReactNode
   }) => (
     <div data-testid="folder-tree">
-      {data.map((node) => (
-        <button key={node.id} onClick={() => onSelect?.([{ id: node.id }])}>
-          {node.name}
-        </button>
+      {data.map((node, index) => (
+        <div key={node.id}>
+          {children?.({
+            node: {
+              data: {
+                id: node.id,
+                name: node.name,
+                isFolder: true,
+                documentCount: node.count,
+              },
+              isSelected: index === 0,
+              isOpen: index === 0,
+              select: () => onSelect?.([{ id: node.id }]),
+              toggle: () => undefined,
+            },
+            style: {},
+            dragHandle: null,
+          })}
+          <button onClick={() => onSelect?.([{ id: node.id }])}>
+            {node.name}
+          </button>
+        </div>
       ))}
     </div>
   ),
@@ -135,6 +165,64 @@ const pageTwoDocuments: Document[] = [
     source: 'reports/page-two.pdf',
     chunks_count: 4,
     created_at: '2026-04-15T09:30:00Z',
+    metadata: {},
+  },
+]
+
+const variedDocuments: Document[] = [
+  {
+    id: 'doc-audio',
+    title: 'Audio Clip',
+    source: 'media/audio.mp3',
+    chunks_count: 0,
+    created_at: 'not-a-date',
+    metadata: {},
+  },
+  {
+    id: 'doc-video',
+    title: 'Video Tour',
+    source: 'media/tour.mp4',
+    chunks_count: 1,
+    metadata: {},
+  },
+  {
+    id: 'doc-word',
+    title: 'Word Plan',
+    source: 'plans/plan.docx',
+    chunks_count: 2,
+    created_at: '2026-04-14T09:30:00Z',
+    metadata: {},
+  },
+  {
+    id: 'doc-sheet',
+    title: 'Budget Sheet',
+    source: 'sheets/budget.xlsx',
+    chunks_count: 3,
+    created_at: '2026-04-13T09:30:00Z',
+    metadata: {},
+  },
+  {
+    id: 'doc-slides',
+    title: 'Launch Deck',
+    source: 'decks/launch.pptx',
+    chunks_count: 4,
+    created_at: '2026-04-12T09:30:00Z',
+    metadata: {},
+  },
+  {
+    id: 'doc-text',
+    title: 'Plain Notes',
+    source: 'notes/plain.txt',
+    chunks_count: 5,
+    created_at: '2026-04-11T09:30:00Z',
+    metadata: {},
+  },
+  {
+    id: 'doc-unknown',
+    title: 'Mystery File',
+    source: 'misc/file.unknown',
+    chunks_count: 6,
+    created_at: '2026-04-10T09:30:00Z',
     metadata: {},
   },
 ]
@@ -274,7 +362,10 @@ describe('DocumentsPage', () => {
 
     expect(await screen.findByText('Quarterly Report')).toBeInTheDocument()
 
-    await user.click(screen.getByTestId('folder-tree').querySelector('button:last-child') as HTMLButtonElement)
+    const reportsButton = Array.from(screen.getByTestId('folder-tree').querySelectorAll('button'))
+      .find((button) => button.textContent === 'reports') as HTMLButtonElement | undefined
+    expect(reportsButton).toBeDefined()
+    await user.click(reportsButton!)
 
     await waitFor(() => {
       expect(listMock).toHaveBeenLastCalledWith(1, 50, 'reports', undefined, true, 'modified', 'desc')
@@ -359,6 +450,49 @@ describe('DocumentsPage', () => {
     expect(screen.getByTitle('Show folders')).toBeInTheDocument()
     await user.click(screen.getByTitle('Show folders'))
     expect(screen.getByText('Folders')).toBeInTheDocument()
+  })
+
+  it('renders alternate file types and surfaces rebuild and delete failures', async () => {
+    const user = userEvent.setup()
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    getFoldersMock.mockResolvedValue({
+      folders: [
+        { path: 'orphan/child', name: 'child', depth: 1, count: 1 },
+        { path: 'solo', name: 'solo', depth: 0, count: 0 },
+      ],
+      total_folders: 2,
+      total_documents: variedDocuments.length,
+    })
+    listMock.mockResolvedValue(listResponse(variedDocuments, { total: variedDocuments.length }))
+    startMetadataRebuildMock.mockResolvedValueOnce({
+      success: false,
+      message: 'No rebuild today',
+    })
+    deleteMock.mockRejectedValueOnce(new Error('delete failed'))
+
+    renderPage()
+
+    expect(await screen.findByText('Audio Clip')).toBeInTheDocument()
+    expect(screen.getByText('Video Tour')).toBeInTheDocument()
+    expect(screen.getByText('Word Plan')).toBeInTheDocument()
+    expect(screen.getByText('Budget Sheet')).toBeInTheDocument()
+    expect(screen.getByText('Launch Deck')).toBeInTheDocument()
+    expect(screen.getByText('Plain Notes')).toBeInTheDocument()
+    expect(screen.getByText('Mystery File')).toBeInTheDocument()
+    expect(screen.getAllByText('N/A').length).toBeGreaterThanOrEqual(2)
+
+    await user.click(screen.getByRole('button', { name: /Fix 1 docs/i }))
+    expect(await screen.findByText('No rebuild today')).toBeInTheDocument()
+
+    await user.click(screen.getAllByTitle('Delete')[0])
+    expect(deleteMock).toHaveBeenCalledWith('doc-audio')
+    expect(await screen.findByText('Failed to delete document.')).toBeInTheDocument()
+
+    await user.click(screen.getByTitle('Grid view'))
+    await user.click(screen.getByText('Audio Clip'))
+    expect(screen.getByText('Audio Clip')).toBeInTheDocument()
+
+    consoleErrorSpy.mockRestore()
   })
 
   it('shows an error banner when document loading fails', async () => {
