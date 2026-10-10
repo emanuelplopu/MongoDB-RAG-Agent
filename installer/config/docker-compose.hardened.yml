@@ -6,8 +6,6 @@
 # minimal external exposure.
 # =============================================================================
 
-version: '3.8'
-
 services:
   # ===========================================================================
   # MongoDB - Internal Only
@@ -133,6 +131,8 @@ volumes:
   mongodb_config:
     driver: local
   ollama_models:
+    # Fixed name so Load-Images.ps1 can pre-populate it independent of the compose project name
+    name: recallhub_ollama_models
     driver: local
   documents_data:
     driver: local

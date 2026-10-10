@@ -248,6 +248,9 @@ APP_ENV=$($Config.security.appEnv)
 APP_DEBUG=$appDebug
 APP_LOG_LEVEL=$($Config.security.logLevel)
 
+# Image tag version (must match build.ps1 export tags)
+VERSION=$($Config.app.version)
+
 # Security Settings
 EXPOSE_API_DOCS=$exposeApiDocs
 ENABLE_DEBUG_ROUTES=$enableDebugRoutes

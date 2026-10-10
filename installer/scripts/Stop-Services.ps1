@@ -27,7 +27,7 @@ if (Test-Path $configPath) {
     $Config = $null
 }
 
-$installPath = if ($Config.docker.installPath) { $Config.docker.installPath } else { "C:\RecallHub" }
+$installPath = Split-Path -Parent $PSScriptRoot  # Derive from script location (scripts/ is one level below app root)
 $composeFile = if ($Config.docker.composeFile) { $Config.docker.composeFile } else { "docker-compose.yml" }
 
 # Check Docker is running

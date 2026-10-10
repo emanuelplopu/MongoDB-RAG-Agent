@@ -23,7 +23,7 @@ AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 
 ; Installation directories
-DefaultDirName={localappdata}\{#MyAppName}
+DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 
@@ -73,11 +73,15 @@ Source: "scripts\*"; DestDir: "{app}\scripts"; Flags: ignoreversion recursesubdi
 ; Configuration files
 Source: "config\*"; DestDir: "{app}\config"; Flags: ignoreversion recursesubdirs
 
+; Runtime compose and env (placed at app root for Start-Services.ps1)
+Source: "config\docker-compose.hardened.yml"; DestDir: "{app}"; DestName: "docker-compose.yml"; Flags: ignoreversion
+Source: "config\hardened.env"; DestDir: "{app}"; DestName: ".env"; Flags: ignoreversion
+
 ; Docker images (exported tars)
 Source: "images\*"; DestDir: "{app}\images"; Flags: ignoreversion recursesubdirs; Check: DirExists(ExpandConstant('{src}\images'))
 
 ; Ollama models (large files)
-Source: "models\*"; DestDir: "{app}\models"; Flags: ignoreversion recursesubdirs; Check: FileExists(ExpandConstant('{src}\models\ollama-models.tar'))
+Source: "models\*"; DestDir: "{app}\models"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 
 ; Assets
 Source: "assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs
@@ -103,8 +107,9 @@ Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: st
 
 [Run]
 ; Post-installation tasks (output captured to log files)
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Configure-Firewall.ps1' *> '{localappdata}\RecallHub\logs\configure-firewall-run.log'""" ; StatusMsg: "Configuring firewall..."; Description: "Configure firewall rules"; Flags: runhidden waituntilterminated
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Start-Services.ps1' -Wait *> '{localappdata}\RecallHub\logs\start-services-run.log'""" ; StatusMsg: "Starting services..."; Description: "Start RecallHub services"; Flags: runhidden waituntilterminated
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Configure-Firewall.ps1' *> '{app}\logs\configure-firewall-run.log'""" ; StatusMsg: "Configuring firewall..."; Description: "Configure firewall rules"; Flags: runhidden waituntilterminated
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Load-Images.ps1' *> '{app}\logs\load-images-run.log'""" ; StatusMsg: "Loading Docker images..."; Description: "Load Docker images and import Ollama models"; Flags: runhidden waituntilterminated
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Start-Services.ps1' -Wait *> '{app}\logs\start-services-run.log'""" ; StatusMsg: "Starting services..."; Description: "Start RecallHub services"; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [Registry]
@@ -138,10 +143,12 @@ var
 // Logging & Transcript
 // ============================================================================
 
-// Initialize log directory early
+// Initialize log directory early.
+// {app} is not available until the directory page, so the transcript starts in
+// {autoappdata} (ProgramData for admin installs, AppData for per-user installs).
 procedure InitializeLogDir();
 begin
-  InstallLogDir := ExpandConstant('{localappdata}\RecallHub\logs');
+  InstallLogDir := ExpandConstant('{autoappdata}\RecallHub\logs');
   ForceDirectories(InstallLogDir);
   InstallStartTime := GetDateTimeString('yyyy-mm-dd_hhnnss', '-', ':');
 end;
@@ -258,7 +265,7 @@ begin
   end;
 
   // Check for sufficient disk space (5GB minimum)
-  if GetSpaceOnDisk(ExpandConstant('{localappdata}'), True, True) < 5368709120 then
+  if GetSpaceOnDisk(ExpandConstant('{autopf}'), True, True) < 5368709120 then
   begin
     LogTranscript('ERROR: Insufficient disk space (requires 5 GB)');
     MsgBox('RecallHub requires at least 5 GB of free disk space.' + #13#10 +
@@ -267,7 +274,6 @@ begin
     Exit;
   end;
 
-  LogTranscript('Install path: ' + ExpandConstant('{localappdata}\RecallHub'));
   LogTranscript('Pre-flight checks passed');
 end;
 
@@ -289,7 +295,10 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   case CurStep of
     ssInstall:
-      LogTranscript('STEP: Installation files being copied');
+      begin
+        LogTranscript('Install path: ' + ExpandConstant('{app}'));
+        LogTranscript('STEP: Installation files being copied');
+      end;
     ssPostInstall:
       begin
         LogTranscript('STEP: Post-installation tasks starting');

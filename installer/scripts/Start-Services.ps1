@@ -38,7 +38,7 @@ if (Test-Path $configPath) {
 
 # Resolve settings from config
 $dockerDesktopPath = if ($Config.docker.desktopPath) { $Config.docker.desktopPath } else { "C:\Program Files\Docker\Docker\Docker Desktop.exe" }
-$installPath = if ($Config.docker.installPath) { $Config.docker.installPath } else { "C:\RecallHub" }
+$installPath = Split-Path -Parent $PSScriptRoot  # Derive from script location (scripts/ is one level below app root)
 $composeFile = if ($Config.docker.composeFile) { $Config.docker.composeFile } else { "docker-compose.yml" }
 $startupTimeout = if ($Config.docker.startupTimeout) { $Config.docker.startupTimeout } else { $Timeout }
 $healthInterval = if ($Config.docker.healthCheckInterval) { $Config.docker.healthCheckInterval } else { 5 }
