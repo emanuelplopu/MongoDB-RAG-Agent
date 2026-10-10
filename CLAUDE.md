@@ -111,6 +111,8 @@ docker compose --profile quellex up -d
 docker compose --profile recallhub --profile quellex up -d
 ```
 
+The Compose project name is pinned (`name: recallhub`) and every service has an explicit `image:` (`recallhub-backend`, `recallhub-ingestion-worker`, `recallhub-frontend`, `recallhub-frontend-quellex`), so container, network and image names do not depend on the checkout folder. Only one folder per machine can own the stack; both tenants are profiles of that one stack. The offline installer (`scripts/INSTALL.ps1`, `scripts/full-backup.ps1`, `installer/scripts/*.ps1`) relies on these names - see `docs/14-OFFLINE_DEPLOYMENT.md` and `docs/19-INSTALL_TEST_POSTMORTEM.md`.
+
 Default local ports:
 
 - MongoDB Atlas Local: `11017`

@@ -107,6 +107,11 @@ $manifestPath = $null
 $primaryManifest = Join-Path $InstallPath ".recallhub-install-manifest.json"
 # Try fallback location
 $fallbackManifest = Join-Path $env:ProgramData "RecallHub\install-manifest.json"
+$localAppDataManifest = Join-Path $env:LOCALAPPDATA "RecallHub\install-manifest.json"
+if (Test-Path $localAppDataManifest) {
+    if (-not (Test-Path $fallbackManifest)) { $fallbackManifest = $localAppDataManifest }
+    elseif ((Get-Item $localAppDataManifest).LastWriteTime -gt (Get-Item $fallbackManifest).LastWriteTime) { $fallbackManifest = $localAppDataManifest }
+}
 
 if (Test-Path $fallbackManifest) {
     $manifestPath = $fallbackManifest

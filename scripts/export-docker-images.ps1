@@ -25,7 +25,9 @@ param(
     [switch]$IncludeBase
 )
 
-$ErrorActionPreference = "Stop"
+# Docker writes progress to stderr; PowerShell 5.1 must not treat that as a terminating
+# error (the script checks $LASTEXITCODE after every docker call).
+$ErrorActionPreference = "Continue"
 
 function Write-OK   { param([string]$Msg) Write-Host "  [OK] $Msg" -ForegroundColor Green }
 function Write-Warn { param([string]$Msg) Write-Host "  [WARN] $Msg" -ForegroundColor Yellow }
@@ -61,20 +63,23 @@ if (-not (Test-Path $OutputPath)) {
 }
 
 # Shared images (always included)
+# Image names are pinned in docker-compose.yml (image: ...), so they are the same on
+# every machine regardless of the folder the stack runs from.
 $sharedImages = @(
-    @{ Image = "mongodb-rag-agent-ingestion-worker:latest"; File = "ingestion-worker.tar" },
-    @{ Image = "mongodb/mongodb-atlas-local:8.0";           File = "mongodb-atlas-local.tar" }
+    @{ Image = "recallhub-backend:latest";          File = "backend.tar" },
+    @{ Image = "recallhub-ingestion-worker:latest"; File = "ingestion-worker.tar" },
+    @{ Image = "mongodb/mongodb-atlas-local:8.0";   File = "mongodb-atlas-local.tar" }
 )
 
 # Tenant-specific images
+# The backend image is shared by both tenants (TENANT_ID is an env var); only the
+# frontend is built per tenant (VITE_TENANT build arg).
 $tenantImages = @{
     "quellex" = @(
-        @{ Image = "mongodb-rag-agent-backend-quellex:latest";  File = "backend-quellex.tar" },
-        @{ Image = "mongodb-rag-agent-frontend-quellex:latest"; File = "frontend-quellex.tar" }
+        @{ Image = "recallhub-frontend-quellex:latest"; File = "frontend-quellex.tar" }
     )
     "recallhub" = @(
-        @{ Image = "mongodb-rag-agent-backend:latest";  File = "backend.tar" },
-        @{ Image = "mongodb-rag-agent-frontend:latest"; File = "frontend.tar" }
+        @{ Image = "recallhub-frontend:latest"; File = "frontend.tar" }
     )
 }
 

@@ -23,7 +23,11 @@ AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 
 ; Installation directories
-DefaultDirName={localappdata}\{#MyAppName}
+; Use {autopf} (Program Files) so the path is the same whether the installer
+; runs elevated or not. Per-user state lives under {commonappdata} or is
+; resolved by the tray app at runtime - never under {localappdata} from an
+; elevated installer (which silently routes to the SYSTEM profile).
+DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 
@@ -70,14 +74,25 @@ Source: "tray-app\bin\Release\net8.0-windows\*"; DestDir: "{app}"; Flags: ignore
 ; PowerShell scripts
 Source: "scripts\*"; DestDir: "{app}\scripts"; Flags: ignoreversion recursesubdirs
 
-; Configuration files
+; Configuration files (kept under {app}\config for reference)
 Source: "config\*"; DestDir: "{app}\config"; Flags: ignoreversion recursesubdirs
 
-; Docker images (exported tars)
-Source: "images\*"; DestDir: "{app}\images"; Flags: ignoreversion recursesubdirs; Check: DirExists(ExpandConstant('{src}\images'))
+; Active deployment files at the install root - this is where Start-Services.ps1
+; runs `docker compose up -d` from. Without these two, the install does nothing.
+Source: "config\docker-compose.hardened.yml"; DestDir: "{app}"; DestName: "docker-compose.yml"; Flags: ignoreversion
+Source: "config\hardened.env"; DestDir: "{app}"; DestName: ".env"; Flags: ignoreversion
 
-; Ollama models (large files)
-Source: "models\*"; DestDir: "{app}\models"; Flags: ignoreversion recursesubdirs; Check: FileExists(ExpandConstant('{src}\models\ollama-models.tar'))
+; Docker images (exported tars) - compile-time include
+#if FileExists("images\backend.tar")
+Source: "images\*"; DestDir: "{app}\images"; Flags: ignoreversion recursesubdirs
+#endif
+
+; Ollama models (large files) - compile-time include only.
+; The previous runtime Check used {src} which on a compiled installer is the
+; user's machine, not the build payload, so it was always false.
+#if FileExists("models\ollama-models.tar")
+Source: "models\*"; DestDir: "{app}\models"; Flags: ignoreversion recursesubdirs
+#endif
 
 ; Assets
 Source: "assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs
@@ -102,9 +117,13 @@ Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilen
 Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: startupicon
 
 [Run]
-; Post-installation tasks (output captured to log files)
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Configure-Firewall.ps1' *> '{localappdata}\RecallHub\logs\configure-firewall-run.log'""" ; StatusMsg: "Configuring firewall..."; Description: "Configure firewall rules"; Flags: runhidden waituntilterminated
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Start-Services.ps1' -Wait *> '{localappdata}\RecallHub\logs\start-services-run.log'""" ; StatusMsg: "Starting services..."; Description: "Start RecallHub services"; Flags: runhidden waituntilterminated
+; Post-installation tasks (output captured to log files under {commonappdata}
+; so the same paths resolve identically whether running elevated or as the
+; user, and so the tray app can read its own logs at runtime).
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Configure-Firewall.ps1' *> '{commonappdata}\RecallHub\logs\configure-firewall-run.log'""" ; StatusMsg: "Configuring firewall..."; Description: "Configure firewall rules"; Flags: runhidden waituntilterminated
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Load-Images.ps1' *> '{commonappdata}\RecallHub\logs\load-images-run.log'""" ; StatusMsg: "Loading Docker images..."; Description: "Load bundled Docker images"; Flags: runhidden waituntilterminated
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Import-OllamaModels.ps1' *> '{commonappdata}\RecallHub\logs\import-models-run.log'""" ; StatusMsg: "Importing Ollama models..."; Description: "Import bundled Ollama models"; Flags: runhidden waituntilterminated
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Start-Services.ps1' -Wait *> '{commonappdata}\RecallHub\logs\start-services-run.log'""" ; StatusMsg: "Starting services..."; Description: "Start RecallHub services"; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [Registry]
@@ -125,7 +144,7 @@ Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\s
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\logs"
-Type: files; Name: "{localappdata}\RecallHub\window-state.json"
+Type: files; Name: "{commonappdata}\RecallHub\window-state.json"
 Type: files; Name: "{userdesktop}\{#MyAppName}.lnk"
 Type: dirifempty; Name: "{app}"
 
@@ -141,7 +160,7 @@ var
 // Initialize log directory early
 procedure InitializeLogDir();
 begin
-  InstallLogDir := ExpandConstant('{localappdata}\RecallHub\logs');
+  InstallLogDir := ExpandConstant('{commonappdata}\RecallHub\logs');
   ForceDirectories(InstallLogDir);
   InstallStartTime := GetDateTimeString('yyyy-mm-dd_hhnnss', '-', ':');
 end;
@@ -257,8 +276,8 @@ begin
     Exit;
   end;
 
-  // Check for sufficient disk space (5GB minimum)
-  if GetSpaceOnDisk(ExpandConstant('{localappdata}'), True, True) < 5368709120 then
+  // Check for sufficient disk space (5GB minimum) on the install drive
+  if GetSpaceOnDisk(ExpandConstant('{app}'), True, True) < 5368709120 then
   begin
     LogTranscript('ERROR: Insufficient disk space (requires 5 GB)');
     MsgBox('RecallHub requires at least 5 GB of free disk space.' + #13#10 +
@@ -267,7 +286,7 @@ begin
     Exit;
   end;
 
-  LogTranscript('Install path: ' + ExpandConstant('{localappdata}\RecallHub'));
+  LogTranscript('Install path: ' + ExpandConstant('{app}'));
   LogTranscript('Pre-flight checks passed');
 end;
 

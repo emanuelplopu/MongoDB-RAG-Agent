@@ -30,6 +30,8 @@ public class TrayApplicationContext : ApplicationContext
     public TrayApplicationContext()
     {
         _appConfig = LoadConfig();
+        MainWindow.BaseUrl = $"http://localhost:{_appConfig.Ports?.Frontend ?? 11080}";
+        TrayLog.Info($"RecallHubTray starting (frontend {MainWindow.BaseUrl})");
         _serviceManager = new ServiceManager(_appConfig);
 
         // Create context menu
@@ -194,6 +196,7 @@ public class TrayApplicationContext : ApplicationContext
 
             if (!startSuccess)
             {
+                TrayLog.Error("Service start failed - see start-services-*.log in the logs folder");
                 _splashScreen.UpdateStatus("Failed to start services.");
                 await Task.Delay(2000);
                 _splashScreen.CloseFromAnyThread();
@@ -364,7 +367,7 @@ public class TrayApplicationContext : ApplicationContext
         else
         {
             // Fallback to browser
-            MainWindow.OpenInBrowser("http://localhost:11080/admin");
+            MainWindow.OpenInBrowser(MainWindow.BaseUrl + "/admin");
         }
     }
 

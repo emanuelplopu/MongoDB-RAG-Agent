@@ -61,7 +61,7 @@ $ProgressPreference    = "Continue"
 $script:Errors      = @()
 $script:Warnings    = @()
 $script:CurrentStep = 0
-$script:TotalSteps  = 11
+$script:TotalSteps  = 12
 
 function Write-Step  { param([string]$Msg) $script:CurrentStep++; Write-Host "`n[$script:CurrentStep/$script:TotalSteps] $Msg" -ForegroundColor Cyan }
 function Write-OK    { param([string]$Msg) Write-Host "  [OK] $Msg" -ForegroundColor Green }
@@ -308,6 +308,91 @@ foreach ($folder in $docFolders) {
     }
 }
 
+function Repair-OverrideMounts {
+    <# Comment out bind mounts in docker-compose.override.yml whose host path does
+       not exist on this machine (dev-machine drives such as D:/... or G:/My Drive)
+       and strip them from MOUNT_MAPPINGS. Docker would otherwise refuse to start or
+       silently mount empty folders. Runs with or without a backup manifest. #>
+    param([string]$overridePath, [string]$TestDataPath = "")
+    try {
+        # ── Sanitize volume mounts for paths that don't exist on this machine ──
+        Write-Info "Sanitizing volume mounts for non-existent host paths..."
+        $override = Get-Content $overridePath -Raw
+
+        # Pre-pass: the Test_Data mount (/app/mounts/test-law) is remapped to this
+        # machine's TestDataPath instead of being dropped. The path in the override
+        # is whatever the source machine used (e.g. D:/Test_data) and is only
+        # guaranteed to match the manifest when the source machine was the dev box.
+        if ($TestDataPath -and (Test-Path $TestDataPath)) {
+            $newFwd = ($TestDataPath -replace '\\', '/').TrimEnd('/')
+            $script:RemappedTestData = @()
+            [System.Text.RegularExpressions.MatchEvaluator]$mountEval = {
+                param($m)
+                $hostPath = $m.Groups[2].Value -replace '/', '\\'
+                if (Test-Path $hostPath) { return $m.Value }
+                $script:RemappedTestData += $m.Groups[2].Value
+                return $m.Groups[1].Value + $newFwd + $m.Groups[3].Value
+            }
+            $override = [regex]::Replace($override, '(?m)^(\s*-\s*"?)([A-Za-z]:[/\\][^:"\r\n]*?)(:/app/mounts/test-law(?::ro)?"?\s*)$', $mountEval)
+            [System.Text.RegularExpressions.MatchEvaluator]$mapEval = {
+                param($m)
+                $hostPath = $m.Groups[2].Value -replace '/', '\\'
+                if (Test-Path $hostPath) { return $m.Value }
+                return $m.Groups[1].Value + $newFwd
+            }
+            $override = [regex]::Replace($override, '(/app/mounts/test-law=)([A-Za-z]:[^|\r\n]*)', $mapEval)
+            if ($script:RemappedTestData.Count -gt 0) {
+                Set-Content $overridePath $override -Encoding UTF8 -NoNewline
+                Write-OK "Remapped Test_Data mount $($script:RemappedTestData -join ', ') -> $newFwd"
+            }
+        }
+        $lines = $override -split "`n"
+        $cleanedLines = @()
+        $removedMounts = @()
+
+        foreach ($line in $lines) {
+            # Match volume mount lines like:
+            #   - "G:/My Drive/root:/app/mounts/gdrive-root:ro"   (quoted, may have spaces)
+            #   - D:/parhelion.energy:/app/mounts/parhelion-energy:ro  (unquoted)
+            # Only target absolute host paths with a drive letter (A-Z).
+            if ($line -match '^\s*-\s*"?([A-Za-z]:[/\\][^:]+):(/app/[^:"]+)') {
+                $hostPath = $Matches[1] -replace '/', '\'
+                if (-not (Test-Path $hostPath)) {
+                    $removedMounts += $hostPath
+                    # Comment out instead of delete for transparency
+                    $cleanedLines += "      # REMOVED (path not found): $($line.TrimStart())"
+                    continue
+                }
+            }
+            $cleanedLines += $line
+        }
+
+        if ($removedMounts.Count -gt 0) {
+            # Also clean MOUNT_MAPPINGS env var entries for removed paths
+            $result = $cleanedLines -join "`n"
+            foreach ($removedPath in $removedMounts) {
+                $fwdPath = $removedPath -replace '\\', '/'
+                $escaped = [regex]::Escape($fwdPath)
+                # Remove pipe-separated segment with leading pipe:  |/app/mounts/name=G:/My Drive/root
+                $result = $result -replace "\|[^|=]+=$escaped", ''
+                # Remove segment with trailing pipe (if it was first):  /app/mounts/name=G:/My Drive/root|
+                $result = $result -replace "[^|=]+=$escaped\|", ''
+                # Remove segment if it's the only one (no pipes)
+                $result = $result -replace "MOUNT_MAPPINGS=[^|=]+=$escaped\s*`$", 'MOUNT_MAPPINGS='
+            }
+            Set-Content $overridePath $result -Encoding UTF8 -NoNewline
+            Write-OK "Removed $($removedMounts.Count) volume mount(s) for non-existent paths:"
+            foreach ($m in $removedMounts) {
+                Write-Info "    - $m"
+            }
+        } else {
+            Write-OK "All volume mount paths exist on this machine"
+        }
+    } catch {
+        Write-Warn "Failed to sanitize override mounts: $_"
+    }
+}
+
 # Step 7: Update docker-compose.override.yml with new paths
 Write-Step "Updating path mappings in docker-compose.override.yml..."
 
@@ -369,51 +454,7 @@ if ((Test-Path $overridePath) -and $manifest) {
             }
         }
 
-        # ── Sanitize volume mounts for paths that don't exist on this machine ──
-        Write-Info "Sanitizing volume mounts for non-existent host paths..."
-        $override = Get-Content $overridePath -Raw
-        $lines = $override -split "`n"
-        $cleanedLines = @()
-        $removedMounts = @()
-
-        foreach ($line in $lines) {
-            # Match volume mount lines like:
-            #   - "G:/My Drive/root:/app/mounts/gdrive-root:ro"   (quoted, may have spaces)
-            #   - D:/parhelion.energy:/app/mounts/parhelion-energy:ro  (unquoted)
-            # Only target absolute host paths with a drive letter (A-Z).
-            if ($line -match '^\s*-\s*"?([A-Za-z]:[/\\][^:]+):(/app/[^:"]+)') {
-                $hostPath = $Matches[1] -replace '/', '\'
-                if (-not (Test-Path $hostPath)) {
-                    $removedMounts += $hostPath
-                    # Comment out instead of delete for transparency
-                    $cleanedLines += "      # REMOVED (path not found): $($line.TrimStart())"
-                    continue
-                }
-            }
-            $cleanedLines += $line
-        }
-
-        if ($removedMounts.Count -gt 0) {
-            # Also clean MOUNT_MAPPINGS env var entries for removed paths
-            $result = $cleanedLines -join "`n"
-            foreach ($removedPath in $removedMounts) {
-                $fwdPath = $removedPath -replace '\\', '/'
-                $escaped = [regex]::Escape($fwdPath)
-                # Remove pipe-separated segment with leading pipe:  |/app/mounts/name=G:/My Drive/root
-                $result = $result -replace "\|[^|=]+=$escaped", ''
-                # Remove segment with trailing pipe (if it was first):  /app/mounts/name=G:/My Drive/root|
-                $result = $result -replace "[^|=]+=$escaped\|", ''
-                # Remove segment if it's the only one (no pipes)
-                $result = $result -replace "MOUNT_MAPPINGS=[^|=]+=$escaped\s*`$", 'MOUNT_MAPPINGS='
-            }
-            Set-Content $overridePath $result -Encoding UTF8 -NoNewline
-            Write-OK "Removed $($removedMounts.Count) volume mount(s) for non-existent paths:"
-            foreach ($m in $removedMounts) {
-                Write-Info "    - $m"
-            }
-        } else {
-            Write-OK "All volume mount paths exist on this machine"
-        }
+        Repair-OverrideMounts -overridePath $overridePath -TestDataPath $(if ($SkipTestData) { "" } else { $TestDataPath })
     } catch {
         Write-Warn "Failed to update override paths: $_"
     }
@@ -421,7 +462,8 @@ if ((Test-Path $overridePath) -and $manifest) {
     if (-not (Test-Path $overridePath)) {
         Write-Warn "docker-compose.override.yml not found at $overridePath"
     } else {
-        Write-Info "No manifest available - manual path review recommended"
+        Write-Info "No manifest available - skipping path remap, still sanitizing mounts"
+        Repair-OverrideMounts -overridePath $overridePath -TestDataPath $(if ($SkipTestData) { "" } else { $TestDataPath })
     }
 }
 
@@ -466,8 +508,19 @@ if (-not (Test-Path $dockerComposePath)) {
 Write-Info "Stopping any existing containers..."
 $prevEAP = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
-$null = docker compose --profile $Tenant down 2>&1
-$null = docker compose down 2>&1
+$null = docker compose --profile $Tenant down --remove-orphans 2>&1
+$null = docker compose down --remove-orphans 2>&1
+
+# Containers that carry the stack's fixed names but that compose does not manage
+# (hand-made helpers such as rag-frontend-11080, or containers created with partial
+# labels - no com.docker.compose.oneoff label means compose never lists them) make
+# `docker compose up` fail with "container name already in use". Remove them.
+$managed = @(docker compose --profile $Tenant ps -a --format "{{.Name}}" 2>$null | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+$leftovers = @(docker ps -a --filter "name=^/rag-" --format "{{.Names}}" 2>$null | ForEach-Object { "$_".Trim() } | Where-Object { $_ -and ($managed -notcontains $_) })
+foreach ($name in $leftovers) {
+    Write-Warn "Removing unmanaged container '$name' (uses a RecallHub container name but was not created by this compose project)"
+    $null = docker rm -f $name 2>&1
+}
 $ErrorActionPreference = $prevEAP
 Write-OK "Docker environment cleared"
 
@@ -689,11 +742,12 @@ if ($hasImages) {
 
     # Verify images are available
     Write-Info "Verifying loaded images..."
+    $tenantFrontend = if ($Tenant -eq "quellex") { "recallhub-frontend-quellex" } else { "recallhub-frontend" }
     $expectedImages = @(
-        "mongodb-rag-agent-backend",
-        "mongodb-rag-agent-ingestion-worker",
-        "mongodb-rag-agent-frontend",
-        "mongodb/mongodb-atlas-local"
+        "recallhub-backend:",
+        "recallhub-ingestion-worker:",
+        "${tenantFrontend}:",
+        "mongodb/mongodb-atlas-local:"
     )
     $foundCount = 0
     foreach ($expected in $expectedImages) {
@@ -704,9 +758,11 @@ if ($hasImages) {
     }
     Write-OK "Loaded $loadedCount image(s), verified $foundCount/$($expectedImages.Count) expected images present"
 
-    if ($failedCount -eq 0 -and $loadedCount -gt 0) {
+    if ($failedCount -eq 0 -and $loadedCount -gt 0 -and $foundCount -eq $expectedImages.Count) {
         $imagesLoaded = $true
         Write-OK "All images loaded from backup - no internet or build required"
+    } elseif ($foundCount -lt $expectedImages.Count) {
+        Write-Warn "Only $foundCount/$($expectedImages.Count) expected images present after load - falling back to build"
     } else {
         Write-Warn "$failedCount image(s) failed to load - may need to rebuild missing ones"
     }
@@ -763,6 +819,12 @@ if (Test-Path $trayScriptsSource) {
     }
     Copy-Item "$trayScriptsSource\*" $trayScriptsDest -Recurse -Force
     Write-OK "Tray app scripts deployed to $trayScriptsDest"
+    $trayCfgScript = Join-Path $trayScriptsSource "Write-TrayConfig.ps1"
+    if (Test-Path $trayCfgScript) {
+        & $trayCfgScript -InstallPath $InstallPath -Tenant $Tenant
+    } else {
+        Write-Warn "Write-TrayConfig.ps1 missing - tray app would default to 11080/11000 and the wrong compose folder"
+    }
 } else {
     Write-Info "No installer\scripts found - tray app scripts skipped"
 }
@@ -773,11 +835,12 @@ Write-Step "Starting all services and verifying health..."
 Write-Info "Starting all $tenantName services..."
 $prevEAP = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
-$null = docker compose --profile $Tenant up -d 2>&1
+$upOutput = docker compose --profile $Tenant up -d --remove-orphans 2>&1 | ForEach-Object { "$_" }
 $upExitCode = $LASTEXITCODE
 $ErrorActionPreference = $prevEAP
 if ($upExitCode -ne 0) {
-    Write-Warn "Some services may have failed to start (exit code: $upExitCode)"
+    Write-Err "docker compose up failed (exit code: $upExitCode)"
+    $upOutput | Where-Object { $_ -match 'Error|error|Conflict|denied|failed' } | Select-Object -Last 8 | ForEach-Object { Write-Err "  $_" }
 }
 
 Write-Info "Waiting for services to initialize (30s)..."
@@ -905,6 +968,7 @@ if ($script:Errors.Count -gt 0) {
 } else {
     Write-Host "  Restore completed successfully!" -ForegroundColor Green
 }
+$script:ExitCode = if ($script:Errors.Count -gt 0) { 1 } else { 0 }
 
 Write-Host ""
 Write-Host "  USEFUL COMMANDS:" -ForegroundColor Yellow
@@ -912,3 +976,4 @@ Write-Host "    View logs:    docker compose --profile $Tenant logs -f" -Foregro
 Write-Host "    Stop:         docker compose --profile $Tenant down" -ForegroundColor Gray
 Write-Host "    Restart:      docker compose --profile $Tenant restart" -ForegroundColor Gray
 Write-Host ""
+exit $script:ExitCode

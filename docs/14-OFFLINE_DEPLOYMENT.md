@@ -13,6 +13,13 @@ RecallHub deploys as a fully self-contained offline package. Backups are **per-t
 
 The installer is idempotent — safe to re-run after interruptions or restarts. It reads the tenant from `manifest.json` and adjusts paths, ports, and profiles automatically.
 
+### How the pieces fit together (read this first)
+
+- **One install folder per machine.** `docker-compose.yml` pins the Compose project name to `recallhub` and gives every service a fixed image name (`recallhub-backend`, `recallhub-ingestion-worker`, `recallhub-frontend`, `recallhub-frontend-quellex`). Container, network and image names therefore no longer depend on the folder the stack runs from, and a package exported on the dev machine is loaded by exactly the names the stack expects. The flip side: two install folders (e.g. `C:\RecallHub` and `C:\Quellex`) cannot both own the containers. Both tenants live in one folder as Compose profiles; `INSTALL.ps1` refuses to take over a stack owned by another folder unless `-TakeOverStack` is given.
+- **The desktop app is configured, not guessed.** `installer\scripts\Write-TrayConfig.ps1` writes `%LocalAppData%\RecallHub\config.json` with the install path, the tenant's Compose profile and the tenant's ports (RecallHub 11080/11000, Quellex 11081/11001), and deploys `Start-Services.ps1` / `Stop-Services.ps1` next to the app. Without this file the tray app falls back to `%LocalAppData%\RecallHub` as the compose directory and to the RecallHub ports — which is exactly why earlier test installs looked "installed" but never came up through the tray app.
+- **Install is only complete when the tenant answers.** `INSTALL.ps1` polls `http://localhost:<frontend>/` and `http://localhost:<backend>/api/v1/system/health` for up to 3 minutes before it writes `install_complete: true` into the manifest. A failed restore stops the installer instead of being papered over.
+- **Administrator rights are only needed for Phase 1** (Docker Desktop, Ollama, Windows features). With `-SkipPrerequisites` the installer runs as the logged-in user, which keeps the tray app, Ollama models and logs on the right profile.
+
 ## Backup Package Structure
 
 Each backup is named `<Tenant>_v<version>_<timestamp>` and contains only tenant-relevant resources:
@@ -116,7 +123,14 @@ The installer runs in 3 phases:
 7. Copies documents to configured path
 8. Starts tenant services via `docker compose --profile <tenant> up -d`
 9. Runs health checks on tenant endpoints
-10. Writes install manifest for future uninstall/upgrade
+10. Writes `%LocalAppData%\RecallHub\config.json` + service scripts for the desktop app (`Write-TrayConfig.ps1`)
+11. Writes install manifest for future uninstall/upgrade
+
+### Phase 4: Desktop App + verification
+
+- Copies the newest `RecallHubTray.exe` from `installer\tray-app\bin\publish` or `bin\Release\net8.0-windows\win-x64\publish`
+- Creates desktop / Start Menu shortcuts, the `recallhub://` protocol handler and the HKCU Run entry
+- Polls the tenant frontend and backend; only then marks `install_complete: true` (exit code 2 otherwise)
 
 ### Installer Parameters
 
@@ -126,7 +140,10 @@ The installer runs in 3 phases:
 | `-TestDataPath` | `C:\Test_Data` | Where document corpus is stored |
 | `-SkipPrerequisites` | false | Skip Docker/Ollama install (use after restart) |
 | `-Repair` | false | Re-run restore steps without reinstalling prerequisites |
-| `-Force` | false | Skip confirmation prompts |
+| `-PurgeTestData` | false | In `-Repair` mode also delete `Test_Data` (kept by default: it is user data) |
+| `-TakeOverStack` | false | Allow taking over a stack that runs from a different install folder |
+| `-NoLaunch` | false | Do not start the desktop app at the end (automation) |
+| `-NonInteractive` | false | Never wait for a key press or a restart confirmation (automation) |
 
 The tenant is always read from `manifest.json` — there is no `-Tenant` parameter on `INSTALL.ps1`.
 
@@ -251,7 +268,44 @@ Automatically configured via Docker Desktop settings:
 |----------|---------|
 | `OLLAMA_MODELS` | Points to Ollama model storage directory |
 
+## Verification checklist (run on every test machine)
+
+```powershell
+# 1. Manifest says complete and names the tenant
+Get-Content C:\ProgramData\RecallHub\install-manifest.json   # or %LocalAppData%\RecallHub\install-manifest.json
+# 2. Exactly one Compose project, owned by the install folder
+docker compose ls
+# 3. Tenant endpoints answer (Quellex: 11081 / 11001)
+Invoke-WebRequest http://localhost:11081/ -UseBasicParsing | Select-Object StatusCode
+Invoke-WebRequest http://localhost:11001/api/v1/system/health -UseBasicParsing | Select-Object StatusCode
+# 4. Tray app config points at the install folder and the tenant
+Get-Content $env:LOCALAPPDATA\RecallHub\config.json
+# 5. Tray app start path works end to end
+& $env:LOCALAPPDATA\RecallHub\scripts\Start-Services.ps1 -Wait; $LASTEXITCODE   # must be 0
+Get-Content $env:LOCALAPPDATA\RecallHub\logs\tray-app.log -Tail 20
+```
+
 ## Troubleshooting
+
+### Tray app says "Failed to start services"
+
+Read `%LocalAppData%\RecallHub\logs\tray-app.log` and the newest `start-services-*.log` in the same folder. The start script exits 1 (Docker not running), 2 (compose file not at `docker.installPath`), 3 (`docker compose up` failed, output is in the log) or 4 (endpoints not healthy). If `config.json` is missing or points at the wrong folder, re-run:
+
+```powershell
+& C:\<Tenant>\installer\scripts\Write-TrayConfig.ps1 -InstallPath C:\<Tenant> -Tenant quellex
+```
+
+### "A ... stack already runs from: <other folder>"
+
+The containers belong to another install folder. Either install into that folder (`-InstallPath`) or pass `-TakeOverStack` to move the stack; data folders of the old install are left untouched.
+
+### Package says "PACKAGE INCOMPLETE"
+
+`full-backup.ps1` now verifies the package (source tree, config/.env, MongoDB dump, images, models) and refuses to call it done otherwise. A folder with only `config/` in it is a backup that died early — never ship it.
+
+### LLM provider after restore
+
+The restored `config/.env` decides which LLM and embedding provider the tenant uses. The default dev configuration uses OpenAI (`gpt-5.2`, `text-embedding-3-large`, 3072 dimensions), so the bundled Ollama models are only used if `.env` is switched to Ollama — and the embedding model cannot be switched without re-ingesting, because the stored vectors have 3072 dimensions. Decide this on the source machine before creating the package.
 
 ### "Docker not ready after restart"
 
@@ -325,3 +379,4 @@ Some antivirus solutions flag PowerShell automation. Temporarily disable real-ti
 | Version | Date | Notes |
 |---------|------|-------|
 | v0.8.8 | 2026-05-13 | Initial offline deployment package |
+| v0.8.8 | 2026-10-10 | Pinned Compose project/image names, tenant-aware tray config, start scripts no longer abort on Docker stderr, install verified by health check, package completeness check |

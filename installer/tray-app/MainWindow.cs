@@ -20,7 +20,8 @@ public class MainWindow : Form
     private FormBorderStyle _previousBorderStyle;
     private Rectangle _previousBounds;
 
-    private const string BaseUrl = "http://localhost:11080";
+    /// <summary>Frontend base URL. Set from config.json ports by TrayApplicationContext (tenant-aware).</summary>
+    public static string BaseUrl { get; set; } = "http://localhost:11080";
     private const int DefaultWidth = 1280;
     private const int DefaultHeight = 800;
     private const int MinWidth = 800;

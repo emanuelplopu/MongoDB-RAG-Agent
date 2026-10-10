@@ -82,3 +82,6 @@ tools/telemetry-viewer/node_modules/
 tools/telemetry-viewer/dist/
 tools/telemetry-viewer/dist-electron/
 tools/telemetry-viewer/dist-package/
+
+# Offline install packages (full-backup.ps1 default output)
+Hub_Backups/

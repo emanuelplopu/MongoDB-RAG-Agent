@@ -56,6 +56,7 @@ The config file is the single source of truth for all build and runtime paramete
 | Key | Default | Description |
 |-----|---------|-------------|
 | `composeFile` | `docker-compose.yml` | Path to compose file (relative to installPath) |
+| `composeProfile` | _(tenant)_ | Compose profile to enable: `recallhub` or `quellex`. Set by `Write-TrayConfig.ps1` |
 | `installPath` | `C:\RecallHub` | Installation root directory |
 | `startupTimeout` | `120` | Seconds to wait for services to become healthy |
 | `healthCheckInterval` | `5` | Polling interval in seconds |
@@ -79,6 +80,8 @@ The tray app searches for `config.json` in this order:
 1. `<AppContext.BaseDirectory>/config.json` (next to the exe)
 2. `%LocalAppData%\RecallHub\config.json`
 
+`INSTALL.ps1` / `full-restore.ps1` write the second file through `installer\scripts\Write-TrayConfig.ps1 -InstallPath <dir> -Tenant <recallhub|quellex>`. It carries `docker.installPath`, `docker.composeProfile` and the tenant ports, so the app no longer assumes 11080/11000 or `%LocalAppData%\RecallHub` as compose directory. Re-run it whenever the install folder or tenant changes.
+
 ## ServiceManager (C#)
 
 Located at `installer/tray-app/ServiceManager.cs`. Handles all Docker interaction.
@@ -92,15 +95,13 @@ Located at `installer/tray-app/ServiceManager.cs`. Handles all Docker interactio
 | `StopServicesAsync()` | Runs `docker compose down`; falls back to Stop-Services.ps1 if compose file missing |
 | `RestartServicesAsync()` | Calls Stop then Start with a 2s gap |
 | `CheckServicesRunningAsync()` | GET `http://localhost:{frontendPort}/` — returns true on 200 |
-| `CheckBackendHealthyAsync()` | GET `http://localhost:{backendPort}/api/v1/status` — returns true on 200 |
+| `CheckBackendHealthyAsync()` | GET `http://localhost:{backendPort}/api/v1/system/health` — returns true on 200 (`/api/v1/status` does not exist) |
 | `IsDockerRunningAsync()` | Runs `docker info` with 5s timeout |
 | `GetServiceStatusAsync()` | Returns composite `ServiceStatus` (DockerRunning, IsRunning, BackendHealthy) |
 
-### Fallback Behavior
+### Start/Stop strategy
 
-If the `docker-compose.yml` file is not found at the expected path, ServiceManager falls back to running the PowerShell scripts:
-- Start: `Start-Services.ps1 -Wait`
-- Stop: `Stop-Services.ps1 -Force`
+ServiceManager prefers the PowerShell scripts (`%LocalAppData%\RecallHub\scripts`, then `<installPath>\installer\scripts`): they know the install path, the Compose profile and the health endpoints and leave a log. Only when no script is found does it run `docker compose -f <file> [-f override] [--profile <tenant>] up -d --remove-orphans` itself. Decisions are logged to `%LocalAppData%\RecallHub\logs\tray-app.log`.
 
 ### Health Polling
 
@@ -126,12 +127,17 @@ Located at `installer/scripts/Start-Services.ps1`.
 4. If not running: starts Docker Desktop, polls every 2s for up to 60s
 5. Validates compose file exists at `<installPath>/<composeFile>`
 6. Runs `docker compose up -d` from `installPath`
-7. If `-Wait`: polls both frontend (port 11080) and backend (`/api/v1/status`) until both return 200
+7. If `-Wait`: polls the frontend (`ports.frontend`) and backend (`ports.backend`, `/api/v1/system/health`) until both return 200
+
+The script runs native Docker commands with `$ErrorActionPreference = Continue` and judges them by exit code: Docker prints progress to stderr, and Windows PowerShell 5.1 would otherwise turn the first stderr line into a terminating error (every pre-October-2026 run died silently right after "Running docker compose up").
 
 **Error codes:**
 - `DOCKER-001` — Docker daemon not available
 - `COMPOSE-001` — docker-compose.yml not found
 - `COMPOSE-002` — `docker compose up` failed
+- `HEALTH-001` — endpoints not healthy within the timeout
+
+Exit codes: 0 ok, 1 Docker unavailable, 2 compose file missing, 3 compose up failed, 4 health timeout.
 
 ### Stop-Services.ps1
 
@@ -154,7 +160,7 @@ Located at `installer/scripts/Stop-Services.ps1`.
 |---------|------|
 | Application root | `C:\RecallHub` (configurable via `docker.installPath`) |
 | Tray executable | `<installPath>\RecallHubTray.exe` |
-| Scripts | `<installPath>\installer\scripts\` |
+| Scripts | `%LocalAppData%\RecallHub\scripts\` (deployed copy of `<installPath>\installer\scripts\`) |
 | Config | `<installPath>\config.json` or `%LocalAppData%\RecallHub\config.json` |
 | Logs | `%LocalAppData%\RecallHub\logs\` |
 | Updates | `%LocalAppData%\RecallHub\updates\` (drop `.rhu` files here) |
@@ -201,8 +207,8 @@ Output: `bin/Release/net8.0-windows/win-x64/publish/RecallHubTray.exe`
 
 ## Auto-Start
 
-- Configured via **Windows Task Scheduler** (not a Windows Service)
-- Task name: "RecallHub" — triggers at user logon
+- Backup/restore installs (`INSTALL.ps1`): HKCU `Run` entry "RecallHub" at user logon
+- Hardened installer: **Windows Task Scheduler** task "RecallHub" at user logon
 - Strategy chosen over Windows Service for:
   - Better user-session integration (tray icon, UI access)
   - No elevated permissions required for normal operation

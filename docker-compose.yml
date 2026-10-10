@@ -18,6 +18,12 @@
 #   Quellex only:             docker compose --profile quellex up -d
 #   Rebuild specific tenant:  docker compose --profile quellex build frontend-quellex
 #   With Airbyte:             docker compose --profile recallhub -f docker-compose.yml -f docker-compose.airbyte.yml up -d
+#
+# The project name is pinned so container, network and image names do not
+# depend on the folder this file lives in (C:\RecallHub, C:\Quellex, a git
+# checkout, ...). Images carry explicit names for the same reason: the offline
+# backup/restore flow exports and loads them by these exact names.
+name: recallhub
 
 services:
   # ===========================================
@@ -61,6 +67,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile.worker
+    image: recallhub-ingestion-worker:latest
     container_name: rag-ingestion-worker
     depends_on:
       mongodb:
@@ -121,6 +128,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile.fast
+    image: recallhub-backend:latest
     container_name: rag-backend
     ports:
       - "11000:8000"
@@ -135,8 +143,9 @@ services:
       # Tenant
       - TENANT_ID=recallhub
       
-      # Profile (overrides profiles.yaml active_profile)
-      - ACTIVE_PROFILE=parhelion
+      # Profile (overrides profiles.yaml active_profile). Override per machine in .env
+      # with RECALLHUB_ACTIVE_PROFILE / RECALLHUB_MONGODB_DATABASE instead of editing this file.
+      - ACTIVE_PROFILE=${RECALLHUB_ACTIVE_PROFILE:-parhelion}
       
       # LLM Configuration
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}
@@ -192,6 +201,7 @@ services:
       dockerfile: Dockerfile
       args:
         TENANT: recallhub
+    image: recallhub-frontend:latest
     container_name: rag-frontend
     ports:
       - "11080:80"
@@ -228,6 +238,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile.fast
+    image: recallhub-backend:latest
     container_name: rag-backend-quellex
     ports:
       - "11001:8000"
@@ -237,7 +248,7 @@ services:
     environment:
       # MongoDB connection (internal container network)
       - MONGODB_URI=mongodb://mongodb:27017/?directConnection=true
-      - MONGODB_DATABASE=rag_test_law
+      - MONGODB_DATABASE=${QUELLEX_MONGODB_DATABASE:-rag_test_law}
       
       # Tenant
       - TENANT_ID=quellex
@@ -245,8 +256,9 @@ services:
       # Tool Gating - Quellex is fully offline, no web tools
       - TENANT_DISABLED_TOOLS=web_search,browse_web
       
-      # Profile (overrides profiles.yaml active_profile)
-      - ACTIVE_PROFILE=test-law
+      # Profile (overrides profiles.yaml active_profile). Override per machine in .env
+      # with QUELLEX_ACTIVE_PROFILE / QUELLEX_MONGODB_DATABASE instead of editing this file.
+      - ACTIVE_PROFILE=${QUELLEX_ACTIVE_PROFILE:-test-law}
       
       # LLM Configuration
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}
@@ -302,6 +314,7 @@ services:
       dockerfile: Dockerfile
       args:
         TENANT: quellex
+    image: recallhub-frontend-quellex:latest
     container_name: rag-frontend-quellex
     ports:
       - "11081:80"
@@ -333,6 +346,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: recallhub-cli:latest
     container_name: rag-cli
     profiles:
       - cli

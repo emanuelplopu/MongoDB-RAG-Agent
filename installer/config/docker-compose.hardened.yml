@@ -4,9 +4,10 @@
 # This file defines the production container orchestration for the hardened
 # Windows installer. All services are isolated on internal networks with
 # minimal external exposure.
+#
+# NOTE: The top-level `version:` key was removed - Compose v2 ignores it and
+# emits a warning. Image tags resolve via ${VERSION} in the bundled .env.
 # =============================================================================
-
-version: '3.8'
 
 services:
   # ===========================================================================
@@ -80,7 +81,7 @@ services:
     restart: unless-stopped
     # NO PORT MAPPINGS - internal network only
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11000/api/v1/status"]
+      test: ["CMD", "curl", "-f", "http://localhost:11000/api/v1/system/health"]
       interval: 30s
       timeout: 10s
       retries: 3

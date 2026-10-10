@@ -363,9 +363,23 @@ if ($Headless) {
         $existingSettings[$key] = $headlessSettings[$key]
     }
 
-    # Write merged settings
+    # Write merged settings (newer Docker Desktop builds read settings-store.json, older ones settings.json)
     $jsonOutput = $existingSettings | ConvertTo-Json -Depth 10
     Set-Content -Path $dockerSettingsPath -Value $jsonOutput -Encoding UTF8 -Force
+    $storePath = Join-Path $dockerSettingsDir "settings-store.json"
+    if (Test-Path $storePath) {
+        try {
+            $store = @{}
+            $storeRaw = Get-Content -Path $storePath -Raw -ErrorAction Stop
+            if ($storeRaw -and $storeRaw.Trim()) { ($storeRaw | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $store[$_.Name] = $_.Value } }
+            $store["AutoStart"] = $true
+            $store["OpenUIOnStartupDisabled"] = $true
+            $store["DisplayedOnboarding"] = $true
+            $store | ConvertTo-Json -Depth 10 | Set-Content -Path $storePath -Encoding UTF8 -Force
+        } catch {
+            Write-Info "Could not update settings-store.json: $_"
+        }
+    }
     Write-OK "Docker Desktop settings.json configured for headless operation"
     Write-Info "  Path: $dockerSettingsPath"
 }

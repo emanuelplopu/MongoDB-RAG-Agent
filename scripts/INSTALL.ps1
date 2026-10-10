@@ -30,6 +30,16 @@
     Does NOT touch Docker Desktop, Ollama, WSL, or model files.
 .PARAMETER RepairFull
     Like -Repair but also re-restores Ollama models (Phase 2 + Phase 3).
+.PARAMETER PurgeTestData
+    In repair mode also delete the Test_Data folder (it is kept by default).
+.PARAMETER TakeOverStack
+    Allow this install to take over a stack that was started from a different
+    install folder (the compose project name is pinned to "recallhub", so only
+    one install folder can own the containers on a machine).
+.PARAMETER NoLaunch
+    Do not start the desktop app at the end (automation / tests).
+.PARAMETER NonInteractive
+    Never wait for a key press or an Enter (automation / tests).
 .EXAMPLE
     .\INSTALL.ps1
     .\INSTALL.ps1 -TestDataPath "D:\Test_Data" -InstallPath "D:\Quellex"
@@ -45,13 +55,21 @@ param(
     [switch]$SkipRestore,
     [switch]$Repair,
     [switch]$RepairFull,
-    [switch]$SkipDesktopApp
+    [switch]$SkipDesktopApp,
+    [switch]$PurgeTestData,
+    [switch]$TakeOverStack,
+    [switch]$NoLaunch,
+    [switch]$NonInteractive
 )
 
 $ErrorActionPreference = "Stop"
 
 # --- Self-elevation ---
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+# Administrator rights are only needed for Phase 1 (Docker Desktop / Ollama /
+# Windows features). Everything else runs as the logged-in user, which keeps
+# %LocalAppData% paths (tray app, Ollama models) on the right profile.
+$needsElevation = -not ($SkipPrerequisites -or $Repair -or $RepairFull)
+if ($needsElevation -and -not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "This script requires Administrator privileges. Restarting elevated..." -ForegroundColor Yellow
     $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     if ($TestDataPath -ne "C:\Test_Data") { $arguments += " -TestDataPath `"$TestDataPath`"" }
@@ -62,16 +80,48 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     if ($Repair) { $arguments += " -Repair" }
     if ($RepairFull) { $arguments += " -RepairFull" }
     if ($SkipDesktopApp) { $arguments += " -SkipDesktopApp" }
+    if ($PurgeTestData) { $arguments += " -PurgeTestData" }
+    if ($TakeOverStack) { $arguments += " -TakeOverStack" }
+    if ($NoLaunch) { $arguments += " -NoLaunch" }
+    if ($NonInteractive) { $arguments += " -NonInteractive" }
     Start-Process powershell.exe -ArgumentList $arguments -Verb RunAs -Wait
     exit
 }
 
 # --- Helper: Incremental manifest writing ---
+function Get-ManifestPath {
+    # Prefer ProgramData, but only if THIS user can actually write the manifest there.
+    # An earlier elevated install leaves a file that an unelevated run cannot modify,
+    # so the probe must test the real file, not just the folder.
+    $candidates = @((Join-Path $env:ProgramData "RecallHub"), (Join-Path $env:LOCALAPPDATA "RecallHub"))
+    foreach ($dir in $candidates) {
+        $file = Join-Path $dir "install-manifest.json"
+        try {
+            if (-not (Test-Path $dir)) { New-Item $dir -ItemType Directory -Force -ErrorAction Stop | Out-Null }
+            if (Test-Path $file) {
+                $fs = [System.IO.File]::Open($file, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+                $fs.Close()
+            } else {
+                $probe = Join-Path $dir ".write-probe"
+                Set-Content -Path $probe -Value "x" -ErrorAction Stop
+                Remove-Item $probe -Force -ErrorAction SilentlyContinue
+            }
+            return $file
+        } catch { }
+    }
+    return (Join-Path (Join-Path $env:LOCALAPPDATA "RecallHub") "install-manifest.json")
+}
+
 function Update-Manifest {
     param([hashtable]$Updates)
-    $manifestDir = Join-Path $env:ProgramData "RecallHub"
-    $manifestFile = Join-Path $manifestDir "install-manifest.json"
-    if (-not (Test-Path $manifestDir)) { New-Item $manifestDir -ItemType Directory -Force | Out-Null }
+    $manifestFile = Get-ManifestPath
+    $manifestDir = Split-Path $manifestFile -Parent
+    # When falling back to %LocalAppData%, start from the (read-only) ProgramData
+    # manifest so the install history is carried over instead of lost.
+    $programDataManifest = Join-Path (Join-Path $env:ProgramData "RecallHub") "install-manifest.json"
+    if (-not (Test-Path $manifestFile) -and ($manifestFile -ne $programDataManifest) -and (Test-Path $programDataManifest)) {
+        try { Copy-Item $programDataManifest $manifestFile -Force -ErrorAction Stop } catch { }
+    }
 
     $manifest = @{}
     if (Test-Path $manifestFile) {
@@ -131,7 +181,8 @@ Write-Host ""
 
 # --- Validate backup contents ---
 Write-Host "[Validation] Checking backup integrity..." -ForegroundColor Yellow
-$requiredDirs = @("source", "mongodb", "models", "config")
+$requiredDirs = @("source", "mongodb", "config")
+if (-not ($SkipModels -or $Repair)) { $requiredDirs += "models" }
 $missing = @()
 foreach ($dir in $requiredDirs) {
     $path = Join-Path $BackupDir $dir
@@ -143,6 +194,12 @@ if ($missing.Count -gt 0) {
     exit 1
 }
 Write-Host "  [OK] Backup structure validated" -ForegroundColor Green
+if (-not (Test-Path (Join-Path $BackupDir "images"))) {
+    Write-Host "  [WARN] No images/ folder in this backup - Docker images will have to be BUILT (needs the base image or internet)" -ForegroundColor Yellow
+}
+if (-not (Test-Path (Join-Path $BackupDir "manifest.json"))) {
+    Write-Host "  [WARN] No manifest.json - this package was not finished by full-backup.ps1; tenant defaults to recallhub" -ForegroundColor Yellow
+}
 
 # --- Repair mode: clean up existing deployment before restoring ---
 if ($Repair -or $RepairFull) {
@@ -239,8 +296,8 @@ if ($Repair -or $RepairFull) {
         }
     }
 
-    # Remove Test_Data directory
-    if (Test-Path $TestDataPath) {
+    # Remove Test_Data directory (opt-in: it is user data, not an install artifact)
+    if ($PurgeTestData -and (Test-Path $TestDataPath)) {
         Write-Host "  Removing test data: $TestDataPath" -ForegroundColor Gray
         try {
             Remove-Item $TestDataPath -Recurse -Force
@@ -257,6 +314,37 @@ if ($Repair -or $RepairFull) {
     $SkipPrerequisites = $true
     if (-not $RepairFull) { $SkipModels = $true }
     $SkipRestore = $false
+}
+
+# --- Guard: stack owned by a different install folder ---
+# docker-compose.yml pins the project name to "recallhub", so a stack started from
+# another folder (e.g. C:\RecallHub while installing to C:\Quellex) would be taken
+# over and its containers recreated against this folder's data directories.
+if (-not ($Repair -or $RepairFull)) {
+    $ownerDir = $null
+    try {
+        $lsJson = docker compose ls --all --format json 2>$null | Out-String
+        if ($lsJson.Trim()) {
+            $projects = $lsJson | ConvertFrom-Json
+            foreach ($proj in @($projects)) {
+                if ($proj.Name -eq "recallhub" -and $proj.ConfigFiles) {
+                    $ownerDir = Split-Path (($proj.ConfigFiles -split ",")[0].Trim()) -Parent
+                }
+            }
+        }
+    } catch { }
+    if ($ownerDir -and ($ownerDir.TrimEnd('\') -ne $InstallPath.TrimEnd('\'))) {
+        Write-Host "" 
+        Write-Host "  A $tenantName/RecallHub stack already runs from: $ownerDir" -ForegroundColor Yellow
+        Write-Host "  This install targets:                       $InstallPath" -ForegroundColor Yellow
+        Write-Host "  Only one install folder can own the containers on a machine." -ForegroundColor Yellow
+        if (-not $TakeOverStack) {
+            Write-Host "  Re-run with -InstallPath `"$ownerDir`" to update that install, or add -TakeOverStack" -ForegroundColor Yellow
+            Write-Host "  to move the stack here (data in $ownerDir\data is left untouched)." -ForegroundColor Yellow
+            exit 2
+        }
+        Write-Host "  -TakeOverStack given: the stack will be recreated from $InstallPath" -ForegroundColor Yellow
+    }
 }
 
 # --- Write initial manifest (tracks partial installs) ---
@@ -332,6 +420,10 @@ if (-not $SkipPrerequisites) {
             Write-Host "     .\INSTALL.ps1 -SkipPrerequisites" -ForegroundColor Yellow
             Write-Host "  ======================================================" -ForegroundColor Yellow
             Write-Host ""
+            if ($NonInteractive) {
+                Write-Host "  Non-interactive mode: restart the machine, then re-run with -SkipPrerequisites" -ForegroundColor Yellow
+                exit 3010
+            }
             Read-Host "Press Enter to restart now (or Ctrl+C to cancel)"
             Restart-Computer -Force
             exit
@@ -414,6 +506,12 @@ if (-not $SkipRestore) {
 
     if (Test-Path $restoreScript) {
         & $restoreScript -BackupPath $BackupDir -TestDataPath $TestDataPath -InstallPath $InstallPath -Tenant $tenant
+        $restoreExit = $LASTEXITCODE
+        if ($restoreExit -ne 0) {
+            Update-Manifest @{ install_complete = $false; last_error = "full-restore.ps1 exited with code $restoreExit" }
+            Write-Host "  [ERROR] full-restore.ps1 failed (exit code $restoreExit). Installation is NOT complete." -ForegroundColor Red
+            exit 1
+        }
     } else {
         Write-Host "  [ERROR] full-restore.ps1 not found at: $restoreScript" -ForegroundColor Red
         exit 1
@@ -430,7 +528,17 @@ if (-not $SkipDesktopApp) {
     Write-Host "  STEP 4/4: Deploy Desktop App" -ForegroundColor Magenta
     Write-Host "===================================================" -ForegroundColor Magenta
 
-    # Locate the tray app executable
+    # Runtime config for the tray app and the service scripts. Without this the
+    # app used %LocalAppData%\RecallHub as compose directory and ports 11080/11000
+    # regardless of tenant - the main reason earlier test installs never worked.
+    $trayCfgScript = Join-Path $InstallPath "installer\scripts\Write-TrayConfig.ps1"
+    if (Test-Path $trayCfgScript) {
+        & $trayCfgScript -InstallPath $InstallPath -Tenant $tenant
+    } else {
+        Write-Host "  [WARN] Write-TrayConfig.ps1 not found at $trayCfgScript - tray app will use defaults" -ForegroundColor Yellow
+    }
+
+    # Locate the tray app executable (newest of the known publish locations)
     $trayExe = $null
     $primaryPath = Join-Path $InstallPath "installer"
     $primaryPath = Join-Path $primaryPath "tray-app"
@@ -438,10 +546,10 @@ if (-not $SkipDesktopApp) {
     $primaryPath = Join-Path $primaryPath "publish"
     $primaryPath = Join-Path $primaryPath "RecallHubTray.exe"
 
-    if (Test-Path $primaryPath) {
-        $trayExe = $primaryPath
-    } else {
-        # Try alternate publish path
+    $candidates = @()
+    if (Test-Path $primaryPath) { $candidates += Get-Item $primaryPath }
+    if ($true) {
+        # Alternate publish path (dotnet publish -c Release)
         $altPath = Join-Path $InstallPath "installer"
         $altPath = Join-Path $altPath "tray-app"
         $altPath = Join-Path $altPath "bin"
@@ -451,9 +559,10 @@ if (-not $SkipDesktopApp) {
         $altPath = Join-Path $altPath "publish"
         $altPath = Join-Path $altPath "RecallHubTray.exe"
 
-        if (Test-Path $altPath) {
-            $trayExe = $altPath
-        }
+        if (Test-Path $altPath) { $candidates += Get-Item $altPath }
+    }
+    if ($candidates.Count -gt 0) {
+        $trayExe = ($candidates | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
     }
 
     if (-not $trayExe) {
@@ -575,12 +684,16 @@ if (-not $SkipDesktopApp) {
         }
 
         # Launch the app
-        Write-Host "  Launching RecallHub desktop app..." -ForegroundColor Gray
-        try {
-            Start-Process -FilePath $exePath
-            Write-Host "  [OK] Desktop app launched" -ForegroundColor Green
-        } catch {
-            Write-Host "  [WARN] Failed to launch desktop app: $_" -ForegroundColor Yellow
+        if ($NoLaunch) {
+            Write-Host "  (desktop app not launched: -NoLaunch)" -ForegroundColor DarkGray
+        } else {
+            Write-Host "  Launching RecallHub desktop app..." -ForegroundColor Gray
+            try {
+                Start-Process -FilePath $exePath
+                Write-Host "  [OK] Desktop app launched" -ForegroundColor Green
+            } catch {
+                Write-Host "  [WARN] Failed to launch desktop app: $_" -ForegroundColor Yellow
+            }
         }
 
         # Phase 4 summary
@@ -597,20 +710,41 @@ if (-not $SkipDesktopApp) {
     Write-Host "[SKIP] Desktop app deployment skipped" -ForegroundColor DarkGray
 }
 
+# --- Verify the tenant endpoints before calling the install complete ---
+$frontendPort = if ($tenant -eq "quellex") { 11081 } else { 11080 }
+$backendPort  = if ($tenant -eq "quellex") { 11001 } else { 11000 }
+$frontendUrl = "http://localhost:$frontendPort/"
+$backendUrl  = "http://localhost:$backendPort/api/v1/system/health"
+Write-Host ""
+Write-Host "[Verify] Waiting for $frontendUrl and $backendUrl ..." -ForegroundColor Yellow
+$healthy = $false
+$deadline = (Get-Date).AddSeconds(180)
+while ((Get-Date) -lt $deadline) {
+    $f = $false; $b = $false
+    try { $f = (Invoke-WebRequest -Uri $frontendUrl -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200 } catch { }
+    try { $b = (Invoke-WebRequest -Uri $backendUrl -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200 } catch { }
+    if ($f -and $b) { $healthy = $true; break }
+    Start-Sleep -Seconds 5
+}
+if ($healthy) {
+    Write-Host "  [OK] Frontend and backend are answering" -ForegroundColor Green
+} else {
+    Write-Host "  [ERROR] Frontend/backend did not answer within 180s - see: docker compose --profile $tenant ps / logs (in $InstallPath)" -ForegroundColor Red
+}
+
 # --- Finalize manifest ---
-Update-Manifest @{ docker_images_loaded = $true; tenant = $tenant; install_complete = $true }
-$manifestDir = Join-Path $env:ProgramData "RecallHub"
-Write-Host "  [OK] Install manifest finalized: $manifestDir\install-manifest.json" -ForegroundColor Green
+Update-Manifest @{ docker_images_loaded = $true; tenant = $tenant; install_complete = $healthy; frontend_url = $frontendUrl; backend_url = $backendUrl; verified_at = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss") }
+Write-Host "  [OK] Install manifest finalized: $(Get-ManifestPath) (install_complete=$healthy)" -ForegroundColor Green
 
 # --- Final Summary ---
-$tenantPort = if ($tenant -eq "quellex") { "11001" } else { "11000" }
+$tenantPort = $frontendPort
 Write-Host ""
 Write-Host "=====================================================" -ForegroundColor Green
-Write-Host "   $tenantName INSTALLATION COMPLETE" -ForegroundColor Green
+if ($healthy) { Write-Host "   $tenantName INSTALLATION COMPLETE" -ForegroundColor Green } else { Write-Host "   $tenantName INSTALLATION FINISHED WITH ERRORS" -ForegroundColor Red }
 Write-Host "=====================================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "  $tenantName is now running at:" -ForegroundColor White
-Write-Host "    http://localhost:$tenantPort" -ForegroundColor White
+Write-Host "    http://localhost:$tenantPort   (API: http://localhost:$backendPort/docs)" -ForegroundColor White
 Write-Host ""
 Write-Host "  Source code:    $InstallPath" -ForegroundColor Gray
 Write-Host "  Test data:      $TestDataPath" -ForegroundColor Gray
@@ -626,12 +760,16 @@ Write-Host "    gemma4:e4b (worker)" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  Desktop App:" -ForegroundColor Gray
 if (-not $SkipDesktopApp) {
-    Write-Host "    $env:LOCALAPPDATA\$tenantName\${tenantName}Tray.exe" -ForegroundColor Gray
+    Write-Host "    $env:LOCALAPPDATA\RecallHub\RecallHubTray.exe  (config: $env:LOCALAPPDATA\RecallHub\config.json)" -ForegroundColor Gray
 } else {
     Write-Host "    (skipped)" -ForegroundColor DarkGray
 }
 Write-Host ""
 Write-Host "=====================================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "Press any key to exit..." -ForegroundColor Gray
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+if (-not $NonInteractive) {
+    Write-Host "Press any key to exit..." -ForegroundColor Gray
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+}
+if (-not $healthy) { exit 2 }
+exit 0

@@ -16,13 +16,25 @@ public class ServiceManager
     private readonly AppConfig _config;
     private readonly string _installPath;
     private readonly string _scriptsPath;
+    private readonly string[] _scriptCandidates;
 
     public ServiceManager(AppConfig config)
     {
         _config = config;
         _installPath = config.Docker?.InstallPath
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecallHub");
-        _scriptsPath = Path.Combine(_installPath, "installer", "scripts");
+        // Service scripts: deployed next to the tray app by Write-TrayConfig.ps1, or
+        // (dev checkout / hardened layout) under the install path.
+        _scriptCandidates = new[]
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecallHub", "scripts"),
+            Path.Combine(_installPath, "installer", "scripts"),
+            Path.Combine(_installPath, "scripts"),
+        };
+        _scriptsPath = _scriptCandidates.FirstOrDefault(d => File.Exists(Path.Combine(d, "Start-Services.ps1")))
+            ?? _scriptCandidates[0];
+        TrayLog.Info($"ServiceManager: installPath={_installPath} scripts={_scriptsPath} "
+            + $"profile={config.Docker?.ComposeProfile ?? "(none)"} frontendPort={config.Ports?.Frontend ?? 11080} backendPort={config.Ports?.Backend ?? 11000}");
 
         _httpClient = new HttpClient
         {
@@ -55,7 +67,8 @@ public class ServiceManager
         try
         {
             var port = _config.Ports?.Backend ?? 11000;
-            var response = await _httpClient.GetAsync($"http://localhost:{port}/api/v1/status");
+            // /api/v1/status does not exist on the backend; this is the real health route.
+            var response = await _httpClient.GetAsync($"http://localhost:{port}/api/v1/system/health");
             return response.IsSuccessStatusCode;
         }
         catch
@@ -139,30 +152,33 @@ public class ServiceManager
         if (!await EnsureDockerRunningAsync())
             return false;
 
+        var startupTimeout = _config.Docker?.StartupTimeout ?? 120;
+
+        // Preferred path: Start-Services.ps1 knows the install path, the compose
+        // profile (tenant) and the health endpoints, and writes a log under
+        // %LocalAppData%\RecallHub\logs. INSTALL.ps1 deploys it next to this app.
+        var scriptPath = Path.Combine(_scriptsPath, "Start-Services.ps1");
+        if (File.Exists(scriptPath))
+        {
+            TrayLog.Info($"Starting services via {scriptPath}");
+            if (await RunPowerShellScriptAsync(scriptPath, "-Wait", timeoutMs: (startupTimeout + 90) * 1000))
+                return true;
+            TrayLog.Warn("Start-Services.ps1 reported failure - trying docker compose directly");
+        }
+
         var composePath = Path.Combine(_installPath, _config.Docker?.ComposeFile ?? "docker-compose.yml");
         if (!File.Exists(composePath))
         {
-            // Fallback: try Start-Services.ps1 script
-            var scriptPath = Path.Combine(_scriptsPath, "Start-Services.ps1");
-            if (File.Exists(scriptPath))
-            {
-                return await RunPowerShellScriptAsync(scriptPath, "-Wait");
-            }
-            Debug.WriteLine($"Neither compose file nor start script found");
+            TrayLog.Error($"Neither a usable Start-Services.ps1 nor {composePath} found");
             return false;
         }
 
-        // Run docker compose up
-        var result = await RunProcessAsync(
-            "docker",
-            $"compose -f \"{composePath}\" up -d",
-            workingDirectory: _installPath,
-            timeoutMs: (_config.Docker?.StartupTimeout ?? 120) * 1000
-        );
-
+        var args = BuildComposeArgs(composePath) + " up -d --remove-orphans";
+        TrayLog.Info($"docker {args}");
+        var result = await RunProcessAsync("docker", args, workingDirectory: _installPath, timeoutMs: startupTimeout * 1000);
         if (result.ExitCode != 0)
         {
-            Debug.WriteLine($"docker compose up failed: {result.StdErr}");
+            TrayLog.Error($"docker compose up failed (exit {result.ExitCode}): {result.StdErr}");
             return false;
         }
 
@@ -186,26 +202,47 @@ public class ServiceManager
     /// </summary>
     public async Task<bool> StopServicesAsync()
     {
+        var scriptPath = Path.Combine(_scriptsPath, "Stop-Services.ps1");
+        if (File.Exists(scriptPath))
+        {
+            TrayLog.Info($"Stopping services via {scriptPath}");
+            if (await RunPowerShellScriptAsync(scriptPath, "", timeoutMs: 120000))
+                return true;
+            TrayLog.Warn("Stop-Services.ps1 reported failure - trying docker compose directly");
+        }
+
         var composePath = Path.Combine(_installPath, _config.Docker?.ComposeFile ?? "docker-compose.yml");
         if (!File.Exists(composePath))
         {
-            // Fallback: try Stop-Services.ps1 script
-            var scriptPath = Path.Combine(_scriptsPath, "Stop-Services.ps1");
-            if (File.Exists(scriptPath))
-            {
-                return await RunPowerShellScriptAsync(scriptPath, "-Force");
-            }
+            TrayLog.Error($"Compose file not found: {composePath}");
             return false;
         }
 
-        var result = await RunProcessAsync(
-            "docker",
-            $"compose -f \"{composePath}\" down",
-            workingDirectory: _installPath,
-            timeoutMs: 60000
-        );
-
+        var args = BuildComposeArgs(composePath) + " down";
+        TrayLog.Info($"docker {args}");
+        var result = await RunProcessAsync("docker", args, workingDirectory: _installPath, timeoutMs: 120000);
+        if (result.ExitCode != 0)
+            TrayLog.Error($"docker compose down failed (exit {result.ExitCode}): {result.StdErr}");
         return result.ExitCode == 0;
+    }
+
+    /// <summary>
+    /// Compose arguments shared by start/stop: compose file, the override file
+    /// (external document mounts) and the tenant profile from config.json.
+    /// </summary>
+    private string BuildComposeArgs(string composePath)
+    {
+        var args = $"compose -f \"{composePath}\"";
+        var overridePath = Path.Combine(_installPath, "docker-compose.override.yml");
+        if (File.Exists(overridePath)
+            && Path.GetFileName(composePath).Equals("docker-compose.yml", StringComparison.OrdinalIgnoreCase))
+        {
+            args += $" -f \"{overridePath}\"";
+        }
+        var profile = _config.Docker?.ComposeProfile;
+        if (!string.IsNullOrWhiteSpace(profile))
+            args += $" --profile {profile}";
+        return args;
     }
 
     /// <summary>
@@ -292,13 +329,16 @@ public class ServiceManager
     /// <summary>
     /// Run a PowerShell script (fallback for complex operations).
     /// </summary>
-    private async Task<bool> RunPowerShellScriptAsync(string scriptPath, string arguments = "")
+    private async Task<bool> RunPowerShellScriptAsync(string scriptPath, string arguments = "", int timeoutMs = 120000)
     {
         var result = await RunProcessAsync(
             "powershell.exe",
-            $"-ExecutionPolicy Bypass -File \"{scriptPath}\" {arguments}",
-            timeoutMs: 120000
+            $"-NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\" {arguments}",
+            timeoutMs: timeoutMs
         );
+        TrayLog.Info($"{Path.GetFileName(scriptPath)} {arguments} -> exit {result.ExitCode}");
+        if (result.ExitCode != 0 && !string.IsNullOrWhiteSpace(result.StdErr))
+            TrayLog.Warn(result.StdErr.Trim());
         return result.ExitCode == 0;
     }
 }
@@ -337,6 +377,8 @@ public class DockerConfig
 {
     public string? ComposeFile { get; set; }
     public string? InstallPath { get; set; }
+    /// <summary>Compose profile to enable (tenant): recallhub | quellex. Empty = none.</summary>
+    public string? ComposeProfile { get; set; }
     public int StartupTimeout { get; set; } = 120;
     public int HealthCheckInterval { get; set; } = 5;
     public bool AutoStart { get; set; } = true;
@@ -349,4 +391,38 @@ public class PortsConfig
     public int Backend { get; set; } = 11000;
     public int MongoDB { get; set; } = 27017;
     public int Ollama { get; set; } = 11434;
+}
+
+/// <summary>
+/// Minimal file logger: %LocalAppData%\RecallHub\logs\tray-app.log. The tray app used
+/// to be a black box when startup failed; this puts its decisions next to the
+/// Start-Services logs.
+/// </summary>
+public static class TrayLog
+{
+    private static readonly object Gate = new();
+    private static readonly string LogPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RecallHub", "logs", "tray-app.log");
+
+    public static void Info(string message) => Write("INFO", message);
+    public static void Warn(string message) => Write("WARN", message);
+    public static void Error(string message) => Write("ERROR", message);
+
+    private static void Write(string level, string message)
+    {
+        try
+        {
+            lock (Gate)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+                if (File.Exists(LogPath) && new FileInfo(LogPath).Length > 2_000_000)
+                    File.Move(LogPath, LogPath + ".1", overwrite: true);
+                File.AppendAllText(LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [{level}] {message}{Environment.NewLine}");
+            }
+        }
+        catch
+        {
+            // logging must never break the app
+        }
+    }
 }

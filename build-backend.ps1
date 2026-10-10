@@ -21,8 +21,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 $BaseImageName = "recallhub-backend-base"
-$AppImageName = "mongodb-rag-agent-backend"
-$WorkerImageName = "mongodb-rag-agent-ingestion-worker"
+$AppImageName = "recallhub-backend"
+$WorkerImageName = "recallhub-ingestion-worker"
 
 function Write-Header { param([string]$Msg) Write-Host "`n=== $Msg ===" -ForegroundColor Cyan }
 function Write-Success { param([string]$Msg) Write-Host "[OK] $Msg" -ForegroundColor Green }
