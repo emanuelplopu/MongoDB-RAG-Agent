@@ -20,14 +20,31 @@ import {
 } from '@heroicons/react/24/outline'
 import { useAuth } from '../contexts/AuthContext'
 import { useLanguage } from '../contexts/LanguageContext'
-import { benchmarkApi, BenchmarkProviderConfig, BenchmarkResult, BenchmarkMetrics, AvailableProviders } from '../api/client'
+import {
+  benchmarkApi,
+  BenchmarkProviderConfig,
+  BenchmarkResult,
+  BenchmarkMetrics,
+  AvailableProviders,
+  EmbeddingChecksResult,
+} from '../api/client'
+import EmbeddingCheckResults from '../components/EmbeddingCheckResults'
 
 // Provider type options
 const PROVIDER_TYPES = [
   { id: 'openai', name: 'OpenAI', icon: CloudIcon, color: 'text-green-500' },
   { id: 'ollama', name: 'Ollama (Local)', icon: ServerIcon, color: 'text-blue-500' },
+  { id: 'llamacpp', name: 'llama.cpp (Local CPU / NVIDIA GPU)', icon: CpuChipIcon, color: 'text-orange-500' },
   { id: 'vllm', name: 'vLLM / Custom', icon: GlobeAltIcon, color: 'text-purple-500' },
 ]
+
+type BenchmarkMode = 'benchmark' | 'checks'
+
+const parseIntList = (value: string): number[] =>
+  value
+    .split(',')
+    .map((v) => parseInt(v.trim(), 10))
+    .filter((v) => Number.isFinite(v) && v > 0)
 
 // Provider card component
 interface ProviderCardProps {
@@ -56,6 +73,7 @@ function ProviderCard({
   const [model, setModel] = useState<string>(config?.model || '')
   const [baseUrl, setBaseUrl] = useState<string>(config?.base_url || '')
   const [apiKey, setApiKey] = useState<string>(config?.api_key || '')
+  const [truncateDim, setTruncateDim] = useState<string>(config?.truncate_dim ? String(config.truncate_dim) : '')
 
   // Get models for selected provider type
   const getModels = () => {
@@ -65,6 +83,8 @@ function ProviderCard({
         return availableProviders.openai?.models || []
       case 'ollama':
         return availableProviders.ollama?.models || []
+      case 'llamacpp':
+        return availableProviders.llamacpp?.models || []
       case 'vllm':
         return availableProviders.vllm?.models || []
       default:
@@ -75,22 +95,26 @@ function ProviderCard({
   // Update parent when config changes
   useEffect(() => {
     if (providerType && model) {
+      const parsedTruncate = parseInt(truncateDim, 10)
       onUpdate({
         provider_type: providerType,
         model,
         base_url: baseUrl || undefined,
         api_key: apiKey || undefined,
         name: `Provider ${index + 1}`,
+        truncate_dim: Number.isFinite(parsedTruncate) && parsedTruncate > 0 ? parsedTruncate : undefined,
       })
     } else {
       onUpdate(null)
     }
-  }, [providerType, model, baseUrl, apiKey])
+  }, [providerType, model, baseUrl, apiKey, truncateDim])
 
   // Set default URL when provider type changes
   useEffect(() => {
     if (providerType === 'ollama' && availableProviders?.ollama?.url) {
       setBaseUrl(availableProviders.ollama.url)
+    } else if (providerType === 'llamacpp') {
+      setBaseUrl(availableProviders?.llamacpp?.url || 'http://embedder:8080')
     } else if (providerType === 'openai') {
       setBaseUrl('')
     }
@@ -117,6 +141,7 @@ function ProviderCard({
               setModel('')
               setBaseUrl('')
               setApiKey('')
+              setTruncateDim('')
             }}
             className="p-1 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 text-secondary"
           >
@@ -190,7 +215,26 @@ function ProviderCard({
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
               disabled={disabled}
-              placeholder="http://localhost:11434"
+              placeholder={providerType === 'llamacpp' ? 'http://embedder:8080' : 'http://localhost:11434'}
+              className="w-full rounded-xl bg-surface-variant dark:bg-gray-700 px-4 py-2.5 text-primary-900 dark:text-gray-200 border-none focus:ring-2 focus:ring-primary placeholder-gray-400"
+            />
+          </div>
+        )}
+
+        {/* Matryoshka truncation (optional, client-side) */}
+        {providerType && (
+          <div>
+            <label className="block text-sm font-medium text-secondary dark:text-gray-400 mb-1">
+              {t('benchmark.truncateDim', 'Truncate to dimensions (MRL, optional)')}
+            </label>
+            <input
+              type="number"
+              min={16}
+              value={truncateDim}
+              onChange={(e) => setTruncateDim(e.target.value)}
+              disabled={disabled}
+              placeholder="768"
+              aria-label={t('benchmark.truncateDim', 'Truncate to dimensions (MRL, optional)')}
               className="w-full rounded-xl bg-surface-variant dark:bg-gray-700 px-4 py-2.5 text-primary-900 dark:text-gray-200 border-none focus:ring-2 focus:ring-primary placeholder-gray-400"
             />
           </div>
@@ -332,6 +376,7 @@ function ResultCard({ metrics, isWinner }: { metrics: BenchmarkMetrics; isWinner
         <div className="flex items-center gap-2">
           {metrics.provider_type === 'openai' && <CloudIcon className="h-5 w-5 text-green-500" />}
           {metrics.provider_type === 'ollama' && <ServerIcon className="h-5 w-5 text-blue-500" />}
+          {metrics.provider_type === 'llamacpp' && <CpuChipIcon className="h-5 w-5 text-orange-500" />}
           {metrics.provider_type === 'vllm' && <GlobeAltIcon className="h-5 w-5 text-purple-500" />}
           <span className="font-semibold text-primary-900 dark:text-gray-200">{metrics.model}</span>
         </div>
@@ -411,9 +456,21 @@ export default function EmbeddingBenchmarkPage() {
   const [result, setResult] = useState<BenchmarkResult | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  // Validation-checks mode state (real index chunks instead of an uploaded file)
+  const [mode, setMode] = useState<BenchmarkMode>('benchmark')
+  const [checksResult, setChecksResult] = useState<EmbeddingChecksResult | null>(null)
+  const [sampleSource, setSampleSource] = useState<'index' | 'file'>('index')
+  const [sampleLimit, setSampleLimit] = useState(200)
+  const [batchSizes, setBatchSizes] = useState('1,8,32,64')
+  const [truncateDims, setTruncateDims] = useState('512,256')
+  const [latencyRuns, setLatencyRuns] = useState(10)
+  const [checkImages, setCheckImages] = useState(true)
+  const [compareWithIndex, setCompareWithIndex] = useState(true)
+
   // History state
   const [showHistory, setShowHistory] = useState(false)
   const [history, setHistory] = useState<BenchmarkResult[]>([])
+  const [checksHistory, setChecksHistory] = useState<EmbeddingChecksResult[]>([])
   const [loadingHistory, setLoadingHistory] = useState(false)
 
   // Admin check
@@ -532,12 +589,56 @@ export default function EmbeddingBenchmarkPage() {
     }
   }
 
+  // Run validation checks
+  const runChecks = async () => {
+    const validProviders = providers.filter((p) => p !== null) as BenchmarkProviderConfig[]
+    if (validProviders.length < 1) return
+    if (sampleSource === 'file' && (!fileContent || !file)) return
+
+    setIsRunning(true)
+    setError(null)
+    setChecksResult(null)
+
+    try {
+      const data = await benchmarkApi.runChecks({
+        providers: validProviders,
+        options: {
+          sample_size: sampleLimit,
+          batch_sizes: parseIntList(batchSizes),
+          truncate_dims: parseIntList(truncateDims),
+          latency_runs: latencyRuns,
+          check_images: checkImages,
+        },
+        sample:
+          sampleSource === 'file' && file && fileContent
+            ? {
+                source: 'file',
+                limit: sampleLimit,
+                file_name: file.name,
+                file_content: fileContent,
+                chunk_config: { chunk_size: chunkSize, chunk_overlap: chunkOverlap, max_tokens: maxTokens },
+              }
+            : { source: 'index', limit: sampleLimit, compare_with_index: compareWithIndex },
+      })
+      setChecksResult(data)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Checks failed')
+    } finally {
+      setIsRunning(false)
+    }
+  }
+
   // Load history
   const loadHistory = async () => {
     setLoadingHistory(true)
     try {
-      const data = await benchmarkApi.getHistory(10)
-      setHistory(data.results)
+      if (mode === 'checks') {
+        const data = await benchmarkApi.getChecksHistory(10)
+        setChecksHistory(data.results)
+      } else {
+        const data = await benchmarkApi.getHistory(10)
+        setHistory(data.results)
+      }
     } catch (err) {
       console.error('Failed to load history:', err)
     } finally {
@@ -549,11 +650,12 @@ export default function EmbeddingBenchmarkPage() {
     if (showHistory) {
       loadHistory()
     }
-  }, [showHistory])
+  }, [showHistory, mode])
 
   // Check if we can run
   const validProviderCount = providers.filter((p) => p !== null).length
-  const canRun = validProviderCount >= 1 && fileContent && !isRunning
+  const canRun =
+    validProviderCount >= 1 && !isRunning && (mode === 'checks' ? sampleSource === 'index' || !!fileContent : !!fileContent)
 
   if (authLoading) {
     return (
@@ -581,7 +683,9 @@ export default function EmbeddingBenchmarkPage() {
               {t('benchmark.title', 'Embedding Benchmark')}
             </h2>
             <p className="text-sm text-secondary dark:text-gray-400">
-              {t('benchmark.subtitle', 'Compare embedding providers side by side')}
+              {mode === 'checks'
+                ? t('benchmark.checksSubtitle', 'Validate an embedding provider on real chunks: latency, throughput, MRL, retrieval sanity, images, index agreement')
+                : t('benchmark.subtitle', 'Compare embedding providers side by side')}
             </p>
           </div>
         </div>
@@ -594,6 +698,29 @@ export default function EmbeddingBenchmarkPage() {
         </button>
       </div>
 
+      {/* Mode toggle */}
+      <div className="flex gap-2" role="tablist">
+        {(['benchmark', 'checks'] as BenchmarkMode[]).map((m) => (
+          <button
+            key={m}
+            role="tab"
+            aria-selected={mode === m}
+            onClick={() => {
+              setMode(m)
+              setError(null)
+            }}
+            disabled={isRunning}
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
+              mode === m
+                ? 'bg-primary text-white'
+                : 'bg-surface-variant dark:bg-gray-700 text-primary-700 dark:text-primary-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+            }`}
+          >
+            {m === 'benchmark' ? t('benchmark.modeBenchmark', 'File benchmark') : t('benchmark.modeChecks', 'Validation checks')}
+          </button>
+        ))}
+      </div>
+
       {/* History Panel */}
       {showHistory && (
         <div className="rounded-2xl bg-surface dark:bg-gray-800 p-5 shadow-elevation-1">
@@ -604,6 +731,39 @@ export default function EmbeddingBenchmarkPage() {
             <div className="flex items-center justify-center py-8">
               <ArrowPathIcon className="h-6 w-6 animate-spin text-primary" />
             </div>
+          ) : mode === 'checks' ? (
+            checksHistory.length === 0 ? (
+              <p className="text-secondary dark:text-gray-400 text-center py-8">
+                {t('benchmark.noHistory', 'No benchmark history yet')}
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {checksHistory.map((h) => (
+                  <div
+                    key={h.id}
+                    className="flex items-center justify-between p-3 bg-surface-variant dark:bg-gray-700 rounded-xl"
+                  >
+                    <div>
+                      <p className="font-medium text-primary-900 dark:text-gray-200">
+                        {h.results.map((r) => r.provider).join(', ')}
+                      </p>
+                      <p className="text-xs text-secondary dark:text-gray-400">
+                        {new Date(h.timestamp).toLocaleString()} - {h.sample.count} {t('benchmark.texts', 'texts')} ({h.sample.source})
+                      </p>
+                    </div>
+                    <span
+                      className={`text-xs ${
+                        h.results.every((r) => r.success)
+                          ? 'text-green-600 dark:text-green-400'
+                          : 'text-red-600 dark:text-red-400'
+                      }`}
+                    >
+                      {h.results.every((r) => r.success) ? t('benchmark.checksPassed', 'Completed') : t('benchmark.failed', 'Failed')}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )
           ) : history.length === 0 ? (
             <p className="text-secondary dark:text-gray-400 text-center py-8">
               {t('benchmark.noHistory', 'No benchmark history yet')}
@@ -650,7 +810,107 @@ export default function EmbeddingBenchmarkPage() {
         ))}
       </div>
 
+      {/* Checks options */}
+      {mode === 'checks' && (
+        <div className="rounded-2xl bg-surface dark:bg-gray-800 p-5 shadow-elevation-1">
+          <h3 className="font-semibold text-primary-900 dark:text-gray-200 mb-4">
+            {t('benchmark.checksOptions', 'Validation options')}
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label htmlFor="checks-sample-source" className="block text-sm font-medium text-secondary dark:text-gray-400 mb-1">
+                {t('benchmark.sampleSource', 'Sample source')}
+              </label>
+              <select
+                id="checks-sample-source"
+                value={sampleSource}
+                onChange={(e) => setSampleSource(e.target.value as 'index' | 'file')}
+                disabled={isRunning}
+                className="w-full rounded-xl bg-surface-variant dark:bg-gray-700 px-4 py-2.5 text-primary-900 dark:text-gray-200 border-none focus:ring-2 focus:ring-primary"
+              >
+                <option value="index">{t('benchmark.sampleIndex', 'Chunks from the active index')}</option>
+                <option value="file">{t('benchmark.sampleFile', 'Uploaded file')}</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="checks-sample-limit" className="block text-sm font-medium text-secondary dark:text-gray-400 mb-1">
+                {t('benchmark.sampleLimit', 'Sample size')}
+              </label>
+              <input
+                id="checks-sample-limit"
+                type="number"
+                min={10}
+                max={2000}
+                value={sampleLimit}
+                onChange={(e) => setSampleLimit(parseInt(e.target.value, 10) || 200)}
+                disabled={isRunning}
+                className="w-full rounded-xl bg-surface-variant dark:bg-gray-700 px-4 py-2.5 text-primary-900 dark:text-gray-200 border-none focus:ring-2 focus:ring-primary"
+              />
+            </div>
+            <div>
+              <label htmlFor="checks-latency-runs" className="block text-sm font-medium text-secondary dark:text-gray-400 mb-1">
+                {t('benchmark.latencyRuns', 'Latency runs')}
+              </label>
+              <input
+                id="checks-latency-runs"
+                type="number"
+                min={1}
+                max={100}
+                value={latencyRuns}
+                onChange={(e) => setLatencyRuns(parseInt(e.target.value, 10) || 10)}
+                disabled={isRunning}
+                className="w-full rounded-xl bg-surface-variant dark:bg-gray-700 px-4 py-2.5 text-primary-900 dark:text-gray-200 border-none focus:ring-2 focus:ring-primary"
+              />
+            </div>
+            <div>
+              <label htmlFor="checks-batch-sizes" className="block text-sm font-medium text-secondary dark:text-gray-400 mb-1">
+                {t('benchmark.batchSizes', 'Batch sizes')}
+              </label>
+              <input
+                id="checks-batch-sizes"
+                type="text"
+                value={batchSizes}
+                onChange={(e) => setBatchSizes(e.target.value)}
+                disabled={isRunning}
+                placeholder="1,8,32,64"
+                className="w-full rounded-xl bg-surface-variant dark:bg-gray-700 px-4 py-2.5 text-primary-900 dark:text-gray-200 border-none focus:ring-2 focus:ring-primary placeholder-gray-400"
+              />
+            </div>
+            <div>
+              <label htmlFor="checks-truncate-dims" className="block text-sm font-medium text-secondary dark:text-gray-400 mb-1">
+                {t('benchmark.truncateDims', 'MRL dimensions to test')}
+              </label>
+              <input
+                id="checks-truncate-dims"
+                type="text"
+                value={truncateDims}
+                onChange={(e) => setTruncateDims(e.target.value)}
+                disabled={isRunning}
+                placeholder="512,256"
+                className="w-full rounded-xl bg-surface-variant dark:bg-gray-700 px-4 py-2.5 text-primary-900 dark:text-gray-200 border-none focus:ring-2 focus:ring-primary placeholder-gray-400"
+              />
+            </div>
+            <div className="flex flex-col justify-end gap-2 text-sm text-primary-900 dark:text-gray-200">
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={checkImages} onChange={(e) => setCheckImages(e.target.checked)} disabled={isRunning} />
+                {t('benchmark.checkImages', 'Probe image embedding (llama.cpp)')}
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={compareWithIndex}
+                  onChange={(e) => setCompareWithIndex(e.target.checked)}
+                  disabled={isRunning || sampleSource !== 'index'}
+                />
+                {t('benchmark.compareWithIndex', 'Compare rankings with stored index vectors')}
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* File Upload */}
+      {(mode === 'benchmark' || sampleSource === 'file') && (
       <div className="rounded-2xl bg-surface dark:bg-gray-800 p-5 shadow-elevation-1">
         <h3 className="font-semibold text-primary-900 dark:text-gray-200 mb-4">
           {t('benchmark.fileUpload', 'File Upload')}
@@ -693,8 +953,10 @@ export default function EmbeddingBenchmarkPage() {
           )}
         </div>
       </div>
+      )}
 
       {/* Configuration (Collapsible) */}
+      {(mode === 'benchmark' || sampleSource === 'file') && (
       <div className="rounded-2xl bg-surface dark:bg-gray-800 shadow-elevation-1">
         <button
           onClick={() => setShowConfig(!showConfig)}
@@ -747,23 +1009,25 @@ export default function EmbeddingBenchmarkPage() {
           </div>
         )}
       </div>
+      )}
 
       {/* Run Button */}
       <div className="flex justify-center">
         <button
-          onClick={runBenchmark}
+          onClick={mode === 'checks' ? runChecks : runBenchmark}
           disabled={!canRun}
           className="flex items-center gap-3 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-500 px-8 py-4 text-white font-medium transition-all hover:from-cyan-600 hover:to-blue-600 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
         >
           {isRunning ? (
             <>
               <ArrowPathIcon className="h-5 w-5 animate-spin" />
-              {t('benchmark.running', 'Running Benchmark...')}
+              {mode === 'checks' ? t('benchmark.runningChecks', 'Running Checks...') : t('benchmark.running', 'Running Benchmark...')}
             </>
           ) : (
             <>
               <PlayIcon className="h-5 w-5" />
-              {t('benchmark.runBenchmark', 'Run Benchmark')} ({validProviderCount} {t('benchmark.providers', 'providers')})
+              {mode === 'checks' ? t('benchmark.runChecks', 'Run Checks') : t('benchmark.runBenchmark', 'Run Benchmark')} ({validProviderCount}{' '}
+              {t('benchmark.providers', 'providers')})
             </>
           )}
         </button>
@@ -780,8 +1044,27 @@ export default function EmbeddingBenchmarkPage() {
         </div>
       )}
 
+      {/* Validation check results */}
+      {mode === 'checks' && checksResult && (
+        <div className="space-y-6">
+          <EmbeddingCheckResults result={checksResult} />
+          <div className="flex justify-center">
+            <button
+              onClick={() => {
+                setChecksResult(null)
+                setError(null)
+              }}
+              className="flex items-center gap-2 rounded-xl bg-surface-variant dark:bg-gray-700 px-6 py-3 text-primary-700 dark:text-primary-300 font-medium transition-all hover:bg-gray-200 dark:hover:bg-gray-600"
+            >
+              <ArrowPathIcon className="h-5 w-5" />
+              {t('benchmark.runAnotherChecks', 'Run Another Check')}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Results */}
-      {result && (
+      {mode === 'benchmark' && result && (
         <div className="space-y-6">
           {/* Summary Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

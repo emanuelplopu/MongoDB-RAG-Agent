@@ -41,7 +41,8 @@ If docs and code disagree, trust the current code first, then fix the docs.
 - Strategy OS configs: `backend/config/strategy_specs/`, `backend/config/capabilities/`, `backend/config/answer_contracts/`, `backend/config/tenant_strategy_policies/`
 - Strategy OS scheduler & evaluation: `backend/scheduler/scheduler_daemon.py`, `backend/evaluation/runner.py`, `backend/evaluation/composite_scorer.py`
 - Strategy OS observability: `backend/services/runtime_profiler.py`, `backend/services/activity_tracker.py`, `backend/services/resource_snapshot.py`
-- `quellexctl` CLI: `backend/cli/main.py`, `backend/cli/strategy_commands.py`, `backend/cli/eval_commands.py`, `backend/cli/phase6_commands.py`
+- `quellexctl` CLI: `backend/cli/main.py`, `backend/cli/strategy_commands.py`, `backend/cli/eval_commands.py`, `backend/cli/phase6_commands.py`, `backend/cli/bench_commands.py`
+- Embedding benchmark & validation checks: `backend/services/embedding_benchmark.py`, `backend/services/embedding_checks.py`, `backend/routers/embedding_benchmark.py`, `quellexctl bench embeddings`, `scripts/benchmark-embeddings.ps1`
 - Ingestion API: `backend/routers/ingestion.py`
 - Ingestion worker: `backend/workers/ingestion_worker.py`
 - Ingestion pipeline and chunking: `src/ingestion/`
@@ -109,6 +110,8 @@ Main profiles from `docker-compose.yml`:
 docker compose --profile recallhub up -d
 docker compose --profile quellex up -d
 docker compose --profile recallhub --profile quellex up -d
+docker compose --profile recallhub --profile embedder up -d      # + local llama.cpp embedding server (CPU)
+docker compose --profile recallhub --profile embedder-gpu up -d  # + NVIDIA variant (needs NVIDIA Container Toolkit)
 ```
 
 The Compose project name is pinned (`name: recallhub`) and every service has an explicit `image:` (`recallhub-backend`, `recallhub-ingestion-worker`, `recallhub-frontend`, `recallhub-frontend-quellex`), so container, network and image names do not depend on the checkout folder. Only one folder per machine can own the stack; both tenants are profiles of that one stack. The offline installer (`scripts/INSTALL.ps1`, `scripts/full-backup.ps1`, `installer/scripts/*.ps1`) relies on these names - see `docs/14-OFFLINE_DEPLOYMENT.md` and `docs/19-INSTALL_TEST_POSTMORTEM.md`.
@@ -119,6 +122,7 @@ Default local ports:
 - RecallHub backend/frontend: `11000` / `11080`
 - Quellex backend/frontend: `11001` / `11081`
 - Airbyte web/API/builder when enabled: `11020` / `11021` / `11022`
+- llama.cpp embedding server when enabled: `11090`
 
 ## CRITICAL: Backend Docker Build Commands
 

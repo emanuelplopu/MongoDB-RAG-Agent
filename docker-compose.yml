@@ -11,6 +11,7 @@
 #   - Airbyte Webapp:     11020  (optional, via docker-compose.airbyte.yml)
 #   - Airbyte API:        11021  (optional, via docker-compose.airbyte.yml)
 #   - Airbyte Builder:    11022  (optional, via docker-compose.airbyte.yml)
+#   - Embedding server:   11090  (optional, profile: embedder [CPU] or embedder-gpu [NVIDIA])
 #
 # Usage:
 #   Dev (both tenants):       docker compose --profile recallhub --profile quellex up -d
@@ -18,6 +19,8 @@
 #   Quellex only:             docker compose --profile quellex up -d
 #   Rebuild specific tenant:  docker compose --profile quellex build frontend-quellex
 #   With Airbyte:             docker compose --profile recallhub -f docker-compose.yml -f docker-compose.airbyte.yml up -d
+#   Local embeddings (CPU):   docker compose --profile recallhub --profile embedder up -d
+#   Local embeddings (GPU):   docker compose --profile recallhub --profile embedder-gpu up -d   (needs NVIDIA Container Toolkit)
 #
 # The project name is pinned so container, network and image names do not
 # depend on the folder this file lives in (C:\RecallHub, C:\Quellex, a git
@@ -111,6 +114,112 @@ services:
         max-file: "3"
     networks:
       - rag-network
+    restart: unless-stopped
+
+  # ===========================================
+  # Local embedding server - llama.cpp (optional, shared by all tenants)
+  # ===========================================
+  # Serves EmbeddingGemma 2 (or any GGUF embedding model) through an
+  # OpenAI-compatible /v1/embeddings API plus llama.cpp's native endpoints
+  # (/props, multimodal /embeddings). Exactly one of the two variants runs;
+  # both answer on the network alias `embedder` so app config never changes:
+  #   EMBEDDING_PROVIDER=openai  EMBEDDING_BASE_URL=http://embedder:8080/v1
+  # The GGUF is downloaded from Hugging Face on first start and cached in the
+  # `embedder_models` volume (offline installs can pre-populate it).
+  embedder:
+    profiles: [embedder]
+    image: ghcr.io/ggml-org/llama.cpp:server
+    container_name: rag-embedder
+    command:
+      - "-hf"
+      - "${EMBEDDER_HF_MODEL:-ggml-org/embeddinggemma-2-GGUF:Q8_0}"
+      - "--embeddings"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8080"
+      - "-c"
+      - "${EMBEDDER_CTX:-32768}"
+      - "-np"
+      - "${EMBEDDER_SLOTS:-4}"
+      - "-b"
+      - "8192"
+      - "-ub"
+      - "8192"
+      - "-t"
+      - "${EMBEDDER_THREADS:-8}"
+    ports:
+      - "11090:8080"
+    volumes:
+      - embedder_models:/root/.cache
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      rag-network:
+        aliases:
+          - embedder
+    restart: unless-stopped
+
+  # NVIDIA variant: same server built with CUDA, all layers offloaded to the GPU.
+  # Requires the NVIDIA Container Toolkit on the host (`nvidia-smi` must work in
+  # `docker run --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi`).
+  embedder-gpu:
+    profiles: [embedder-gpu]
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: rag-embedder-gpu
+    command:
+      - "-hf"
+      - "${EMBEDDER_HF_MODEL:-ggml-org/embeddinggemma-2-GGUF:Q8_0}"
+      - "--embeddings"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8080"
+      - "-c"
+      - "${EMBEDDER_CTX:-32768}"
+      - "-np"
+      - "${EMBEDDER_SLOTS:-4}"
+      - "-b"
+      - "8192"
+      - "-ub"
+      - "8192"
+      - "-ngl"
+      - "${EMBEDDER_GPU_LAYERS:-999}"
+    ports:
+      - "11090:8080"
+    volumes:
+      - embedder_models:/root/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      rag-network:
+        aliases:
+          - embedder
     restart: unless-stopped
 
   # ===========================================================================
@@ -379,3 +488,8 @@ services:
 networks:
   rag-network:
     driver: bridge
+
+volumes:
+  # GGUF cache for the llama.cpp embedding server (~310 MB for EmbeddingGemma 2 Q8_0)
+  embedder_models:
+    driver: local
