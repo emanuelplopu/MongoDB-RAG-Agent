@@ -43,6 +43,7 @@ If docs and code disagree, trust the current code first, then fix the docs.
 - Strategy OS observability: `backend/services/runtime_profiler.py`, `backend/services/activity_tracker.py`, `backend/services/resource_snapshot.py`
 - `quellexctl` CLI: `backend/cli/main.py`, `backend/cli/strategy_commands.py`, `backend/cli/eval_commands.py`, `backend/cli/phase6_commands.py`, `backend/cli/bench_commands.py`
 - Embedding benchmark & validation checks: `backend/services/embedding_benchmark.py`, `backend/services/embedding_checks.py`, `backend/routers/embedding_benchmark.py`, `quellexctl bench embeddings`, `scripts/benchmark-embeddings.ps1`
+- GPU thermal / mixed-placement stress test: `backend/services/gpu_stress.py`, `backend/cli/stress_commands.py`, `backend/config/gpu_stress/`, `quellexctl bench gpu-stress`, `scripts/gpu-stress.ps1`
 - Ingestion API: `backend/routers/ingestion.py`
 - Ingestion worker: `backend/workers/ingestion_worker.py`
 - Ingestion pipeline and chunking: `src/ingestion/`

@@ -253,6 +253,45 @@ Entry points:
   `uv run python -m backend.cli bench embeddings --provider llamacpp --base-url http://localhost:11090 --database rag_parhelion`
   or `.\scripts\benchmark-embeddings.ps1 -Database rag_parhelion [-Json] [-Output checks.json]`.
 
+### GPU Thermal / Mixed-Placement Stress Test
+
+`backend/services/gpu_stress.py` answers "how does this box behave under
+sustained local-model load": it starts llama.cpp servers as Docker containers
+(`server-cuda` or CPU image, any GGUF from Hugging Face, cached in the
+`recallhub_embedder_models` volume), drives them with concurrent synthetic
+chat/embedding requests for a fixed duration and samples `nvidia-smi` every
+second (temperature, power vs. limit, SM/memory clocks, utilisation, VRAM,
+active throttle reasons) together with host CPU/RAM. Each scenario reports
+per-model load time, VRAM growth, layers offloaded to the GPU, tokens/s,
+requests/s and p95 latency, plus a thermal summary (start/max/end
+temperature, time to max, mean power, throttle seconds, host CPU).
+
+Placement per model: `gpu` (all layers in VRAM), `cpu` (CPU image, model in
+system RAM), `split` (`--fit on`, llama.cpp keeps what fits in VRAM and spills
+the rest to RAM) or `cpu_moe: true` (attention on the GPU, MoE experts in
+RAM). A scenario may run several models at once, which is how "models on the
+GPU and in RAM at the same time" is exercised. A model may also point at an
+existing OpenAI-compatible `endpoint` (e.g. Ollama) instead of a GGUF.
+
+Suites are YAML (`backend/config/gpu_stress/gemma4.yaml` covers EmbeddingGemma 2
+and Gemma 4 E2B/E4B/26B-A4B alone, split and mixed) so the same run can be
+repeated on other hardware and the JSON results compared:
+
+```powershell
+.\scripts\gpu-stress.ps1 -DryRun                                   # print the docker commands
+.\scripts\gpu-stress.ps1 -Output docs/system-validation/gpu-stress-<host>.json
+.\scripts\gpu-stress.ps1 -Only gemma4-26b-split,mixed-gpu-and-ram -Duration 180
+.\scripts\gpu-stress.ps1 -Cleanup                                  # remove leftover rag-stress-* containers
+# equivalent: uv run python -m backend.cli bench gpu-stress [--suite ..] [--only ..] [--duration ..] [--output ..]
+```
+
+Requirements on the host: Docker with the NVIDIA Container Toolkit (`docker run
+--gpus all`), `nvidia-smi` on PATH (without it only host CPU/RAM is sampled)
+and roughly 26 GB of disk for the default suite's GGUFs. The test is CLI-only
+on purpose: it orchestrates containers and runs for minutes, so it does not
+belong behind the API. Results from this repo's machines live in
+`docs/system-validation/`.
+
 ### Metadata Attached to Embeddings
 
 Each embedded chunk stores:
