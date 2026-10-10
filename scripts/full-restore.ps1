@@ -612,6 +612,46 @@ if (Test-Path $mongoDumpDir) {
         } else {
             Write-Warn "Could not verify database count (got: $dbCountTrimmed)"
         }
+
+        # ── Recreate Atlas Search indexes (mongorestore does NOT dump/restore them) ──
+        Write-Info "Recreating Atlas Search indexes (vector_index + text_index)..."
+        $dbsWithChunks = Get-ChildItem $mongoDumpDir -Directory -ErrorAction SilentlyContinue |
+            Where-Object { Test-Path (Join-Path $_.FullName "chunks.bson.gz") } |
+            ForEach-Object { $_.Name }
+        if (-not $dbsWithChunks -or $dbsWithChunks.Count -eq 0) {
+            Write-Info "No databases with chunks collection found - skipping index creation"
+        } else {
+            $idxFailed = $false
+            foreach ($dbName in $dbsWithChunks) {
+                Write-Info "  -> $dbName.chunks ..."
+                $jsScript = @"
+var sample = db.chunks.findOne({embedding: {`$exists: true, `$ne: null}}, {embedding: 1});
+if (!sample || !sample.embedding) { print('SKIP: no embedded chunks'); quit(); }
+var dim = sample.embedding.length;
+print('  embedding dim: ' + dim);
+try { db.runCommand({dropSearchIndex: 'chunks', name: 'vector_index'}); print('  dropped existing vector_index'); } catch(e) {}
+try { db.runCommand({dropSearchIndex: 'chunks', name: 'text_index'}); print('  dropped existing text_index'); } catch(e) {}
+var r = db.runCommand({
+  createSearchIndexes: 'chunks',
+  indexes: [
+    {name: 'vector_index', type: 'vectorSearch', definition: {fields: [{type: 'vector', path: 'embedding', numDimensions: dim, similarity: 'cosine'}]}},
+    {name: 'text_index', definition: {mappings: {dynamic: false, fields: {content: {type: 'string', analyzer: 'lucene.standard'}}}}}
+  ]
+});
+print('  createSearchIndexes ok=' + r.ok);
+"@
+                $idxOutput = docker compose --profile $Tenant exec -T mongodb mongosh $dbName --quiet --eval $jsScript 2>&1 | Out-String
+                $idxExitCode = $LASTEXITCODE
+                $idxOutput.Trim() -split "`n" | ForEach-Object { if ($_.Trim()) { Write-Info "    $($_.Trim())" } }
+                if ($idxExitCode -ne 0) {
+                    Write-Err "Search index creation failed for $dbName.chunks (exit code: $idxExitCode)"
+                    $idxFailed = $true
+                }
+            }
+            if (-not $idxFailed) {
+                Write-OK "Atlas Search indexes recreated (may take ~30s to reach READY status)"
+            }
+        }
     } catch {
         Write-Err "MongoDB restore failed: $_"
     } finally {
