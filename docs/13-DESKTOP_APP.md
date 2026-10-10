@@ -183,6 +183,8 @@ dotnet publish -c Release
 
 Output: `bin/Release/net8.0-windows/win-x64/publish/RecallHubTray.exe`
 
+The csproj sets `IncludeNativeLibrariesForSelfExtract=true`: `WebView2Loader.dll` and the WinForms native DLLs are embedded in the single exe. Without it they are written next to the exe, and because `INSTALL.ps1` deploys only `RecallHubTray.exe`, the app fails with "Browser Initialization Error" (`DllNotFoundException`). Check `%LocalAppData%\RecallHub\logs\tray-app.log` for the logged exception.
+
 ### Project Configuration (RecallHubTray.csproj)
 
 - Target: `net8.0-windows` (WinForms)

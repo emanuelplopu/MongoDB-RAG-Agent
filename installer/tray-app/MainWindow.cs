@@ -204,6 +204,7 @@ public class MainWindow : Form
 
     private void HandleWebViewMissing()
     {
+        TrayLog.Error("WebView2 runtime not found (WebView2RuntimeNotFoundException)");
         _webViewInitialized = false;
 
         var result = MessageBox.Show(
@@ -224,6 +225,7 @@ public class MainWindow : Form
     private void HandleWebViewInitError(Exception ex)
     {
         _webViewInitialized = false;
+        TrayLog.Error($"WebView2 initialization failed: {ex.GetType().Name}: {ex.Message}");
 
         var result = MessageBox.Show(
             $"Failed to initialize the embedded browser.\n\n" +
