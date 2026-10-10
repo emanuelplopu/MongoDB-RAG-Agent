@@ -5,9 +5,15 @@ Provides functionality to benchmark and compare embedding providers:
 - Google Gemini (gemini-embedding-2-preview, gemini-embedding-001)
 - Voyage AI (voyage-4-large, voyage-4, voyage-4-lite)
 - Ollama (local)
+- llama.cpp server (local CPU or NVIDIA GPU, `embedder`/`embedder-gpu` compose profiles)
 - vLLM/OpenAI-compatible (remote/VPN)
 
 Collects metrics: time, tokens, memory, CPU, latency, dimensions.
+
+Beyond the file-based speed benchmark, ``run_checks`` executes the embedding
+validation suite from :mod:`backend.services.embedding_checks` (latency,
+throughput by batch size, normalisation, MRL truncation, retrieval sanity,
+image probe, ranking agreement with the live index).
 """
 
 import logging
@@ -24,6 +30,16 @@ from dataclasses import dataclass, field
 import psutil
 import httpx
 import openai
+
+from backend.services.embedding_checks import (
+    CheckOptions,
+    EmbeddingCheckRunner,
+    EmbeddingChecksResult,
+    ProviderSpec,
+    SampleInfo,
+    detect_task_prefixes,
+    truncate_renorm,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,21 +94,65 @@ EMBEDDING_DIMENSIONS = {
     "bge-base": 768,
     "bge-small": 384,
     "bge-m3": 1024,
+    # Google open models (llama.cpp / Ollama)
+    "embeddinggemma-2": 768,
+    "embeddinggemma": 768,
 }
+
+# Candidate roots for the local llama.cpp embedding server, probed in order.
+LLAMACPP_CANDIDATE_URLS = [
+    "http://embedder:8080",
+    "http://host.docker.internal:11090",
+    "http://localhost:11090",
+]
+
+
+def lookup_known_dimension(model: str) -> Optional[int]:
+    """Best-effort dimension lookup that tolerates tags/quant suffixes (``name:tag``)."""
+    if not model:
+        return None
+    if model in EMBEDDING_DIMENSIONS:
+        return EMBEDDING_DIMENSIONS[model]
+    base = model.split(":")[0].lower()
+    for key, dim in EMBEDDING_DIMENSIONS.items():
+        if base == key or base.startswith(key):
+            return dim
+    return None
 
 
 @dataclass
 class BenchmarkProviderConfig:
     """Configuration for an embedding provider to benchmark."""
-    provider_type: str  # "openai", "ollama", "vllm", "custom"
+    provider_type: str  # "openai", "ollama", "vllm", "custom", "llamacpp"
     model: str
     base_url: Optional[str] = None
     api_key: Optional[str] = None
     name: Optional[str] = None  # Display name
-    
+    # Task prefixes (auto-detected from the model family when both are empty)
+    query_prefix: str = ""
+    document_prefix: str = ""
+    # Client-side Matryoshka truncation target (None = native dimension)
+    truncate_dim: Optional[int] = None
+
     def __post_init__(self):
         if not self.name:
             self.name = f"{self.provider_type}/{self.model}"
+        if not self.query_prefix and not self.document_prefix:
+            self.query_prefix, self.document_prefix = detect_task_prefixes(self.model)
+
+    def to_spec(self) -> ProviderSpec:
+        """Convert to the typed spec used by the validation checks."""
+        return ProviderSpec(
+            provider_type=self.provider_type,
+            model=self.model,
+            base_url=self.base_url,
+            api_key=self.api_key,
+            name=self.name,
+            query_prefix=self.query_prefix,
+            document_prefix=self.document_prefix,
+            truncate_dim=self.truncate_dim,
+            expected_dimension=lookup_known_dimension(self.model),
+        )
 
 
 @dataclass
@@ -484,10 +544,18 @@ class EmbeddingBenchmarkService:
         texts: List[str],
         batch_size: int = 50,
     ) -> Tuple[List[List[float]], List[float]]:
-        """Generate embeddings using the specified provider."""
+        """Generate embeddings using the specified provider.
+
+        Applies the provider's document task prefix before the call and the
+        optional client-side Matryoshka truncation afterwards, so the file
+        benchmark measures the same vectors ingestion would store.
+        """
         embeddings = []
         latencies = []
-        
+
+        if provider.document_prefix:
+            texts = [f"{provider.document_prefix}{t}" for t in texts]
+
         if provider.provider_type == "openai":
             embeddings, latencies = await self._generate_openai_embeddings(
                 texts, provider.model, provider.api_key, provider.base_url, batch_size
@@ -502,7 +570,11 @@ class EmbeddingBenchmarkService:
             )
         elif provider.provider_type == "ollama":
             embeddings, latencies = await self._generate_ollama_embeddings(
-                texts, provider.model, provider.base_url or "http://host.docker.internal:11434"
+                texts, provider.model, provider.base_url or "http://host.docker.internal:11434", batch_size
+            )
+        elif provider.provider_type == "llamacpp":
+            embeddings, latencies = await self._generate_openai_compatible_embeddings(
+                texts, provider.model, self._llamacpp_v1_url(provider.base_url), provider.api_key, batch_size
             )
         elif provider.provider_type in ["vllm", "custom"]:
             embeddings, latencies = await self._generate_openai_compatible_embeddings(
@@ -510,8 +582,19 @@ class EmbeddingBenchmarkService:
             )
         else:
             raise ValueError(f"Unknown provider type: {provider.provider_type}")
-        
+
+        if provider.truncate_dim and embeddings and len(embeddings[0]) > provider.truncate_dim:
+            embeddings = truncate_renorm(embeddings, provider.truncate_dim)
+
         return embeddings, latencies
+
+    @staticmethod
+    def _llamacpp_v1_url(base_url: Optional[str]) -> str:
+        """Return the OpenAI-compatible ``/v1`` URL for a llama.cpp server root."""
+        from backend.core.config import settings
+
+        root = (base_url or settings.embedder_base_url).rstrip("/")
+        return root if root.endswith("/v1") else f"{root}/v1"
     
     async def _generate_openai_embeddings(
         self,
@@ -553,25 +636,36 @@ class EmbeddingBenchmarkService:
         texts: List[str],
         model: str,
         base_url: str,
+        batch_size: int = 50,
     ) -> Tuple[List[List[float]], List[float]]:
-        """Generate embeddings using Ollama."""
-        embeddings = []
-        latencies = []
-        
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            for text in texts:
+        """Generate embeddings using Ollama.
+
+        Uses the batched ``/api/embed`` endpoint and falls back to the legacy
+        single-text ``/api/embeddings`` endpoint on servers that predate it.
+        """
+        embeddings: List[List[float]] = []
+        latencies: List[float] = []
+        root = base_url.rstrip("/")
+        if root.endswith("/v1"):
+            root = root[:-3]
+
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            for i in range(0, len(texts), batch_size):
+                batch = texts[i:i + batch_size]
                 start = time.perf_counter()
-                response = await client.post(
-                    f"{base_url}/api/embeddings",
-                    json={"model": model, "prompt": text},
-                )
-                latency = (time.perf_counter() - start) * 1000
-                latencies.append(latency)
-                
+                response = await client.post(f"{root}/api/embed", json={"model": model, "input": batch})
+                if response.status_code == 404:
+                    for text in batch:
+                        single_start = time.perf_counter()
+                        legacy = await client.post(f"{root}/api/embeddings", json={"model": model, "prompt": text})
+                        latencies.append((time.perf_counter() - single_start) * 1000)
+                        legacy.raise_for_status()
+                        embeddings.append(legacy.json()["embedding"])
+                    continue
+                latencies.append((time.perf_counter() - start) * 1000)
                 response.raise_for_status()
-                data = response.json()
-                embeddings.append(data["embedding"])
-        
+                embeddings.extend(response.json().get("embeddings", []))
+
         return embeddings, latencies
     
     async def _generate_openai_compatible_embeddings(
@@ -771,24 +865,69 @@ class EmbeddingBenchmarkService:
     async def get_results(
         self,
         limit: int = 20,
+        kind: str = "benchmark",
     ) -> List[Dict[str, Any]]:
-        """Get historical benchmark results."""
+        """Get historical results.
+
+        Args:
+            limit: Maximum number of documents.
+            kind: ``"benchmark"`` for file benchmarks (documents without a
+                ``kind`` field included) or ``"checks"`` for validation runs.
+        """
         if not self.db:
             return []
-        
+
+        query = {"kind": "checks"} if kind == "checks" else {"kind": {"$ne": "checks"}}
         try:
             collection = self.db.db["benchmark_results"]
-            cursor = collection.find().sort("timestamp", -1).limit(limit)
-            
+            cursor = collection.find(query).sort("timestamp", -1).limit(limit)
+
             results = []
             async for doc in cursor:
                 doc["id"] = doc.pop("_id")
                 results.append(doc)
-            
+
             return results
         except Exception as e:
             logger.error(f"Failed to get benchmark results: {e}")
             return []
+
+    async def run_checks(
+        self,
+        providers: List[BenchmarkProviderConfig],
+        texts: List[str],
+        options: CheckOptions,
+        sample: SampleInfo,
+        reference_vectors: Optional[List[List[float]]] = None,
+    ) -> EmbeddingChecksResult:
+        """Run the embedding validation checks and persist the result.
+
+        Args:
+            providers: Providers to validate (1-3).
+            texts: Sample texts without task prefixes.
+            options: Check tunables.
+            sample: Provenance of ``texts``.
+            reference_vectors: Vectors already stored in the index for ``texts``.
+        """
+        if not 1 <= len(providers) <= 3:
+            raise ValueError("Between 1 and 3 providers are required")
+        runner = EmbeddingCheckRunner()
+        result = await runner.run(
+            [p.to_spec() for p in providers],
+            texts,
+            options,
+            sample,
+            reference_vectors=reference_vectors,
+        )
+        if self.db:
+            try:
+                doc = result.model_dump(mode="json")
+                doc["_id"] = doc.pop("id")
+                doc["timestamp"] = result.timestamp
+                await self.db.db["benchmark_results"].insert_one(doc)
+            except Exception as e:  # noqa: BLE001 - persistence is best-effort
+                logger.error(f"Failed to store embedding checks result: {e}")
+        return result
     
     async def get_available_providers(self) -> Dict[str, Any]:
         """Get available embedding providers from discovery."""
@@ -834,13 +973,45 @@ class EmbeddingBenchmarkService:
                 "url": None,
                 "models": [],
             },
+            "llamacpp": {
+                "name": "llama.cpp server (Local CPU / NVIDIA GPU)",
+                "available": False,
+                "url": None,
+                "models": [],
+            },
             "vllm": {
                 "name": "vLLM / OpenAI-compatible",
                 "available": False,
                 "models": [],
             },
         }
-        
+
+        # Check llama.cpp embedding server (compose `embedder` / `embedder-gpu` profiles)
+        llamacpp_urls = [settings.embedder_base_url.rstrip("/")] + [
+            u for u in LLAMACPP_CANDIDATE_URLS if u != settings.embedder_base_url.rstrip("/")
+        ]
+        for url in llamacpp_urls:
+            try:
+                async with httpx.AsyncClient(timeout=3.0) as client:
+                    health = await client.get(f"{url}/health")
+                    if health.status_code != 200:
+                        continue
+                    props = await client.get(f"{url}/props")
+                    alias = props.json().get("model_alias") if props.status_code == 200 else None
+                    modalities = props.json().get("modalities", {}) if props.status_code == 200 else {}
+                    model_id = alias or "embeddinggemma-2"
+                    providers["llamacpp"]["available"] = True
+                    providers["llamacpp"]["url"] = url
+                    providers["llamacpp"]["models"].append({
+                        "id": model_id,
+                        "name": model_id,
+                        "dimension": lookup_known_dimension(model_id) or 0,
+                        "multimodal": bool(modalities.get("vision")),
+                    })
+                    break
+            except Exception:
+                continue
+
         # Check Ollama
         ollama_urls = [
             "http://localhost:11434",

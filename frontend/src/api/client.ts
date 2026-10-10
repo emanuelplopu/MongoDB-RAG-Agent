@@ -3384,11 +3384,16 @@ export const backupsApi = {
 // ============== Embedding Benchmark Types ==============
 
 export interface BenchmarkProviderConfig {
-  provider_type: string  // "openai", "ollama", "vllm", "custom"
+  provider_type: string  // "openai", "ollama", "vllm", "custom", "llamacpp"
   model: string
   base_url?: string
   api_key?: string
   name?: string
+  // Task prefixes (auto-detected from the model family when both are empty)
+  query_prefix?: string
+  document_prefix?: string
+  // Client-side Matryoshka truncation target (undefined = native dimension)
+  truncate_dim?: number | null
 }
 
 export interface ChunkConfig {
@@ -3439,6 +3444,7 @@ export interface BenchmarkModelInfo {
   id: string
   name: string
   dimension: number
+  multimodal?: boolean
 }
 
 export interface ProviderAvailability {
@@ -3451,6 +3457,7 @@ export interface ProviderAvailability {
 export interface AvailableProviders {
   openai: ProviderAvailability
   ollama: ProviderAvailability
+  llamacpp?: ProviderAvailability
   vllm: ProviderAvailability
 }
 
@@ -3461,6 +3468,159 @@ export interface ProviderTestResult {
   latency_ms: number
   dimension: number
   error?: string | null
+}
+
+// ============== Embedding Validation Checks Types ==============
+// Mirrors backend/services/embedding_checks.py
+
+export interface EmbeddingCheckOptions {
+  sample_size?: number
+  batch_sizes?: number[]
+  single_batch_limit?: number
+  truncate_dims?: number[]
+  latency_runs?: number
+  top_k?: number
+  pseudo_query_every?: number
+  check_images?: boolean
+  query_text?: string
+}
+
+export interface EmbeddingCheckSample {
+  source: 'index' | 'file'
+  limit?: number
+  collection?: string
+  compare_with_index?: boolean
+  file_content?: string  // Base64, when source === 'file'
+  file_name?: string
+  chunk_config?: ChunkConfig
+}
+
+export interface EmbeddingChecksRequest {
+  providers: BenchmarkProviderConfig[]
+  options?: EmbeddingCheckOptions
+  sample?: EmbeddingCheckSample
+}
+
+export interface EmbeddingLatencyStats {
+  cold_ms: number
+  p50_ms: number
+  p95_ms: number
+  runs: number
+}
+
+export interface EmbeddingThroughputPoint {
+  batch_size: number
+  texts: number
+  wall_ms: number
+  texts_per_s: number
+  tokens: number
+  tokens_per_s: number
+  token_source: 'server' | 'estimate' | string
+}
+
+export interface EmbeddingVectorStats {
+  dimension: number
+  expected_dimension?: number | null
+  dimension_matches?: boolean | null
+  norm_mean: number
+  norm_min: number
+  norm_max: number
+  normalized: boolean
+}
+
+export interface EmbeddingTruncationCheck {
+  dim: number
+  topk_overlap: number
+}
+
+export interface EmbeddingRetrievalSanity {
+  queries: number
+  top1_hits: number
+  top5_hits: number
+  top1_rate: number
+  top5_rate: number
+}
+
+export interface EmbeddingImageProbe {
+  supported: boolean
+  tokens?: number | null
+  latency_ms?: number | null
+  vector_changed?: boolean | null
+  error?: string | null
+}
+
+export interface EmbeddingServerCapabilities {
+  build?: string | null
+  model_alias?: string | null
+  modalities: Record<string, boolean>
+  context_length?: number | null
+  slots?: number | null
+}
+
+export interface EmbeddingGpuInfo {
+  name: string
+  memory_total_mb?: number | null
+  memory_used_mb?: number | null
+  driver_version?: string | null
+  utilization_percent?: number | null
+}
+
+export interface EmbeddingHardwareInfo {
+  hostname: string
+  cpu_count?: number | null
+  ram_gb?: number | null
+  gpus: EmbeddingGpuInfo[]
+  note: string
+}
+
+export interface EmbeddingProviderCheckResult {
+  provider: string
+  model: string
+  provider_type: string
+  base_url?: string | null
+  success: boolean
+  error?: string | null
+  warnings: string[]
+  query_prefix: string
+  document_prefix: string
+  truncate_dim?: number | null
+  capabilities?: EmbeddingServerCapabilities | null
+  hardware?: EmbeddingHardwareInfo | null
+  latency?: EmbeddingLatencyStats | null
+  throughput: EmbeddingThroughputPoint[]
+  vectors?: EmbeddingVectorStats | null
+  truncation: EmbeddingTruncationCheck[]
+  retrieval?: EmbeddingRetrievalSanity | null
+  image?: EmbeddingImageProbe | null
+  agreement_with_index?: number | null
+  total_ms: number
+}
+
+export interface EmbeddingAgreementPair {
+  a: string
+  b: string
+  topk_overlap: number
+}
+
+export interface EmbeddingSampleInfo {
+  source: 'index' | 'file' | string
+  count: number
+  avg_chars: number
+  database?: string | null
+  collection?: string | null
+  file_name?: string | null
+  reference_model?: string | null
+  reference_dimension?: number | null
+}
+
+export interface EmbeddingChecksResult {
+  id: string
+  timestamp: string
+  kind: 'checks'
+  sample: EmbeddingSampleInfo
+  options: Required<EmbeddingCheckOptions>
+  results: EmbeddingProviderCheckResult[]
+  agreement: EmbeddingAgreementPair[]
 }
 
 // ============== Embedding Benchmark API ==============
@@ -3499,6 +3659,18 @@ export const benchmarkApi = {
   // Delete benchmark result
   deleteResult: async (benchmarkId: string): Promise<{ success: boolean; message: string }> => {
     const response = await api.delete(`/benchmark/results/${benchmarkId}`)
+    return response.data
+  },
+
+  // Run the embedding validation checks (latency, throughput, MRL, retrieval sanity, image probe, index agreement)
+  runChecks: async (request: EmbeddingChecksRequest): Promise<EmbeddingChecksResult> => {
+    const response = await api.post('/benchmark/checks', request, { timeout: 30 * 60 * 1000 })
+    return response.data
+  },
+
+  // Get validation-check history
+  getChecksHistory: async (limit: number = 20): Promise<{ results: EmbeddingChecksResult[]; total: number }> => {
+    const response = await api.get('/benchmark/checks/results', { params: { limit } })
     return response.data
   },
 }

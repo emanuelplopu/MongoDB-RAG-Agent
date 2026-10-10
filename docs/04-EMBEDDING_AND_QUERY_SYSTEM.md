@@ -192,6 +192,67 @@ Embeddings are generated in batches for efficiency:
 3. Progress callbacks report completion status
 4. Control is yielded between batches to allow API responsiveness
 
+### Local Embedding Server (llama.cpp, CPU or NVIDIA GPU)
+
+`docker-compose.yml` ships two optional profiles that run a llama.cpp server with
+an OpenAI-compatible `/v1/embeddings` API (default model: Google's
+EmbeddingGemma 2, `ggml-org/embeddinggemma-2-GGUF:Q8_0`, 768-d, multimodal):
+
+```powershell
+docker compose --profile recallhub --profile embedder up -d       # CPU
+docker compose --profile recallhub --profile embedder-gpu up -d   # NVIDIA (CUDA build, needs NVIDIA Container Toolkit)
+```
+
+Both answer on the network alias `embedder` (host port `11090`), so switching
+the app is config-only:
+
+```env
+EMBEDDING_PROVIDER=openai
+EMBEDDING_API_KEY=none
+EMBEDDING_MODEL=embeddinggemma-2
+EMBEDDING_BASE_URL=http://embedder:8080/v1
+EMBEDDING_DIMENSION=768
+```
+
+Tunables: `EMBEDDER_HF_MODEL`, `EMBEDDER_CTX` (total context, split across
+`EMBEDDER_SLOTS`), `EMBEDDER_THREADS` (CPU), `EMBEDDER_GPU_LAYERS` (GPU). The
+GGUF is cached in the `embedder_models` volume.
+
+Notes:
+
+- EmbeddingGemma expects task prefixes (`task: search result | query: ` for
+  queries, `title: none | text: ` for documents). The benchmark/checks apply
+  them automatically (`detect_task_prefixes`); the ingestion and query paths
+  do not yet, so a production switch needs the shared embedding client
+  described in `docs/system-validation/EMBEDDINGGEMMA2_EVALUATION_2026-10-10.md`.
+- llama.cpp ignores the OpenAI `dimensions` parameter; Matryoshka truncation
+  is done client-side (`truncate_renorm`).
+- Image embedding works through `/v1/embeddings` with
+  `{"input": {"prompt_string": "<media_marker>", "multimodal_data": ["<base64>"]}}`;
+  the flat `multimodal_data` form is silently ignored by the server.
+- Ollama's `embeddinggemma-2` tags are MLX-only (Apple Silicon) as of
+  2026-10-10 and fail on Windows/Linux with "requires MLX support".
+
+### Embedding Validation Checks
+
+`backend/services/embedding_checks.py` runs the suite used to qualify an
+embedding provider on real chunks from the index: cold/warm query latency,
+throughput by batch size (tokens/s from the server's `usage` when available),
+vector dimension and L2 normalisation, MRL truncation stability (top-k
+neighbour overlap), pseudo-query retrieval sanity, an image-embedding probe
+(llama.cpp), ranking agreement between providers and against the vectors
+already stored in the index, plus a hardware snapshot (CPU/RAM/NVIDIA GPUs).
+
+Entry points:
+
+- UI: System → Embedding Benchmark → "Validation checks" (admin only).
+- API: `POST /api/v1/benchmark/checks` (`EmbeddingChecksRequest`),
+  `GET /api/v1/benchmark/checks/results`; results are stored in
+  `benchmark_results` with `kind: "checks"`.
+- CLI (no API needed, works on a GPU box):
+  `uv run python -m backend.cli bench embeddings --provider llamacpp --base-url http://localhost:11090 --database rag_parhelion`
+  or `.\scripts\benchmark-embeddings.ps1 -Database rag_parhelion [-Json] [-Output checks.json]`.
+
 ### Metadata Attached to Embeddings
 
 Each embedded chunk stores:

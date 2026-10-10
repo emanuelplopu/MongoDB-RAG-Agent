@@ -97,6 +97,12 @@ class BackendSettings(BaseSettings):
         default="http://host.docker.internal:11434",
         description="Base URL for local Ollama instance (host.docker.internal resolves to host from Docker)"
     )
+
+    # Local embedding server (llama.cpp `embedder` / `embedder-gpu` compose profiles)
+    embedder_base_url: str = Field(
+        default="http://embedder:8080",
+        description="Root URL of the llama.cpp embedding server; /v1 is appended for OpenAI-compatible calls"
+    )
     
     # Federated Agent Settings
     agent_max_iterations: int = Field(

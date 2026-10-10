@@ -2,6 +2,7 @@
 
 API endpoints for comparing embedding providers:
 - Run benchmarks with file upload
+- Run embedding validation checks on real index chunks
 - Get available providers
 - Test provider connectivity
 - View historical results
@@ -10,15 +11,16 @@ API endpoints for comparing embedding providers:
 import logging
 import base64
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 from fastapi import APIRouter, Request, HTTPException, Depends, UploadFile, File, Form
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.routers.auth import require_admin, UserResponse
 from backend.services.embedding_benchmark import (
     EmbeddingBenchmarkService,
     BenchmarkProviderConfig,
 )
+from backend.services.embedding_checks import CheckOptions, EmbeddingChecksResult, SampleInfo
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +31,27 @@ router = APIRouter()
 
 class ProviderConfigRequest(BaseModel):
     """Provider configuration for benchmark."""
-    provider_type: str  # "openai", "ollama", "vllm", "custom"
+    provider_type: str  # "openai", "ollama", "vllm", "custom", "llamacpp"
     model: str
     base_url: Optional[str] = None
     api_key: Optional[str] = None
     name: Optional[str] = None
+    query_prefix: str = ""
+    document_prefix: str = ""
+    truncate_dim: Optional[int] = Field(default=None, ge=16)
+
+    def to_config(self) -> BenchmarkProviderConfig:
+        """Convert to the service-level provider configuration."""
+        return BenchmarkProviderConfig(
+            provider_type=self.provider_type,
+            model=self.model,
+            base_url=self.base_url,
+            api_key=self.api_key,
+            name=self.name,
+            query_prefix=self.query_prefix,
+            document_prefix=self.document_prefix,
+            truncate_dim=self.truncate_dim,
+        )
 
 
 class ChunkConfigRequest(BaseModel):
@@ -123,7 +141,32 @@ class AvailableProvidersResponse(BaseModel):
     google: Optional[ProviderInfo] = None
     voyageai: Optional[ProviderInfo] = None
     ollama: ProviderInfo
+    llamacpp: Optional[ProviderInfo] = None
     vllm: ProviderInfo
+
+
+class CheckSampleRequest(BaseModel):
+    """Where the texts for the validation checks come from."""
+    source: Literal["index", "file"] = "index"
+    limit: int = Field(default=200, ge=10, le=2000)
+    collection: Optional[str] = Field(default=None, description="Chunk collection; defaults to the active profile's")
+    compare_with_index: bool = Field(default=True, description="Compute ranking agreement vs. stored vectors")
+    file_content: Optional[str] = Field(default=None, description="Base64 file content when source == 'file'")
+    file_name: Optional[str] = None
+    chunk_config: Optional[ChunkConfigRequest] = None
+
+
+class EmbeddingChecksRequest(BaseModel):
+    """Request to run the embedding validation checks."""
+    providers: List[ProviderConfigRequest] = Field(min_length=1, max_length=3)
+    options: CheckOptions = Field(default_factory=CheckOptions)
+    sample: CheckSampleRequest = Field(default_factory=CheckSampleRequest)
+
+
+class EmbeddingChecksHistoryResponse(BaseModel):
+    """Historical validation runs."""
+    results: List[dict]
+    total: int
 
 
 # Endpoints
@@ -168,17 +211,8 @@ async def run_benchmark(
         )
     
     # Convert provider configs
-    providers = [
-        BenchmarkProviderConfig(
-            provider_type=p.provider_type,
-            model=p.model,
-            base_url=p.base_url,
-            api_key=p.api_key,
-            name=p.name,
-        )
-        for p in benchmark_request.providers
-    ]
-    
+    providers = [p.to_config() for p in benchmark_request.providers]
+
     # Get chunk config
     chunk_config = benchmark_request.chunk_config or ChunkConfigRequest()
     
@@ -276,6 +310,9 @@ async def run_benchmark_with_file(
             base_url=p.get("base_url"),
             api_key=p.get("api_key"),
             name=p.get("name"),
+            query_prefix=p.get("query_prefix", ""),
+            document_prefix=p.get("document_prefix", ""),
+            truncate_dim=p.get("truncate_dim"),
         )
         for p in providers_data
     ]
@@ -300,6 +337,121 @@ async def run_benchmark_with_file(
             status_code=500,
             detail=f"Benchmark failed: {str(e)}"
         )
+
+
+async def _load_check_sample(
+    request: Request,
+    service: EmbeddingBenchmarkService,
+    sample: CheckSampleRequest,
+) -> tuple[List[str], Optional[List[List[float]]], SampleInfo]:
+    """Resolve the sample texts (and stored reference vectors) for a checks run."""
+    db = request.app.state.db
+
+    if sample.source == "file":
+        if not sample.file_content or not sample.file_name:
+            raise HTTPException(status_code=400, detail="file_content and file_name are required when source is 'file'")
+        try:
+            file_bytes = base64.b64decode(sample.file_content)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid base64 file content: {e}")
+        text, _ = await service._extract_text_content(file_bytes, sample.file_name)
+        cfg = sample.chunk_config or ChunkConfigRequest()
+        chunks = await service._chunk_document(
+            text, sample.file_name, chunk_size=cfg.chunk_size, chunk_overlap=cfg.chunk_overlap, max_tokens=cfg.max_tokens
+        )
+        texts = [c["content"] for c in chunks][: sample.limit]
+        if not texts:
+            raise HTTPException(status_code=400, detail="The uploaded file produced no text chunks")
+        info = SampleInfo(
+            source="file",
+            count=len(texts),
+            avg_chars=round(sum(len(t) for t in texts) / len(texts), 1),
+            file_name=sample.file_name,
+        )
+        return texts, None, info
+
+    collection = db.db[sample.collection] if sample.collection else db.chunks_collection
+    active_name = getattr(db, "_current_chunks_collection", None)
+    collection_name = sample.collection or (active_name if isinstance(active_name, str) else "chunks")
+    projection = {"content": 1, "embedding": 1, "metadata.embedding_model": 1}
+    docs = [d async for d in collection.find({"embedding": {"$exists": True}}, projection).limit(sample.limit)]
+    if not docs:
+        docs = [d async for d in collection.find({"content": {"$exists": True}}, projection).limit(sample.limit)]
+    docs = [d for d in docs if isinstance(d.get("content"), str) and d["content"].strip()]
+    if not docs:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No chunks with content found in '{collection_name}'; ingest documents or use source='file'",
+        )
+    texts = [d["content"] for d in docs]
+    vectors = [d["embedding"] for d in docs if isinstance(d.get("embedding"), list)]
+    reference = vectors if (sample.compare_with_index and len(vectors) == len(texts)) else None
+    reference_model = next(
+        (d.get("metadata", {}).get("embedding_model") for d in docs if isinstance(d.get("metadata"), dict)),
+        None,
+    )
+    info = SampleInfo(
+        source="index",
+        count=len(texts),
+        avg_chars=round(sum(len(t) for t in texts) / len(texts), 1),
+        database=getattr(db, "current_database_name", None) if isinstance(getattr(db, "current_database_name", None), str) else None,
+        collection=collection_name,
+        reference_model=(reference_model or "unknown") if reference else None,
+        reference_dimension=len(reference[0]) if reference else None,
+    )
+    return texts, reference, info
+
+
+@router.post("/checks", response_model=EmbeddingChecksResult)
+async def run_embedding_checks(
+    request: Request,
+    checks_request: EmbeddingChecksRequest,
+    admin: UserResponse = Depends(require_admin),
+):
+    """
+    Run the embedding validation checks for up to three providers.
+
+    Samples real chunks from the active index (or chunks an uploaded file),
+    then measures query latency, throughput by batch size, vector
+    normalisation/dimension, Matryoshka truncation stability, pseudo-query
+    retrieval sanity, image-embedding support (llama.cpp) and ranking
+    agreement between providers and against the vectors stored in the index.
+
+    Requires admin access.
+    """
+    db = request.app.state.db
+    service = EmbeddingBenchmarkService(db)
+
+    texts, reference, sample_info = await _load_check_sample(request, service, checks_request.sample)
+    providers = [p.to_config() for p in checks_request.providers]
+
+    try:
+        return await service.run_checks(
+            providers=providers,
+            texts=texts,
+            options=checks_request.options,
+            sample=sample_info,
+            reference_vectors=reference,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Embedding checks failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Embedding checks failed: {str(e)}")
+
+
+@router.get("/checks/results", response_model=EmbeddingChecksHistoryResponse)
+async def get_embedding_checks_results(
+    request: Request,
+    limit: int = 20,
+    admin: UserResponse = Depends(require_admin),
+):
+    """Get historical embedding validation runs."""
+    db = request.app.state.db
+    service = EmbeddingBenchmarkService(db)
+
+    results = await service.get_results(limit=limit, kind="checks")
+    return EmbeddingChecksHistoryResponse(results=results, total=len(results))
 
 
 @router.get("/providers")
