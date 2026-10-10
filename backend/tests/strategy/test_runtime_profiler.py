@@ -261,7 +261,10 @@ async def test_runtime_profiler_run_test_happy_path(monkeypatch: Any) -> None:
     assert profile.test_name == "short_rag"
     assert profile.context_tokens == 2000
     assert profile.output_tokens == 500
-    assert profile.total_latency_ms >= 50  # ~50ms from invoker sleep
+    # ~50ms from invoker sleep. asyncio may fire the sleep timer up to one
+    # monotonic clock tick early (15.6ms on Windows with Python < 3.13), so
+    # allow that slack instead of asserting the exact floor.
+    assert profile.total_latency_ms >= 30
     assert profile.tokens_per_second > 0.0
     assert profile.first_token_ms == 30
     assert profile.model_load_ms == 50

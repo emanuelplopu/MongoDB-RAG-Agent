@@ -143,7 +143,9 @@ describe('StrategyTracePanel', () => {
 
     expect(screen.getByRole('button', { name: /Nodes/ })).toBeInTheDocument()
     expect(screen.getByText('compose')).toBeInTheDocument()
-    expect(screen.getByText(/1,500/)).toBeInTheDocument()
+    // Token counts render via toLocaleString(); match the runtime locale (e.g. "1,500" vs "1.500").
+    const formattedTokens = (1500).toLocaleString().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    expect(screen.getByText(new RegExp(formattedTokens))).toBeInTheDocument()
     expect(screen.getByText('critic unavailable')).toBeInTheDocument()
     expect(screen.getByText('validation timed out')).toBeInTheDocument()
 

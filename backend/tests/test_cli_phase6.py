@@ -37,7 +37,11 @@ if HAS_TYPER:
     from backend.scheduler.models import StrategySchedule
     from backend.scheduler.scheduler_daemon import ScheduleNotFoundError
 
-    runner = CliRunner(mix_stderr=False)
+    try:
+        runner = CliRunner(mix_stderr=False)
+    except TypeError:
+        # Click >= 8.2 removed ``mix_stderr``; stderr is always captured separately.
+        runner = CliRunner()
 
 
 @pytest.fixture(autouse=True)

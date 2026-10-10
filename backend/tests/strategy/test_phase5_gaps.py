@@ -146,12 +146,28 @@ def _make_minimal_spec(
     )
 
 
+class _TickingPromotionManager(PromotionManager):
+    """PromotionManager with a strictly increasing clock.
+
+    ``_set_status`` stamps ``updated_at`` via ``_now()`` and the selector
+    ranks active specs by that timestamp. ``datetime.utcnow()`` only ticks
+    every ~1-15ms on Windows, so consecutive promotions in one test would
+    otherwise collide and fall through to the strategy_id tie-break.
+    """
+
+    _clock = datetime.utcnow()
+
+    def _now(self) -> datetime:
+        _TickingPromotionManager._clock += timedelta(seconds=1)
+        return _TickingPromotionManager._clock
+
+
 @pytest.mark.asyncio
 async def test_spec_lifecycle_load_seed_promote_select() -> None:
     """End-to-end: YAML load → seed → list → promote → selector returns it → rollback."""
     db = _FakeAsyncDB()
     store = MongoSpecStore(db)
-    promotion_manager = PromotionManager()
+    promotion_manager = _TickingPromotionManager()
 
     # 1. Create an initial draft spec
     spec_v1 = _make_minimal_spec(
@@ -180,7 +196,7 @@ async def test_spec_lifecycle_load_seed_promote_select() -> None:
     in_memory_store = {
         "lifecycle-spec": [v1_snapshot],
     }
-    promotion_manager = PromotionManager(store=in_memory_store)
+    promotion_manager = _TickingPromotionManager(store=in_memory_store)
     promoted = await promotion_manager.promote(
         "lifecycle-spec", "1.0.0", actor="test", reason="lifecycle test"
     )
@@ -221,7 +237,7 @@ async def test_spec_lifecycle_load_seed_promote_select() -> None:
 
     # Promote v2
     in_memory_store["lifecycle-spec-v2"] = [v2_snapshot]
-    promotion_manager = PromotionManager(store=in_memory_store)
+    promotion_manager = _TickingPromotionManager(store=in_memory_store)
     await promotion_manager.promote(
         "lifecycle-spec-v2", "2.0.0", actor="test", reason="rollout v2"
     )
@@ -243,7 +259,7 @@ async def test_spec_lifecycle_load_seed_promote_select() -> None:
     in_memory_store["lifecycle-spec"] = [v1_snapshot]
     in_memory_store["lifecycle-spec-v2"] = [v2_snapshot]
 
-    promotion_manager = PromotionManager(store=in_memory_store)
+    promotion_manager = _TickingPromotionManager(store=in_memory_store)
     # Clear cooldown for testing
     promotion_manager._last_rollback_at = {}
     rolled_back = await promotion_manager.rollback(
