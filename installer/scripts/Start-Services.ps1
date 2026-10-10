@@ -65,13 +65,17 @@ $dockerCfg = Get-ConfigValue $Config "docker" $null
 $portsCfg  = Get-ConfigValue $Config "ports" $null
 
 $dockerDesktopPath = Get-ConfigValue $dockerCfg "desktopPath" "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-$installPath       = Get-ConfigValue $dockerCfg "installPath" (Split-Path $ScriptDir -Parent)
+$installPath       = Get-ConfigValue $dockerCfg "installPath" "auto"
 $composeFile       = Get-ConfigValue $dockerCfg "composeFile" "docker-compose.yml"
 $composeProfile    = Get-ConfigValue $dockerCfg "composeProfile" ""
 $startupTimeout    = [int](Get-ConfigValue $dockerCfg "startupTimeout" $Timeout)
 $healthInterval    = [int](Get-ConfigValue $dockerCfg "healthCheckInterval" 5)
 $frontendPort      = [int](Get-ConfigValue $portsCfg "frontend" 11080)
 $backendPort       = [int](Get-ConfigValue $portsCfg "backend" 11000)
+
+# "auto" (the hardened installer's config.json) or no config at all: derive the app
+# root from the script location - scripts\ is one level below the compose file.
+if ($installPath -eq "auto") { $installPath = Split-Path $ScriptDir -Parent }
 
 Write-InstallLog "installPath=$installPath composeFile=$composeFile profile='$composeProfile' frontendPort=$frontendPort backendPort=$backendPort" -Source "Start-Services"
 

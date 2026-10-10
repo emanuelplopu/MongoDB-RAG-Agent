@@ -364,14 +364,14 @@ function Export-DockerImages {
     $imagesDir = Join-Path $OUTPUT_DIR "images"
     New-Item -ItemType Directory -Path $imagesDir -Force | Out-Null
     
-    # Export backend image
+    # Export backend image (include both version and :latest tags)
     $backendTar = Join-Path $imagesDir "backend.tar"
-    docker save -o $backendTar "${BACKEND_IMAGE}:${Version}"
+    docker save -o $backendTar "${BACKEND_IMAGE}:${Version}" "${BACKEND_IMAGE}:latest"
     Write-Success "Exported backend image to: $backendTar"
     
-    # Export frontend image
+    # Export frontend image (include both version and :latest tags)
     $frontendTar = Join-Path $imagesDir "frontend.tar"
-    docker save -o $frontendTar "${FRONTEND_IMAGE}:${Version}"
+    docker save -o $frontendTar "${FRONTEND_IMAGE}:${Version}" "${FRONTEND_IMAGE}:latest"
     Write-Success "Exported frontend image to: $frontendTar"
     
     # Get sizes

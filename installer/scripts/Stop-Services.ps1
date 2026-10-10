@@ -41,9 +41,12 @@ if (Test-Path $configPath) {
     try { $Config = Get-Content $configPath -Raw | ConvertFrom-Json } catch { $Config = $null }
 }
 $dockerCfg      = Get-ConfigValue $Config "docker" $null
-$installPath    = Get-ConfigValue $dockerCfg "installPath" (Split-Path $ScriptDir -Parent)
+$installPath    = Get-ConfigValue $dockerCfg "installPath" "auto"
 $composeFile    = Get-ConfigValue $dockerCfg "composeFile" "docker-compose.yml"
 $composeProfile = Get-ConfigValue $dockerCfg "composeProfile" ""
+# "auto" (the hardened installer's config.json) or no config at all: derive the app
+# root from the script location - scripts\ is one level below the compose file.
+if ($installPath -eq "auto") { $installPath = Split-Path $ScriptDir -Parent }
 
 $null = docker info 2>&1
 if ($LASTEXITCODE -ne 0) {

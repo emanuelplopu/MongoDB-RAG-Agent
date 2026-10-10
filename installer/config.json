@@ -101,7 +101,7 @@
       "logs_data"
     ],
     "composeFile": "docker-compose.yml",
-    "installPath": "C:\\RecallHub",
+    "installPath": "auto",
     "startupTimeout": 120,
     "healthCheckInterval": 5,
     "autoStart": true,

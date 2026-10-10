@@ -157,7 +157,9 @@ var
 // Logging & Transcript
 // ============================================================================
 
-// Initialize log directory early
+// Initialize log directory early.
+// {app} is not available until the directory page, so the transcript starts in
+// {autoappdata} (ProgramData for admin installs, AppData for per-user installs).
 procedure InitializeLogDir();
 begin
   InstallLogDir := ExpandConstant('{commonappdata}\RecallHub\logs');
@@ -276,8 +278,10 @@ begin
     Exit;
   end;
 
-  // Check for sufficient disk space (5GB minimum) on the install drive
-  if GetSpaceOnDisk(ExpandConstant('{app}'), True, True) < 5368709120 then
+  // Check for sufficient disk space (5GB minimum) on the Program Files drive.
+  // {app} is not defined yet in InitializeSetup, so the default target is used;
+  // the chosen install path is logged at ssInstall.
+  if GetSpaceOnDisk(ExpandConstant('{autopf}'), True, True) < 5368709120 then
   begin
     LogTranscript('ERROR: Insufficient disk space (requires 5 GB)');
     MsgBox('RecallHub requires at least 5 GB of free disk space.' + #13#10 +
@@ -286,7 +290,6 @@ begin
     Exit;
   end;
 
-  LogTranscript('Install path: ' + ExpandConstant('{app}'));
   LogTranscript('Pre-flight checks passed');
 end;
 
@@ -308,7 +311,10 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   case CurStep of
     ssInstall:
-      LogTranscript('STEP: Installation files being copied');
+      begin
+        LogTranscript('Install path: ' + ExpandConstant('{app}'));
+        LogTranscript('STEP: Installation files being copied');
+      end;
     ssPostInstall:
       begin
         LogTranscript('STEP: Post-installation tasks starting');

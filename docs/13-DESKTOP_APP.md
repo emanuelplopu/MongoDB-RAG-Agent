@@ -57,7 +57,7 @@ The config file is the single source of truth for all build and runtime paramete
 |-----|---------|-------------|
 | `composeFile` | `docker-compose.yml` | Path to compose file (relative to installPath) |
 | `composeProfile` | _(tenant)_ | Compose profile to enable: `recallhub` or `quellex`. Set by `Write-TrayConfig.ps1` |
-| `installPath` | `C:\RecallHub` | Installation root directory |
+| `installPath` | `C:\RecallHub` | Installation root directory. `auto` (the hardened installer's `config.json`) means the parent folder of the `scripts` directory the service scripts run from. |
 | `startupTimeout` | `120` | Seconds to wait for services to become healthy |
 | `healthCheckInterval` | `5` | Polling interval in seconds |
 | `autoStart` | `true` | Auto-start Docker Desktop if not running |
