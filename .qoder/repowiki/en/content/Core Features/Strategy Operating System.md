@@ -12,26 +12,48 @@
 - [spec_store.py](file://backend/agent/strategy/spec_store.py)
 - [spec_selector.py](file://backend/agent/strategy/spec_selector.py)
 - [business_context_resolver.py](file://backend/agent/strategy/business_context_resolver.py)
+- [telemetry_strategy.py](file://backend/routers/telemetry_strategy.py)
+- [llm_call_store.py](file://backend/agent/strategy/llm_call_store.py)
+- [run_trace_store.py](file://backend/agent/strategy/run_trace_store.py)
+- [strategy_trace.py](file://backend/agent/strategy/strategy_trace.py)
+- [operational_trace.py](file://backend/agent/strategy/operational_trace.py)
+- [telemetry_service.py](file://backend/services/telemetry_service.py)
+- [telemetry.py](file://backend/routers/telemetry.py)
+- [models.py](file://backend/models/telemetry.py)
+- [emit_telemetry.py](file://backend/agent/strategy/nodes/emit_telemetry.py)
+- [SimplifiedLiveTrace.tsx](file://frontend/src/components/SimplifiedLiveTrace.tsx)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Added comprehensive telemetry and tracing framework documentation
+- Documented LLM-call tracking and persistence layer
+- Added strategy run trace building and visualization components
+- Included administrative telemetry endpoints for monitoring
+- Enhanced observability and debugging capabilities section
+- Added frontend visualization components for operational insights
 
 ## Table of Contents
 1. [Introduction](#introduction)
 2. [Project Structure](#project-structure)
 3. [Core Components](#core-components)
 4. [Architecture Overview](#architecture-overview)
-5. [Detailed Component Analysis](#detailed-component-analysis)
-6. [Dependency Analysis](#dependency-analysis)
-7. [Performance Considerations](#performance-considerations)
-8. [Troubleshooting Guide](#troubleshooting-guide)
-9. [Conclusion](#conclusion)
+5. [Enhanced Telemetry Framework](#enhanced-telemetry-framework)
+6. [Detailed Component Analysis](#detailed-component-analysis)
+7. [Dependency Analysis](#dependency-analysis)
+8. [Performance Considerations](#performance-considerations)
+9. [Troubleshooting Guide](#troubleshooting-guide)
+10. [Conclusion](#conclusion)
 
 ## Introduction
 The Strategy Operating System (Strategy OS) is a sophisticated orchestration framework that powers intelligent, adaptive agent behavior within the RecallHub platform. It provides a modular, extensible architecture for selecting and executing domain-specific strategies based on business context, tenant policies, and runtime conditions. The system seamlessly integrates with the broader agent ecosystem, enabling dynamic routing between traditional orchestration and advanced strategy-driven execution paths.
 
-The Strategy OS operates through several key phases: business context resolution, capability detection, strategy specification selection, adaptive routing, and execution orchestration. It maintains comprehensive observability through telemetry, supports tenant-specific configurations, and provides robust error handling and fallback mechanisms.
+**Enhanced** The Strategy OS now features a comprehensive telemetry and tracing framework that captures detailed execution metrics, LLM call information, and operational insights for monitoring, debugging, and operational analysis.
+
+The Strategy OS operates through several key phases: business context resolution, capability detection, strategy specification selection, adaptive routing, and execution orchestration. It maintains comprehensive observability through dual telemetry systems (development and strategy-specific), supports tenant-specific configurations, and provides robust error handling and fallback mechanisms.
 
 ## Project Structure
-The Strategy OS is organized into several interconnected subsystems within the backend agent architecture:
+The Strategy OS is organized into several interconnected subsystems within the backend agent architecture, now enhanced with comprehensive telemetry capabilities:
 
 ```mermaid
 graph TB
@@ -46,35 +68,50 @@ E[Coordinator]
 F[Orchestrator]
 G[Worker Pool]
 end
-subgraph "Persistence Layer"
-H[Spec Store]
-I[MongoSpecStore]
-J[InMemorySpecStore]
+subgraph "Telemetry Framework"
+H[Run Trace Store]
+I[LLM Call Store]
+J[Strategy Trace Builder]
+K[Operational Trace]
 end
-subgraph "Configuration"
-K[Tenant Policies]
-L[Capability Definitions]
-M[Answer Contracts]
+subgraph "Persistence Layer"
+L[Spec Store]
+M[MongoSpecStore]
+N[InMemorySpecStore]
+end
+subgraph "Configuration & Frontend"
+O[Tenant Policies]
+P[Capability Definitions]
+Q[Answer Contracts]
+R[Frontend Visualization]
 end
 A --> B
 B --> C
 C --> E
 E --> F
 E --> G
-B --> H
-H --> I
-H --> J
-K --> A
-L --> A
-M --> A
+B --> L
+L --> M
+L --> N
+E --> H
+E --> I
+E --> J
+E --> K
+R --> J
+O --> A
+P --> A
+Q --> A
 ```
 
 **Diagram sources**
 - [business_context_resolver.py:31-164](file://backend/agent/strategy/business_context_resolver.py#L31-L164)
 - [spec_selector.py:118-260](file://backend/agent/strategy/spec_selector.py#L118-L260)
 - [coordinator.py:182-256](file://backend/agent/coordinator.py#L182-L256)
+- [run_trace_store.py:1-517](file://backend/agent/strategy/run_trace_store.py#L1-L517)
+- [llm_call_store.py:1-551](file://backend/agent/strategy/llm_call_store.py#L1-L551)
+- [strategy_trace.py:1-360](file://backend/agent/strategy/strategy_trace.py#L1-L360)
 
-The system follows a layered architecture pattern with clear separation of concerns between business logic, persistence, and execution orchestration.
+The system follows a layered architecture pattern with clear separation of concerns between business logic, persistence, execution orchestration, and comprehensive observability infrastructure.
 
 **Section sources**
 - [main.py:300-391](file://backend/main.py#L300-L391)
@@ -130,7 +167,7 @@ The Strategy Registry manages the lifecycle of all available strategies, providi
 
 ## Architecture Overview
 
-The Strategy Operating System implements a multi-layered architecture that seamlessly integrates with the broader RecallHub agent ecosystem:
+The Strategy Operating System implements a multi-layered architecture that seamlessly integrates with the broader RecallHub agent ecosystem, now enhanced with comprehensive telemetry and tracing capabilities:
 
 ```mermaid
 sequenceDiagram
@@ -140,6 +177,8 @@ participant Selector as "StrategySpecSelector"
 participant Coordinator as "FederatedAgent"
 participant Orchestrator as "Orchestrator"
 participant WorkerPool as "WorkerPool"
+participant RunStore as "RunTraceStore"
+participant LLMStore as "LLMCallStore"
 Client->>Resolver : Query + Context
 Resolver->>Resolver : Detect capability + policy
 Resolver-->>Coordinator : BusinessContext
@@ -148,29 +187,129 @@ Selector->>Selector : Cache + filter candidates
 Selector-->>Coordinator : StrategySpec
 Coordinator->>Coordinator : Route execution path
 alt Strategy DAG
+Coordinator->>RunStore : Initialize trace
 Coordinator->>Orchestrator : Execute with spec
 Orchestrator->>WorkerPool : Coordinate tasks
+WorkerPool->>LLMStore : Capture LLM calls
 WorkerPool-->>Orchestrator : Results
 Orchestrator-->>Coordinator : Synthesized response
+Coordinator->>RunStore : Persist run trace
+Coordinator-->>Client : Final response
 else Legacy path
 Coordinator->>Orchestrator : Traditional orchestration
 Orchestrator->>WorkerPool : Execute tasks
 WorkerPool-->>Orchestrator : Results
-Orchestrator-->>Coordinator : Response
+Coordinator-->>Client : Response
 end
-Coordinator-->>Client : Final response
 ```
 
 **Diagram sources**
 - [coordinator.py:606-796](file://backend/agent/coordinator.py#L606-L796)
 - [business_context_resolver.py:111-164](file://backend/agent/strategy/business_context_resolver.py#L111-L164)
 - [spec_selector.py:171-260](file://backend/agent/strategy/spec_selector.py#L171-L260)
+- [run_trace_store.py:420-444](file://backend/agent/strategy/run_trace_store.py#L420-L444)
+- [llm_call_store.py:437-456](file://backend/agent/strategy/llm_call_store.py#L437-L456)
 
-The architecture supports both traditional orchestration and advanced strategy-driven execution, with automatic fallback mechanisms and comprehensive observability.
+The architecture supports both traditional orchestration and advanced strategy execution, with automatic fallback mechanisms, comprehensive observability, and detailed telemetry capture.
 
 **Section sources**
 - [coordinator.py:367-452](file://backend/agent/coordinator.py#L367-L452)
 - [orchestrator.py:341-385](file://backend/agent/orchestrator.py#L341-L385)
+
+## Enhanced Telemetry Framework
+
+The Strategy OS now features a comprehensive telemetry and tracing framework designed for monitoring, debugging, and operational insights. This framework consists of multiple interconnected components that capture detailed execution metrics and provide rich visualization capabilities.
+
+### Strategy Telemetry Endpoints
+The system provides administrative telemetry endpoints for monitoring strategy execution:
+
+```mermaid
+graph TB
+subgraph "Admin Telemetry Endpoints"
+A[/api/v1/admin/telemetry/strategy/runs]
+B[/api/v1/admin/telemetry/strategy/runs/{trace_id}]
+C[/api/v1/admin/telemetry/strategy/runs/{trace_id}/llm-calls]
+D[/api/v1/admin/telemetry/strategy/decisions]
+E[/api/v1/admin/telemetry/strategy/stats]
+end
+subgraph "Data Collections"
+F[strategy_runs]
+G[strategy_llm_calls]
+H[adaptive_selection_decisions]
+end
+A --> F
+B --> F
+C --> G
+D --> H
+E --> F
+```
+
+**Diagram sources**
+- [telemetry_strategy.py:149-358](file://backend/routers/telemetry_strategy.py#L149-L358)
+
+### LLM Call Tracking and Persistence
+The LLM Call Store captures every LLM invocation with full prompt/response text and timing metrics:
+
+- **Complete Prompt/Response Capture**: Stores full system prompts and assistant responses
+- **Token Accounting**: Tracks prompt, completion, and total tokens for cost analysis
+- **Timing Metrics**: Records wall-clock latency for performance monitoring
+- **Error Tracking**: Captures success/failure states and error messages
+- **TTL Management**: Automatic cleanup of old telemetry data
+
+**Section sources**
+- [llm_call_store.py:68-166](file://backend/agent/strategy/llm_call_store.py#L68-L166)
+- [llm_call_store.py:300-551](file://backend/agent/strategy/llm_call_store.py#L300-L551)
+
+### Strategy Run Trace Building
+The Strategy Trace Builder creates unified, structured views of execution for frontend visualization:
+
+- **Node Execution Tracking**: Captures per-node status, duration, and token usage
+- **Context Budget Analysis**: Records context budget application and filtering decisions
+- **Adaptive Selection Scores**: Preserves candidate strategy scores for analysis
+- **Fallback Reasoning**: Documents fallback mechanisms and error conditions
+- **LLM Call Correlation**: Links node outputs to captured LLM calls
+
+**Section sources**
+- [strategy_trace.py:127-184](file://backend/agent/strategy/strategy_trace.py#L127-L184)
+- [strategy_trace.py:280-360](file://backend/agent/strategy/strategy_trace.py#L280-L360)
+
+### Operational Trace Management
+The Operational Trace system provides detailed operational insights:
+
+- **Trace Event Emission**: Lightweight in-process event logging for operational decisions
+- **Omitted Reason Localization**: Internationalized messages for result filtering reasons
+- **Validation Tracking**: Records validation outcomes and warnings
+- **Source Policy Summary**: Human-readable summaries of active source policies
+- **Warning Generation**: Automatic warnings for significant omissions or issues
+
+**Section sources**
+- [operational_trace.py:23-55](file://backend/agent/strategy/operational_trace.py#L23-L55)
+- [operational_trace.py:130-195](file://backend/agent/strategy/operational_trace.py#L130-L195)
+
+### Development Telemetry Integration
+The system includes a separate development telemetry service for interaction tracing:
+
+- **PII Pseudonymization**: Protects sensitive data in development environments
+- **Daily JSONL Storage**: Structured logging with automatic rotation
+- **Multi-mode Support**: Separate modes for development, beta, and production
+- **Full Capture Capability**: Detailed logging of LLM calls, searches, and tool executions
+- **Entity Mapping**: Consistent pseudonymization across sessions
+
+**Section sources**
+- [telemetry_service.py:25-77](file://backend/services/telemetry_service.py#L25-L77)
+- [models.py:108-197](file://backend/models/telemetry.py#L108-L197)
+
+### Frontend Visualization Components
+The frontend provides user-friendly visualization of operational traces:
+
+- **Simplified Live Trace**: User-focused step-by-step progress display
+- **Strategy Trace Panel**: Technical view for operational insights
+- **Real-time Updates**: Progressive display of execution phases and results
+- **Internal Task Filtering**: Hides technical details from end users
+- **Internationalization**: Multi-language support for operational messages
+
+**Section sources**
+- [SimplifiedLiveTrace.tsx:60-205](file://frontend/src/components/SimplifiedLiveTrace.tsx#L60-L205)
 
 ## Detailed Component Analysis
 
@@ -182,6 +321,7 @@ Key responsibilities include:
 - **Execution Routing**: Deciding between legacy orchestration and strategy DAG execution
 - **Telemetry Integration**: Capturing comprehensive execution metrics and traces
 - **Error Handling**: Providing fallback mechanisms and graceful degradation
+- **Trace Initialization**: Setting up run traces and LLM call tracking
 
 ```mermaid
 classDiagram
@@ -190,6 +330,8 @@ class FederatedAgent {
 +orchestrator : Orchestrator
 +worker_pool : WorkerPool
 +strategy : BaseStrategy
++run_trace_store : RunTraceStore
++llm_call_store : LLMCallStore
 +process() str, AgentTrace
 +_process_with_orchestrator() str
 +_process_fast() str
@@ -212,15 +354,31 @@ class WorkerPool {
 +execute_tasks() List[WorkerResult]
 +reset() void
 }
+class RunTraceStore {
++save() RunTraceDoc
++get() RunTraceDoc
++list_recent() List[RunTraceDoc]
++ensure_indexes() void
+}
+class LLMCallStore {
++save() void
++get() LLMCallDoc
++list_by_trace() List[LLMCallDoc]
++list_by_node() List[LLMCallDoc]
++ensure_indexes() void
+}
 FederatedAgent --> Orchestrator : "coordinates"
 FederatedAgent --> WorkerPool : "coordinates"
-FederatedAgent --> BaseStrategy : "uses"
+FederatedAgent --> RunTraceStore : "uses"
+FederatedAgent --> LLMCallStore : "uses"
 ```
 
 **Diagram sources**
 - [coordinator.py:182-256](file://backend/agent/coordinator.py#L182-L256)
 - [orchestrator.py:83-136](file://backend/agent/orchestrator.py#L83-L136)
 - [worker_pool.py:39-106](file://backend/agent/worker_pool.py#L39-L106)
+- [run_trace_store.py:163-212](file://backend/agent/strategy/run_trace_store.py#L163-L212)
+- [llm_call_store.py:173-230](file://backend/agent/strategy/llm_call_store.py#L173-L230)
 
 **Section sources**
 - [coordinator.py:182-256](file://backend/agent/coordinator.py#L182-L256)
@@ -295,7 +453,7 @@ I --> J
 
 ## Dependency Analysis
 
-The Strategy Operating System exhibits a well-designed dependency structure with clear boundaries between components:
+The Strategy Operating System exhibits a well-designed dependency structure with clear boundaries between components, now enhanced with comprehensive telemetry dependencies:
 
 ```mermaid
 graph TB
@@ -304,44 +462,71 @@ A[MongoDB]
 B[LiteLLM]
 C[FastAPI]
 D[Pydantic]
+E[React]
+F[Electron]
 end
 subgraph "Core Strategy OS"
-E[BusinessContextResolver]
-F[StrategySpecSelector]
-G[AdaptiveSelector]
-H[StrategyRegistry]
+G[BusinessContextResolver]
+H[StrategySpecSelector]
+I[AdaptiveSelector]
+J[StrategyRegistry]
 end
 subgraph "Execution Layer"
-I[FederatedAgent]
-J[Orchestrator]
-K[WorkerPool]
+K[FederatedAgent]
+L[Orchestrator]
+M[WorkerPool]
+end
+subgraph "Telemetry Layer"
+N[RunTraceStore]
+O[LLMCallStore]
+P[StrategyTraceResponse]
+Q[OperationalTraceSummary]
+R[TelemetryService]
 end
 subgraph "Persistence"
-L[SpecStore]
-M[MongoSpecStore]
-N[InMemorySpecStore]
+S[SpecStore]
+T[MongoSpecStore]
+U[InMemorySpecStore]
 end
-E --> L
-F --> L
-G --> F
-I --> J
-I --> K
-I --> E
-I --> F
-L --> M
-L --> N
-J --> B
-K --> B
-I --> C
-E --> D
-F --> D
+subgraph "Frontend"
+V[SimplifiedLiveTrace]
+W[StrategyTracePanel]
+X[TelemetryViewer]
+end
+G --> S
+H --> S
+I --> H
+K --> L
+K --> M
+K --> N
+K --> O
+K --> P
+K --> Q
+N --> A
+O --> A
+P --> A
+Q --> A
+R --> A
+L --> B
+M --> B
+K --> C
+G --> D
+H --> D
+V --> E
+W --> E
+X --> F
 ```
 
 **Diagram sources**
 - [spec_store.py:326-375](file://backend/agent/strategy/spec_store.py#L326-L375)
 - [coordinator.py:182-256](file://backend/agent/coordinator.py#L182-L256)
+- [run_trace_store.py:1-517](file://backend/agent/strategy/run_trace_store.py#L1-L517)
+- [llm_call_store.py:1-551](file://backend/agent/strategy/llm_call_store.py#L1-L551)
+- [strategy_trace.py:1-360](file://backend/agent/strategy/strategy_trace.py#L1-L360)
+- [operational_trace.py:1-195](file://backend/agent/strategy/operational_trace.py#L1-L195)
+- [telemetry_service.py:1-402](file://backend/services/telemetry_service.py#L1-L402)
 
-The dependency analysis reveals a clean separation of concerns with minimal circular dependencies. The system leverages external libraries for LLM interactions and data validation while maintaining internal consistency through well-defined interfaces.
+The dependency analysis reveals a clean separation of concerns with minimal circular dependencies. The system leverages external libraries for LLM interactions, data validation, and frontend frameworks while maintaining internal consistency through well-defined interfaces. The telemetry layer adds comprehensive observability without disrupting core functionality.
 
 **Section sources**
 - [main.py:28-50](file://backend/main.py#L28-L50)
@@ -349,32 +534,38 @@ The dependency analysis reveals a clean separation of concerns with minimal circ
 
 ## Performance Considerations
 
-The Strategy Operating System implements several performance optimization strategies:
+The Strategy Operating System implements several performance optimization strategies, now enhanced with telemetry considerations:
 
 ### Caching Strategy
 - **Spec Selection Cache**: 5-minute TTL for store-resolved entries, 1-minute for legacy fallback
 - **Adaptive Decision Cache**: Shared cache across selector layers with configurable TTL
 - **Strategy Instance Cache**: Singleton pattern for strategy instances to avoid repeated instantiation
+- **Telemetry Cache**: In-memory caches for frequently accessed trace data
 
 ### Concurrency Management
 - **Thread Pool Configuration**: 32 concurrent workers for async operations
 - **Worker Pool Parallelism**: Configurable max_workers with intelligent batching
 - **Task Dependency Resolution**: Efficient parallel execution with dependency-aware scheduling
+- **Telemetry Asynchronous Writing**: Non-blocking telemetry persistence to avoid impacting main execution
 
 ### Memory Optimization
 - **Lazy Loading**: MongoDB mirror hydration only when needed
 - **Snapshot Management**: In-memory mirrors reduce database round trips
 - **Resource Cleanup**: Proper cleanup of HTTP clients and LLM connections
+- **Telemetry Data Management**: TTL-based automatic cleanup of old telemetry data
 
 ### Observability and Monitoring
 - **Comprehensive Telemetry**: End-to-end tracing with detailed metrics
 - **Performance Metrics**: Latency tracking, token usage monitoring, and quality assessment
 - **Health Checks**: Built-in monitoring for LLM providers and database connectivity
+- **Administrative Endpoints**: REST APIs for real-time monitoring and debugging
+- **Frontend Visualization**: Real-time progress display and operational insights
 
 **Section sources**
 - [main.py:66-72](file://backend/main.py#L66-L72)
 - [worker_pool.py:107-112](file://backend/agent/worker_pool.py#L107-L112)
 - [spec_selector.py:81-84](file://backend/agent/strategy/spec_selector.py#L81-L84)
+- [telemetry_strategy.py:1-358](file://backend/routers/telemetry_strategy.py#L1-L358)
 
 ## Troubleshooting Guide
 
@@ -389,11 +580,19 @@ The Strategy Operating System implements several performance optimization strate
 - Monitor thread pool utilization and adjust worker counts
 - Check MongoDB connection pooling and index usage
 - Review LLM provider response times and retry policies
+- Monitor telemetry storage and TTL cleanup processes
 
 **Execution Errors**
 - Enable debug logging for detailed error traces
 - Verify tool gate configurations for disabled operations
 - Check model provider credentials and API limits
+- Review telemetry service configuration and storage permissions
+
+**Telemetry Issues**
+- Verify MongoDB connectivity for telemetry collections
+- Check TTL index creation and maintenance
+- Monitor telemetry file rotation and cleanup processes
+- Validate frontend telemetry viewer configuration
 
 **Section sources**
 - [business_context_resolver.py:60-73](file://backend/agent/strategy/business_context_resolver.py#L60-L73)
@@ -401,19 +600,30 @@ The Strategy Operating System implements several performance optimization strate
 
 ### Debugging Tools and Techniques
 
-The system provides comprehensive debugging capabilities:
-- **Request ID Tracking**: Unique correlation IDs for end-to-end request tracing
-- **Telemetry Integration**: Detailed metrics capture for performance analysis
-- **Error Classification**: Structured error reporting with technical details for administrators
-- **Fallback Mechanisms**: Graceful degradation when components fail
+The system provides comprehensive debugging capabilities through multiple channels:
+
+**Request ID Tracking**: Unique correlation IDs for end-to-end request tracing across all components
+
+**Telemetry Integration**: Detailed metrics capture for performance analysis and operational insights
+
+**Error Classification**: Structured error reporting with technical details for administrators
+
+**Fallback Mechanisms**: Graceful degradation when components fail
+
+**Administrative Interfaces**: REST endpoints for real-time monitoring and debugging
+
+**Frontend Visualization**: User-friendly progress displays and operational insights
 
 **Section sources**
 - [coordinator.py:644-756](file://backend/agent/coordinator.py#L644-L756)
 - [main.py:618-756](file://backend/main.py#L618-L756)
+- [telemetry_strategy.py:1-358](file://backend/routers/telemetry_strategy.py#L1-L358)
 
 ## Conclusion
 
-The Strategy Operating System represents a sophisticated and well-architected solution for intelligent agent strategy management. Its modular design, comprehensive observability, and robust error handling mechanisms provide a solid foundation for scalable AI-powered applications.
+The Strategy Operating System represents a sophisticated and well-architected solution for intelligent agent strategy management, now enhanced with comprehensive telemetry and tracing capabilities. Its modular design, extensive observability, and robust error handling mechanisms provide a solid foundation for scalable AI-powered applications.
+
+**Enhanced** The addition of the comprehensive telemetry framework significantly improves the system's monitoring, debugging, and operational capabilities, making it suitable for enterprise deployment scenarios with demanding operational requirements.
 
 Key strengths of the system include:
 - **Modular Architecture**: Clear separation of concerns with well-defined interfaces
@@ -421,5 +631,8 @@ Key strengths of the system include:
 - **Tenant Flexibility**: Comprehensive configuration management for diverse organizational needs
 - **Production Ready**: Robust error handling, caching, and monitoring capabilities
 - **Extensible Design**: Plugin architecture supporting custom strategies and integrations
+- **Comprehensive Telemetry**: Full observability through dual telemetry systems and administrative endpoints
+- **Advanced Visualization**: Rich frontend components for operational insights and user experience
+- **Operational Excellence**: Administrative interfaces for monitoring, debugging, and system health management
 
-The system successfully balances flexibility with reliability, providing both powerful automation capabilities and comprehensive control mechanisms for enterprise deployment scenarios.
+The system successfully balances flexibility with reliability, providing both powerful automation capabilities and comprehensive control mechanisms for enterprise deployment scenarios. The enhanced telemetry framework ensures that operators have the tools needed to monitor, debug, and optimize strategy execution in real-time.
