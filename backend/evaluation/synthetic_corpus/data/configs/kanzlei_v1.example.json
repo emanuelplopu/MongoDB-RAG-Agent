@@ -1,0 +1,13 @@
+{
+  "_comment": "Example run config. Only overrides are listed; see 'init-config' for every setting. Never put API keys here.",
+  "run": {"output_root": "synthetic_runs", "run_name": "kanzlei_v1"},
+  "llm": {
+    "env_file": ".env",
+    "concurrency": 6,
+    "orchestrator": {"model": "gpt-6-astra", "reasoning_effort": "medium"},
+    "generator": {"model": "gpt-6.1-sol", "reasoning_effort": "low"}
+  },
+  "corpus": {"cases_per_area": 1, "documents_per_case": {"min": 18, "max": 28}},
+  "seeds": {"ris": {"decisions_per_case": 2}},
+  "questions": {"per_case": 8, "unanswerable_per_case": 1, "cross_case": 3}
+}

@@ -1,0 +1,38 @@
+{
+  "id": "inkasso_01",
+  "area": "inkasso_mahnklage_exekution",
+  "title": "Tischlerei gegen säumigen Privatkunden",
+  "description": "Eine Wiener Tischlerei hat einem Privatkunden eine Einbauküche geliefert und montiert. Zwei Rechnungen (Anzahlung bereits bezahlt, Restbetrag und eine Nachtragsrechnung für zusätzliche Hängeschränke) sind trotz eigener Mahnungen der Tischlerei offen. Der Kunde reagiert nicht. Die Kanzlei schreibt ihn an, bringt eine Mahnklage ein, der Zahlungsbefehl wird rechtskräftig, weil kein Einspruch erhoben wird. Danach Gehaltsexekution bei seinem Arbeitgeber, einer Spedition. Die Drittschuldnererklärung nennt eine Vorpfändung eines anderen Gläubigers, daher fließen zunächst nur geringe Beträge. Zwei Teilzahlungen gehen ein.",
+  "client_role": "mandant",
+  "start_date": "2025-01-20",
+  "streitwert": 7864.8,
+  "documents_target": 22,
+  "use_ris_search": true,
+  "extra_instructions": "Zinsen: 9,2 Prozentpunkte über dem Basiszinssatz kommen nicht in Frage, weil der Schuldner Verbraucher ist; verwende 4 % Zinsen nach § 1000 ABGB. Eine der beiden Rechnungen soll auch als Kopie im Posteingang liegen.",
+  "role_hints": {
+    "mandant": {
+      "name_word": "Tischlerei",
+      "legal_form": "GmbH",
+      "vienna": true
+    },
+    "schuldner": {
+      "gender": "male",
+      "vienna": true
+    },
+    "drittschuldner": {
+      "name_word": "Spedition",
+      "legal_form": "GmbH"
+    },
+    "richter": {
+      "gender": "female"
+    },
+    "rechtspfleger": {
+      "gender": "male"
+    }
+  },
+  "tags": [
+    "inkasso",
+    "mahnverfahren",
+    "exekution"
+  ]
+}

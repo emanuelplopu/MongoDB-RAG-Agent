@@ -1,0 +1,230 @@
+{
+  "id": "arbeitsrecht_entlassung",
+  "name": "Arbeitsrecht: ungerechtfertigte Entlassung und Beendigungsansprüche",
+  "description": "Die Kanzlei vertritt eine Angestellte, die fristlos entlassen wurde. Sie macht beim Arbeits- und Sozialgericht Wien Kündigungsentschädigung, Urlaubsersatzleistung, aliquote Sonderzahlungen und offene Überstunden geltend. Der Arbeitgeber behauptet einen Entlassungsgrund (z. B. Vertrauensunwürdigkeit). Es folgen Geltendmachungsschreiben, Klage, Klagebeantwortung, Tagsatzungen mit Zeugeneinvernahme und ein Vergleich oder Urteil.",
+  "procedure_outline": [
+    "Dienstvertrag bzw. Dienstzettel mit Einstufung nach Kollektivvertrag",
+    "Gehaltsabrechnungen der letzten Monate",
+    "Entlassungsschreiben des Arbeitgebers mit behauptetem Entlassungsgrund",
+    "Erstberatung der Mandantin, Aktenvermerk, Berechnung der Ansprüche",
+    "Geltendmachungsschreiben an den Arbeitgeber mit Frist (Verfallsfristen beachten)",
+    "Klage beim Arbeits- und Sozialgericht Wien (Register Cga)",
+    "Klagebeantwortung des Arbeitgebers",
+    "Vorbereitende Tagsatzung und Beweisaufnahme mit Zeugen",
+    "Vergleich oder Urteil, allenfalls Berufung an das OLG Wien als Arbeits- und Sozialgericht, Kostennote"
+  ],
+  "courts": [
+    "asg_wien",
+    "olg_wien"
+  ],
+  "registers": [
+    "Cga",
+    "Ra"
+  ],
+  "statutes": [
+    "§ 27 AngG",
+    "§ 29 AngG",
+    "§ 10 UrlG",
+    "§ 1162b ABGB",
+    "ASGG",
+    "Kollektivvertrag"
+  ],
+  "roles": [
+    {
+      "role": "mandant",
+      "kind": "natural",
+      "label": "Arbeitnehmerin / klagende Partei"
+    },
+    {
+      "role": "arbeitgeber",
+      "kind": "legal",
+      "label": "Arbeitgeberin / beklagte Partei"
+    },
+    {
+      "role": "gegenvertreter",
+      "kind": "natural",
+      "label": "Rechtsanwältin der Arbeitgeberin"
+    },
+    {
+      "role": "geschaeftsfuehrer",
+      "kind": "natural",
+      "label": "Geschäftsführer der Arbeitgeberin"
+    },
+    {
+      "role": "richter",
+      "kind": "natural",
+      "label": "Vorsitzender Richter des Arbeits- und Sozialgerichts"
+    },
+    {
+      "role": "zeuge",
+      "kind": "natural",
+      "label": "Arbeitskollegin als Zeugin"
+    }
+  ],
+  "document_types": [
+    {
+      "type": "dienstvertrag",
+      "label": "Dienstvertrag",
+      "category": "beweis",
+      "formats": [
+        "scan_jpg",
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Dienstvertrag: Eintrittsdatum, Verwendung, Kollektivvertrag und Einstufung, Bruttomonatsgehalt, Arbeitszeit, Kündigungsfristen, Überstundenregelung."
+    },
+    {
+      "type": "gehaltsabrechnung",
+      "label": "Gehaltsabrechnung",
+      "category": "beweis",
+      "formats": [
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Monatliche Abrechnung: Brutto, Überstunden, Sozialversicherung, Lohnsteuer, Netto, Urlaubsstand."
+    },
+    {
+      "type": "entlassungsschreiben",
+      "label": "Entlassungsschreiben",
+      "category": "beweis",
+      "formats": [
+        "scan_jpg",
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Kurzes Schreiben des Arbeitgebers: Entlassung mit sofortiger Wirkung, Datum, behaupteter Grund."
+    },
+    {
+      "type": "email_mandantin",
+      "label": "E-Mail der Mandantin",
+      "category": "korrespondenz",
+      "formats": [
+        "eml"
+      ],
+      "is_email": true,
+      "guidance": "E-Mail der Mandantin mit Schilderung der Vorfälle oder Übermittlung von Unterlagen."
+    },
+    {
+      "type": "aktenvermerk_erstberatung",
+      "label": "Aktenvermerk Erstberatung",
+      "category": "intern",
+      "formats": [
+        "txt",
+        "docx"
+      ],
+      "required": true,
+      "guidance": "Vermerk über die Erstberatung: Sachverhalt, Fristen, nächste Schritte."
+    },
+    {
+      "type": "anspruchsberechnung",
+      "label": "Berechnung der Ansprüche",
+      "category": "intern",
+      "formats": [
+        "docx",
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Tabellarische Aufstellung: Kündigungsentschädigung (Zeitraum und Betrag), Urlaubsersatzleistung (Tage und Betrag), aliquote Sonderzahlungen, Überstunden, Summe brutto."
+    },
+    {
+      "type": "geltendmachung",
+      "label": "Geltendmachungsschreiben",
+      "category": "korrespondenz",
+      "formats": [
+        "docx",
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Anwaltliches Schreiben an die Arbeitgeberin: Bestreitung des Entlassungsgrundes, Aufstellung der Ansprüche, Zahlungsfrist."
+    },
+    {
+      "type": "klage",
+      "label": "Klage",
+      "category": "schriftsatz",
+      "formats": [
+        "pdf",
+        "docx"
+      ],
+      "required": true,
+      "guidance": "Klage beim ASG Wien: Parteien, Beschäftigungsdaten, Entlassungsvorgang, Ansprüche mit Beträgen brutto, Zinsen, Beweisanbote."
+    },
+    {
+      "type": "klagebeantwortung",
+      "label": "Klagebeantwortung",
+      "category": "gericht",
+      "formats": [
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Schriftsatz der Gegenseite: Entlassungsgrund mit konkreten Vorwürfen und Daten, Beweisanbote."
+    },
+    {
+      "type": "ladung",
+      "label": "Ladung",
+      "category": "gericht",
+      "formats": [
+        "scan_jpg",
+        "pdf"
+      ],
+      "guidance": "Ladung zur Tagsatzung mit Datum und Uhrzeit."
+    },
+    {
+      "type": "protokoll_tagsatzung",
+      "label": "Protokoll der Tagsatzung",
+      "category": "gericht",
+      "formats": [
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Protokoll mit Parteienaussagen, Zeugenaussage der Kollegin, Beschlüssen und Vergleichsgesprächen."
+    },
+    {
+      "type": "vergleich_oder_urteil",
+      "label": "Vergleich oder Urteil",
+      "category": "gericht",
+      "formats": [
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Gerichtlicher Vergleich (Vergleichsbetrag brutto, Zahlungsfrist, Kosten) oder Urteil."
+    },
+    {
+      "type": "kostennote",
+      "label": "Kostennote",
+      "category": "kosten",
+      "formats": [
+        "pdf",
+        "docx"
+      ],
+      "required": true,
+      "is_cost_note": true,
+      "guidance": "Kostenverzeichnis nach RATG. Die Tabelle wird automatisch eingefügt; schreibe nur Einleitung und Schluss und setze die Marke [[KOSTENTABELLE]] genau einmal."
+    }
+  ],
+  "question_focus": [
+    "Eintrittsdatum und Bruttogehalt",
+    "Datum und behaupteter Grund der Entlassung",
+    "Höhe der einzelnen Ansprüche",
+    "Klagebetrag",
+    "Zeugenaussage",
+    "Vergleichsbetrag",
+    "Kosten"
+  ],
+  "ris_queries": [
+    {
+      "suchworte": "Entlassung Vertrauensunwürdigkeit Angestellte Kündigungsentschädigung",
+      "gericht": "OGH",
+      "entscheidungsdatum_von": "2012-01-01"
+    },
+    {
+      "suchworte": "Urlaubsersatzleistung ungerechtfertigte Entlassung § 29 AngG",
+      "gericht": "OGH",
+      "entscheidungsdatum_von": "2012-01-01"
+    }
+  ],
+  "streitwert_range": [
+    8000.0,
+    40000.0
+  ],
+  "style_notes": "Österreichisches Arbeitsrecht. Begriffe: Dienstnehmerin, Dienstgeberin, Kündigungsentschädigung, Urlaubsersatzleistung, Sonderzahlungen, Kollektivvertrag, Verwendungsgruppe. Beträge brutto im Format 'EUR 3.456,78'."
+}

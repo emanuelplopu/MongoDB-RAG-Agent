@@ -1,0 +1,44 @@
+{
+  "id": "datenschutz_01",
+  "area": "datenschutz_schadenersatz",
+  "title": "Datenleck bei einem Online-Optiker: Auskunft, DSB-Beschwerde und Schadenersatz",
+  "description": "Eine Kundin eines Online-Optikers erhält eine E-Mail über eine Datenschutzverletzung: Durch eine falsch konfigurierte Cloud-Datenbank waren Name, Adresse, Geburtsdatum und Brillenrezeptwerte (Gesundheitsdaten) mehrere Wochen öffentlich abrufbar. Danach bekommt sie Phishing-SMS. Ihr Auskunftsbegehren wird nur teilweise beantwortet. Die Kanzlei erhebt Beschwerde bei der Datenschutzbehörde, die mit Bescheid eine Verletzung des Auskunftsrechts feststellt. Anschließend Klage auf immateriellen Schadenersatz nach Art 82 DSGVO beim Landesgericht für Zivilrechtssachen Wien. Das Gericht spricht einen Teilbetrag zu.",
+  "client_role": "mandant",
+  "start_date": "2024-11-12",
+  "streitwert": 3500.0,
+  "documents_target": 20,
+  "ris_geschaeftszahlen": [
+    "6Ob35/21x"
+  ],
+  "use_ris_search": true,
+  "extra_instructions": "Gesundheitsdaten (Rezeptwerte) sind ein besonders wichtiger Punkt. Die Geschäftszahl der Datenschutzbehörde hat das Bundes-Format, nicht das Gerichts-Format.",
+  "role_hints": {
+    "mandant": {
+      "gender": "female",
+      "vienna": true
+    },
+    "verantwortlicher": {
+      "name_word": "Optik",
+      "legal_form": "GmbH"
+    },
+    "datenschutzbeauftragter": {
+      "gender": "male"
+    },
+    "gegenvertreter": {
+      "gender": "male",
+      "vienna": true
+    },
+    "dsb_referent": {
+      "gender": "female"
+    },
+    "richter": {
+      "gender": "female"
+    }
+  },
+  "tags": [
+    "datenschutz",
+    "dsgvo",
+    "dsb",
+    "landesgericht"
+  ]
+}

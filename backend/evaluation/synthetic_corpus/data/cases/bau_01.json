@@ -1,0 +1,44 @@
+{
+  "id": "bau_01",
+  "area": "bau_gewaehrleistung_gutachten",
+  "title": "Undichtes Flachdach beim Einfamilienhaus in Niederösterreich",
+  "description": "Ein Ehepaar (Mandant ist der Ehemann, die Ehefrau ist Miteigentümerin und wird in den Dokumenten erwähnt) ließ von einem Baumeisterbetrieb einen Zubau mit Flachdach errichten. Pauschalpreis laut Werkvertrag, Haftrücklass 5 Prozent. Ein halbes Jahr nach der Übernahme dringt bei Starkregen Wasser in das Wohnzimmer ein. Mängelrüge per E-Mail, das Bauunternehmen bessert erfolglos nach. Ein Privatgutachten stellt fehlerhafte Anschlüsse der Abdichtung an der Attika fest. Klage beim Landesgericht für Zivilrechtssachen Wien (Gerichtsstandvereinbarung). Das Gericht bestellt einen Sachverständigen, dessen Gutachten die Sanierungskosten etwas niedriger als das Privatgutachten ansetzt. Urteil: Klage überwiegend stattgegeben.",
+  "client_role": "mandant",
+  "start_date": "2024-09-16",
+  "streitwert": 46380.0,
+  "documents_target": 24,
+  "use_ris_search": true,
+  "extra_instructions": "Die Sanierungskosten im Privatgutachten und im Gerichtsgutachten müssen unterschiedliche Beträge haben; beide sind wichtige Fakten. Das Gerichtsgutachten soll ausführlich sein und mehrere nummerierte Kapitel haben.",
+  "role_hints": {
+    "mandant": {
+      "gender": "male",
+      "postcode": "2340"
+    },
+    "bauunternehmen": {
+      "name_word": "Baumeister",
+      "legal_form": "GmbH"
+    },
+    "gegenvertreter": {
+      "gender": "male",
+      "vienna": true
+    },
+    "privatgutachter": {
+      "gender": "male"
+    },
+    "sachverstaendiger": {
+      "gender": "male"
+    },
+    "richter": {
+      "gender": "female"
+    },
+    "bauleiter": {
+      "gender": "male"
+    }
+  },
+  "tags": [
+    "bau",
+    "gewaehrleistung",
+    "gutachten",
+    "landesgericht"
+  ]
+}

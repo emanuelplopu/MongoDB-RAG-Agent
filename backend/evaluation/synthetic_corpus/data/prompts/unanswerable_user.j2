@@ -1,0 +1,7 @@
+Matter: {{ case_title }} (internal file {{ internal_no }}), client: {{ client }}, opposing party: {{ opponent }}.
+Case summary: {{ case_summary }}
+
+Known facts (the answer to your questions must NOT be among them):
+{% for f in facts %}- {{ f.label }}: {{ f.value }}
+{% endfor %}
+Write {{ n }} plausible questions a colleague might ask about this matter whose answer is NOT contained in the case file (for example a document type that was never created, a hearing that never took place, an amount that was never claimed). For each, list two or three distinctive German terms the answer would need (absent_terms) and say briefly why the file cannot answer it. The assistant should answer that the file does not contain this information.

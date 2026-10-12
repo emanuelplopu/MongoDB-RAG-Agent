@@ -1,0 +1,270 @@
+{
+  "id": "bau_gewaehrleistung_gutachten",
+  "name": "Baurecht: Gewährleistung, Schadenersatz und Sachverständigengutachten",
+  "description": "Die Kanzlei vertritt Bauherren (Ehepaar oder Einzelperson) gegen ein Bauunternehmen wegen Mängeln an einem Einfamilienhaus oder einer Sanierung (z. B. undichte Flachdachabdichtung, Risse in der Fassade, fehlerhafter Fenstereinbau). Nach Mängelrügen, Verbesserungsaufforderungen und einem Privatgutachten klagen die Bauherren beim Landesgericht auf Preisminderung, Verbesserungskosten und Schadenersatz (§§ 922 ff, 932, 933a ABGB). Das Gericht bestellt einen Sachverständigen; Gutachten, Erörterung, Ergänzungsgutachten und Urteil oder Vergleich folgen.",
+  "procedure_outline": [
+    "Angebot und Werkvertrag mit Leistungsbeschreibung und Pauschalpreis",
+    "Bauausführung, Übernahme und Schlussrechnung mit Haftrücklass",
+    "Auftreten der Mängel und Mängelrüge der Bauherren",
+    "Verbesserungsaufforderung durch die Kanzlei mit Frist",
+    "Privatgutachten eines Bausachverständigen mit Sanierungskosten",
+    "Klage beim Landesgericht für Zivilrechtssachen Wien (Register Cg)",
+    "Klagebeantwortung des Bauunternehmens (Bestreitung, Mitverschulden, Verjährungseinwand)",
+    "Beschluss über die Bestellung eines gerichtlichen Sachverständigen und Kostenvorschuss",
+    "Gutachten des gerichtlich beeideten Sachverständigen, Stellungnahme der Parteien, Erörterung in der Verhandlung",
+    "Urteil oder Vergleich, allenfalls Berufung an das Oberlandesgericht Wien, Kostennote"
+  ],
+  "courts": [
+    "lg_zrs_wien",
+    "olg_wien"
+  ],
+  "registers": [
+    "Cg",
+    "R"
+  ],
+  "statutes": [
+    "§ 922 ABGB",
+    "§ 932 ABGB",
+    "§ 933 ABGB",
+    "§ 933a ABGB",
+    "§ 1168a ABGB",
+    "§ 1170b ABGB",
+    "ÖNORM B 2110"
+  ],
+  "roles": [
+    {
+      "role": "mandant",
+      "kind": "natural",
+      "label": "Bauherr / klagende Partei"
+    },
+    {
+      "role": "bauunternehmen",
+      "kind": "legal",
+      "label": "Bauunternehmen / beklagte Partei"
+    },
+    {
+      "role": "gegenvertreter",
+      "kind": "natural",
+      "label": "Rechtsanwalt des Bauunternehmens"
+    },
+    {
+      "role": "privatgutachter",
+      "kind": "natural",
+      "label": "Privatsachverständiger der Bauherren"
+    },
+    {
+      "role": "sachverstaendiger",
+      "kind": "natural",
+      "label": "Gerichtlich beeideter Sachverständiger für das Bauwesen"
+    },
+    {
+      "role": "richter",
+      "kind": "natural",
+      "label": "Richterin des Landesgerichts"
+    },
+    {
+      "role": "bauleiter",
+      "kind": "natural",
+      "label": "Bauleiter des Bauunternehmens",
+      "optional": true
+    }
+  ],
+  "document_types": [
+    {
+      "type": "angebot_werkvertrag",
+      "label": "Angebot und Werkvertrag",
+      "category": "beweis",
+      "formats": [
+        "pdf",
+        "scan_jpg"
+      ],
+      "required": true,
+      "guidance": "Angebot mit Leistungspositionen und Pauschalpreis, Annahme, Fertigstellungstermin, Haftrücklass, Bezug auf ÖNORM B 2110."
+    },
+    {
+      "type": "schlussrechnung",
+      "label": "Schlussrechnung",
+      "category": "beweis",
+      "formats": [
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Schlussrechnung mit Abzug der Teilrechnungen, Haftrücklass in Prozent und Betrag, Zahlungsziel."
+    },
+    {
+      "type": "uebernahmeprotokoll",
+      "label": "Übernahmeprotokoll",
+      "category": "beweis",
+      "formats": [
+        "scan_jpg",
+        "pdf"
+      ],
+      "guidance": "Protokoll der Übernahme mit Datum, Teilnehmern und vorbehaltenen Mängeln."
+    },
+    {
+      "type": "maengelruege",
+      "label": "Mängelrüge",
+      "category": "korrespondenz",
+      "formats": [
+        "eml",
+        "docx"
+      ],
+      "is_email": true,
+      "required": true,
+      "guidance": "E-Mail der Bauherren an das Bauunternehmen mit Mängelbeschreibung und Datum der Feststellung."
+    },
+    {
+      "type": "verbesserungsaufforderung",
+      "label": "Verbesserungsaufforderung",
+      "category": "korrespondenz",
+      "formats": [
+        "docx",
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Anwaltliches Schreiben: Mängel, Aufforderung zur Verbesserung binnen Frist, Hinweis auf Preisminderung und Ersatzvornahme."
+    },
+    {
+      "type": "privatgutachten",
+      "label": "Privatgutachten",
+      "category": "beweis",
+      "formats": [
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Gutachten des Privatsachverständigen: Befund mit Ortsaugenschein-Datum, Messungen, Ursachen, Sanierungsvorschlag, geschätzte Sanierungskosten netto und brutto."
+    },
+    {
+      "type": "klage",
+      "label": "Klage",
+      "category": "schriftsatz",
+      "formats": [
+        "pdf",
+        "docx"
+      ],
+      "required": true,
+      "guidance": "Klage der Bauherren: Sachverhalt, Mängel, Anspruchsgrundlagen, Klagebegehren mit Betrag samt Zinsen, Beweisanbote, Streitwert."
+    },
+    {
+      "type": "klagebeantwortung",
+      "label": "Klagebeantwortung",
+      "category": "gericht",
+      "formats": [
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Schriftsatz des Gegenvertreters: Bestreitung, Gegenvorbringen (Bedienungsfehler, Mitverschulden, Warnpflicht), Verjährungseinwand, Gegenforderung offener Werklohn."
+    },
+    {
+      "type": "beschluss_sv_bestellung",
+      "label": "Beschluss über die Bestellung des Sachverständigen",
+      "category": "gericht",
+      "formats": [
+        "pdf",
+        "scan_jpg"
+      ],
+      "required": true,
+      "guidance": "Beschluss mit Geschäftszahl, Name des Sachverständigen, Beweisthema, Kostenvorschuss und Frist."
+    },
+    {
+      "type": "gutachten_sv",
+      "label": "Gutachten des gerichtlichen Sachverständigen",
+      "category": "gericht",
+      "formats": [
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Ausführliches Gutachten: Auftrag, Befundaufnahme (Datum, Anwesende), Feststellungen je Mangel, Ursachen, Sanierungskosten je Position, Zusammenfassung. Gliederung mit Überschriften."
+    },
+    {
+      "type": "stellungnahme_gutachten",
+      "label": "Stellungnahme zum Gutachten",
+      "category": "schriftsatz",
+      "formats": [
+        "docx",
+        "pdf"
+      ],
+      "guidance": "Schriftsatz der Kanzlei mit Ergänzungsfragen an den Sachverständigen."
+    },
+    {
+      "type": "verhandlungsprotokoll",
+      "label": "Protokoll der Streitverhandlung",
+      "category": "gericht",
+      "formats": [
+        "pdf"
+      ],
+      "guidance": "Protokoll mit Erörterung des Gutachtens, Aussagen, Beschlüssen."
+    },
+    {
+      "type": "urteil_oder_vergleich",
+      "label": "Urteil oder Vergleich",
+      "category": "gericht",
+      "formats": [
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Urteil mit Spruch (zugesprochener Betrag, Zinsen, Kosten) und Entscheidungsgründen oder gerichtlicher Vergleich."
+    },
+    {
+      "type": "email_mandant",
+      "label": "E-Mail der Mandanten",
+      "category": "korrespondenz",
+      "formats": [
+        "eml"
+      ],
+      "is_email": true,
+      "guidance": "E-Mail der Bauherren an die Kanzlei."
+    },
+    {
+      "type": "aktenvermerk",
+      "label": "Aktenvermerk",
+      "category": "intern",
+      "formats": [
+        "txt",
+        "docx"
+      ],
+      "guidance": "Interner Vermerk über einen Ortsaugenschein oder ein Telefonat."
+    },
+    {
+      "type": "kostennote",
+      "label": "Kostennote",
+      "category": "kosten",
+      "formats": [
+        "pdf",
+        "docx"
+      ],
+      "required": true,
+      "is_cost_note": true,
+      "guidance": "Kostenverzeichnis nach RATG. Die Tabelle wird automatisch eingefügt; schreibe nur Einleitung und Schluss und setze die Marke [[KOSTENTABELLE]] genau einmal."
+    }
+  ],
+  "question_focus": [
+    "Werklohn und Haftrücklass",
+    "Mängel und Datum der Mängelrüge",
+    "Sanierungskosten laut Privatgutachten und laut gerichtlichem Gutachten",
+    "Kostenvorschuss für den Sachverständigen",
+    "Klagebetrag und Ausgang",
+    "Termine der Befundaufnahme"
+  ],
+  "ris_queries": [
+    {
+      "suchworte": "Werkvertrag Gewährleistung Verbesserung",
+      "gericht": "OGH",
+      "entscheidungsdatum_von": "2012-01-01"
+    },
+    {
+      "suchworte": "Werkunternehmer Mangel Preisminderung",
+      "gericht": "OGH",
+      "entscheidungsdatum_von": "2012-01-01"
+    },
+    {
+      "suchworte": "Abdichtung Werkmangel Schadenersatz",
+      "entscheidungsdatum_von": "2012-01-01"
+    }
+  ],
+  "streitwert_range": [
+    18000.0,
+    85000.0
+  ],
+  "style_notes": "Bau- und Gewährleistungsrecht in Österreich. Technische Begriffe (Abdichtung, Attika, Dampfsperre, Anschlussfuge) korrekt verwenden. Beträge im Format 'EUR 12.345,67'."
+}

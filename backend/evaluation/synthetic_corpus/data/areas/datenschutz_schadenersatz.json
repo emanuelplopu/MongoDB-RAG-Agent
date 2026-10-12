@@ -1,0 +1,243 @@
+{
+  "id": "datenschutz_schadenersatz",
+  "name": "Datenschutz: Auskunft, DSB-Beschwerde und Schadenersatz nach Art 82 DSGVO",
+  "description": "Die Kanzlei vertritt eine Privatperson, deren Daten von einem Unternehmen (z. B. Online-Händler oder Adressverlag) unrechtmäßig verarbeitet oder durch eine Datenpanne offengelegt wurden. Ablauf: Benachrichtigung über die Datenpanne, Auskunftsbegehren nach Art 15 DSGVO, unvollständige Auskunft, Beschwerde bei der Datenschutzbehörde, Bescheid der DSB, Klage auf immateriellen Schadenersatz nach Art 82 DSGVO beim Landesgericht (§ 29 DSG), Verfahren und Urteil oder Vergleich.",
+  "procedure_outline": [
+    "Benachrichtigung der Mandantin über eine Datenschutzverletzung nach Art 34 DSGVO",
+    "Auskunftsbegehren nach Art 15 DSGVO an den Verantwortlichen",
+    "Auskunft des Verantwortlichen bzw. seines Datenschutzbeauftragten",
+    "Mandatserteilung, Prüfung, Aktenvermerk",
+    "Beschwerde an die Datenschutzbehörde",
+    "Aufforderung zur Stellungnahme und Stellungnahme des Verantwortlichen im DSB-Verfahren",
+    "Bescheid der Datenschutzbehörde",
+    "Klage auf Schadenersatz (immaterieller Schaden) nach Art 82 DSGVO beim Landesgericht für Zivilrechtssachen Wien (Register Cg)",
+    "Klagebeantwortung, Verhandlung, Urteil oder Vergleich, Kostennote"
+  ],
+  "courts": [
+    "dsb",
+    "lg_zrs_wien",
+    "olg_wien"
+  ],
+  "registers": [
+    "DSB",
+    "Cg",
+    "R"
+  ],
+  "statutes": [
+    "Art 15 DSGVO",
+    "Art 33 DSGVO",
+    "Art 34 DSGVO",
+    "Art 77 DSGVO",
+    "Art 82 DSGVO",
+    "§ 24 DSG",
+    "§ 29 DSG"
+  ],
+  "roles": [
+    {
+      "role": "mandant",
+      "kind": "natural",
+      "label": "Betroffene Person / klagende Partei"
+    },
+    {
+      "role": "verantwortlicher",
+      "kind": "legal",
+      "label": "Verantwortlicher / beklagte Partei"
+    },
+    {
+      "role": "datenschutzbeauftragter",
+      "kind": "natural",
+      "label": "Datenschutzbeauftragter des Verantwortlichen"
+    },
+    {
+      "role": "gegenvertreter",
+      "kind": "natural",
+      "label": "Rechtsanwalt des Verantwortlichen"
+    },
+    {
+      "role": "dsb_referent",
+      "kind": "natural",
+      "label": "Sachbearbeiterin der Datenschutzbehörde"
+    },
+    {
+      "role": "richter",
+      "kind": "natural",
+      "label": "Richterin des Landesgerichts"
+    }
+  ],
+  "document_types": [
+    {
+      "type": "benachrichtigung_datenpanne",
+      "label": "Benachrichtigung über die Datenschutzverletzung",
+      "category": "beweis",
+      "formats": [
+        "eml",
+        "pdf"
+      ],
+      "is_email": true,
+      "required": true,
+      "guidance": "E-Mail des Unternehmens an die Kundin: Datum der Verletzung, betroffene Datenkategorien, Maßnahmen, Kontakt des Datenschutzbeauftragten."
+    },
+    {
+      "type": "auskunftsbegehren",
+      "label": "Auskunftsbegehren nach Art 15 DSGVO",
+      "category": "korrespondenz",
+      "formats": [
+        "eml",
+        "docx"
+      ],
+      "is_email": true,
+      "required": true,
+      "guidance": "Auskunftsbegehren der Mandantin bzw. der Kanzlei mit Frist von einem Monat."
+    },
+    {
+      "type": "auskunft",
+      "label": "Auskunft des Verantwortlichen",
+      "category": "korrespondenz",
+      "formats": [
+        "pdf",
+        "scan_jpg"
+      ],
+      "required": true,
+      "guidance": "Antwort mit Verarbeitungszwecken, Datenkategorien, Empfängern und Speicherdauer, aber lückenhaft."
+    },
+    {
+      "type": "email_mandantin",
+      "label": "E-Mail der Mandantin",
+      "category": "korrespondenz",
+      "formats": [
+        "eml"
+      ],
+      "is_email": true,
+      "guidance": "Schilderung der Folgen (Phishing-Anrufe, Spam, Sorge) an die Kanzlei."
+    },
+    {
+      "type": "aktenvermerk",
+      "label": "Aktenvermerk",
+      "category": "intern",
+      "formats": [
+        "txt",
+        "docx"
+      ],
+      "required": true,
+      "guidance": "Vermerk über die Besprechung: erlittene Beeinträchtigungen, Beweise, Fristen."
+    },
+    {
+      "type": "beschwerde_dsb",
+      "label": "Beschwerde an die Datenschutzbehörde",
+      "category": "schriftsatz",
+      "formats": [
+        "pdf",
+        "docx"
+      ],
+      "required": true,
+      "guidance": "Beschwerde nach Art 77 DSGVO und § 24 DSG: Beschwerdeführerin, Beschwerdegegner, Sachverhalt, Rechtsverletzung, Anträge."
+    },
+    {
+      "type": "aufforderung_stellungnahme_dsb",
+      "label": "Aufforderung zur Stellungnahme (DSB)",
+      "category": "gericht",
+      "formats": [
+        "pdf",
+        "scan_jpg"
+      ],
+      "guidance": "Schreiben der Datenschutzbehörde mit Geschäftszahl und Frist."
+    },
+    {
+      "type": "stellungnahme_verantwortlicher",
+      "label": "Stellungnahme des Verantwortlichen",
+      "category": "gericht",
+      "formats": [
+        "pdf"
+      ],
+      "guidance": "Stellungnahme im DSB-Verfahren: technische und organisatorische Maßnahmen, Ursache der Panne."
+    },
+    {
+      "type": "bescheid_dsb",
+      "label": "Bescheid der Datenschutzbehörde",
+      "category": "gericht",
+      "formats": [
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Bescheid mit Spruch (Beschwerde berechtigt/teilweise berechtigt), Begründung, Rechtsmittelbelehrung."
+    },
+    {
+      "type": "klage_art82",
+      "label": "Klage auf Schadenersatz nach Art 82 DSGVO",
+      "category": "schriftsatz",
+      "formats": [
+        "pdf",
+        "docx"
+      ],
+      "required": true,
+      "guidance": "Klage: Sachverhalt, Verweis auf den DSB-Bescheid, immaterieller Schaden (konkrete Beeinträchtigungen), Klagebetrag samt Zinsen, Beweisanbote."
+    },
+    {
+      "type": "klagebeantwortung",
+      "label": "Klagebeantwortung",
+      "category": "gericht",
+      "formats": [
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Bestreitung des Schadens, Hinweis auf Erheblichkeitsschwelle, Mitverschulden."
+    },
+    {
+      "type": "verhandlungsprotokoll",
+      "label": "Verhandlungsprotokoll",
+      "category": "gericht",
+      "formats": [
+        "pdf"
+      ],
+      "guidance": "Protokoll mit Parteienvernehmung der Klägerin."
+    },
+    {
+      "type": "urteil_oder_vergleich",
+      "label": "Urteil oder Vergleich",
+      "category": "gericht",
+      "formats": [
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Urteil mit zugesprochenem Betrag und Begründung zur Höhe des immateriellen Schadens, oder Vergleich."
+    },
+    {
+      "type": "kostennote",
+      "label": "Kostennote",
+      "category": "kosten",
+      "formats": [
+        "pdf",
+        "docx"
+      ],
+      "required": true,
+      "is_cost_note": true,
+      "guidance": "Kostenverzeichnis nach RATG. Die Tabelle wird automatisch eingefügt; schreibe nur Einleitung und Schluss und setze die Marke [[KOSTENTABELLE]] genau einmal."
+    }
+  ],
+  "question_focus": [
+    "Datum und Umfang der Datenpanne",
+    "Betroffene Datenkategorien",
+    "Frist und Inhalt der Auskunft",
+    "Geschäftszahl und Ergebnis des DSB-Bescheids",
+    "Klagebetrag und zugesprochener Betrag",
+    "Kosten"
+  ],
+  "ris_queries": [
+    {
+      "applikation": "Justiz",
+      "suchworte": "Art 82 DSGVO immaterieller Schaden",
+      "gericht": "OGH",
+      "entscheidungsdatum_von": "2012-01-01"
+    },
+    {
+      "applikation": "Dsk",
+      "suchworte": "Auskunft Art 15 DSGVO Beschwerde berechtigt",
+      "entscheidungsdatum_von": "2012-01-01"
+    }
+  ],
+  "streitwert_range": [
+    1500.0,
+    10000.0
+  ],
+  "style_notes": "Datenschutzrecht in Österreich (DSGVO, DSG). Begriffe: Verantwortlicher, betroffene Person, Beschwerdeführerin, Beschwerdegegnerin, Bescheid, Spruch, Rechtsmittelbelehrung. Beträge im Format 'EUR 1.234,56'."
+}

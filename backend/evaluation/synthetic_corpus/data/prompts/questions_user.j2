@@ -1,0 +1,10 @@
+Matter: {{ case_title }} (internal file {{ internal_no }}), client: {{ client }}, opposing party: {{ opponent }}.
+
+Write one question per selection.
+{% for s in selections %}
+### Selection {{ loop.index }} (type: {{ s.type }})
+{{ s.instruction }}
+Facts:
+{% for f in s.facts %}- {{ f.label }}: {{ f.value }}
+{% endfor %}Documents containing them: {{ s.documents }}
+{% endfor %}

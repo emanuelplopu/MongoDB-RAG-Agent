@@ -126,6 +126,7 @@ def cli_entry():
     import backend.cli.phase6_commands  # noqa: F401
     import backend.cli.bench_commands  # noqa: F401
     import backend.cli.stress_commands  # noqa: F401
+    import backend.cli.synth_commands  # noqa: F401
     app()
 
 

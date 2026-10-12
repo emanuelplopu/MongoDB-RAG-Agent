@@ -1,0 +1,253 @@
+{
+  "law": "RATG",
+  "valid_from": "2023-05-01",
+  "valid_to": null,
+  "source": {
+    "bgbl": "RATG BGBl. Nr. 189/1969 idF BGBl. I Nr. 112/2025; amounts per Anlage zur Verordnung BGBl. II Nr. 131/2023 (Zuschlag 20 vH, in force 2023-05-01, applies to services rendered after 2023-04-30)",
+    "ris_url": "https://www.ris.bka.gv.at/GeltendeFassung.wxe?Abfrage=Bundesnormen&Gesetzesnummer=10002143",
+    "documents": [
+      "https://www.ris.bka.gv.at/Dokumente/BgblAuth/BGBLA_2023_II_131/BGBLA_2023_II_131.pdfsig",
+      "https://www.ris.bka.gv.at/Dokumente/BgblAuth/BGBLA_2023_II_131/Anlagen_0001_458BE6FF_DFB6_4EFF_AEFE_3E26813DADA4.pdf",
+      "https://www.ris.bka.gv.at/NormDokument.wxe?Abfrage=Bundesnormen&Gesetzesnummer=10004873&Paragraf=10"
+    ],
+    "retrieved": "2026-10-11"
+  },
+  "verified": true,
+  "notes": "Every amount was read from the authentic Anlage of BGBl. II Nr. 131/2023 and cross-checked against the 'Anm.' notes of the RIS consolidated RATG (Fassung vom 11.10.2026). Band limits, vT rates and the Einheitssatz rule come from the statute text (unchanged by the Verordnung). No later valorisation is in force as of 2026-10-11. Amendments after 2023 (BGBl. I Nr. 179/2023, 85/2024, 112/2025) only touched § 10, § 7a, § 15 and Verbandsklage caps, not the amounts used here. Rounding: tariff amounts resulting from computations in the Tarif are rounded to full 10 cent (§ 1 Abs. 1 letzter Satz RATG); Einheitssatz and USt are computed to the cent. Out of scope: Streitgenossenzuschlag (§ 15), Verbandsklage caps, TP 4 (Strafsachen), TP 7 and TP 9 (Reisekosten), Anmerkungen on waiting time.",
+  "rounding": {
+    "tariff_amounts": "nearest 0.10 EUR, half up (§ 1 Abs. 1 letzter Satz RATG)",
+    "einheitssatz_and_ust": "nearest 0.01 EUR, half up"
+  },
+  "einheitssatz": {
+    "threshold": "10170.00",
+    "rate_up_to_threshold": "0.60",
+    "rate_above_threshold": "0.50",
+    "applies_to_posts": ["TP1", "TP2", "TP3A", "TP3B", "TP3C"],
+    "source": "§ 23 Abs. 1 und 3 RATG: Streitwert bis einschließlich 10 170 Euro 60 vH, darüber 50 vH der Verdienstsumme; nur für Leistungen nach TP 1, 2, 3, 4 oder 7; Multiplikatoren nach § 23 Abs. 5 bis 9 (doppelt, dreifach, vierfach)"
+  },
+  "erv": {
+    "initial": "5.00",
+    "further": "2.60",
+    "grundbuch_firmenbuch_urkunden": "9.50",
+    "source": "§ 23a RATG iVm Anlage Z 1 BGBl. II Nr. 131/2023; the ERV increase is not part of the Einheitssatz base"
+  },
+  "ust_rate": "0.20",
+  "ust_source": "§ 10 Abs. 1 UStG 1994 (20 %); court fees paid in the name of the client are durchlaufende Posten (§ 4 Abs. 3 UStG 1994) and carry no USt",
+  "posts": {
+    "TP1": {
+      "label": "Tarifpost 1: einfache Schriftsätze (Anzeigen, Urkundenvorlagen, Mitteilungen, Fristerstreckungsanträge, Kostenbestimmungsanträge, bloße Einspruchserhebung u. a.)",
+      "einheitssatz_eligible": true,
+      "erv_eligible": true,
+      "bands": [
+        {"up_to": "40", "amount": "4.20"},
+        {"up_to": "70", "amount": "5.90"},
+        {"up_to": "110", "amount": "7.50"},
+        {"up_to": "180", "amount": "8.40"},
+        {"up_to": "360", "amount": "9.20"},
+        {"up_to": "730", "amount": "11.10"},
+        {"up_to": "1090", "amount": "14.80"},
+        {"up_to": "1820", "amount": "16.10"},
+        {"up_to": "3630", "amount": "17.90"},
+        {"up_to": "5450", "amount": "21.50"},
+        {"up_to": "7270", "amount": "26.60"},
+        {"up_to": "10170", "amount": "35.10"}
+      ],
+      "segments": [
+        {"kind": "step", "from": "10170", "to": "34820", "step": "1450", "amount": "4.20"},
+        {"kind": "flat", "from": "34820", "to": "36340", "amount": "4.20"},
+        {"kind": "per_mille", "from": "36340", "to": "363360", "rate": "0.1"},
+        {"kind": "per_mille", "from": "363360", "to": null, "rate": "0.05"}
+      ],
+      "cap": "312.20",
+      "duration": null,
+      "source": "Anlage Z 2 BGBl. II Nr. 131/2023; RATG Anlage 1 TP 1"
+    },
+    "TP2": {
+      "label": "Tarifpost 2 Abschnitt I: Schriftsätze mit kurzer Sachverhaltsdarstellung (u. a. Mahn-/Saldo-/Kaufpreis-/Werklohnklagen, bloße Bestreitung, Exekutionsanträge); Abschnitt II: kurze Tagsatzungen (Pauschale, nicht nach Stunden)",
+      "einheitssatz_eligible": true,
+      "erv_eligible": true,
+      "bands": [
+        {"up_to": "40", "amount": "17.90"},
+        {"up_to": "70", "amount": "26.60"},
+        {"up_to": "110", "amount": "35.10"},
+        {"up_to": "180", "amount": "38.70"},
+        {"up_to": "360", "amount": "43.70"},
+        {"up_to": "730", "amount": "52.50"},
+        {"up_to": "1090", "amount": "69.80"},
+        {"up_to": "1820", "amount": "78.60"},
+        {"up_to": "3630", "amount": "87.00"},
+        {"up_to": "5450", "amount": "104.60"},
+        {"up_to": "7270", "amount": "130.20"},
+        {"up_to": "10170", "amount": "173.80"}
+      ],
+      "segments": [
+        {"kind": "step", "from": "10170", "to": "34820", "step": "1450", "amount": "17.90"},
+        {"kind": "flat", "from": "34820", "to": "36340", "amount": "17.90"},
+        {"kind": "per_mille", "from": "36340", "to": "363360", "rate": "0.5"},
+        {"kind": "per_mille", "from": "363360", "to": null, "rate": "0.25"}
+      ],
+      "cap": "1558.20",
+      "duration": null,
+      "source": "Anlage Z 3 und 4 BGBl. II Nr. 131/2023; RATG Anlage 1 TP 2"
+    },
+    "TP3A": {
+      "label": "Tarifpost 3 A: Klagen, Klagebeantwortungen, Einsprüche mit Sachvorbringen, vorbereitende Schriftsätze, EV-Anträge, Kostenrekurse (Abschnitt I); Tagsatzungen im Zivilprozess und Außerstreitverfahren (Abschnitt II, nach begonnenen Stunden)",
+      "einheitssatz_eligible": true,
+      "erv_eligible": true,
+      "bands": [
+        {"up_to": "40", "amount": "35.10"},
+        {"up_to": "70", "amount": "52.50"},
+        {"up_to": "110", "amount": "69.80"},
+        {"up_to": "180", "amount": "76.80"},
+        {"up_to": "360", "amount": "87.00"},
+        {"up_to": "730", "amount": "104.60"},
+        {"up_to": "1090", "amount": "139.10"},
+        {"up_to": "1820", "amount": "156.20"},
+        {"up_to": "3630", "amount": "173.80"},
+        {"up_to": "5450", "amount": "208.20"},
+        {"up_to": "7270", "amount": "260.20"},
+        {"up_to": "10170", "amount": "346.60"}
+      ],
+      "segments": [
+        {"kind": "step", "from": "10170", "to": "34820", "step": "1450", "amount": "35.10"},
+        {"kind": "flat", "from": "34820", "to": "36340", "amount": "35.10"},
+        {"kind": "per_mille", "from": "36340", "to": "363360", "rate": "1"},
+        {"kind": "per_mille", "from": "363360", "to": null, "rate": "0.5"}
+      ],
+      "cap": "20770.60",
+      "duration": {
+        "unit_minutes": 60,
+        "further_unit_factor": "0.5",
+        "first_unit_cap": "20770.60",
+        "further_unit_cap": "10385.40",
+        "source": "TP 3A Abschnitt II: erste Stunde Entlohnung nach Abschnitt I, jede weitere begonnene Stunde die Hälfte (Anlage Z 7 BGBl. II Nr. 131/2023)"
+      },
+      "source": "Anlage Z 6 und 7 BGBl. II Nr. 131/2023; RATG Anlage 1 TP 3 A"
+    },
+    "TP3B": {
+      "label": "Tarifpost 3 B: Berufungen, Berufungsbeantwortungen, Rekurse und Rekursbeantwortungen (Abschnitt I); mündliche Berufungs-/Rekursverhandlungen (Abschnitt II, nach begonnenen Stunden)",
+      "einheitssatz_eligible": true,
+      "erv_eligible": true,
+      "bands": [
+        {"up_to": "40", "amount": "43.70"},
+        {"up_to": "70", "amount": "65.40"},
+        {"up_to": "110", "amount": "87.00"},
+        {"up_to": "180", "amount": "96.00"},
+        {"up_to": "360", "amount": "108.60"},
+        {"up_to": "730", "amount": "130.20"},
+        {"up_to": "1090", "amount": "173.80"},
+        {"up_to": "1820", "amount": "195.20"},
+        {"up_to": "3630", "amount": "216.90"},
+        {"up_to": "5450", "amount": "260.20"},
+        {"up_to": "7270", "amount": "325.00"},
+        {"up_to": "10170", "amount": "433.20"}
+      ],
+      "segments": [
+        {"kind": "step", "from": "10170", "to": "34820", "step": "1450", "amount": "43.70"},
+        {"kind": "flat", "from": "34820", "to": "36340", "amount": "43.70"},
+        {"kind": "per_mille", "from": "36340", "to": "363360", "rate": "1.25"},
+        {"kind": "per_mille", "from": "363360", "to": null, "rate": "0.625"}
+      ],
+      "cap": "25963.20",
+      "duration": {
+        "unit_minutes": 60,
+        "further_unit_factor": "0.5",
+        "first_unit_cap": "25963.20",
+        "further_unit_cap": "12981.80",
+        "source": "TP 3B Abschnitt II (Anlage Z 9 BGBl. II Nr. 131/2023)"
+      },
+      "source": "Anlage Z 8 und 9 BGBl. II Nr. 131/2023; RATG Anlage 1 TP 3 B"
+    },
+    "TP3C": {
+      "label": "Tarifpost 3 C: Revisionen, Revisionsbeantwortungen, Revisionsrekurse, Rekurse an den OGH (Abschnitt I); mündliche Revisionsverhandlungen (Abschnitt II, nach begonnenen Stunden)",
+      "einheitssatz_eligible": true,
+      "erv_eligible": true,
+      "bands": [
+        {"up_to": "40", "amount": "52.50"},
+        {"up_to": "70", "amount": "78.60"},
+        {"up_to": "110", "amount": "104.60"},
+        {"up_to": "180", "amount": "115.00"},
+        {"up_to": "360", "amount": "130.20"},
+        {"up_to": "730", "amount": "156.20"},
+        {"up_to": "1090", "amount": "208.20"},
+        {"up_to": "1820", "amount": "234.40"},
+        {"up_to": "3630", "amount": "260.20"},
+        {"up_to": "5450", "amount": "312.20"},
+        {"up_to": "7270", "amount": "390.00"},
+        {"up_to": "10170", "amount": "519.60"}
+      ],
+      "segments": [
+        {"kind": "step", "from": "10170", "to": "34820", "step": "1450", "amount": "52.50"},
+        {"kind": "flat", "from": "34820", "to": "36340", "amount": "52.50"},
+        {"kind": "per_mille", "from": "36340", "to": "363360", "rate": "1.5"},
+        {"kind": "per_mille", "from": "363360", "to": null, "rate": "0.75"}
+      ],
+      "cap": "31155.80",
+      "duration": {
+        "unit_minutes": 60,
+        "further_unit_factor": "0.5",
+        "first_unit_cap": "31155.80",
+        "further_unit_cap": "15578.00",
+        "source": "TP 3C Abschnitt II (Anlage Z 11 BGBl. II Nr. 131/2023)"
+      },
+      "source": "Anlage Z 10 und 11 BGBl. II Nr. 131/2023; RATG Anlage 1 TP 3 C"
+    },
+    "TP5": {
+      "label": "Tarifpost 5: einfache Schreiben (Mahnschreiben, kurze Berichte und Mitteilungen, Einladungen, Empfangsbestätigungen)",
+      "einheitssatz_eligible": false,
+      "erv_eligible": false,
+      "bands": [
+        {"up_to": "70", "amount": "4.20"},
+        {"up_to": "180", "amount": "5.60"},
+        {"up_to": "360", "amount": "6.30"},
+        {"up_to": "730", "amount": "7.50"},
+        {"up_to": "1820", "amount": "9.20"},
+        {"up_to": "2910", "amount": "10.80"}
+      ],
+      "segments": [
+        {"kind": "step", "from": "2910", "to": null, "step": "1450", "amount": "3.30"}
+      ],
+      "cap": "104.60",
+      "duration": null,
+      "source": "Anlage Z 15 BGBl. II Nr. 131/2023; RATG Anlage 1 TP 5"
+    },
+    "TP6": {
+      "label": "Tarifpost 6: Briefe anderer Art (z. B. anwaltliches Aufforderungsschreiben mit rechtlicher Begründung): das Doppelte der TP 5",
+      "einheitssatz_eligible": false,
+      "erv_eligible": false,
+      "derived": {"from": "TP5", "factor": "2"},
+      "cap": "208.20",
+      "duration": null,
+      "source": "Anlage Z 16 BGBl. II Nr. 131/2023; RATG Anlage 1 TP 6"
+    },
+    "TP8": {
+      "label": "Tarifpost 8: Besprechungen aller Art (auch telefonisch), je begonnene halbe Stunde; unter zehn Minuten vier Zehntel",
+      "einheitssatz_eligible": false,
+      "erv_eligible": false,
+      "bands": [
+        {"up_to": "70", "amount": "14.80"},
+        {"up_to": "180", "amount": "21.50"},
+        {"up_to": "360", "amount": "28.50"},
+        {"up_to": "730", "amount": "35.10"},
+        {"up_to": "1820", "amount": "52.50"}
+      ],
+      "segments": [
+        {"kind": "step", "from": "1820", "to": "20670", "step": "1450", "amount": "11.10"},
+        {"kind": "flat", "from": "20670", "to": "21800", "amount": "11.10"},
+        {"kind": "step", "from": "21800", "to": null, "step": "1450", "amount": "5.90"}
+      ],
+      "cap": "692.90",
+      "duration": {
+        "unit_minutes": 30,
+        "further_unit_factor": "1",
+        "first_unit_cap": "692.90",
+        "further_unit_cap": "692.90",
+        "short_below_minutes": 10,
+        "short_factor": "0.4",
+        "short_cap": "277.40",
+        "source": "TP 8 Abs. 1 und 2 (Anlage Z 18 und 19 BGBl. II Nr. 131/2023)"
+      },
+      "source": "Anlage Z 18 und 19 BGBl. II Nr. 131/2023; RATG Anlage 1 TP 8"
+    }
+  }
+}

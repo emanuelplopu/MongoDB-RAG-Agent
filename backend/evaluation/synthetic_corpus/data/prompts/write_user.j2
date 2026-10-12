@@ -1,0 +1,40 @@
+Write document {{ doc.id }} of case "{{ case_title }}".
+
+## Document to write
+- Type: {{ doc_type_label }} ({{ doc.doc_type }})
+- Title: {{ doc.title }}
+- Date: {{ doc_date }}
+- Author: {{ author }}
+- Recipients: {{ recipients }}
+- Category: {{ doc.category }}{% if doc.is_email %} (this is an email){% endif %}
+- What it says: {{ doc.summary }}
+{% if type_guidance %}- Guidance for this document type: {{ type_guidance }}{% endif %}
+{% if proceeding %}- Proceeding: {{ proceeding }}{% endif %}
+{% if cost_note %}- This is a cost note. Put the marker [[KOSTENTABELLE]] on its own line exactly once. The computed table will contain:
+{{ cost_note }}{% endif %}
+{% if forbidden_phrase %}- Forbidden phrase (must not appear anywhere): "{{ forbidden_phrase }}"{% endif %}
+
+## Required values (must appear verbatim)
+{% for f in required %}- {{ f.label }}: {{ f.value }}
+{% endfor %}
+## Other known facts of the case (use only if it fits; keep values exact)
+{% for f in context_facts %}- {{ f.label }}: {{ f.value }}
+{% endfor %}
+## People and organisations
+{{ people }}
+
+## Law firm
+{{ firm }}
+
+## Case summary
+{{ case_summary }}
+
+## Earlier documents (for references; do not repeat them)
+{% for d in earlier %}- {{ d }}
+{% endfor %}
+## Style
+{{ style_notes }}
+{% if retry_feedback %}
+## Your previous attempt was rejected
+{{ retry_feedback }}
+{% endif %}
