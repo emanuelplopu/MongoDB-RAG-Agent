@@ -1,0 +1,7 @@
+## Legal area
+{{ area_json }}
+
+## Existing scenarios (do not repeat them)
+{% for c in existing %}- {{ c }}
+{% endfor %}
+Invent one new scenario for this area. The amount in dispute must lie between {{ streitwert_min }} and {{ streitwert_max }} EUR and the start date between {{ date_from }} and {{ date_to }}.

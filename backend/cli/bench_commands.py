@@ -88,7 +88,7 @@ def _summary_rows(result: EmbeddingChecksResult) -> List[List[str]]:
         rows.append(
             [
                 r.provider,
-                f"{r.vectors.dimension}d{' ✓' if r.vectors.normalized else ' (not normalised)'}" if r.vectors else "-",
+                f"{r.vectors.dimension}d{' normalised' if r.vectors.normalized else ' NOT normalised'}" if r.vectors else "-",
                 f"{r.latency.p50_ms:.0f} / {r.latency.p95_ms:.0f} ms" if r.latency else "-",
                 f"{best.texts_per_s:.1f} texts/s, {best.tokens_per_s:.0f} tok/s (b{best.batch_size})" if best else "-",
                 trunc,

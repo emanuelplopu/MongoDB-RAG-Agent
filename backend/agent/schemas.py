@@ -196,7 +196,20 @@ class OrchestratorStep(BaseModel):
     duration_ms: float = 0.0
     tokens_per_second: float = Field(default=0.0, description="Token throughput for hardware benchmarking")
     is_cold_start: bool = Field(default=False, description="True if this was the first call for this model (cold start)")
-    
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    hidden_tokens_est: int = Field(default=0, description="Completion tokens not visible in the output (hidden reasoning), estimated")
+    max_tokens: int = 0
+    hit_token_limit: bool = Field(default=False, description="The completion used its whole max_tokens budget and was cut off")
+    content_chars: int = 0
+    attempt: int = Field(default=1, description="1 for the first call of a phase, 2 for a retry after unparsable JSON")
+    parse_error: bool = False
+    repetition_detected: bool = False
+    output_truncated: bool = Field(default=False, description="Looping output was trimmed by the repetition guard")
+    request_options: Dict[str, Any] = Field(default_factory=dict, description="Provider options sent (think, json_mode, num_ctx, ...)")
+    raw_output: Optional[str] = Field(default=None, description="Raw model output, kept only when it could not be parsed or was trimmed")
+    error: Optional[str] = None
+
     class Config:
         use_enum_values = True
 
@@ -245,6 +258,10 @@ class AgentTrace(BaseModel):
     # Plan tracking
     initial_plan: Optional[AgentPlan] = None
     evaluation_history: List[EvaluationDecision] = Field(default_factory=list)
+    degradations: List[str] = Field(
+        default_factory=list,
+        description="Fallback paths taken (parse failures, retries, repaired queries, cut outputs), in order",
+    )
     
     # Timing
     started_at: datetime = Field(default_factory=datetime.now)
@@ -356,9 +373,23 @@ class AgentTrace(BaseModel):
                     "tokens_per_second": s.tokens_per_second,
                     "is_cold_start": s.is_cold_start,
                     "model": s.model,
+                    "prompt_tokens": s.prompt_tokens,
+                    "completion_tokens": s.completion_tokens,
+                    "hidden_tokens_est": s.hidden_tokens_est,
+                    "max_tokens": s.max_tokens,
+                    "hit_token_limit": s.hit_token_limit,
+                    "content_chars": s.content_chars,
+                    "attempt": s.attempt,
+                    "parse_error": s.parse_error,
+                    "repetition_detected": s.repetition_detected,
+                    "output_truncated": s.output_truncated,
+                    "request_options": s.request_options,
+                    "raw_output": s.raw_output,
+                    "error": s.error,
                 }
                 for s in self.orchestrator_steps
             ],
+            "degradations": list(self.degradations),
             "worker_steps": [
                 {
                     "task_id": s.task_id,
@@ -382,6 +413,7 @@ class AgentTrace(BaseModel):
                     ],
                     "duration_ms": s.duration_ms,
                     "success": s.success,
+                    "error": s.error,
                 }
                 for s in self.worker_steps
             ],

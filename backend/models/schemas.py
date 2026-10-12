@@ -24,6 +24,8 @@ class IngestionStatus(str, Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     STOPPED = "stopped"
+    # Ended by an API shutdown/restart; resumed on the next API start. Persisted as "INTERRUPTED".
+    INTERRUPTED = "interrupted"
 
 
 class FileClassification(str, Enum):

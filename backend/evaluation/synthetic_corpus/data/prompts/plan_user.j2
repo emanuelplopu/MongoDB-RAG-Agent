@@ -1,0 +1,31 @@
+Plan the case file described below.
+
+## Legal area
+{{ area_json }}
+
+## Case seed
+{{ seed_json }}
+
+## Law firm (fictional)
+{{ firm_json }}
+
+## Identities you must use (ids and roles are fixed; names are fictional)
+{{ identities_json }}
+
+## Courts and authorities you may use (court_id)
+{{ courts_json }}
+
+## RATG service mapping for cost notes
+{{ service_mapping_json }}
+
+## Constraints
+- Date window: {{ date_from }} to {{ date_to }}. The case starts around {{ start_date }}.
+- Number of documents: about {{ documents_target }}.
+- Streitwert (amount in dispute): about {{ streitwert }} EUR.
+- The client is {{ client_id }}.
+
+{% if decisions %}## Public court decisions for inspiration only (do not copy names, numbers or sentences)
+{% for d in decisions %}### {{ d.citation }}
+{{ d.text }}
+
+{% endfor %}{% endif %}

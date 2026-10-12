@@ -178,9 +178,10 @@ class FederatedSearch:
             db = self.client[database_name]
             collection = db[chunks_collection]
             
-            # Check if collection exists and has data
-            count = await collection.count_documents({})
-            if count == 0:
+            # Check if collection exists and has data. find_one stops at the first
+            # document; count_documents({}) scanned every chunk (embeddings included)
+            # on each search task.
+            if await collection.find_one({}, {"_id": 1}) is None:
                 logger.debug(f"Database {database_name}.{chunks_collection} is empty")
                 return []
             

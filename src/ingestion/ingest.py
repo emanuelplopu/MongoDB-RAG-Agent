@@ -11,7 +11,7 @@ import logging
 import glob
 import hashlib
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Set, Tuple
+from typing import List, Dict, Any, Optional, Set, Tuple, Callable, Awaitable
 from datetime import datetime
 import argparse
 from dataclasses import dataclass
@@ -672,6 +672,7 @@ class DocumentIngestionPipeline:
             ".xlsx", ".xls",  # Excel
             ".html", ".htm",  # HTML
             ".msg",  # Outlook email
+            ".eml",  # RFC 5322 email
             ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif",  # Images
             ".mp3", ".wav", ".m4a", ".flac",  # Audio formats
             ".mp4", ".avi", ".mkv", ".mov", ".webm",  # Video formats
@@ -728,6 +729,7 @@ class DocumentIngestionPipeline:
             '.xlsx': 5, '.xls': 5,
             '.pptx': 6, '.ppt': 6,
             '.msg': 4,  # Outlook email - similar priority to Office docs
+            '.eml': 4,  # RFC 5322 email
             # Images - can need OCR
             '.png': 7, '.jpg': 7, '.jpeg': 7, '.gif': 7, '.webp': 7, '.bmp': 7, '.tiff': 7, '.tif': 7, '.svg': 7,
             # Audio - requires transcription
@@ -787,6 +789,10 @@ class DocumentIngestionPipeline:
         # Outlook .msg files - extract email content
         if file_ext == '.msg':
             return self._read_msg_file(file_path)
+
+        # RFC 5322 .eml files - parse with the standard library
+        if file_ext == '.eml':
+            return self._read_eml_file(file_path)
 
         # Legacy .doc files - use antiword (Docling doesn't support .doc)
         if file_ext == '.doc':
@@ -1055,6 +1061,62 @@ class DocumentIngestionPipeline:
             return (f"[Error: extract-msg package required for .msg files]", None)
         except Exception as e:
             logger.error(f"Failed to extract .msg file {file_path}: {e}")
+            return (f"[Error: Could not read email {os.path.basename(file_path)}: {e}]", None)
+
+    def _read_eml_file(self, file_path: str) -> tuple[str, Optional[Any]]:
+        """
+        Extract text content from RFC 5322 email files (.eml).
+
+        Mirrors :meth:`_read_msg_file`: subject as heading, sender, recipients and
+        date as header lines, then the plain-text body (HTML body as fallback).
+        Attachments are listed by name but not processed.
+
+        Args:
+            file_path: Path to the .eml file
+
+        Returns:
+            Tuple of (markdown_content, None)
+        """
+        import re
+        from email import policy
+        from email.parser import BytesParser
+
+        try:
+            with open(file_path, "rb") as fh:
+                msg = BytesParser(policy=policy.default).parse(fh)
+
+            parts = []
+            if msg["subject"]:
+                parts.append(f"# {msg['subject']}")
+            header_lines = []
+            for label, key in (("From", "from"), ("To", "to"), ("CC", "cc"), ("Date", "date")):
+                if msg[key]:
+                    header_lines.append(f"**{label}:** {msg[key]}")
+            if header_lines:
+                parts.append("\n".join(header_lines))
+                parts.append("---")
+
+            body_part = msg.get_body(preferencelist=("plain", "html"))
+            if body_part is not None:
+                body = body_part.get_content()
+                if body_part.get_content_subtype() == "html":
+                    body = re.sub(r"<[^>]+>", " ", body)
+                    body = re.sub(r"\s+", " ", body)
+                if body and body.strip():
+                    parts.append(body.strip())
+
+            attachments = [a.get_filename() or "unnamed" for a in msg.iter_attachments()]
+            if attachments:
+                parts.append("\n---\n**Attachments:**")
+                parts.extend(f"- {name}" for name in attachments)
+
+            content = "\n\n".join(parts)
+            if not content.strip():
+                content = f"[Empty email: {os.path.basename(file_path)}]"
+            logger.info(f"Successfully extracted email: {os.path.basename(file_path)}")
+            return (content, None)
+        except Exception as e:
+            logger.error(f"Failed to extract .eml file {file_path}: {e}")
             return (f"[Error: Could not read email {os.path.basename(file_path)}: {e}]", None)
 
     def _transcribe_audio(self, file_path: str) -> tuple[str, Optional[Any]]:
@@ -1771,7 +1833,8 @@ class DocumentIngestionPipeline:
         progress_callback: Optional[callable] = None,
         incremental: bool = True,
         max_concurrent_files: int = 1,
-        job_id: Optional[str] = None
+        job_id: Optional[str] = None,
+        pause_checkpoint: Optional[Callable[[], Awaitable[None]]] = None
     ) -> List[IngestionResult]:
         """
         Ingest all documents from the documents folder.
@@ -1781,6 +1844,10 @@ class DocumentIngestionPipeline:
             incremental: If True, skip already-ingested files (default: True)
             max_concurrent_files: Number of files to process concurrently (default: 1)
             job_id: Optional job ID to link stats to
+            pause_checkpoint: Optional coroutine function awaited before each file
+                starts. It may block to pause the run between files, or raise
+                ``asyncio.CancelledError`` to abort it. The synchronous
+                ``progress_callback`` cannot do either without blocking the event loop.
 
         Returns:
             List of ingestion results
@@ -1864,7 +1931,8 @@ class DocumentIngestionPipeline:
                 incremental=incremental,
                 max_concurrent=max_concurrent_files,
                 progress_callback=progress_callback,
-                job_id=job_id
+                job_id=job_id,
+                pause_checkpoint=pause_checkpoint
             )
         else:
             # Sequential processing (original behavior)
@@ -1872,7 +1940,8 @@ class DocumentIngestionPipeline:
                 document_files=document_files,
                 existing_hashes=existing_hashes,
                 incremental=incremental,
-                progress_callback=progress_callback
+                progress_callback=progress_callback,
+                pause_checkpoint=pause_checkpoint
             )
 
         # Log summary
@@ -1892,24 +1961,30 @@ class DocumentIngestionPipeline:
         document_files: List[str],
         existing_hashes: Dict[str, str],
         incremental: bool,
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[callable] = None,
+        pause_checkpoint: Optional[Callable[[], Awaitable[None]]] = None
     ) -> Tuple[List[IngestionResult], int]:
         """
         Process documents sequentially (original behavior).
-        
+
         Args:
             document_files: List of file paths to process
             existing_hashes: Dict of content hashes to source paths
             incremental: Whether to skip duplicates
             progress_callback: Optional progress callback
-            
+            pause_checkpoint: Optional coroutine function awaited before each file
+
         Returns:
             Tuple of (results list, duplicates skipped count)
         """
         results = []
         duplicates_skipped = 0
-        
+
         for i, file_path in enumerate(document_files):
+            # Pause point between files: blocks while the caller holds the run paused
+            if pause_checkpoint:
+                await pause_checkpoint()
+
             # Give API requests priority - small delay between documents
             await asyncio.sleep(0.05)
             
@@ -1984,11 +2059,12 @@ class DocumentIngestionPipeline:
         incremental: bool,
         max_concurrent: int,
         progress_callback: Optional[callable] = None,
-        job_id: Optional[str] = None
+        job_id: Optional[str] = None,
+        pause_checkpoint: Optional[Callable[[], Awaitable[None]]] = None
     ) -> Tuple[List[IngestionResult], int]:
         """
         Process documents concurrently using a semaphore with timeout and failure tracking.
-        
+
         Args:
             document_files: List of file paths to process
             existing_hashes: Dict of content hashes to source paths
@@ -1996,9 +2072,14 @@ class DocumentIngestionPipeline:
             max_concurrent: Maximum concurrent files to process
             progress_callback: Optional progress callback
             job_id: Optional job ID to link stats to
-            
+            pause_checkpoint: Optional coroutine function awaited before each file
+
         Returns:
             Tuple of (results list, duplicates skipped count)
+
+        Raises:
+            asyncio.CancelledError: A file task was cancelled by a stop/shutdown check. Files
+                already in progress finish first; stats of processed files are still saved.
         """
         import threading
         
@@ -2026,6 +2107,11 @@ class DocumentIngestionPipeline:
             nonlocal duplicates_skipped, processed_count
             
             async with semaphore:
+                # Pause point after taking a slot: every file task is created up front,
+                # so a check before the semaphore would let queued tasks slip past a pause
+                if pause_checkpoint:
+                    await pause_checkpoint()
+
                 file_start_time = datetime.now()
                 file_size = get_file_size_safe(file_path)
                 file_modified_at = get_file_modified_time_safe(file_path)
@@ -2277,59 +2363,69 @@ class DocumentIngestionPipeline:
                     if progress_callback:
                         progress_callback(processed_count, total_files, file_path, 0)
         
-        # Create initial tasks for all files (first attempt)
-        tasks = [
-            asyncio.create_task(process_file_with_retry(i, file_path, retry_attempt=0))
-            for i, file_path in enumerate(document_files)
-        ]
-        
-        # Wait for all initial tasks to complete
-        await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Process retry queue with increasing retry attempts
-        for retry_round in range(1, timeout_cfg.max_retries + 1):
-            if not timed_out_files:
-                break
-                
-            files_to_retry = list(timed_out_files)
-            timed_out_files.clear()
-            
-            logger.info(
-                f"Retry round {retry_round}/{timeout_cfg.max_retries}: "
-                f"Processing {len(files_to_retry)} timed-out files with increased timeout"
-            )
-            
-            retry_tasks = [
-                asyncio.create_task(
-                    process_file_with_retry(
-                        idx, 
-                        fpath, 
-                        retry_attempt=retry_round,
-                        prev_content_hash=chash
-                    )
-                )
-                for idx, fpath, chash in files_to_retry
+        def raise_if_cancelled(outcomes: List[Any]) -> None:
+            # gather(return_exceptions=True) keeps one failing file from ending the run, but it
+            # also returns the CancelledError a stop/shutdown raises inside a file task (from
+            # pause_checkpoint or progress_callback) instead of raising it. Every remaining task
+            # has already ended at its next check, so re-raise to end the run as cancelled.
+            for outcome in outcomes:
+                if isinstance(outcome, asyncio.CancelledError):
+                    raise outcome
+
+        try:
+            # Create initial tasks for all files (first attempt)
+            tasks = [
+                asyncio.create_task(process_file_with_retry(i, file_path, retry_attempt=0))
+                for i, file_path in enumerate(document_files)
             ]
-            
-            await asyncio.gather(*retry_tasks, return_exceptions=True)
-        
-        # Log retry summary
-        if timeout_cfg.max_retries > 0:
-            timeout_failures = sum(1 for s in file_stats if s.error_type == "timeout")
-            if timeout_failures > 0:
-                logger.warning(
-                    f"Retry summary: {timeout_failures} files still timed out after "
-                    f"{timeout_cfg.max_retries} retries"
+
+            # Wait for all initial tasks to complete
+            raise_if_cancelled(await asyncio.gather(*tasks, return_exceptions=True))
+
+            # Process retry queue with increasing retry attempts
+            for retry_round in range(1, timeout_cfg.max_retries + 1):
+                if not timed_out_files:
+                    break
+
+                files_to_retry = list(timed_out_files)
+                timed_out_files.clear()
+
+                logger.info(
+                    f"Retry round {retry_round}/{timeout_cfg.max_retries}: "
+                    f"Processing {len(files_to_retry)} timed-out files with increased timeout"
                 )
-        
-        # Save stats to database
-        await self._save_ingestion_stats(file_stats)
-        
+
+                retry_tasks = [
+                    asyncio.create_task(
+                        process_file_with_retry(
+                            idx,
+                            fpath,
+                            retry_attempt=retry_round,
+                            prev_content_hash=chash
+                        )
+                    )
+                    for idx, fpath, chash in files_to_retry
+                ]
+
+                raise_if_cancelled(await asyncio.gather(*retry_tasks, return_exceptions=True))
+
+            # Log retry summary
+            if timeout_cfg.max_retries > 0:
+                timeout_failures = sum(1 for s in file_stats if s.error_type == "timeout")
+                if timeout_failures > 0:
+                    logger.warning(
+                        f"Retry summary: {timeout_failures} files still timed out after "
+                        f"{timeout_cfg.max_retries} retries"
+                    )
+        finally:
+            # Save stats to database - also when the run is stopped, for the files already processed
+            await self._save_ingestion_stats(file_stats)
+
         return results, duplicates_skipped
     
     async def _save_ingestion_stats(self, file_stats: List[IngestionFileStats]) -> None:
         """Save ingestion stats to database for analysis."""
-        if not self.db or not file_stats:
+        if self.db is None or not file_stats:
             return
             
         try:

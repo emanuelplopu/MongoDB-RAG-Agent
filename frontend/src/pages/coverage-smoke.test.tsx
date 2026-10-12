@@ -1845,7 +1845,9 @@ describe('large workflow page coverage smoke tests', () => {
       failed_files: 0,
       chunks_created: 20,
       progress_percent: 50,
-      can_pause: true,
+      // What /ingestion/status returns while paused: pause is no longer offered, resume is
+      is_paused: true,
+      can_pause: false,
       can_stop: true,
     })
 

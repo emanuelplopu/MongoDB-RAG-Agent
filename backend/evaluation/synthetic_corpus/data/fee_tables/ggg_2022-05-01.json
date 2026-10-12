@@ -1,0 +1,303 @@
+{
+  "law": "GGG",
+  "valid_from": "2022-05-01",
+  "valid_to": "2025-03-31",
+  "source": {
+    "bgbl": "GGG BGBl. Nr. 501/1984 idF BGBl. I Nr. 61/2022 (ZVN 2022; Tarifposten 1 bis 4 in force 2022-05-01, Art. VI Z 74 GGG); amounts are the statutory amounts, no valorisation before 2025-04-01 (Art. VI Z 75 GGG)",
+    "ris_url": "https://www.ris.bka.gv.at/GeltendeFassung.wxe?Abfrage=Bundesnormen&Gesetzesnummer=10002667&FassungVom=2022-05-01",
+    "documents": [
+      "https://www.ris.bka.gv.at/GeltendeFassung.wxe?Abfrage=Bundesnormen&Gesetzesnummer=10002667&FassungVom=2025-03-31",
+      "https://www.ris.bka.gv.at/Dokumente/BgblAuth/BGBLA_2025_II_51/BGBLA_2025_II_51.pdf"
+    ],
+    "retrieved": "2026-10-11"
+  },
+  "verified": true,
+  "notes": "Amounts read from the RIS consolidated GGG, Fassung vom 01.05.2022 and Fassung vom 31.03.2025 (TP 1 to 4 identical in both), and confirmed by the 'von ... auf ...' list in BGBl. II Nr. 51/2025, which names exactly these amounts as the ones replaced on 2025-04-01. valid_from is conservative: it is the in-force date of the ZVN 2022 version of TP 1 to 4; the amounts may have applied earlier as well (not checked). Mahnklage: no separate fee; a Mahnklage (Zahlungsbefehl, §§ 244 ff ZPO) is a Klage and pays the TP 1 Pauschalgebühr in full, arising on filing (§ 2 Z 1 lit. a GGG). Rounding: Bemessungsgrundlagen not in full euros and Hundert-/Tausendsatz fees are rounded UP to the next full euro (§ 6 Abs. 2 GGG).",
+  "rounding": {
+    "bemessungsgrundlage": "up to the next full euro (§ 6 Abs. 2 GGG)",
+    "percentage_fees": "up to the next full euro (§ 6 Abs. 2 GGG)"
+  },
+  "posts": {
+    "TP1": {
+      "label": "Tarifpost 1 Z I: Pauschalgebühr zivilgerichtliches Verfahren erster Instanz (auch Mahnklage), Bemessung nach dem Wert des Streitgegenstandes",
+      "bands": [
+        {
+          "up_to": "150",
+          "amount": "25"
+        },
+        {
+          "up_to": "300",
+          "amount": "48"
+        },
+        {
+          "up_to": "700",
+          "amount": "68"
+        },
+        {
+          "up_to": "2000",
+          "amount": "114"
+        },
+        {
+          "up_to": "3500",
+          "amount": "182"
+        },
+        {
+          "up_to": "7000",
+          "amount": "335"
+        },
+        {
+          "up_to": "35000",
+          "amount": "792"
+        },
+        {
+          "up_to": "70000",
+          "amount": "1556"
+        },
+        {
+          "up_to": "140000",
+          "amount": "3112"
+        },
+        {
+          "up_to": "210000",
+          "amount": "4670"
+        },
+        {
+          "up_to": "280000",
+          "amount": "6227"
+        },
+        {
+          "up_to": "350000",
+          "amount": "7783"
+        }
+      ],
+      "above": {
+        "from": "350000",
+        "rate": "1.2",
+        "rate_unit": "percent",
+        "of": "total",
+        "plus": "4203"
+      },
+      "source": "GGG Tarifpost 1 Z I"
+    },
+    "TP2": {
+      "label": "Tarifpost 2: Pauschalgebühr Rechtsmittelverfahren zweiter Instanz (Berufung u. a.), Bemessung nach dem Berufungsinteresse",
+      "bands": [
+        {
+          "up_to": "150",
+          "amount": "20"
+        },
+        {
+          "up_to": "300",
+          "amount": "44"
+        },
+        {
+          "up_to": "700",
+          "amount": "75"
+        },
+        {
+          "up_to": "2000",
+          "amount": "154"
+        },
+        {
+          "up_to": "3500",
+          "amount": "304"
+        },
+        {
+          "up_to": "7000",
+          "amount": "609"
+        },
+        {
+          "up_to": "35000",
+          "amount": "1219"
+        },
+        {
+          "up_to": "70000",
+          "amount": "2288"
+        },
+        {
+          "up_to": "140000",
+          "amount": "4579"
+        },
+        {
+          "up_to": "210000",
+          "amount": "6867"
+        },
+        {
+          "up_to": "280000",
+          "amount": "9156"
+        },
+        {
+          "up_to": "350000",
+          "amount": "11446"
+        }
+      ],
+      "above": {
+        "from": "350000",
+        "rate": "1.8",
+        "rate_unit": "percent",
+        "of": "total",
+        "plus": "6071"
+      },
+      "source": "GGG Tarifpost 2"
+    },
+    "TP3": {
+      "label": "Tarifpost 3 lit. a: Pauschalgebühr Rechtsmittelverfahren dritter Instanz (Revision), Bemessung nach dem Revisionsinteresse",
+      "bands": [
+        {
+          "up_to": "2000",
+          "amount": "228"
+        },
+        {
+          "up_to": "3500",
+          "amount": "381"
+        },
+        {
+          "up_to": "7000",
+          "amount": "762"
+        },
+        {
+          "up_to": "35000",
+          "amount": "1526"
+        },
+        {
+          "up_to": "70000",
+          "amount": "3051"
+        },
+        {
+          "up_to": "140000",
+          "amount": "6104"
+        },
+        {
+          "up_to": "210000",
+          "amount": "9156"
+        },
+        {
+          "up_to": "280000",
+          "amount": "12211"
+        },
+        {
+          "up_to": "350000",
+          "amount": "15263"
+        }
+      ],
+      "above": {
+        "from": "350000",
+        "rate": "2.4",
+        "rate_unit": "percent",
+        "of": "total",
+        "plus": "8096"
+      },
+      "source": "GGG Tarifpost 3 lit. a"
+    },
+    "TP4": {
+      "label": "Tarifpost 4 Z I lit. a: Pauschalgebühr Exekutionsverfahren, Bemessung nach dem durchzusetzenden Anspruch (§ 19 GGG)",
+      "bands": [
+        {
+          "up_to": "150",
+          "amount": "28"
+        },
+        {
+          "up_to": "300",
+          "amount": "50"
+        },
+        {
+          "up_to": "700",
+          "amount": "60"
+        },
+        {
+          "up_to": "2000",
+          "amount": "80"
+        },
+        {
+          "up_to": "3500",
+          "amount": "100"
+        },
+        {
+          "up_to": "7000",
+          "amount": "150"
+        },
+        {
+          "up_to": "35000",
+          "amount": "200"
+        },
+        {
+          "up_to": "70000",
+          "amount": "300"
+        }
+      ],
+      "above": {
+        "from": "70000",
+        "rate": "2.7",
+        "rate_unit": "per_mille",
+        "of": "excess",
+        "plus": "300"
+      },
+      "source": "GGG Tarifpost 4 Z I lit. a"
+    },
+    "TP4_II": {
+      "label": "Tarifpost 4 Z II lit. a: Rekurs gegen Exekutionsbewilligung oder verfahrensbeendende Entscheidung, 150 % der TP 4 Z I lit. a nach dem Rekursinteresse",
+      "derived": {
+        "from": "TP4",
+        "factor": "1.5"
+      },
+      "source": "GGG Tarifpost 4 Z II lit. a; derived posts: TP 4 Z II lit. a (150 %) and Z III lit. a (200 %) of the TP 4 Z I lit. a fee; *_ARB posts apply the labour-law exemption up to 2 500 EUR (TP 1 Anm. 8, TP 2 Anm. 5, TP 3 Anm. 5, TP 4 Anm. 7)"
+    },
+    "TP4_III": {
+      "label": "Tarifpost 4 Z III lit. a: Revisionsrekurs im Exekutionsverfahren, 200 % der TP 4 Z I lit. a",
+      "derived": {
+        "from": "TP4",
+        "factor": "2"
+      },
+      "source": "GGG Tarifpost 4 Z III lit. a"
+    },
+    "TP1_ARB": {
+      "label": "TP 1 für arbeitsrechtliche Streitigkeiten: gebührenfrei bis 2 500 EUR Streitwert (TP 1 Anm. 8), darüber wie TP 1",
+      "derived": {
+        "from": "TP1",
+        "factor": "1"
+      },
+      "exempt_up_to": "2500",
+      "source": "GGG Tarifpost 1 Anm. 8"
+    },
+    "TP2_ARB": {
+      "label": "TP 2 in arbeitsrechtlichen Rechtsmittelverfahren: gebührenfrei bis 2 500 EUR Berufungsinteresse (TP 2 Anm. 5)",
+      "derived": {
+        "from": "TP2",
+        "factor": "1"
+      },
+      "exempt_up_to": "2500",
+      "source": "GGG Tarifpost 2 Anm. 5"
+    },
+    "TP3_ARB": {
+      "label": "TP 3 in arbeitsrechtlichen Rechtsmittelverfahren dritter Instanz: gebührenfrei bis 2 500 EUR (TP 3 Anm. 5)",
+      "derived": {
+        "from": "TP3",
+        "factor": "1"
+      },
+      "exempt_up_to": "2500",
+      "source": "GGG Tarifpost 3 Anm. 5"
+    },
+    "TP4_ARB": {
+      "label": "TP 4 bei Exekutionstitel aus einer Arbeitsrechtssache: gebührenfrei bis 2 500 EUR (TP 4 Anm. 7)",
+      "derived": {
+        "from": "TP4",
+        "factor": "1"
+      },
+      "exempt_up_to": "2500",
+      "source": "GGG Tarifpost 4 Anm. 7"
+    }
+  },
+  "special": {
+    "family_law_flat_fees": {
+      "scope": "§ 49 Abs. 2 Z 2a und 2b JN (Ehesachen)",
+      "TP1": "333",
+      "TP2": "365",
+      "TP3": "545"
+    },
+    "tp4_i_b_evt_bestaetigung": "15",
+    "tp4_ii_b": "31",
+    "tp4_iii_b": "46",
+    "labour_law_exemption_up_to": "2500",
+    "reductions": "TP 1 Anm. 2: halbe Gebühr für prätorische Vergleiche und EV-Verfahren außerhalb eines Prozesses; Anm. 3: ein Viertel bei Klagsrückziehung vor Zustellung; Anm. 4: Hälfte bei Rückziehung bis zur ersten Tagsatzung oder Vergleich in der ersten Tagsatzung; TP 4 Anm. 2: Hälfte bei Zurückziehung vor Bewilligung. Not applied automatically by the engine."
+  }
+}

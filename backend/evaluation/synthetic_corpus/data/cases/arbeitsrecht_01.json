@@ -1,0 +1,42 @@
+{
+  "id": "arbeitsrecht_01",
+  "area": "arbeitsrecht_entlassung",
+  "title": "Fristlose Entlassung einer Buchhalterin wegen angeblicher Vertrauensunwürdigkeit",
+  "description": "Eine Buchhalterin war mehrere Jahre bei einem mittelgroßen Wiener Handelsunternehmen angestellt. Nach einer Unstimmigkeit bei einer Barkassa wird sie fristlos entlassen. Sie bestreitet jedes Fehlverhalten; eine Kollegin bestätigt später, dass auch andere Personen Zugriff auf die Kassa hatten. Die Kanzlei berechnet Kündigungsentschädigung, Urlaubsersatzleistung, aliquote Sonderzahlungen und 46 offene Überstunden, macht sie geltend und klagt beim ASG Wien. Nach der Zeugeneinvernahme schließen die Parteien einen Vergleich über einen Pauschalbetrag brutto.",
+  "client_role": "mandant",
+  "start_date": "2025-03-03",
+  "streitwert": 21640.0,
+  "documents_target": 20,
+  "use_ris_search": true,
+  "extra_instructions": "Es gibt drei Gehaltsabrechnungen (drei aufeinanderfolgende Monate) mit leicht unterschiedlichen Überstundenbeträgen. Das Entlassungsschreiben liegt nur als Scan vor.",
+  "role_hints": {
+    "mandant": {
+      "gender": "female",
+      "vienna": true
+    },
+    "arbeitgeber": {
+      "name_word": "Handel",
+      "legal_form": "GmbH",
+      "vienna": true
+    },
+    "gegenvertreter": {
+      "gender": "female",
+      "vienna": true
+    },
+    "geschaeftsfuehrer": {
+      "gender": "male"
+    },
+    "richter": {
+      "gender": "male"
+    },
+    "zeuge": {
+      "gender": "female",
+      "vienna": true
+    }
+  },
+  "tags": [
+    "arbeitsrecht",
+    "asg",
+    "vergleich"
+  ]
+}

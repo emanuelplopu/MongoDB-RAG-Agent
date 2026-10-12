@@ -178,6 +178,9 @@ class Settings(BaseSettings):
 _settings_cache: Optional[Settings] = None
 
 
+_env_profile_applied: bool = False
+
+
 def load_settings(use_profile: bool = True) -> Settings:
     """
     Load settings with proper error handling and optional profile support.
@@ -201,9 +204,14 @@ def load_settings(use_profile: bool = True) -> Settings:
         
         profile_manager = get_profile_manager(base_settings.profiles_path)
         
-        # Check for environment variable override
-        if base_settings.active_profile:
+        # The ACTIVE_PROFILE environment variable selects the initial profile once per
+        # process. Re-applying it on every settings load would silently undo explicit
+        # profile switches (e.g. POST /ingestion/start with a profile), and a clean
+        # ingestion would then wipe the wrong database.
+        global _env_profile_applied
+        if base_settings.active_profile and not _env_profile_applied:
             profile_manager.switch_profile(base_settings.active_profile)
+            _env_profile_applied = True
         
         active_profile = profile_manager.active_profile
         

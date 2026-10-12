@@ -1,0 +1,116 @@
+# GPU thermal / mixed-placement stress suite for `quellexctl bench gpu-stress`.
+#
+# Every scenario starts the listed llama.cpp servers (Docker), drives them with
+# concurrent synthetic load for `duration_s`, samples nvidia-smi + host CPU/RAM
+# every second and stops the containers again. GGUFs are downloaded on first use
+# into the compose volume `recallhub_embedder_models`, so the suite can be rerun
+# offline and on other machines with Docker + NVIDIA Container Toolkit.
+#
+# Placement:  gpu   -> server-cuda image, all layers in VRAM (-ngl 999)
+#             cpu   -> CPU image, model in system RAM (-ngl 0)
+#             split -> server-cuda image, `--fit on` keeps as many layers in VRAM
+#                      as fit and spills the rest to RAM
+#             cpu_moe: true -> attention/dense weights on GPU, MoE experts in RAM
+name: gemma4-thermal
+description: >
+  Sustained-load thermal test of EmbeddingGemma 2 and Gemma 4 (E2B, E4B, 26B-A4B)
+  alone on the GPU, split across GPU and RAM, and with several models resident
+  on the GPU and in RAM at the same time.
+
+defaults:
+  volume: recallhub_embedder_models
+  cuda_image: ghcr.io/ggml-org/llama.cpp:server-cuda
+  cpu_image: ghcr.io/ggml-org/llama.cpp:server
+  gpus: all
+  base_port: 11091
+  gpu_index: 0
+  duration_s: 120
+  warmup_s: 10
+  cooldown_s: 30
+  baseline_s: 3
+  sample_interval_s: 1.0
+
+models:
+  embeddinggemma-2:
+    kind: embedding
+    hf_repo: ggml-org/embeddinggemma-2-GGUF:Q8_0
+    ctx: 8192
+    slots: 4
+    batch: 4096
+    ubatch: 4096
+    concurrency: 4
+    batch_size: 32
+    text_words: 150
+  gemma4-e2b:
+    kind: chat
+    hf_repo: ggml-org/gemma-4-E2B-it-GGUF:Q8_0
+    ctx: 8192
+    slots: 4
+    concurrency: 4
+    max_tokens: 128
+    prompt_words: 300
+  gemma4-e4b:
+    kind: chat
+    hf_repo: ggml-org/gemma-4-E4B-it-GGUF:Q8_0
+    ctx: 8192
+    slots: 4
+    concurrency: 4
+    max_tokens: 128
+    prompt_words: 300
+  gemma4-26b:
+    kind: chat
+    hf_repo: ggml-org/gemma-4-26B-A4B-it-GGUF:Q4_0
+    ctx: 8192
+    slots: 4
+    concurrency: 4
+    max_tokens: 128
+    prompt_words: 300
+
+scenarios:
+  - name: embeddinggemma-2-gpu
+    description: EmbeddingGemma 2 Q8_0 alone on the GPU, 4 clients x 32 texts
+    models:
+      - use: embeddinggemma-2
+        placement: gpu
+
+  - name: gemma4-e2b-gpu
+    description: Gemma 4 E2B Q8_0 alone on the GPU, 4 concurrent chat clients
+    models:
+      - use: gemma4-e2b
+        placement: gpu
+
+  - name: gemma4-e4b-gpu
+    description: Gemma 4 E4B Q8_0 alone on the GPU, 4 concurrent chat clients
+    models:
+      - use: gemma4-e4b
+        placement: gpu
+
+  - name: gemma4-26b-split
+    description: Gemma 4 26B-A4B Q4_0, llama.cpp --fit decides how many layers stay in VRAM, rest in RAM
+    models:
+      - use: gemma4-26b
+        placement: split
+
+  - name: gemma4-26b-cpu-moe
+    description: Gemma 4 26B-A4B Q4_0 with attention on the GPU and all MoE experts in system RAM
+    models:
+      - use: gemma4-26b
+        placement: gpu
+        cpu_moe: true
+
+  - name: mixed-gpu-and-ram
+    description: >
+      EmbeddingGemma 2 and Gemma 4 E2B resident on the GPU while Gemma 4 E4B runs
+      from system RAM on the CPU, all three under load at the same time
+    models:
+      - use: embeddinggemma-2
+        placement: gpu
+        concurrency: 2
+      - use: gemma4-e2b
+        placement: gpu
+        concurrency: 4
+      - use: gemma4-e4b
+        placement: cpu
+        threads: 16
+        concurrency: 2
+        max_tokens: 64

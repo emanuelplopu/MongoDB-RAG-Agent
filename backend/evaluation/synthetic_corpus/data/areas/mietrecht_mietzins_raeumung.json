@@ -1,0 +1,254 @@
+{
+  "id": "mietrecht_mietzins_raeumung",
+  "name": "Mietrecht: Mietzinsminderung, Mietzins- und Räumungsklage",
+  "description": "Die Kanzlei vertritt eine Mieterin einer Altbauwohnung in Wien. Wegen eines Feuchtigkeitsschadens mindert sie den Mietzins nach § 1096 ABGB. Die Vermieterin (eine Immobiliengesellschaft, vertreten durch eine Hausverwaltung und einen Rechtsanwalt) bringt beim Bezirksgericht eine Mietzins- und Räumungsklage nach § 1118 ABGB ein. Die Kanzlei erstattet Einwendungen, es folgen Verhandlung, Befundaufnahme und ein gerichtlicher Vergleich oder ein Urteil.",
+  "procedure_outline": [
+    "Mietvertrag und Übergabe der Wohnung",
+    "Mängelanzeige der Mieterin an die Hausverwaltung mit Fotodokumentation",
+    "Ankündigung und Durchführung der Mietzinsminderung",
+    "Mahnschreiben der Hausverwaltung bzw. des gegnerischen Rechtsanwalts",
+    "Mandatserteilung an die Kanzlei, Prüfung von Mietvertrag und Betriebskostenabrechnung",
+    "Mietzins- und Räumungsklage der Vermieterin beim Bezirksgericht (Register C)",
+    "Klagebeantwortung bzw. Einwendungen der Kanzlei (Mietzinsminderung, Gegenforderung)",
+    "Ladung zur vorbereitenden Tagsatzung, Verhandlung und Protokoll",
+    "Befund eines Sachverständigen oder Lokalaugenschein",
+    "Gerichtlicher Vergleich oder Urteil, Kostennote"
+  ],
+  "courts": [
+    "bg_leopoldstadt",
+    "bg_hernals",
+    "bg_favoriten"
+  ],
+  "registers": [
+    "C"
+  ],
+  "statutes": [
+    "§ 1096 ABGB",
+    "§ 1118 ABGB",
+    "§ 33 MRG",
+    "§ 21 MRG",
+    "§ 3 MRG",
+    "§§ 560 ff ZPO"
+  ],
+  "roles": [
+    {
+      "role": "mandant",
+      "kind": "natural",
+      "label": "Mieterin / beklagte Partei"
+    },
+    {
+      "role": "vermieter",
+      "kind": "legal",
+      "label": "Vermieterin / klagende Partei"
+    },
+    {
+      "role": "hausverwaltung",
+      "kind": "legal",
+      "label": "Hausverwaltung der Vermieterin"
+    },
+    {
+      "role": "gegenvertreter",
+      "kind": "natural",
+      "label": "Rechtsanwalt der Vermieterin"
+    },
+    {
+      "role": "richter",
+      "kind": "natural",
+      "label": "Richter des Bezirksgerichts"
+    },
+    {
+      "role": "sachverstaendiger",
+      "kind": "natural",
+      "label": "Sachverständiger für Bauphysik",
+      "optional": true
+    },
+    {
+      "role": "zeuge",
+      "kind": "natural",
+      "label": "Nachbarin als Zeugin",
+      "optional": true
+    }
+  ],
+  "document_types": [
+    {
+      "type": "mietvertrag",
+      "label": "Mietvertrag",
+      "category": "beweis",
+      "formats": [
+        "scan_jpg",
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Hauptmietvertrag: Mietgegenstand (Adresse, Top-Nummer, Nutzfläche), Beginn, Hauptmietzins, Betriebskosten-Akonto, Kaution, Befristung."
+    },
+    {
+      "type": "maengelanzeige",
+      "label": "Mängelanzeige",
+      "category": "korrespondenz",
+      "formats": [
+        "eml",
+        "docx"
+      ],
+      "is_email": true,
+      "required": true,
+      "guidance": "E-Mail der Mieterin an die Hausverwaltung: Beschreibung des Feuchtigkeitsschadens, betroffene Räume, Datum der Entdeckung, Aufforderung zur Behebung."
+    },
+    {
+      "type": "fotodokumentation",
+      "label": "Fotodokumentation (Beschreibung)",
+      "category": "beweis",
+      "formats": [
+        "docx",
+        "pdf"
+      ],
+      "guidance": "Liste der Fotos mit Datum, Raum und Beschreibung des Schadensbildes (kein Bild, nur Bildbeschreibungen)."
+    },
+    {
+      "type": "minderungsschreiben",
+      "label": "Schreiben zur Mietzinsminderung",
+      "category": "korrespondenz",
+      "formats": [
+        "docx",
+        "pdf"
+      ],
+      "guidance": "Schreiben der Mieterin oder der Kanzlei: Minderung um einen Prozentsatz ab einem Datum, Begründung."
+    },
+    {
+      "type": "betriebskostenabrechnung",
+      "label": "Betriebskostenabrechnung",
+      "category": "beweis",
+      "formats": [
+        "pdf"
+      ],
+      "guidance": "Jahresabrechnung der Hausverwaltung mit Positionen, Akonto-Summe, Nachforderung oder Guthaben."
+    },
+    {
+      "type": "mahnung_gegner",
+      "label": "Mahnschreiben des Gegenvertreters",
+      "category": "korrespondenz",
+      "formats": [
+        "pdf",
+        "scan_jpg"
+      ],
+      "guidance": "Aufforderung zur Zahlung des Mietzinsrückstands mit Androhung der Räumungsklage."
+    },
+    {
+      "type": "email_mandantin",
+      "label": "E-Mail der Mandantin",
+      "category": "korrespondenz",
+      "formats": [
+        "eml"
+      ],
+      "is_email": true,
+      "guidance": "E-Mail der Mieterin an die Kanzlei mit Sachverhaltsschilderung oder Rückfragen."
+    },
+    {
+      "type": "klage",
+      "label": "Mietzins- und Räumungsklage",
+      "category": "gericht",
+      "formats": [
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Klage der Vermieterin (verfasst vom Gegenvertreter): Parteien, Bestandobjekt, Mietzinsrückstand nach Monaten, Begehren auf Zahlung und Räumung, Streitwert, Beweisanbote."
+    },
+    {
+      "type": "klagebeantwortung",
+      "label": "Klagebeantwortung",
+      "category": "schriftsatz",
+      "formats": [
+        "docx",
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Schriftsatz der Kanzlei: Bestreitung, Einwand der Mietzinsminderung nach § 1096 ABGB mit Prozentsatz und Zeitraum, Beweisanbote (Zeugin, Fotos, Sachverständiger), Kostenersatzbegehren."
+    },
+    {
+      "type": "ladung",
+      "label": "Ladung zur Tagsatzung",
+      "category": "gericht",
+      "formats": [
+        "scan_jpg",
+        "pdf"
+      ],
+      "guidance": "Ladung mit Datum, Uhrzeit und Verhandlungssaal."
+    },
+    {
+      "type": "verhandlungsprotokoll",
+      "label": "Protokoll der Tagsatzung",
+      "category": "gericht",
+      "formats": [
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Gerichtliches Protokoll: Anwesende, Vorbringen, Parteienvernehmung, Zeugenaussage, Beschlüsse, nächster Termin."
+    },
+    {
+      "type": "befund_sachverstaendiger",
+      "label": "Befund und Gutachten",
+      "category": "gericht",
+      "formats": [
+        "pdf"
+      ],
+      "guidance": "Befund des Sachverständigen über Ursache und Ausmaß der Feuchtigkeit, Messwerte, Einschätzung der Gebrauchsbeeinträchtigung."
+    },
+    {
+      "type": "vergleich_oder_urteil",
+      "label": "Vergleich oder Urteil",
+      "category": "gericht",
+      "formats": [
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Gerichtlicher Vergleich mit Zahlungsbetrag, Ratenvereinbarung und Kostenregelung oder Urteil mit Spruch und Begründung."
+    },
+    {
+      "type": "aktenvermerk",
+      "label": "Aktenvermerk",
+      "category": "intern",
+      "formats": [
+        "txt",
+        "docx"
+      ],
+      "guidance": "Interner Vermerk über eine Besprechung mit der Mandantin."
+    },
+    {
+      "type": "kostennote",
+      "label": "Kostennote",
+      "category": "kosten",
+      "formats": [
+        "pdf",
+        "docx"
+      ],
+      "required": true,
+      "is_cost_note": true,
+      "guidance": "Kostenverzeichnis nach RATG. Die Tabelle wird automatisch eingefügt; schreibe nur Einleitung und Schluss und setze die Marke [[KOSTENTABELLE]] genau einmal."
+    }
+  ],
+  "question_focus": [
+    "Mietgegenstand und Hauptmietzins",
+    "Beginn und Ausmaß der Mietzinsminderung",
+    "Rückstand laut Klage",
+    "Termine der Tagsatzungen",
+    "Ergebnis des Sachverständigen",
+    "Vergleichsbetrag und Raten",
+    "Kosten"
+  ],
+  "ris_queries": [
+    {
+      "suchworte": "Mietzinsminderung Feuchtigkeit § 1096 ABGB",
+      "gericht": "OGH",
+      "entscheidungsdatum_von": "2012-01-01"
+    },
+    {
+      "suchworte": "Räumungsklage § 1118 ABGB Mietzinsrückstand Minderung",
+      "gericht": "OGH",
+      "entscheidungsdatum_von": "2012-01-01"
+    }
+  ],
+  "streitwert_range": [
+    2500.0,
+    12000.0
+  ],
+  "style_notes": "Österreichisches Mietrecht, Wiener Altbau. Begriffe: Hauptmietzins, Betriebskosten, Top, Bestandobjekt, Bestandnehmerin, Bestandgeberin. Beträge im Format 'EUR 1.234,56'."
+}

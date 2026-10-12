@@ -40,9 +40,11 @@ If docs and code disagree, trust the current code first, then fix the docs.
 - Strategy OS routers: `backend/routers/strategy_specs.py`, `backend/routers/evaluation.py`, `backend/routers/scheduler.py`
 - Strategy OS configs: `backend/config/strategy_specs/`, `backend/config/capabilities/`, `backend/config/answer_contracts/`, `backend/config/tenant_strategy_policies/`
 - Strategy OS scheduler & evaluation: `backend/scheduler/scheduler_daemon.py`, `backend/evaluation/runner.py`, `backend/evaluation/composite_scorer.py`
+- Synthetic Austrian law-firm test corpus generator: `backend/evaluation/synthetic_corpus/` (`python -m backend.evaluation.synthetic_corpus` or `quellexctl synth`; areas, case seeds, prompts and fee tables are JSON/Jinja data under `data/`), documented in `docs/20-SYNTHETIC_CORPUS.md`
 - Strategy OS observability: `backend/services/runtime_profiler.py`, `backend/services/activity_tracker.py`, `backend/services/resource_snapshot.py`
 - `quellexctl` CLI: `backend/cli/main.py`, `backend/cli/strategy_commands.py`, `backend/cli/eval_commands.py`, `backend/cli/phase6_commands.py`, `backend/cli/bench_commands.py`
 - Embedding benchmark & validation checks: `backend/services/embedding_benchmark.py`, `backend/services/embedding_checks.py`, `backend/routers/embedding_benchmark.py`, `quellexctl bench embeddings`, `scripts/benchmark-embeddings.ps1`
+- GPU thermal / mixed-placement stress test: `backend/services/gpu_stress.py`, `backend/cli/stress_commands.py`, `backend/config/gpu_stress/`, `quellexctl bench gpu-stress`, `scripts/gpu-stress.ps1`
 - Ingestion API: `backend/routers/ingestion.py`
 - Ingestion worker: `backend/workers/ingestion_worker.py`
 - Ingestion pipeline and chunking: `src/ingestion/`

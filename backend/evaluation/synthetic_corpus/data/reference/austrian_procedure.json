@@ -1,0 +1,714 @@
+{
+  "_meta": {
+    "description": "Austrian civil procedure reference data for the synthetic case planner: value limits, court registers, case number format, deadlines, interest, VAT, Einheitssatz rules and an RATG service-to-post mapping. Every entry names its source; verified=true means the statement was read from an official source (RIS consolidated law, BGBl, or an RIS court decision). Interpretations that go beyond the wording are marked verified=false.",
+    "retrieved": "2026-10-11",
+    "fee_tables": "Amounts are not stored here; see data/fee_tables/*.json and fees.FeeEngine.",
+    "ris_law_numbers": {
+      "JN": "10001697",
+      "ZPO": "10001699",
+      "ASGG": "10000813",
+      "Geo": "10000240",
+      "RATG": "10002143",
+      "GGG": "10002667",
+      "ABGB": "10001622",
+      "UGB": "10001702",
+      "UStG 1994": "10004873"
+    }
+  },
+  "value_limits": [
+    {
+      "id": "jn_49_bezirksgericht",
+      "rule": "Vermögensrechtliche Streitigkeiten gehören vor das Bezirksgericht, wenn der Streitgegenstand 15 000 EUR nicht übersteigt (bis einschließlich 15 000 EUR: BG, register C; darüber: Landesgericht bzw. Handelsgericht, register Cg).",
+      "value_eur": "15000.00",
+      "valid_from": "2013-01-01",
+      "valid_to": null,
+      "history": "15 000 EUR in the version in force 2013-01-01 to 2014-12-31 (BGBl. I Nr. 35/2012) and unchanged in the version for Klagen filed after 2014-12-31 (BGBl. I Nr. 78/2014), last amended by BGBl. I Nr. 148/2020; no change up to 2026-10-11. Earlier limits not checked.",
+      "exceptions": "Ohne Rücksicht auf den Wert vor das BG (§ 49 Abs. 2 JN): u. a. gesetzlicher Unterhalt (Z 2), Ehe- und Partnerschaftssachen (Z 2a bis 2d), Besitzstörung (Z 4), alle Streitigkeiten aus Bestandverträgen über Wohnungen und Geschäftsräume (Z 5), Streitigkeiten nach § 549 ZPO (Z 6). Handelssachen: Handelsgericht bzw. BG für Handelssachen mit derselben 15 000-EUR-Grenze (§§ 51, 52 JN).",
+      "source": "§ 49 Abs. 1 und 2 JN; https://www.ris.bka.gv.at/NormDokument.wxe?Abfrage=Bundesnormen&Gesetzesnummer=10001697&Paragraf=49",
+      "verified": true
+    },
+    {
+      "id": "asgg_3_labour_court",
+      "rule": "Arbeits- und Sozialrechtssachen: in erster Instanz unabhängig vom Streitwert die Landesgerichte als Arbeits- und Sozialgerichte, in Wien das Arbeits- und Sozialgericht Wien.",
+      "source": "§ 3 ASGG; https://www.ris.bka.gv.at/GeltendeFassung.wxe?Abfrage=Bundesnormen&Gesetzesnummer=10000813",
+      "verified": true
+    },
+    {
+      "id": "zpo_244_mahnverfahren",
+      "rule": "Klagen, mit denen ausschließlich die Zahlung eines 75 000 EUR nicht übersteigenden Geldbetrags begehrt wird: das Gericht erlässt ohne Verhandlung einen bedingten Zahlungsbefehl (BG und Gerichtshof). Kein Zahlungsbefehl u. a. bei Wohnsitz/Sitz des Beklagten im Ausland, unbekanntem Aufenthalt, unschlüssiger oder nicht fälliger Forderung (§ 244 Abs. 2).",
+      "value_eur": "75000.00",
+      "source": "§ 244 ZPO; https://www.ris.bka.gv.at/NormDokument.wxe?Abfrage=Bundesnormen&Gesetzesnummer=10001699&Paragraf=244",
+      "verified": true
+    },
+    {
+      "id": "zpo_501_bagatellberufung",
+      "rule": "Streitgegenstand bis zur Grenze: Urteil nur wegen Nichtigkeit und unrichtiger rechtlicher Beurteilung anfechtbar (keine Beweis- oder Tatsachenrüge).",
+      "periods": [
+        {
+          "value_eur": "2700.00",
+          "applies": "Entscheidungen erster Instanz mit Datum bis 2026-12-31",
+          "valid_to": "2026-12-31"
+        },
+        {
+          "value_eur": "3500.00",
+          "applies": "Entscheidungen erster Instanz mit Datum nach 2026-12-31",
+          "valid_from": "2027-01-01"
+        }
+      ],
+      "source": "§ 501 Abs. 1 ZPO (RIS, Fassung vom 11.10.2026); Budgetbegleitgesetz 2027-2028, BGBl. I Nr. 62/2026, Art. 21 (also § 517 Abs. 1 and § 518 Abs. 3 ZPO); https://www.ris.bka.gv.at/Dokumente/BgblAuth/BGBLA_2026_I_62/BGBLA_2026_I_62.html",
+      "verified": true
+    },
+    {
+      "id": "zpo_502_revision",
+      "rule": "Revision jedenfalls unzulässig bei Entscheidungsgegenstand bis 5 000 EUR; über 5 000 bis 30 000 EUR nur ordentliche Revision bei Zulassung durch das Berufungsgericht oder Abänderungsantrag nach § 508; außerordentliche Revision über 30 000 EUR.",
+      "source": "§ 502 Abs. 2 und 3, § 505 Abs. 4 ZPO; https://www.ris.bka.gv.at/GeltendeFassung.wxe?Abfrage=Bundesnormen&Gesetzesnummer=10001699",
+      "verified": true
+    }
+  ],
+  "court_registers": [
+    {
+      "register": "C",
+      "court": "Bezirksgericht",
+      "meaning": "Zivilprozesse einschließlich Bagatellsachen, prätorische Vergleiche (§ 433 ZPO), Mandatssachen und einstweilige Verfügungen",
+      "example": "3 C 412/25k",
+      "source": "§ 364 Abs. 1 Geo; https://www.ris.bka.gv.at/GeltendeFassung.wxe?Abfrage=Bundesnormen&Gesetzesnummer=10000240",
+      "verified": true
+    },
+    {
+      "register": "Cg",
+      "court": "Landesgericht / Handelsgericht (Gerichtshof erster Instanz)",
+      "meaning": "Zivilprozesse einschließlich Mandats- und Wechselsachen",
+      "example": "15 Cg 10/24h (LG Innsbruck, zitiert in OGH 5 Ob 141/25h)",
+      "source": "§ 365 Abs. 1 Geo; usage confirmed in https://www.ris.bka.gv.at/Dokument.wxe?Abfrage=Justiz&Dokumentnummer=JJT_20251218_OGH0002_0050OB00141_25H0000_000",
+      "verified": true
+    },
+    {
+      "register": "Cga",
+      "court": "Landesgericht als Arbeits- und Sozialgericht / ASG Wien",
+      "meaning": "Arbeitsrechtssachen erster Instanz",
+      "example": "OLG Linz 12 Ra 40/26b: Urteil des Landesgerichts Wels als Arbeits- und Sozialgericht, GZ Cga* (anonymised number)",
+      "note": "The RIS text of §§ 364-366 Geo is outdated for labour courts (it still lists Cr/Nr of the former Arbeitsgerichte); Cga usage is confirmed by the cited RIS decision. Sozialrechtssachen use Cgs (not verified here).",
+      "source": "https://www.ris.bka.gv.at/Dokument.wxe?Abfrage=Justiz&Dokumentnummer=JJT_20260812_OLG0459_0120RA00040_26B0000_001",
+      "verified": true
+    },
+    {
+      "register": "E",
+      "court": "Bezirksgericht (Exekutionsgericht)",
+      "meaning": "Exekutionssachen",
+      "example": "12 E 3456/25m",
+      "source": "§ 364 Abs. 1 Geo",
+      "verified": true
+    },
+    {
+      "register": "Msch",
+      "court": "Bezirksgericht",
+      "meaning": "Mietrechtliche Außerstreitsachen (§ 37 MRG); the Geo wording still refers to 'Anträge, über die die Mietkommission zu entscheiden hat'",
+      "example": "28 Msch 6/25a (BG Mödling, zitiert in OGH 5 Ob 200/25k)",
+      "source": "§ 364 Abs. 1 Geo; usage confirmed in https://www.ris.bka.gv.at/Dokument.wxe?Abfrage=Justiz&Dokumentnummer=JJT_20260908_OGH0002_0050OB00200_25K0000_000",
+      "verified": true
+    },
+    {
+      "register": "R",
+      "court": "Landesgericht als Rechtsmittelgericht, Oberlandesgericht",
+      "meaning": "Rechtsmittel in Zivilsachen (Berufungen, Rekurse); at the OLG except Arbeits- and Sozialrechtssachen",
+      "example": "19 R 52/25w (LG als Rekursgericht, OGH 5 Ob 200/25k); 4 R 90/25d (OLG Innsbruck, OGH 5 Ob 141/25h)",
+      "source": "§ 365 Abs. 1 und § 366 Abs. 1 Z 3 Geo; decisions cited above",
+      "verified": true
+    },
+    {
+      "register": "Ra",
+      "court": "Oberlandesgericht",
+      "meaning": "Rechtsmittel in Arbeitsrechtssachen (Rs: Sozialrechtssachen)",
+      "example": "7 Ra 13/23t (zitiert in OGH 8 ObA 76/23v); 12 Ra 40/26b (OLG Linz)",
+      "source": "§ 366 Abs. 1 Z 4 und 5 Geo; https://www.ris.bka.gv.at/Dokument.wxe?Abfrage=Justiz&Dokumentnummer=JJT_20231213_OGH0002_008OBA00076_23V0000_000",
+      "verified": true
+    },
+    {
+      "register": "Ob",
+      "court": "Oberster Gerichtshof",
+      "meaning": "Zivilsachen; ObA for Arbeitsrechtssachen, ObS for Sozialrechtssachen",
+      "example": "5 Ob 141/25h, 8 ObA 76/23v, 10 ObS 94/24g",
+      "note": "Usage verified from RIS Judikatur metadata; the OGH Geschäftsordnung itself was not read.",
+      "source": "RIS Judikatur Justiz (OGH), e.g. https://www.ris.bka.gv.at/Dokument.wxe?Abfrage=Justiz&Dokumentnummer=JJT_20251218_OGH0002_0050OB00141_25H0000_000",
+      "verified": true
+    },
+    {
+      "register": "Mahnverfahren",
+      "court": "BG / Gerichtshof / ASG",
+      "meaning": "Handling of Mahnklagen (bedingter Zahlungsbefehl, §§ 244 ff ZPO; ASG: § 56 ASGG)",
+      "rule": "The RIS text of § 373 Abs. 2 Geo says Mahnsachen not entered in a register carry the Gattungszeichen M (Mr at former Arbeitsgerichte). In current automated practice (§§ 250, 251 ZPO) Mahnklagen are expected to carry the ordinary litigation number of the court (C at the BG, Cg at LG/HG, Cga at the ASG) and keep it after an Einspruch. For the corpus use C/Cg/Cga.",
+      "source": "§ 373 Abs. 2 Geo (RIS); §§ 244-251 ZPO; § 56 ASGG",
+      "verified": false
+    }
+  ],
+  "aktenzeichen_format": {
+    "pattern": "<Abteilungsnummer> <Gattungszeichen> <Aktenzahl>/<JJ><Prüfbuchstabe>[-<Ordnungsnummer>]",
+    "regex": "^(\\d{1,3}) ([A-Z][A-Za-z]{0,3}) (\\d{1,5})/(\\d{2})([a-z])(?:-(\\d{1,4}))?$",
+    "example": "3 C 412/25k",
+    "example_geschaeftszahl": "15 Cg 10/24h-28",
+    "components": {
+      "abteilungsnummer": "number of the court department (Gerichtsabteilung), placed before the register where several departments handle the same kind of matters (§ 372 Abs. 1 Geo)",
+      "gattungszeichen": "register abbreviation (§ 373 Geo)",
+      "aktenzahl": "running number per register, restarting at 1 every year (§ 374 Geo)",
+      "jahr": "last two digits of the year the matter was filed (§ 372 Abs. 1 Geo)",
+      "pruefbuchstabe": "one lowercase check letter directly after the year; appears on all current case numbers in RIS. The algorithm is not published in the Geo. Letters observed in about 3 400 case numbers from RIS: a b d f g h i k m p s t v w x y z (never c e j l n o q r u).",
+      "ordnungsnummer": "number of the document within the file, appended with a hyphen to form the Geschäftszahl (ON, § 375 Geo)"
+    },
+    "source": "§§ 372 to 375 Geo (RIS); case numbers in RIS Judikatur (OGH, OLG decisions retrieved 2026-10-11)",
+    "verified": true,
+    "verified_note": "Format and components verified; the check-letter algorithm is unknown, so generated letters are synthetic (pick from the observed set)."
+  },
+  "deadlines": [
+    {
+      "id": "zahlungsbefehl_zahlungsfrist",
+      "event": "Zahlungsfrist laut bedingtem Zahlungsbefehl",
+      "period": "14 Tage",
+      "starts": "Zustellung des Zahlungsbefehls",
+      "source": "§ 246 Z 2 ZPO",
+      "verified": true
+    },
+    {
+      "id": "einspruch_zahlungsbefehl",
+      "event": "Einspruch gegen den Zahlungsbefehl",
+      "period": "4 Wochen",
+      "starts": "Zustellung der schriftlichen Ausfertigung des Zahlungsbefehls",
+      "extendable": false,
+      "details": "Der Einspruch hat den Inhalt einer Klagebeantwortung zu haben (§ 248 Abs. 1). Im bezirksgerichtlichen Mahnverfahren keine Anwaltspflicht für den Einspruch, auch mündlich zu Protokoll (§ 448 ZPO). Not suspended by the court holidays of § 222 ZPO (only Rechtsmittelfristen are).",
+      "source": "§ 248 Abs. 2 ZPO; https://www.ris.bka.gv.at/NormDokument.wxe?Abfrage=Bundesnormen&Gesetzesnummer=10001699&Paragraf=248",
+      "verified": true
+    },
+    {
+      "id": "einspruch_arbeitsrechtssache",
+      "event": "Einspruch gegen den Zahlungsbefehl in Arbeitsrechtssachen",
+      "period": "4 Wochen",
+      "starts": "Zustellung des Zahlungsbefehls",
+      "details": "§ 56 ASGG: die Bestimmungen über das bezirksgerichtliche Mahnverfahren sind anzuwenden (Zahlungsbefehl erlässt der Vorsitzende); daher Einspruchsfrist 4 Wochen (§ 248 Abs. 2 ZPO) und keine Anwaltspflicht für den Einspruch (§ 448 Z 1 ZPO). There is no shorter labour-specific Einspruchsfrist in the current ASGG.",
+      "source": "§ 56 ASGG; §§ 248, 448 ZPO",
+      "verified": true
+    },
+    {
+      "id": "klagebeantwortung",
+      "event": "Klagebeantwortung",
+      "period": "4 Wochen",
+      "starts": "Zustellung des Auftrags zur Klagebeantwortung",
+      "details": "Only before the Gerichtshof (LG/HG) when no Zahlungsbefehl is issued (§ 230 Abs. 1). Not in BG proceedings (§ 440 Abs. 2 ZPO) and not in Arbeitsrechtssachen (§ 59 Abs. 1 Z 2 ASGG); there the court may order preparatory pleadings (§ 440 Abs. 3 ZPO).",
+      "source": "§ 230 Abs. 1, § 440 ZPO; § 59 ASGG",
+      "verified": true
+    },
+    {
+      "id": "berufung",
+      "event": "Berufung",
+      "period": "4 Wochen",
+      "starts": "Zustellung der schriftlichen Urteilsausfertigung",
+      "extendable": false,
+      "source": "§ 464 Abs. 1 und 2 ZPO",
+      "verified": true
+    },
+    {
+      "id": "berufungsbeantwortung",
+      "event": "Berufungsbeantwortung",
+      "period": "4 Wochen (Notfrist)",
+      "starts": "Zustellung der Berufungsschrift",
+      "source": "§ 468 Abs. 2 ZPO",
+      "verified": true
+    },
+    {
+      "id": "revision",
+      "event": "Revision",
+      "period": "4 Wochen",
+      "starts": "Zustellung des Berufungserkenntnisses",
+      "extendable": false,
+      "source": "§ 505 Abs. 2 ZPO",
+      "verified": true
+    },
+    {
+      "id": "revisionsbeantwortung",
+      "event": "Revisionsbeantwortung",
+      "period": "4 Wochen (Notfrist)",
+      "starts": "Zustellung der Revisionsschrift",
+      "source": "§ 507a Abs. 1 ZPO",
+      "verified": true
+    },
+    {
+      "id": "rekurs",
+      "event": "Rekurs",
+      "period": "14 Tage; 4 Wochen gegen Endbeschlüsse und Aufhebungsbeschlüsse nach § 519 Abs. 1 Z 2",
+      "starts": "Zustellung der schriftlichen Beschlussausfertigung",
+      "extendable": false,
+      "source": "§ 521 Abs. 1 und 2 ZPO",
+      "verified": true
+    },
+    {
+      "id": "kostenverzeichnis_einwendungen",
+      "event": "Stellungnahme zum Kostenverzeichnis des Gegners (Schluss der Verhandlung erster Instanz)",
+      "period": "14 Tage (Notfrist)",
+      "starts": "Aushändigung des Kostenverzeichnisses",
+      "source": "§ 54 Abs. 1a ZPO",
+      "verified": true
+    }
+  ],
+  "deadline_computation": {
+    "rules": [
+      "Nach Wochen bestimmte Fristen enden mit Ablauf des Tages der letzten Woche, der durch seine Benennung dem Tag entspricht, an dem die Frist begonnen hat (§ 125 Abs. 2 ZPO).",
+      "Samstage, Sonntage, Feiertage und der Karfreitag hemmen Beginn und Lauf nicht; fällt das Ende auf einen solchen Tag, ist der nächste Werktag der letzte Tag (§ 126 ZPO).",
+      "Gerichtsferien: Zwischen 15. Juli und 17. August sowie 24. Dezember und 6. Jänner werden die Notfristen im Berufungs-, Revisions-, Rekurs- und Revisionsrekursverfahren gehemmt (§ 222 Abs. 1 ZPO; Ausnahmen Abs. 2, z. B. Besitzstörung). Nicht in Arbeits- und Sozialrechtssachen (§ 39 Abs. 4 ASGG)."
+    ],
+    "source": "§§ 125, 126, 222 ZPO; § 39 Abs. 4 ASGG",
+    "verified": true
+  },
+  "interest_rates": [
+    {
+      "id": "abgb_1000",
+      "rule": "Gesetzliche Zinsen (ohne Vereinbarung der Höhe): 4 % pro Jahr; also for Zinseszinsen without agreement.",
+      "rate": "4.00",
+      "unit": "percent p.a.",
+      "valid_from": "2010-06-11",
+      "source": "§ 1000 Abs. 1 ABGB (idF BGBl. I Nr. 28/2010); https://www.ris.bka.gv.at/NormDokument.wxe?Abfrage=Bundesnormen&Gesetzesnummer=10001622&Paragraf=1000",
+      "verified": true
+    },
+    {
+      "id": "ugb_456",
+      "rule": "Verzugszinsen bei Geldforderungen aus unternehmerischen Geschäften: 9,2 Prozentpunkte über dem Basiszinssatz; der am ersten Kalendertag eines Halbjahres geltende Basiszinssatz gilt für das ganze Halbjahr; ist der Schuldner für die Verzögerung nicht verantwortlich, nur 4 % (§ 1000 Abs. 1 ABGB).",
+      "rate_above_base": "9.20",
+      "unit": "percentage points above the Basiszinssatz",
+      "valid_from": "2013-03-16",
+      "note": "Applies to business-to-business transactions (scope in § 455 UGB, not re-read here). A consumer debtor owes 4 % under § 1000 ABGB.",
+      "source": "§ 456 UGB (idF BGBl. I Nr. 50/2013); https://www.ris.bka.gv.at/NormDokument.wxe?Abfrage=Bundesnormen&Gesetzesnummer=10001702&Paragraf=456",
+      "verified": true
+    },
+    {
+      "id": "basiszinssatz",
+      "rule": "The Basiszinssatz is published by the Oesterreichische Nationalbank and changes over time. No value is embedded here; look it up for the relevant half-year before stating an amount.",
+      "source": "Oesterreichische Nationalbank (OeNB) base rate publication; not retrieved",
+      "verified": false
+    },
+    {
+      "id": "zpo_54a_kostenzinsen",
+      "rule": "Wird der zugesprochene Kostenbetrag nicht vor Eintritt der Vollstreckbarkeit gezahlt, schuldet die ersatzpflichtige Partei gesetzliche Verzugszinsen ab dem Datum der Kostenentscheidung.",
+      "source": "§ 54a Abs. 1 ZPO",
+      "verified": true
+    }
+  ],
+  "vat": {
+    "rate": "0.20",
+    "rule": "20 % USt on the lawyer fee, Einheitssatz and ERV increase. Court fees paid in the name and for the account of the client are durchlaufende Posten and carry no USt. RATG: Gerichtsgebühren, Postentgelte und andere Auslagen einschließlich der Umsatzsteuer sind gesondert zu vergüten.",
+    "source": "§ 10 Abs. 1 und § 4 Abs. 3 UStG 1994; § 16 RATG; https://www.ris.bka.gv.at/NormDokument.wxe?Abfrage=Bundesnormen&Gesetzesnummer=10004873&Paragraf=10",
+    "verified": true,
+    "verified_note": "Statutory texts read. Whether a specific Barauslage (e.g. travel costs) is a durchlaufender Posten or part of the taxable fee depends on the case; the engine treats all Barauslagen as pass-through."
+  },
+  "einheitssatz_rules": [
+    {
+      "rule": "Basic rate: 60 % of the fee (Verdienstsumme without travel costs and other outlays) if the Streitwert is up to and including 10 170 EUR, 50 % above. Replaces the Nebenleistungen of TP 5, 6 and 8 and domestic postage; only for services under TP 1, 2, 3, 4 or 7. The ERV increase is not part of the base.",
+      "einheitssatz_factor": 1,
+      "source": "§ 23 Abs. 1 und 3, § 23a RATG",
+      "verified": true
+    },
+    {
+      "rule": "Hearings (TP 3A Abschnitt II and III, TP 3B Abschnitt II, TP 3C Abschnitt II): the normal rate applies to the hearing fee. The part of the Einheitssatz for the hearing is doubled if the lawyer attends at a place outside the seat of the Kanzlei (or instructs another lawyer) and claims no travel costs or Zeitversäumnis, or the court refuses them because a local lawyer could have been used.",
+      "einheitssatz_factor": 2,
+      "applies_when": "hearing outside the seat of the Kanzlei without travel costs",
+      "source": "§ 23 Abs. 5 RATG",
+      "verified": true
+    },
+    {
+      "rule": "Proceedings with a bedingter Zahlungsbefehl or an ordered Klagebeantwortung: the Einheitssatz for the Klage, the Klagebeantwortung and the Einspruch gegen den Zahlungsbefehl is doubled.",
+      "einheitssatz_factor": 2,
+      "source": "§ 23 Abs. 6 RATG",
+      "verified": true
+    },
+    {
+      "rule": "Exception: claims for money not exceeding 360 EUR with a bedingter Zahlungsbefehl: simple Einheitssatz for a TP 2 Klage; doubled only if an Einspruch is raised.",
+      "einheitssatz_factor": 1,
+      "source": "§ 23 Abs. 7 RATG",
+      "verified": true
+    },
+    {
+      "rule": "Exekutionsanträge (Antrag auf Exekutionsbewilligung) and applications under TP 3A Abschnitt I Z 2: doubled Einheitssatz.",
+      "einheitssatz_factor": 2,
+      "source": "§ 23 Abs. 8 RATG",
+      "verified": true
+    },
+    {
+      "rule": "Berufung and Berufungsbeantwortung in appeals without evidence taking or other supplementation: Einheitssatz tripled (quadrupled if a Berufungsverhandlung under § 23 Abs. 5 is attended). Not for appeals under § 501 Abs. 1 ZPO (Bagatellberufung).",
+      "einheitssatz_factor": 3,
+      "source": "§ 23 Abs. 9 und 10 RATG; real example: OLG Linz 12 Ra 40/26b awards EUR 658,99 (darin EUR 109,83 USt) for a Berufungsbeantwortung at Streitwert EUR 1 326,95 = TP 3B 195,20 + 180 % ES 351,36 + ERV 2,60 + 20 % USt",
+      "verified": true
+    },
+    {
+      "rule": "Out-of-court settlement negotiations before or during proceedings that caused considerable effort are not covered by the Einheitssatz and are billed separately under their own post (e.g. TP 8).",
+      "einheitssatz_factor": null,
+      "source": "§ 23 Abs. 4 RATG",
+      "verified": true
+    }
+  ],
+  "ratg_bemessungsgrundlage_rules": [
+    {
+      "rule": "Zivilprozess: Wert des Streitgegenstandes nach §§ 54 bis 59 JN; Außerstreitverfahren: Wert des Verfahrensgegenstandes.",
+      "source": "§§ 3, 4 RATG",
+      "verified": true
+    },
+    {
+      "rule": "Exekutionsverfahren (betreibender Gläubiger): Wert des Anspruchs an Kapital; Prozesskosten und Nebengebühren nur, wenn sie allein den Gegenstand bilden; keine Änderung während des Verfahrens.",
+      "source": "§ 13 Abs. 1 lit. a RATG",
+      "verified": true
+    },
+    {
+      "rule": "Bestandstreitigkeiten und Räumungsklagen: Jahresmietzins der letzten 12 Monate, mindestens 2 000 EUR (Geschäftsräume, Wohnungen über 90 m2, sonstige Gegenstände), 1 500 EUR (Wohnungen über 60 m2), 1 000 EUR (kleinere Wohnungen).",
+      "source": "§ 10 Z 2 RATG",
+      "verified": true
+    },
+    {
+      "rule": "Außerstreitverfahren nach § 37 Abs. 1 MRG, § 52 Abs. 1 WEG 2002, § 22 Abs. 1 WGG (objektbezogen): Geschäftsräume/Wohnungen über 90 m2/Garagen mit mehr als zwei Plätzen 2 000 EUR (wenn kein Geldbetrag), sonst höchstens 6 000 EUR; Wohnungen 60 bis 90 m2 1 500 EUR bzw. höchstens 4 500 EUR; andere Objekte 1 000 EUR bzw. höchstens 3 000 EUR.",
+      "source": "§ 10 Z 3 lit. a RATG",
+      "verified": true
+    },
+    {
+      "rule": "Besitzstörungsklagen: 800 EUR; Kfz-Besitzstörung, die in der ersten Tagsatzung erledigt wird: 40 EUR (Klagen eingebracht 2026-01-01 bis 2030-12-31).",
+      "source": "§ 10 Z 1 und 1a, § 26a Abs. 8 RATG (BGBl. I Nr. 112/2025)",
+      "verified": true
+    }
+  ],
+  "ratg_service_mapping": [
+    {
+      "service": "Mahnklage (Zahlungsklage im Mahnverfahren mit kurzer Sachverhaltsdarstellung: Kaufpreis, Werklohn, Entgelt für Arbeiten und Dienste, Darlehen, Saldo, Bestandzins)",
+      "post": "TP2",
+      "engine_post": "TP2",
+      "unit": "per Schriftsatz",
+      "erv_applicable": true,
+      "erv_kind": "initial",
+      "einheitssatz": true,
+      "einheitssatz_factor": 2,
+      "einheitssatz_note": "doubled (§ 23 Abs. 6); for claims up to 360 EUR simple unless an Einspruch is raised (§ 23 Abs. 7)",
+      "alternatives": "TP3A if no short presentation of the facts is possible",
+      "source": "RATG TP 2 Abschnitt I Z 1 lit. b; § 23 Abs. 6 und 7, § 23a RATG",
+      "verified": true
+    },
+    {
+      "service": "Klage (sonstige Klage mit ausführlichem Sachvorbringen)",
+      "post": "TP3A",
+      "engine_post": "TP3A",
+      "unit": "per Schriftsatz",
+      "erv_applicable": true,
+      "erv_kind": "initial",
+      "einheitssatz": true,
+      "einheitssatz_factor": 2,
+      "einheitssatz_note": "doubled where a Zahlungsbefehl is issued or a Klagebeantwortung is ordered (§ 23 Abs. 6: Mahnverfahren, LG/HG/ASG proceedings with Klagebeantwortung); otherwise 1 (e.g. BG claim outside the Mahnverfahren)",
+      "source": "RATG TP 3A Abschnitt I Z 1 lit. a; § 23 Abs. 6 RATG",
+      "verified": true
+    },
+    {
+      "service": "Klagebeantwortung",
+      "post": "TP3A",
+      "engine_post": "TP3A",
+      "unit": "per Schriftsatz",
+      "erv_applicable": true,
+      "erv_kind": "further",
+      "einheitssatz": true,
+      "einheitssatz_factor": 2,
+      "einheitssatz_note": "doubled (§ 23 Abs. 6)",
+      "alternatives": "TP2 if limited to a mere denial and a motion to dismiss, or if it answers a TP 2 Klage with a short presentation of facts (TP 2 Abschnitt I Z 1 lit. c)",
+      "source": "RATG TP 3A Abschnitt I Z 1 lit. b; TP 2 Abschnitt I Z 1 lit. c; § 23 Abs. 6 RATG",
+      "verified": true
+    },
+    {
+      "service": "Einspruch gegen Zahlungsbefehl mit Sachvorbringen (Inhalt einer Klagebeantwortung)",
+      "post": "TP3A",
+      "engine_post": "TP3A",
+      "unit": "per Schriftsatz",
+      "erv_applicable": true,
+      "erv_kind": "further",
+      "einheitssatz": true,
+      "einheitssatz_factor": 2,
+      "einheitssatz_note": "doubled (§ 23 Abs. 6)",
+      "alternatives": "TP2 for a mere denial or a short Einspruch against a TP 2 Mahnklage (TP 2 Abschnitt I Z 1 lit. c); TP1 for an Einspruch that only raises the objection (TP 1 Abschnitt II lit. e)",
+      "source": "RATG TP 3A Abschnitt I Z 1 lit. b; TP 2 Abschnitt I Z 1 lit. c; TP 1 Abschnitt II lit. e; § 23 Abs. 6 RATG",
+      "verified": true
+    },
+    {
+      "service": "Vorbereitender Schriftsatz (nach § 257 Abs. 3 ZPO zulässig oder vom Gericht aufgetragen)",
+      "post": "TP3A",
+      "engine_post": "TP3A",
+      "unit": "per Schriftsatz",
+      "erv_applicable": true,
+      "erv_kind": "further",
+      "einheitssatz": true,
+      "einheitssatz_factor": 1,
+      "alternatives": "other pleadings not listed in TP 1 or TP 3: TP2 (TP 2 Abschnitt I Z 1 lit. e)",
+      "source": "RATG TP 3A Abschnitt I Z 1 lit. d; TP 2 Abschnitt I Z 1 lit. e",
+      "verified": true
+    },
+    {
+      "service": "Stellungnahme zum Sachverständigengutachten (vom Gericht aufgetragen)",
+      "post": "TP3A",
+      "engine_post": "TP3A",
+      "unit": "per Schriftsatz",
+      "erv_applicable": true,
+      "erv_kind": "further",
+      "einheitssatz": true,
+      "einheitssatz_factor": 1,
+      "note": "Treated as a vorbereitender Schriftsatz ordered by the court. An unsolicited statement outside § 257 Abs. 3 ZPO would fall under TP 2 Abschnitt I Z 1 lit. e and may not be recoverable from the opponent. This classification is an interpretation, not wording of the Tarif.",
+      "source": "RATG TP 3A Abschnitt I Z 1 lit. d",
+      "verified": false
+    },
+    {
+      "service": "Teilnahme an Tagsatzung/Verhandlung im Zivilprozess oder Außerstreitverfahren (vorbereitende Tagsatzung, Beweisaufnahme, Streitverhandlung)",
+      "post": "TP3A",
+      "engine_post": "TP3A:<n>h or TP3A:<n>min (e.g. TP3A:2h, TP3A:105min)",
+      "unit": "per begonnene Stunde: erste Stunde voller Ansatz nach Abschnitt I, jede weitere begonnene Stunde die Hälfte",
+      "erv_applicable": false,
+      "einheitssatz": true,
+      "einheitssatz_factor": 1,
+      "einheitssatz_note": "normal rate; doubled (factor 2) if attended outside the seat of the Kanzlei without claiming travel costs (§ 23 Abs. 5)",
+      "source": "RATG TP 3A Abschnitt II Z 1; § 23 Abs. 5 RATG",
+      "verified": true
+    },
+    {
+      "service": "Kurze Tagsatzung: erstreckt vor Verhandlung, Versäumungs-/Anerkenntnisurteil oder Vergleich vor Erörterung des Sachverhalts, Tagsatzung bloß zum Vergleichsabschluss",
+      "post": "TP2",
+      "engine_post": "TP2",
+      "unit": "per Tagsatzung (Pauschale, nicht nach Stunden)",
+      "erv_applicable": false,
+      "einheitssatz": true,
+      "einheitssatz_factor": 1,
+      "source": "RATG TP 2 Abschnitt II Z 1 lit. b, c, d",
+      "verified": true
+    },
+    {
+      "service": "Teilnahme an der Befundaufnahme durch Sachverständige (über ausdrücklichen Auftrag des Gerichts)",
+      "post": "TP3A",
+      "engine_post": "TP3A:<n>h",
+      "unit": "per begonnene Stunde wie Tagsatzung (TP 3A Abschnitt II)",
+      "erv_applicable": false,
+      "einheitssatz": true,
+      "einheitssatz_factor": 1,
+      "einheitssatz_note": "doubled if outside the seat of the Kanzlei without travel costs (§ 23 Abs. 5)",
+      "source": "RATG TP 3A Abschnitt III; § 23 Abs. 5 RATG",
+      "verified": true
+    },
+    {
+      "service": "Berufung",
+      "post": "TP3B",
+      "engine_post": "TP3B",
+      "unit": "per Schriftsatz",
+      "erv_applicable": true,
+      "erv_kind": "further",
+      "einheitssatz": true,
+      "einheitssatz_factor": 3,
+      "einheitssatz_note": "tripled if the appeal is decided without evidence taking (§ 23 Abs. 9); factor 1 in Bagatellberufungen under § 501 Abs. 1 ZPO (§ 23 Abs. 10) and where evidence is taken",
+      "source": "RATG TP 3B Abschnitt I; § 23 Abs. 9 und 10 RATG",
+      "verified": true
+    },
+    {
+      "service": "Berufungsbeantwortung",
+      "post": "TP3B",
+      "engine_post": "TP3B",
+      "unit": "per Schriftsatz",
+      "erv_applicable": true,
+      "erv_kind": "further",
+      "einheitssatz": true,
+      "einheitssatz_factor": 3,
+      "einheitssatz_note": "as for the Berufung (§ 23 Abs. 9 und 10)",
+      "alternatives": "TP1 if it only asks for an oral appeal hearing (TP 1 Abschnitt II lit. i)",
+      "source": "RATG TP 3B Abschnitt I; TP 1 Abschnitt II lit. i; § 23 Abs. 9 RATG",
+      "verified": true
+    },
+    {
+      "service": "Mündliche Berufungs- oder Rekursverhandlung",
+      "post": "TP3B",
+      "engine_post": "TP3B:<n>h",
+      "unit": "per begonnene Stunde: erste Stunde voller Ansatz, jede weitere die Hälfte",
+      "erv_applicable": false,
+      "einheitssatz": true,
+      "einheitssatz_factor": 1,
+      "source": "RATG TP 3B Abschnitt II; § 23 Abs. 5 und 9 RATG",
+      "verified": true
+    },
+    {
+      "service": "Rekurs, Rekursbeantwortung (ausgenommen Kostenrekurs und Rekurse an den OGH)",
+      "post": "TP3B",
+      "engine_post": "TP3B",
+      "unit": "per Schriftsatz",
+      "erv_applicable": true,
+      "erv_kind": "further",
+      "einheitssatz": true,
+      "einheitssatz_factor": 1,
+      "alternatives": "Kostenrekurs and Kostenrekursbeantwortung: TP3A (TP 3A Abschnitt I Z 5 lit. b)",
+      "source": "RATG TP 3B Abschnitt I; TP 3A Abschnitt I Z 5 lit. b",
+      "verified": true
+    },
+    {
+      "service": "Revision, Revisionsbeantwortung, Revisionsrekurs, Rekurs an den OGH",
+      "post": "TP3C",
+      "engine_post": "TP3C",
+      "unit": "per Schriftsatz",
+      "erv_applicable": true,
+      "erv_kind": "further",
+      "einheitssatz": true,
+      "einheitssatz_factor": 1,
+      "source": "RATG TP 3C Abschnitt I",
+      "verified": true
+    },
+    {
+      "service": "Antrag auf Erlassung einer einstweiligen Verfügung, Äußerung dazu, Widerspruch",
+      "post": "TP3A",
+      "engine_post": "TP3A",
+      "unit": "per Schriftsatz",
+      "erv_applicable": true,
+      "erv_kind": "initial if filed as a separate proceeding, otherwise further",
+      "einheitssatz": true,
+      "einheitssatz_factor": 1,
+      "note": "If combined with the Klage: +25 % of the fee for that pleading (Anm. 4 zu TP 3); not modelled by the engine.",
+      "source": "RATG TP 3A Abschnitt I Z 5 lit. a; Anmerkung 4 zu TP 3",
+      "verified": true
+    },
+    {
+      "service": "Exekutionsantrag (Forderungsexekution/Gehaltsexekution nach § 294 EO, Fahrnisexekution)",
+      "post": "TP2",
+      "engine_post": "TP2",
+      "unit": "per Schriftsatz",
+      "erv_applicable": true,
+      "erv_kind": "initial",
+      "einheitssatz": true,
+      "einheitssatz_factor": 2,
+      "einheitssatz_note": "doubled (§ 23 Abs. 8)",
+      "note": "Bemessungsgrundlage: Kapitalforderung (§ 13 Abs. 1 lit. a RATG). In Fahrnis- and Forderungsexekution the fee also covers all TP 1 pleadings of the creditor filed within ten months after the Bewilligung (Anmerkung zu TP 1).",
+      "source": "RATG TP 2 Abschnitt I Z 2; § 23 Abs. 8, § 13 RATG; Anmerkung zu TP 1",
+      "verified": true
+    },
+    {
+      "service": "Antrag auf Vollzug oder neuerlichen Exekutionsvollzug, Forderungsanmeldung im Exekutionsverfahren",
+      "post": "TP1",
+      "engine_post": "TP1",
+      "unit": "per Schriftsatz",
+      "erv_applicable": true,
+      "erv_kind": "further",
+      "einheitssatz": true,
+      "einheitssatz_factor": 1,
+      "source": "RATG TP 1 Abschnitt III lit. a, b, h",
+      "verified": true
+    },
+    {
+      "service": "Kurze Mitteilung, Anzeige oder Urkundenvorlage an das Gericht; Vollmachtsbekanntgabe; Ansuchen um Akteneinsicht",
+      "post": "TP1",
+      "engine_post": "TP1",
+      "unit": "per Schriftsatz",
+      "erv_applicable": true,
+      "erv_kind": "further",
+      "einheitssatz": true,
+      "einheitssatz_factor": 1,
+      "source": "RATG TP 1 Abschnitt I lit. a und b",
+      "verified": true
+    },
+    {
+      "service": "Fristerstreckungsantrag, Antrag auf Verlegung einer Tagsatzung, Zustellangelegenheiten",
+      "post": "TP1",
+      "engine_post": "TP1",
+      "unit": "per Schriftsatz",
+      "erv_applicable": true,
+      "erv_kind": "further",
+      "einheitssatz": true,
+      "einheitssatz_factor": 1,
+      "source": "RATG TP 1 Abschnitt I lit. c",
+      "verified": true
+    },
+    {
+      "service": "Antrag auf Kostenbestimmung",
+      "post": "TP1",
+      "engine_post": "TP1",
+      "unit": "per Schriftsatz",
+      "erv_applicable": true,
+      "erv_kind": "further",
+      "einheitssatz": true,
+      "einheitssatz_factor": 1,
+      "source": "RATG TP 1 Abschnitt I lit. d",
+      "verified": true
+    },
+    {
+      "service": "Aufkündigung (gerichtliche Kündigung) oder Einwendungen dagegen, beschränkt auf Anführung oder Bestreitung der Kündigungsgründe",
+      "post": "TP2",
+      "engine_post": "TP2",
+      "unit": "per Schriftsatz",
+      "erv_applicable": true,
+      "erv_kind": "initial for the Aufkündigung, further for the Einwendungen",
+      "einheitssatz": true,
+      "einheitssatz_factor": 1,
+      "alternatives": "TP3A if the pleading contains a presentation of facts (TP 3A Abschnitt I Z 1 lit. c)",
+      "source": "RATG TP 2 Abschnitt I Z 1 lit. d; TP 3A Abschnitt I Z 1 lit. c",
+      "verified": true
+    },
+    {
+      "service": "Verfahrenseinleitender Antrag im Außerstreitverfahren (z. B. § 37 MRG, Register Msch)",
+      "post": "TP3A",
+      "engine_post": "TP3A",
+      "unit": "per Schriftsatz",
+      "erv_applicable": true,
+      "erv_kind": "initial",
+      "einheitssatz": true,
+      "einheitssatz_factor": 1,
+      "alternatives": "TP2 if a short presentation of the facts is possible (TP 2 Abschnitt I Z 3 lit. d); Äußerung of the opponent: TP3A (TP 3A Abschnitt I Z 3 lit. b) or TP2 for a mere denial (TP 2 Abschnitt I Z 3 lit. e)",
+      "note": "Bemessungsgrundlage per § 10 Z 3 RATG.",
+      "source": "RATG TP 3A Abschnitt I Z 3 lit. a und b; TP 2 Abschnitt I Z 3 lit. d und e",
+      "verified": true
+    },
+    {
+      "service": "Mahnschreiben an den Gegner (einfaches Schreiben ohne rechtliche Ausführungen)",
+      "post": "TP5",
+      "engine_post": "TP5",
+      "unit": "per Schreiben",
+      "erv_applicable": false,
+      "einheitssatz": false,
+      "einheitssatz_factor": 1,
+      "einheitssatz_note": "no Einheitssatz on TP 5 (§ 23 Abs. 1 covers only TP 1, 2, 3, 4, 7); set einheitssatz=false",
+      "source": "RATG TP 5 (names Mahnschreiben explicitly); § 23 Abs. 1 RATG",
+      "verified": true
+    },
+    {
+      "service": "Anwaltliches Aufforderungsschreiben an den Gegner mit Forderungsaufstellung und rechtlicher Begründung",
+      "post": "TP6",
+      "engine_post": "TP6",
+      "unit": "per Schreiben",
+      "erv_applicable": false,
+      "einheitssatz": false,
+      "einheitssatz_factor": 1,
+      "einheitssatz_note": "no Einheitssatz on TP 6; set einheitssatz=false",
+      "note": "TP 6 = Briefe anderer Art = twice TP 5, at most 208.20 EUR. Classifying a reasoned demand letter as TP 6 rather than TP 5 follows the wording ('einfache Schreiben' vs. 'Briefe anderer Art').",
+      "source": "RATG TP 5 und TP 6; § 23 Abs. 1 RATG",
+      "verified": true
+    },
+    {
+      "service": "Vergleichsgespräch oder Besprechung mit dem Gegner, dessen Anwalt oder dem Mandanten (auch telefonisch)",
+      "post": "TP8",
+      "engine_post": "TP8:<n>min (e.g. TP8:45min = 2 half hours; under 10 minutes: 4/10)",
+      "unit": "per begonnene halbe Stunde",
+      "erv_applicable": false,
+      "einheitssatz": false,
+      "einheitssatz_factor": 1,
+      "einheitssatz_note": "no Einheitssatz on TP 8. During court proceedings such meetings are normally covered by the Einheitssatz of the main services (§ 23 Abs. 1); only out-of-court settlement talks with considerable effort are billed separately (§ 23 Abs. 4).",
+      "source": "RATG TP 8 Abs. 1 und 2; § 23 Abs. 1 und 4 RATG",
+      "verified": true
+    },
+    {
+      "service": "Vergleichstagsatzung bei Gericht (bloß zum Vergleichsabschluss angeordnet)",
+      "post": "TP2",
+      "engine_post": "TP2",
+      "unit": "per Tagsatzung",
+      "erv_applicable": false,
+      "einheitssatz": true,
+      "einheitssatz_factor": 1,
+      "source": "RATG TP 2 Abschnitt II Z 1 lit. d",
+      "verified": true
+    },
+    {
+      "service": "Beschwerde an die Datenschutzbehörde (Verwaltungsverfahren)",
+      "post": "TP3A",
+      "engine_post": "TP3A",
+      "unit": "per Schriftsatz",
+      "erv_applicable": false,
+      "einheitssatz": true,
+      "einheitssatz_factor": 1,
+      "note": "The RATG applies by its own terms only to civil court proceedings, arbitration under §§ 577 ff ZPO and private prosecutions (§ 1 Abs. 1 RATG), so it does not govern DSB proceedings; the fee is a matter of agreement with the client. Billing analogous to TP 3A follows professional practice (ÖRAK Allgemeine Honorar-Kriterien), which was not checked. § 23a ERV applies to court filings only. Administrative proceedings generally have no cost reimbursement by the opponent (not checked). A damages claim under § 29 DSG before the civil court follows the normal Klage mapping.",
+      "source": "§ 1 Abs. 1 RATG (read); practice not verified",
+      "verified": false
+    }
+  ]
+}

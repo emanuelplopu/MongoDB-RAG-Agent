@@ -1,0 +1,12 @@
+You write one document of a FICTIONAL Austrian law firm's case file, in Austrian German, exactly as a real lawyer, court, authority, company or private person would write it.
+
+Hard rules:
+1. Every required value listed under "Required values" must appear in the document EXACTLY as written there, character for character (same number format "EUR 1.234,56", same date format "12.03.2025", same case number, same spelling of names). Use each at least once in the body text. Do not reformat them, do not write "€" instead of "EUR", do not spell out dates.
+2. Use only the people, companies, addresses, courts and case numbers given. Do not invent other names, case numbers, IBANs, phone numbers or street addresses of courts. Do not mention that the document is fictional or generated.
+3. Stay consistent with the case summary and earlier documents. Do not contradict known facts; you may add realistic minor details (wording, reasoning, procedural phrases) that do not introduce new numbers or dates.
+4. Structure and register depend on the document type: letters have sender block, recipient block, date line, subject ("Betreff:" or "Betrifft:"), salutation, body and signature; pleadings have a court header, parties with representatives, case number, title, numbered sections, motions (Anträge); court decisions have head (Kopf), operative part (Spruch) and reasons (Begründung); protocols list attendees and record statements; emails are short and informal-professional; internal notes (Aktenvermerk) are terse with date and initials.
+5. header_lines holds letterhead/court header lines, sender, recipient and reference lines (one line each). body_markdown holds the main text; you may use "# " headings, "- " bullet lists and **bold**. closing_lines holds the signature block.
+6. For emails, fill the email object (subject, sender_id, recipient_ids, cc_ids using the given ids) and keep header_lines empty; the body starts with the salutation.
+7. If the instructions mention the marker [[KOSTENTABELLE]], put it on its own line exactly once where the cost table belongs; code replaces it with the computed table. Do not write any amounts of the cost table yourself.
+8. If a "forbidden phrase" is given, do not use it anywhere in the document.
+9. Length: {{ length_hint }}.

@@ -1,0 +1,17 @@
+{
+  "_comment": "Real Austrian courts and authorities (public institutions). Street addresses are deliberately omitted; documents must not invent them. Add entries freely; areas reference them by id.",
+  "courts": [
+    {"id": "bg_innere_stadt", "name": "Bezirksgericht Innere Stadt Wien", "short": "BG Innere Stadt Wien", "type": "BG", "city": "Wien"},
+    {"id": "bg_favoriten", "name": "Bezirksgericht Favoriten", "short": "BG Favoriten", "type": "BG", "city": "Wien"},
+    {"id": "bg_leopoldstadt", "name": "Bezirksgericht Leopoldstadt", "short": "BG Leopoldstadt", "type": "BG", "city": "Wien"},
+    {"id": "bg_hernals", "name": "Bezirksgericht Hernals", "short": "BG Hernals", "type": "BG", "city": "Wien"},
+    {"id": "bg_floridsdorf", "name": "Bezirksgericht Floridsdorf", "short": "BG Floridsdorf", "type": "BG", "city": "Wien"},
+    {"id": "lg_zrs_wien", "name": "Landesgericht für Zivilrechtssachen Wien", "short": "LG für ZRS Wien", "type": "LG", "city": "Wien"},
+    {"id": "hg_wien", "name": "Handelsgericht Wien", "short": "HG Wien", "type": "HG", "city": "Wien"},
+    {"id": "asg_wien", "name": "Arbeits- und Sozialgericht Wien", "short": "ASG Wien", "type": "ASG", "city": "Wien"},
+    {"id": "olg_wien", "name": "Oberlandesgericht Wien", "short": "OLG Wien", "type": "OLG", "city": "Wien"},
+    {"id": "ogh", "name": "Oberster Gerichtshof", "short": "OGH", "type": "OGH", "city": "Wien"},
+    {"id": "dsb", "name": "Datenschutzbehörde", "short": "DSB", "type": "Behoerde", "city": "Wien"},
+    {"id": "schlichtungsstelle_wien", "name": "Schlichtungsstelle für wohnrechtliche Angelegenheiten (Magistratsabteilung 50)", "short": "Schlichtungsstelle MA 50", "type": "Behoerde", "city": "Wien"}
+  ]
+}

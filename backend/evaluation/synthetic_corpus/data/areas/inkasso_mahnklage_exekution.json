@@ -1,0 +1,239 @@
+{
+  "id": "inkasso_mahnklage_exekution",
+  "name": "Inkasso: Mahnklage und Exekution",
+  "description": "Die Kanzlei vertritt eine Gläubigerin (Unternehmen) bei der Eintreibung offener Rechnungen gegen eine Privatperson: außergerichtliche Mahnung, Mahnklage im Mahnverfahren nach §§ 244 ff ZPO über den elektronischen Rechtsverkehr, Zahlungsbefehl, Vollstreckbarkeit, Exekutionsantrag (Gehaltsexekution nach § 294 EO beim Arbeitgeber als Drittschuldner), Drittschuldnererklärung, Zahlungseingänge und Abrechnung mit der Mandantin.",
+  "procedure_outline": [
+    "Mandatserteilung und Vollmacht durch die Gläubigerin",
+    "Prüfung der offenen Rechnungen und bisherigen Mahnungen der Mandantin",
+    "Anwaltliches Aufforderungsschreiben an den Schuldner mit Zahlungsfrist",
+    "Mahnklage im Mahnverfahren über den ERV beim zuständigen Bezirksgericht",
+    "Zahlungsbefehl des Gerichts und Zustellung an den Schuldner",
+    "Kein Einspruch binnen vier Wochen: Zahlungsbefehl wird rechtskräftig und vollstreckbar (alternativ Einspruch und ordentliches Verfahren)",
+    "Exekutionsantrag auf Forderungsexekution (Gehaltsexekution) gegen den Arbeitgeber als Drittschuldner",
+    "Exekutionsbewilligung und Zahlungsverbot an den Drittschuldner",
+    "Drittschuldnererklärung des Arbeitgebers",
+    "Laufende Zahlungseingänge, Kostennote und Abrechnung mit der Mandantin"
+  ],
+  "courts": [
+    "bg_favoriten",
+    "bg_innere_stadt",
+    "bg_floridsdorf"
+  ],
+  "registers": [
+    "C",
+    "E"
+  ],
+  "statutes": [
+    "§§ 244 ff ZPO",
+    "§ 1333 ABGB",
+    "§ 1000 ABGB",
+    "§ 456 UGB",
+    "§ 294 EO",
+    "§ 301 EO",
+    "RATG",
+    "GGG"
+  ],
+  "roles": [
+    {
+      "role": "mandant",
+      "kind": "legal",
+      "label": "Gläubigerin / klagende Partei"
+    },
+    {
+      "role": "schuldner",
+      "kind": "natural",
+      "label": "Schuldner / beklagte und verpflichtete Partei"
+    },
+    {
+      "role": "drittschuldner",
+      "kind": "legal",
+      "label": "Arbeitgeber des Schuldners / Drittschuldner"
+    },
+    {
+      "role": "richter",
+      "kind": "natural",
+      "label": "Richterin des Bezirksgerichts"
+    },
+    {
+      "role": "rechtspfleger",
+      "kind": "natural",
+      "label": "Rechtspfleger in Exekutionssachen"
+    }
+  ],
+  "document_types": [
+    {
+      "type": "vollmacht",
+      "label": "Vollmacht",
+      "category": "intern",
+      "formats": [
+        "scan_jpg",
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Kurze Prozess- und Exekutionsvollmacht der Mandantin, unterschrieben vom Geschäftsführer."
+    },
+    {
+      "type": "rechnung",
+      "label": "Rechnung der Mandantin",
+      "category": "beweis",
+      "formats": [
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Rechnung mit Rechnungsnummer, Leistungszeitraum, Positionen, Nettobetrag, 20 % USt, Bruttobetrag und Zahlungsziel."
+    },
+    {
+      "type": "mahnung_mandant",
+      "label": "Mahnung der Mandantin",
+      "category": "beweis",
+      "formats": [
+        "scan_jpg",
+        "pdf"
+      ],
+      "guidance": "Vorprozessuale Mahnung der Mandantin selbst, mit Mahnspesen."
+    },
+    {
+      "type": "email_mandant",
+      "label": "E-Mail der Mandantin",
+      "category": "korrespondenz",
+      "formats": [
+        "eml"
+      ],
+      "is_email": true,
+      "guidance": "Kurze E-Mail der Buchhaltung der Mandantin an die Kanzlei mit Auftrag oder Rückfragen."
+    },
+    {
+      "type": "aufforderungsschreiben",
+      "label": "Anwaltliches Aufforderungsschreiben",
+      "category": "korrespondenz",
+      "formats": [
+        "docx",
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Brief der Kanzlei an den Schuldner: Forderungsaufstellung (Kapital, Zinsen, Mahnspesen, Kosten des Einschreitens), Zahlungsfrist, Bankverbindung, Ankündigung der Klage."
+    },
+    {
+      "type": "mahnklage",
+      "label": "Mahnklage",
+      "category": "schriftsatz",
+      "formats": [
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Mahnklage im Mahnverfahren (Formularaufbau angelehnt an ZPForm 58a): klagende und beklagte Partei, Klagevertreter, Streitwert, Kapitalforderung, Zinsen ab Fälligkeit, Nebenforderungen, Anspruchsgrund in kurzen Worten, Beweismittel, Kostenverzeichnis-Verweis."
+    },
+    {
+      "type": "zahlungsbefehl",
+      "label": "Zahlungsbefehl",
+      "category": "gericht",
+      "formats": [
+        "scan_jpg",
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Zahlungsbefehl des Bezirksgerichts mit Geschäftszahl, Parteien, zuerkanntem Betrag samt Zinsen und Kosten, Belehrung über den Einspruch binnen vier Wochen."
+    },
+    {
+      "type": "vollstreckbarkeitsbestaetigung",
+      "label": "Bestätigung der Vollstreckbarkeit",
+      "category": "gericht",
+      "formats": [
+        "scan_jpg",
+        "pdf"
+      ],
+      "guidance": "Kurze gerichtliche Bestätigung von Rechtskraft und Vollstreckbarkeit."
+    },
+    {
+      "type": "exekutionsantrag",
+      "label": "Exekutionsantrag",
+      "category": "schriftsatz",
+      "formats": [
+        "pdf",
+        "docx"
+      ],
+      "required": true,
+      "guidance": "Antrag auf Forderungsexekution nach § 294 EO gegen den Drittschuldner (Arbeitgeber), Exekutionstitel, vollstreckbare Forderung, Kosten."
+    },
+    {
+      "type": "exekutionsbewilligung",
+      "label": "Exekutionsbewilligung",
+      "category": "gericht",
+      "formats": [
+        "pdf",
+        "scan_jpg"
+      ],
+      "required": true,
+      "guidance": "Beschluss des Exekutionsgerichts (Rechtspfleger) mit Geschäftszahl im Register E, bewilligte Forderungsexekution, Zahlungsverbot an den Drittschuldner."
+    },
+    {
+      "type": "drittschuldnererklaerung",
+      "label": "Drittschuldnererklärung",
+      "category": "gericht",
+      "formats": [
+        "scan_jpg",
+        "pdf"
+      ],
+      "required": true,
+      "guidance": "Erklärung des Arbeitgebers: Bestehen des Arbeitsverhältnisses, Höhe des Bezugs, Vorpfändungen, Rang, voraussichtlich pfändbarer Betrag."
+    },
+    {
+      "type": "email_zahlungseingang",
+      "label": "E-Mail über Zahlungseingang",
+      "category": "korrespondenz",
+      "formats": [
+        "eml"
+      ],
+      "is_email": true,
+      "guidance": "Information der Kanzlei an die Mandantin über eingegangene Teilzahlungen."
+    },
+    {
+      "type": "aktenvermerk",
+      "label": "Aktenvermerk",
+      "category": "intern",
+      "formats": [
+        "txt",
+        "docx"
+      ],
+      "guidance": "Interner kurzer Vermerk über ein Telefonat oder einen Arbeitsschritt, mit Datum und Kürzel."
+    },
+    {
+      "type": "kostennote",
+      "label": "Kostennote",
+      "category": "kosten",
+      "formats": [
+        "pdf",
+        "docx"
+      ],
+      "required": true,
+      "is_cost_note": true,
+      "guidance": "Kostenverzeichnis bzw. Honorarnote nach RATG. Die Tabelle wird automatisch eingefügt; schreibe nur Einleitung und Schluss und setze die Marke [[KOSTENTABELLE]] genau einmal."
+    }
+  ],
+  "question_focus": [
+    "Höhe der Kapitalforderung",
+    "Zinsen und Zinsbeginn",
+    "Datum und Geschäftszahl des Zahlungsbefehls",
+    "Einspruchsfrist",
+    "Drittschuldner und pfändbarer Betrag",
+    "Kosten laut Kostennote",
+    "Zahlungseingänge"
+  ],
+  "ris_queries": [
+    {
+      "suchworte": "Zahlungsbefehl Einspruch Mahnklage",
+      "gericht": "OGH",
+      "entscheidungsdatum_von": "2012-01-01"
+    },
+    {
+      "suchworte": "Drittschuldnererklärung Gehaltsexekution",
+      "gericht": "OGH",
+      "entscheidungsdatum_von": "2012-01-01"
+    }
+  ],
+  "streitwert_range": [
+    1500.0,
+    14000.0
+  ],
+  "style_notes": "Österreichisches Juristendeutsch: 'klagende Partei', 'beklagte Partei', 'samt 4 % Zinsen', 's.A.', 'binnen 14 Tagen', 'Hochachtungsvoll' oder 'Mit freundlichen Grüßen'. Beträge immer im Format 'EUR 1.234,56'."
+}

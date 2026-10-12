@@ -1,0 +1,164 @@
+{
+  "id": "7a07b12d-c4f4-450f-b498-457160440c3b",
+  "timestamp": "2026-10-10T18:33:52.331252Z",
+  "kind": "checks",
+  "sample": {
+    "source": "index",
+    "count": 1000,
+    "avg_chars": 693.5,
+    "database": "rag_parhelion",
+    "collection": "chunks",
+    "file_name": null,
+    "reference_model": "text-embedding-3-large",
+    "reference_dimension": 3072
+  },
+  "options": {
+    "sample_size": 1000,
+    "batch_sizes": [
+      1,
+      8,
+      32,
+      64,
+      128
+    ],
+    "single_batch_limit": 32,
+    "truncate_dims": [
+      512,
+      256
+    ],
+    "latency_runs": 20,
+    "top_k": 10,
+    "pseudo_query_every": 10,
+    "check_images": true,
+    "query_text": "Which notice period applies to the lease agreement?"
+  },
+  "results": [
+    {
+      "provider": "llamacpp/embeddinggemma-2",
+      "model": "embeddinggemma-2",
+      "provider_type": "llamacpp",
+      "base_url": "http://localhost:11090",
+      "success": true,
+      "error": null,
+      "warnings": [],
+      "query_prefix": "task: search result | query: ",
+      "document_prefix": "title: none | text: ",
+      "truncate_dim": null,
+      "capabilities": {
+        "build": "b11541-f2918cabb",
+        "model_alias": "ggml-org/embeddinggemma-2-GGUF:Q8_0",
+        "modalities": {
+          "vision": true,
+          "video": true,
+          "audio": true
+        },
+        "context_length": 8192,
+        "slots": 4
+      },
+      "hardware": {
+        "hostname": "DESKTOP-8ESH62J",
+        "cpu_count": 24,
+        "ram_gb": 255.7,
+        "gpus": [
+          {
+            "name": "NVIDIA RTX PRO 2000 Blackwell",
+            "memory_total_mb": 16311,
+            "memory_used_mb": 4412,
+            "driver_version": "596.36",
+            "utilization_percent": 9
+          }
+        ],
+        "note": "Measured on the host running the checks (backend container or CLI), which is not necessarily the embedding server."
+      },
+      "latency": {
+        "cold_ms": 129.8,
+        "p50_ms": 48.0,
+        "p95_ms": 50.2,
+        "runs": 20
+      },
+      "throughput": [
+        {
+          "batch_size": 1,
+          "texts": 32,
+          "wall_ms": 1848.9,
+          "texts_per_s": 17.31,
+          "tokens": 839,
+          "tokens_per_s": 453.8,
+          "token_source": "server"
+        },
+        {
+          "batch_size": 8,
+          "texts": 1000,
+          "wall_ms": 16040.3,
+          "texts_per_s": 62.34,
+          "tokens": 221813,
+          "tokens_per_s": 13828.5,
+          "token_source": "server"
+        },
+        {
+          "batch_size": 32,
+          "texts": 1000,
+          "wall_ms": 10671.4,
+          "texts_per_s": 93.71,
+          "tokens": 221813,
+          "tokens_per_s": 20785.8,
+          "token_source": "server"
+        },
+        {
+          "batch_size": 64,
+          "texts": 1000,
+          "wall_ms": 10762.6,
+          "texts_per_s": 92.91,
+          "tokens": 221813,
+          "tokens_per_s": 20609.7,
+          "token_source": "server"
+        },
+        {
+          "batch_size": 128,
+          "texts": 1000,
+          "wall_ms": 10906.5,
+          "texts_per_s": 91.69,
+          "tokens": 221813,
+          "tokens_per_s": 20337.6,
+          "token_source": "server"
+        }
+      ],
+      "vectors": {
+        "dimension": 768,
+        "expected_dimension": null,
+        "dimension_matches": null,
+        "norm_mean": 1.0,
+        "norm_min": 1.0,
+        "norm_max": 1.0,
+        "normalized": true
+      },
+      "truncation": [
+        {
+          "dim": 512,
+          "topk_overlap": 0.9189
+        },
+        {
+          "dim": 256,
+          "topk_overlap": 0.8379
+        }
+      ],
+      "retrieval": {
+        "queries": 100,
+        "top1_hits": 32,
+        "top5_hits": 55,
+        "top1_rate": 0.32,
+        "top5_rate": 0.55
+      },
+      "image": {
+        "supported": true,
+        "tokens": 85,
+        "latency_ms": 121.4,
+        "vector_changed": true,
+        "error": null
+      },
+      "agreement_with_index": 0.6054,
+      "total_ms": 52026.3
+    }
+  ],
+  "agreement": []
+}

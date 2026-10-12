@@ -14,6 +14,7 @@ or from the active strategy if one is provided.
 import json
 import logging
 import time
+import zlib
 from typing import List, Optional, Dict, Any, TYPE_CHECKING
 
 from backend.agent.schemas import (
@@ -50,27 +51,146 @@ _PHASE_MAX_TOKENS: Dict[str, int] = {
 _model_first_call_done: set = set()
 
 
-def _detect_repetition(text: str, threshold: float = 0.5) -> bool:
-    """Detect if text is mostly repetitive patterns.
+_LOOP_MIN_LINE_CHARS = 40
+_LOOP_MIN_LINE_REPEATS = 5
+_LOOP_MAX_PERIOD = 200
+_LOOP_MIN_SPAN = 120
+_TRUNCATION_MARKER = "\n\n... [truncated: repetitive output detected]"
+_JSON_RETRY_INSTRUCTION = (
+    "\n\nIMPORTANT: your previous reply could not be parsed. Reply with exactly one valid JSON "
+    "object and nothing else: no prose, no code fences, no comments."
+)
+
+
+def _repeated_line(text: str) -> Optional[str]:
+    """The most frequent long line if it repeats 5+ times and makes up two thirds of all lines.
+
+    Answers that put the same citation under every bullet reach one half, not two thirds.
+    """
+    counts: Dict[str, int] = {}
+    non_empty = 0
+    for line in text.splitlines():
+        s = line.strip()
+        non_empty += bool(s)
+        if len(s) >= _LOOP_MIN_LINE_CHARS:
+            counts[s] = counts.get(s, 0) + 1
+    if not counts:
+        return None
+    line, n = max(counts.items(), key=lambda kv: kv[1])
+    return line if n >= _LOOP_MIN_LINE_REPEATS and n * 3 >= non_empty * 2 else None
+
+
+def _tail_period(text: str) -> int:
+    """Length of a block that repeats back-to-back at the end of the text (0 if none)."""
+    s = text.rstrip()
+    for period in range(1, _LOOP_MAX_PERIOD + 1):
+        reps = max(6, -(-_LOOP_MIN_SPAN // period))
+        span = period * reps
+        if span > len(s):
+            break
+        unit = s[-period:]
+        if unit.strip() and s[-span:] == unit * reps:
+            return period
+    return 0
+
+
+def _detect_repetition(text: str, threshold: float = 0.10, check_lines: bool = True) -> bool:
+    """Detect output that degenerated into a loop.
+
+    Any of three signals: one long line (40+ chars) repeated 5+ times and making up
+    two thirds of all lines; a block repeated back-to-back at the end (the usual way a
+    looping generation ends); or, for long text, a zlib compression ratio below
+    ``threshold``. Indented JSON and legal answers with repeated citations stay clear
+    of all three (the previous check, any 10-char substring 6+ times, fired on JSON
+    indentation and cut valid output to 200 chars).
 
     Args:
-        text: The text to check for repetition.
-        threshold: Unused (reserved for future tuning).
+        text: Model output.
+        threshold: Compression ratio below which long text counts as a loop.
+        check_lines: Use the repeated-line signal (off for JSON, where list items repeat keys).
 
     Returns:
         True if the text appears to be repetitive garbage.
     """
-    if len(text) < 100:
+    if not text or len(text) < 100:
         return False
-    # Check if any 10-char substring repeats more than 5 times
-    for i in range(0, min(len(text), 200), 10):
-        pattern = text[i:i + 10]
-        if pattern and text.count(pattern) > 5:
-            return True
-    # Check character diversity - if fewer than 20 unique chars in 500+ char text
-    if len(text) > 500 and len(set(text[:500])) < 20:
+    if (check_lines and _repeated_line(text)) or _tail_period(text):
         return True
+    if len(text) >= 1500:
+        return len(zlib.compress(text.encode("utf-8"))) / len(text.encode("utf-8")) < threshold
     return False
+
+
+def _trim_repetition(text: str) -> str:
+    """Cut looping output where the loop starts and mark it; unchanged if the loop cannot be located."""
+    s = text.rstrip()
+    period = _tail_period(s)
+    if period:
+        i = len(s) - period
+        while i - period >= 0 and s[i - period:i] == s[i:i + period]:
+            i -= period
+        return s[:i + period] + _TRUNCATION_MARKER
+    line = _repeated_line(s)
+    if line:
+        pos, seen = 0, 0
+        while True:
+            pos = s.find(line, pos)
+            if pos == -1:
+                break
+            seen += 1
+            if seen == 3:
+                return s[:pos].rstrip() + _TRUNCATION_MARKER
+            pos += len(line)
+    return text
+
+
+def _extract_json(content: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Parse the JSON object in a model reply: bare, in a code fence, or embedded in prose."""
+    text = (content or "").strip()
+    if not text:
+        return None
+    candidates = [text]
+    if "```" in text:
+        fenced = text.split("```json", 1)[1] if "```json" in text else text.split("```", 1)[1]
+        candidates.insert(0, fenced.split("```", 1)[0].strip())
+    decoder = json.JSONDecoder()
+    for candidate in candidates:
+        try:
+            obj = json.loads(candidate)
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+        start, attempts = candidate.find("{"), 0
+        while start != -1 and attempts < 20:
+            try:
+                obj, _ = decoder.raw_decode(candidate, start)
+                if isinstance(obj, dict):
+                    return obj
+            except json.JSONDecodeError:
+                pass
+            start, attempts = candidate.find("{", start + 1), attempts + 1
+    return None
+
+
+def _clean_query(query: Any) -> str:
+    """Normalise a planner query and strip JSON syntax that leaked into it.
+
+    Returns "" when nothing usable is left (empty, or shorter than 3 characters).
+    Quoted phrases stay; unbalanced quotes are removed.
+    """
+    s = " ".join(str(query or "").split()).strip(" ,")
+    while s.startswith(('",', "',")):
+        s = s[2:].strip(" ,")
+    while s.endswith((',"', ",'")):
+        s = s[:-2].strip(" ,")
+    # A list separator inside: two quoted phrases merged into one query.
+    s = s.replace('", "', '" "')
+    if s.count('"') % 2 == 1:
+        s = s.strip('"').strip()
+        if s.count('"') % 2 == 1:
+            s = " ".join(s.replace('"', " ").split())
+    return s if len(s) >= 3 else ""
 
 
 # Default prompts (used when database is not available)
@@ -108,6 +228,8 @@ class Orchestrator:
         self._client = None
         self.activity_logger = activity_logger or NullActivityLogger()
         self.req_id = req_id
+        self.degradations: List[str] = []
+        self._user_message: str = ""
     
     def _get_model_string(self) -> str:
         """Get the model string in LiteLLM format with provider prefix."""
@@ -134,6 +256,13 @@ class Orchestrator:
         """Reset steps for a new session."""
         self.steps = []
         self._llm_calls = []
+        self.degradations = []
+        self._user_message = ""
+
+    def _degrade(self, name: str) -> None:
+        """Record a fallback path taken in this request; it ends up in the trace's ``degradations``."""
+        self.degradations.append(name)
+        logger.info(f"[req={self.req_id}] degradation: {name}")
     
     def _get_prompt(self, phase: str) -> str:
         """Get prompt for a phase, using strategy if available.
@@ -170,50 +299,85 @@ class Orchestrator:
         phase: OrchestratorPhase,
         expect_json: bool = True
     ) -> Dict[str, Any]:
-        """Call the LLM and record the step.
-        
+        """Call the LLM, parse the output and record one step per attempt.
+
+        A JSON phase whose output cannot be parsed is retried once with a stricter
+        instruction (``settings.agent_json_retry``). Fallbacks are recorded in
+        ``self.degradations``.
+
         Args:
             prompt: The prompt to send
             phase: Which phase this is
             expect_json: Whether to parse response as JSON
-        
+
         Returns:
-            Parsed response dict (or {"response": text} if not JSON)
+            Parsed response dict, ``{"response": text}`` if not JSON, or
+            ``{"response": text, "parse_error": True}`` if JSON could not be parsed
+        """
+        phase_key = phase.value if hasattr(phase, 'value') else str(phase)
+        content = await self._complete(prompt, phase, expect_json, attempt=1)
+        if not expect_json:
+            return {"response": content}
+
+        result = _extract_json(content)
+        if result is None and settings.agent_json_retry:
+            self.steps[-1].parse_error = True
+            self.steps[-1].raw_output = content[:4000]
+            logger.warning(f"[req={self.req_id}] {phase_key}: output is not valid JSON, retrying once: {content[:200]!r}")
+            content = await self._complete(prompt + _JSON_RETRY_INSTRUCTION, phase, expect_json, attempt=2)
+            result = _extract_json(content)
+            if result is not None:
+                self._degrade(f"{phase_key}_json_retry")
+        if result is None:
+            step = self.steps[-1]
+            step.parse_error = True
+            step.raw_output = content[:4000]
+            self._degrade(f"{phase_key}_parse_failed")
+            logger.warning(f"[req={self.req_id}] Failed to parse JSON from orchestrator: {content[:200]}")
+            return {"response": content, "parse_error": True}
+
+        step = self.steps[-1]
+        step.reasoning = str(result.get("reasoning") or content[:500])[:500]
+        step.output_summary = json.dumps(result, ensure_ascii=False)[:500]
+        return result
+
+    async def _complete(self, prompt: str, phase: OrchestratorPhase, expect_json: bool, attempt: int) -> str:
+        """One LLM call: provider options, loop guard, step record and telemetry.
+
+        Returns:
+            The (possibly trimmed) text output.
         """
         from litellm import acompletion
-        from backend.core.config import settings
-        
+        from backend.agent.ollama_options import apply_ollama_options, think_budget
+
         start_time = time.time()
-        
+        phase_key = phase.value if hasattr(phase, 'value') else str(phase)
+        max_tokens_for_phase = _PHASE_MAX_TOKENS.get(phase_key, 2000)
+        model_string = self._get_model_string()
+        request_options: Dict[str, Any] = {}
+
         try:
-            # Get the model string with provider prefix
-            model_string = self._get_model_string()
             api_key = settings.get_api_key_for_provider(self.provider)
-            
-            # Determine phase-specific max_tokens
-            phase_key = phase.value if hasattr(phase, 'value') else str(phase)
-            max_tokens_for_phase = _PHASE_MAX_TOKENS.get(phase_key, 2000)
-            
-            # Handle newer OpenAI models that require max_completion_tokens
             llm_params = {
                 "model": model_string,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.2 if phase != OrchestratorPhase.SYNTHESIZE else 0.7,
                 "api_key": api_key,
             }
-            
+
             # Set api_base for Ollama models so LiteLLM routes to the correct host
             is_ollama = self.provider.lower() == "ollama" or "ollama/" in model_string
             if is_ollama:
                 llm_params["api_base"] = settings.ollama_base_url
-                # Ollama-specific: penalize repetition to prevent garbage output
-                llm_params["repeat_penalty"] = 1.3
-                llm_params["stop"] = ["\n\n\n\n", "---END---"]
                 # Large local models (cold start + long generation) need a
                 # generous per-call budget. Cloud providers use their own
                 # server-side limits.
                 llm_params["timeout"] = settings.agent_llm_request_timeout
-            
+                if not expect_json:
+                    llm_params["stop"] = ["\n\n\n\n", "---END---"]
+                request_options = await apply_ollama_options(llm_params, phase_key, json_mode=expect_json)
+                max_tokens_for_phase += think_budget(request_options)
+
             # Check if this is a newer OpenAI model that requires max_completion_tokens
             model_lower = model_string.lower()
             needs_max_completion_tokens = any(prefix in model_lower for prefix in [
@@ -223,9 +387,10 @@ class Orchestrator:
                 llm_params["max_completion_tokens"] = max_tokens_for_phase
             else:
                 llm_params["max_tokens"] = max_tokens_for_phase
-            
-            logger.info(f"[req={self.req_id}] Orchestrator LLM call: model={model_string}, provider={self.provider}, api_base={llm_params.get('api_base', 'default')}")
-            
+            request_options.update(temperature=llm_params["temperature"], max_tokens=max_tokens_for_phase)
+
+            logger.info(f"[req={self.req_id}] Orchestrator LLM call: model={model_string}, provider={self.provider}, api_base={llm_params.get('api_base', 'default')}, phase={phase_key}, attempt={attempt}, options={request_options}")
+
             # Log the LLM request for observability
             self.activity_logger.log_llm_request(
                 model=model_string, provider=self.provider,
@@ -235,69 +400,78 @@ class Orchestrator:
                 api_base=llm_params.get("api_base", ""),
                 phase=phase.value
             )
-            
+
             response = await acompletion(**llm_params)
-            
-            content = response.choices[0].message.content
-            tokens_used = response.usage.total_tokens if response.usage else 0
+
+            raw_content = response.choices[0].message.content or ""
+            usage = response.usage
+            tokens_used = usage.total_tokens if usage else 0
+            prompt_tokens = (getattr(usage, "prompt_tokens", 0) or 0) if usage else 0
+            completion_tokens = (getattr(usage, "completion_tokens", 0) or 0) if usage else 0
             duration_ms = (time.time() - start_time) * 1000
-            
-            # Repetition guard: detect and truncate garbage output
-            if content and _detect_repetition(content):
-                logger.warning(f"[req={self.req_id}] Repetitive output detected in {phase.value} phase, truncating")
-                content = content[:200] + "... [truncated: repetitive output detected]"
-            
+            finish_reason = response.choices[0].finish_reason or ""
+            # LiteLLM's Ollama adapter always reports "stop"; a completion that used its
+            # whole budget was cut off.
+            hit_limit = finish_reason == "length" or (completion_tokens >= max_tokens_for_phase > 0)
+            # ~3.5 characters per token; the rest of the completion was hidden reasoning.
+            hidden_tokens = max(0, completion_tokens - int(len(raw_content) / 3.5))
+
+            content = raw_content
+            repetition = _detect_repetition(raw_content, check_lines=not expect_json)
+            truncated = False
+            if repetition:
+                logger.warning(f"[req={self.req_id}] Repetitive output detected in {phase.value} phase" + ("" if expect_json else ", truncating"))
+                if not expect_json:
+                    content = _trim_repetition(raw_content)
+                    truncated = content != raw_content
+                    if truncated:
+                        self._degrade(f"{phase_key}_repetition_trimmed")
+            if hit_limit:
+                self._degrade(f"{phase_key}_token_limit")
+                logger.warning(f"[req={self.req_id}] {phase_key}: completion used its whole budget ({completion_tokens}/{max_tokens_for_phase} tokens, ~{hidden_tokens} hidden)")
+
             # Log the LLM response for observability
             self.activity_logger.log_llm_response(
                 model=model_string, content=content, tokens_used=tokens_used,
                 duration_ms=duration_ms,
-                finish_reason=response.choices[0].finish_reason or "",
+                finish_reason=finish_reason,
                 phase=phase.value
             )
-            
-            # Try to parse JSON
-            result = None
-            if expect_json:
-                try:
-                    # Handle markdown code blocks
-                    if "```json" in content:
-                        content = content.split("```json")[1].split("```")[0]
-                    elif "```" in content:
-                        content = content.split("```")[1].split("```")[0]
-                    result = json.loads(content.strip())
-                except json.JSONDecodeError:
-                    logger.warning(f"[req={self.req_id}] Failed to parse JSON from orchestrator: {content[:200]}")
-                    result = {"response": content, "parse_error": True}
-            else:
-                result = {"response": content}
-            
+
             # Calculate per-phase token throughput for hardware benchmarking
             tokens_per_second = (
                 round(tokens_used / (duration_ms / 1000), 1)
                 if duration_ms > 0 and tokens_used > 0 else 0.0
             )
-            
+
             # Cold-start detection: first call per model is flagged
             is_cold_start = self.model not in _model_first_call_done
             _model_first_call_done.add(self.model)
-            
-            # Record step
+
             step = OrchestratorStep(
                 phase=phase,
                 model=self.model,
                 input_summary=prompt[:200] + "..." if len(prompt) > 200 else prompt,
-                reasoning=result.get("reasoning", content[:500]),
-                output_summary=json.dumps(result)[:500] if isinstance(result, dict) else str(result)[:500],
+                reasoning=content[:500],
+                output_summary=json.dumps({"response": content}, ensure_ascii=False)[:500],
                 tokens_used=tokens_used,
                 duration_ms=duration_ms,
                 tokens_per_second=tokens_per_second,
-                is_cold_start=is_cold_start
+                is_cold_start=is_cold_start,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                hidden_tokens_est=hidden_tokens,
+                max_tokens=max_tokens_for_phase,
+                hit_token_limit=hit_limit,
+                content_chars=len(raw_content),
+                attempt=attempt,
+                repetition_detected=repetition,
+                output_truncated=truncated,
+                request_options=request_options,
+                raw_output=raw_content[:4000] if truncated else None,
             )
             self.steps.append(step)
 
-            # Record telemetry LLM call
-            finish_reason = response.choices[0].finish_reason or ""
-            usage = response.usage
             llm_record = LLMCall(
                 phase=phase_key,
                 model=self.model,
@@ -305,25 +479,25 @@ class Orchestrator:
                 temperature=llm_params.get("temperature", 0.7),
                 max_tokens=max_tokens_for_phase,
                 prompt_text=prompt,
-                response_text=content if content else "",
-                prompt_tokens=usage.prompt_tokens if usage and hasattr(usage, 'prompt_tokens') else 0,
-                response_tokens=usage.completion_tokens if usage and hasattr(usage, 'completion_tokens') else 0,
+                response_text=content,
+                prompt_tokens=prompt_tokens,
+                response_tokens=completion_tokens,
                 total_tokens=tokens_used,
                 latency_ms=int(duration_ms),
-                finish_reason=finish_reason,
+                finish_reason="length" if hit_limit else finish_reason,
                 success=True,
                 is_cold_start=is_cold_start,
-                repetition_detected=_detect_repetition(content) if content else False,
+                repetition_detected=repetition,
             )
             self._llm_calls.append(llm_record)
-            
-            return result
-            
+
+            return content
+
         except Exception as e:
             logger.error(f"[req={self.req_id}] Orchestrator LLM call failed: {e}")
             self.activity_logger.log_error(str(e), context={"phase": phase.value, "model": model_string})
             duration_ms = (time.time() - start_time) * 1000
-            
+
             # Record failed step
             step = OrchestratorStep(
                 phase=phase,
@@ -332,12 +506,15 @@ class Orchestrator:
                 reasoning=f"Error: {str(e)}",
                 output_summary="Failed",
                 tokens_used=0,
-                duration_ms=duration_ms
+                duration_ms=duration_ms,
+                attempt=attempt,
+                request_options=request_options,
+                error=f"{type(e).__name__}: {e}"[:500],
             )
             self.steps.append(step)
-            
+
             raise
-    
+
     async def analyze(
         self,
         user_message: str,
@@ -352,6 +529,7 @@ class Orchestrator:
         Returns:
             Analysis dict with intent, entities, sources needed
         """
+        self._user_message = user_message
         history_str = self._extract_relevant_context(user_message, conversation_history)
         
         prompt = self._get_prompt("analyze").format(
@@ -362,8 +540,10 @@ class Orchestrator:
         result = await self._call_llm(prompt, OrchestratorPhase.ANALYZE)
         
         # Use strategy's process_analysis if available
+        if result.get("parse_error"):
+            self._degrade("analyze_defaults_used")
         if self.strategy:
-            result = self.strategy.process_analysis(result)
+            result = self.strategy.process_analysis(result) or result
         else:
             # Set defaults for missing fields with new schema compatibility
             result.setdefault("intent_summary", user_message[:100])
@@ -381,9 +561,17 @@ class Orchestrator:
             result.setdefault("key_entities", self._flatten_entities(result.get("named_entities", {})))
             result.setdefault("is_complex", result.get("complexity", 2) >= 3)
             result.setdefault("requires_multiple_searches", result.get("complexity", 2) >= 2)
-        
+
+        # Strategies default these to "" - the planner would then search with an empty query.
+        if not str(result.get("intent_summary") or "").strip():
+            result["intent_summary"] = user_message[:200]
+        if not isinstance(result.get("search_queries"), dict):
+            result["search_queries"] = {"primary": "", "alternatives": []}
+        if not _clean_query(result["search_queries"].get("primary")):
+            result["search_queries"]["primary"] = user_message
+
         return result
-    
+
     def _extract_relevant_context(self, current_query: str, history: List[Dict]) -> str:
         """Extract relevant context from conversation history.
         
@@ -495,14 +683,18 @@ class Orchestrator:
         for task_data in result.get("tasks", []):
             try:
                 # Get query - prefer optimized queries from analysis if task query is generic
-                query = task_data.get("query", "")
+                raw_query = task_data.get("query", "")
+                query = _clean_query(raw_query)
+                if raw_query and query != " ".join(str(raw_query).split()):
+                    self._degrade("plan_query_repaired")
+                if not query:
+                    self._degrade("plan_query_empty")
                 if not query or query == analysis.get("intent_summary", ""):
                     # Use the primary search query from analysis if available
-                    search_queries = analysis.get("search_queries", {})
-                    if search_queries.get("primary"):
-                        query = search_queries["primary"]
-                    else:
-                        query = analysis.get("intent_summary", "")
+                    search_queries = analysis.get("search_queries", {}) or {}
+                    query = (_clean_query(search_queries.get("primary"))
+                             or _clean_query(analysis.get("intent_summary"))
+                             or self._user_message)
                 
                 task = TaskDefinition(
                     id=task_data.get("id", f"task_{len(tasks)}"),
@@ -520,7 +712,22 @@ class Orchestrator:
         
         # If no tasks were created, create smart default tasks based on analysis
         if not tasks:
+            self._degrade("plan_default_tasks")
             tasks = self._create_default_tasks(analysis)
+
+        # Anchor: also search the user's own words. Rewritten queries lose names,
+        # switch language or leak syntax; the plain question is what fast mode searches.
+        question = (self._user_message or "").strip()
+        if settings.agent_anchor_raw_query and question and not any(
+            t.query.strip().lower() == question.lower() for t in tasks
+        ):
+            tasks.append(TaskDefinition(
+                id="anchor_user_question",
+                type=TaskType.SEARCH_ALL,
+                query=question[:1000],
+                priority=1,
+                max_results=10
+            ))
         
         # Defense in depth: filter out any disabled task types the LLM may have planned
         tasks = ToolGate.filter_tasks(tasks)
@@ -538,8 +745,10 @@ class Orchestrator:
         has_doc_search = any(t.type in doc_search_types for t in tasks)
         
         if not has_doc_search:
-            primary_query = analysis.get("search_queries", {}).get(
-                "primary", analysis.get("intent_summary", "")
+            primary_query = (
+                (analysis.get("search_queries", {}) or {}).get("primary")
+                or analysis.get("intent_summary")
+                or self._user_message
             )
             logger.info(f"[req={self.req_id}] No document search tasks in plan - adding SEARCH_ALL as safety net")
             tasks.append(TaskDefinition(
@@ -574,8 +783,12 @@ class Orchestrator:
             List of default TaskDefinition objects
         """
         tasks = []
-        search_queries = analysis.get("search_queries", {})
-        primary_query = search_queries.get("primary", analysis.get("intent_summary", ""))
+        search_queries = analysis.get("search_queries", {}) or {}
+        primary_query = (
+            _clean_query(search_queries.get("primary"))
+            or _clean_query(analysis.get("intent_summary"))
+            or self._user_message
+        )
         alternatives = search_queries.get("alternatives", [])
         source_priority = analysis.get("source_priority", "profile")
         
@@ -680,7 +893,23 @@ class Orchestrator:
         )
         
         result = await self._call_llm(prompt, OrchestratorPhase.EVALUATE)
-        
+        phase = "initial" if iteration == 1 else ("refinement" if iteration == 2 else "final")
+
+        if result.get("parse_error"):
+            # Decide from the results instead of defaulting to "sufficient".
+            found = sum(len(r.documents_found) + len(r.web_links_found) for r in results)
+            decision = "sufficient" if found else "cannot_answer"
+            self._degrade(f"evaluate_fallback_{decision}")
+            return EvaluationDecision(
+                phase=phase,
+                findings_summary="",
+                gaps_identified=[],
+                decision=decision,
+                follow_up_tasks=[],
+                reasoning="Evaluation output could not be parsed; decided from the number of results found.",
+                confidence=0.0,
+            )
+
         # Parse follow-up tasks
         follow_up_tasks = []
         for task_data in result.get("follow_up_tasks", []):
@@ -702,17 +931,27 @@ class Orchestrator:
         # Filter out disabled task types from follow-up tasks
         follow_up_tasks = ToolGate.filter_tasks(follow_up_tasks)
         
-        # Determine phase
-        phase = "initial" if iteration == 1 else ("refinement" if iteration == 2 else "final")
-        
+        decision = str(result.get("decision") or "sufficient").strip().lower()
+        if decision not in ("sufficient", "need_refinement", "need_expansion", "cannot_answer"):
+            self._degrade("evaluate_invalid_decision")
+            decision = ("cannot_answer" if "cannot" in decision
+                        else "need_refinement" if ("refine" in decision or "insufficient" in decision)
+                        else "sufficient")
+        try:
+            confidence = min(1.0, max(0.0, float(result.get("confidence", 0.5))))
+        except (TypeError, ValueError):
+            self._degrade("evaluate_invalid_confidence")
+            confidence = 0.5
+        gaps = result.get("gaps_identified", [])
+
         return EvaluationDecision(
             phase=phase,
-            findings_summary=result.get("findings_summary", ""),
-            gaps_identified=result.get("gaps_identified", []),
-            decision=result.get("decision", "sufficient"),
+            findings_summary=str(result.get("findings_summary", "") or ""),
+            gaps_identified=[str(g) for g in gaps] if isinstance(gaps, list) else [],
+            decision=decision,
             follow_up_tasks=follow_up_tasks,
-            reasoning=result.get("reasoning", ""),
-            confidence=result.get("confidence", 0.5)
+            reasoning=str(result.get("reasoning", "") or ""),
+            confidence=confidence
         )
     
     async def synthesize(
@@ -802,9 +1041,11 @@ class Orchestrator:
                 return response_text
             
             logger.warning(f"[req={self.req_id}] LLM returned empty response during synthesis, using fallback")
+            self._degrade("synthesize_empty_fallback")
             
         except Exception as e:
             logger.error(f"[req={self.req_id}] Synthesis LLM call failed: {e}")
+            self._degrade("synthesize_failed_fallback")
         
         # Fallback: Generate a basic response from the found documents
         if limited_info:

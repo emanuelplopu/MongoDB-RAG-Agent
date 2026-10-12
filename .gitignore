@@ -86,3 +86,6 @@ tools/telemetry-viewer/dist-package/
 
 # Offline install packages (full-backup.ps1 default output)
 Hub_Backups/
+
+# Synthetic corpus generator runs (default run.output_root)
+synthetic_runs/

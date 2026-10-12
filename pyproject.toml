@@ -43,6 +43,10 @@ dev = [
     "black>=24.10.0",
     "ruff>=0.8.0",
 ]
+# Synthetic law-firm corpus generator (backend/evaluation/synthetic_corpus): PDF rendering.
+synthetic = [
+    "fpdf2>=2.8,<3",
+]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

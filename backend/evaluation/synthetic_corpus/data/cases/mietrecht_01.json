@@ -1,0 +1,47 @@
+{
+  "id": "mietrecht_01",
+  "area": "mietrecht_mietzins_raeumung",
+  "title": "Mieterin mindert wegen Schimmel, Vermieterin klagt auf Zahlung und Räumung",
+  "description": "Eine Mieterin bewohnt eine Altbauwohnung (Top 14) in Wien-Leopoldstadt. Im Herbst tritt im Schlafzimmer und Bad massiver Schimmel durch eine undichte Fallstrangleitung auf. Sie zeigt den Mangel per E-Mail an, die Hausverwaltung reagiert monatelang nicht. Ab dem Folgemonat mindert sie den Hauptmietzins um 30 Prozent. Die Vermieterin lässt durch ihren Anwalt mahnen und bringt eine Mietzins- und Räumungsklage beim Bezirksgericht Leopoldstadt ein. Ein Sachverständiger stellt in einem Befund die undichte Leitung als Ursache fest. Die Parteien schließen in der zweiten Tagsatzung einen Vergleich: Die Minderung wird mit 20 Prozent anerkannt, die Räumungsklage wird zurückgezogen, der Rest wird in Raten bezahlt.",
+  "client_role": "mandant",
+  "start_date": "2024-10-07",
+  "streitwert": 4680.0,
+  "documents_target": 22,
+  "use_ris_search": true,
+  "extra_instructions": "Die Betriebskostenabrechnung des Vorjahres soll eine kleine Nachforderung enthalten, die mit dem Streit nichts zu tun hat (Ablenkung für Suchfragen). Von der Klagebeantwortung gibt es einen Entwurf mit einem anderen Minderungsprozentsatz.",
+  "role_hints": {
+    "mandant": {
+      "gender": "female",
+      "postcode": "1020"
+    },
+    "vermieter": {
+      "name_word": "Immobilien",
+      "legal_form": "GmbH",
+      "vienna": true
+    },
+    "hausverwaltung": {
+      "name_word": "Hausverwaltung",
+      "legal_form": "GmbH",
+      "vienna": true
+    },
+    "gegenvertreter": {
+      "gender": "male",
+      "vienna": true
+    },
+    "richter": {
+      "gender": "male"
+    },
+    "sachverstaendiger": {
+      "gender": "male"
+    },
+    "zeuge": {
+      "gender": "female",
+      "postcode": "1020"
+    }
+  },
+  "tags": [
+    "mietrecht",
+    "bezirksgericht",
+    "vergleich"
+  ]
+}
