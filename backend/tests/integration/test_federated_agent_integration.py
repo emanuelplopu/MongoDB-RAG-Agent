@@ -53,6 +53,7 @@ class TestFederatedSearchIntegration:
         mock_db = MagicMock()
         mock_collection = MagicMock()
         mock_collection.count_documents = AsyncMock(return_value=10)
+        mock_collection.find_one = AsyncMock(return_value={"_id": "chunk-1"})
         
         # Mock aggregate cursor
         async def mock_aggregate(pipeline):

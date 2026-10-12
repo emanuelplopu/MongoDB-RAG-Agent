@@ -984,6 +984,13 @@
 | `AGENT_WORKER_TIMEOUT` | `60` | Worker task timeout (seconds) |
 | `AGENT_ORCHESTRATOR_TIMEOUT` | `120` | Orchestrator phase timeout |
 | `AGENT_TOTAL_TIMEOUT` | `300` | Total agent request timeout |
+| `AGENT_OLLAMA_NUM_CTX` | `32768` | Context window for agent calls to Ollama (0 = server default). Sets each model's VRAM size; keep it constant |
+| `AGENT_OLLAMA_THINK_PHASES` | (empty) | Agent call sites where thinking-capable Ollama models may reason first (`synthesize`, `all`, ...). Hidden reasoning counts against `max_tokens` |
+| `AGENT_OLLAMA_THINK_BUDGET` | `4096` | Tokens added to `max_tokens` where thinking is enabled, so hidden reasoning does not cut the answer |
+| `AGENT_OLLAMA_JSON_MODE` | `true` | Grammar-constrained JSON (`format=json`) for analyze, plan and evaluate |
+| `AGENT_OLLAMA_REPEAT_PENALTY` | `1.05` | `repeat_penalty` for Ollama text generation; JSON phases use 1.0 |
+| `AGENT_JSON_RETRY` | `true` | Retry an unparsable orchestrator JSON phase once |
+| `AGENT_ANCHOR_RAW_QUERY` | `true` | Thinking mode also searches the user's own question next to the planner's queries |
 | `JWT_SECRET_KEY` | `recallhub-secret-key-...` | JWT signing key (32+ chars in prod) |
 | `REGISTRATION_MODE` | `open` | Registration: open/invite/closed |
 | `INVITE_CODE` | — | Single invite code |

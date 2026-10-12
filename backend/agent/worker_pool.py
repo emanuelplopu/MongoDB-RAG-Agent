@@ -20,6 +20,7 @@ from backend.agent.schemas import (
 )
 from backend.agent.federated_search import FederatedSearch, get_federated_search
 from backend.agent.tool_gate import ToolGate
+from backend.agent.ollama_options import apply_ollama_options, think_budget
 from backend.core.config import settings
 from backend.services.activity_logger import NullActivityLogger
 from backend.models.telemetry import LLMCall, SearchOperation, ToolExecution
@@ -578,15 +579,17 @@ class WorkerPool:
             }
             
             # Set api_base for Ollama models
+            ollama_options: Dict[str, Any] = {}
             if self.provider.lower() == "ollama" or "ollama/" in model_string:
                 llm_params["api_base"] = settings.ollama_base_url
                 llm_params["timeout"] = settings.agent_llm_request_timeout
+                ollama_options = await apply_ollama_options(llm_params, "summarize")
             
             # Check if this is a newer OpenAI model
             if "gpt-5" in model_string.lower() or "gpt-4o" in model_string.lower():
                 llm_params["max_completion_tokens"] = 500
             else:
-                llm_params["max_tokens"] = 500
+                llm_params["max_tokens"] = 500 + think_budget(ollama_options)
             
             logger.info(f"[req={self.req_id}] Worker LLM call (summarize): model={model_string}, provider={self.provider}, api_base={llm_params.get('api_base', 'default')}")
             
@@ -679,15 +682,17 @@ class WorkerPool:
             }
             
             # Set api_base for Ollama models
+            ollama_options: Dict[str, Any] = {}
             if self.provider.lower() == "ollama" or "ollama/" in model_string:
                 llm_params["api_base"] = settings.ollama_base_url
                 llm_params["timeout"] = settings.agent_llm_request_timeout
+                ollama_options = await apply_ollama_options(llm_params, "refine_query")
             
             # Check if this is a newer OpenAI model
             if "gpt-5" in model_string.lower() or "gpt-4o" in model_string.lower():
                 llm_params["max_completion_tokens"] = 100
             else:
-                llm_params["max_tokens"] = 100
+                llm_params["max_tokens"] = 100 + think_budget(ollama_options)
             
             logger.info(f"[req={self.req_id}] Worker LLM call (refine): model={model_string}, provider={self.provider}, api_base={llm_params.get('api_base', 'default')}")
             

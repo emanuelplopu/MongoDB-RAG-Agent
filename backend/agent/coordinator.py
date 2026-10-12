@@ -46,6 +46,7 @@ from backend.evaluation.contradiction_detector import ContradictionDetector
 from backend.agent.strategies.base import BaseStrategy
 from backend.agent.strategies.registry import StrategyRegistry
 from backend.agent.tool_gate import ToolGate
+from backend.agent.ollama_options import apply_ollama_options, think_budget
 from backend.core.config import settings
 from backend.services.activity_logger import ActivityLogger, NullActivityLogger
 from backend.models.telemetry import LLMCall, SearchOperation, ToolExecution, PhaseMetrics
@@ -437,6 +438,8 @@ class FederatedAgent:
             self.trace.add_orchestrator_step(step)
         for step in self.worker_pool.steps:
             self.trace.add_worker_step(step)
+        self.trace.degradations.extend(getattr(self.orchestrator, "degradations", []))
+        self.trace.degradations.extend(getattr(self.worker_pool, "degradations", []))
         self.trace.finalize()
         
         # Fire-and-forget telemetry recording (non-blocking)
@@ -1341,15 +1344,17 @@ class FederatedAgent:
             }
             
             # Set api_base for Ollama models so LiteLLM routes to the correct host
+            ollama_options: Dict[str, Any] = {}
             if "ollama/" in model_string:
                 llm_params["api_base"] = settings.ollama_base_url
                 llm_params["timeout"] = settings.agent_llm_request_timeout
-            
+                ollama_options = await apply_ollama_options(llm_params, "fast_synthesize")
+
             # Check if this is a newer OpenAI model
             if "gpt-5" in model_string.lower() or "gpt-4o" in model_string.lower():
                 llm_params["max_completion_tokens"] = 1500
             else:
-                llm_params["max_tokens"] = 1500
+                llm_params["max_tokens"] = 1500 + think_budget(ollama_options)
             
             response = await acompletion(**llm_params)
             return response.choices[0].message.content

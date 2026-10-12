@@ -162,6 +162,50 @@ class BackendSettings(BaseSettings):
             "generous budgets for cold-start and long generations."
         )
     )
+    # Ollama request options for agent LLM calls (backend/agent/ollama_options.py).
+    agent_ollama_num_ctx: int = Field(
+        default=32768,
+        description=(
+            "Context window (num_ctx) requested for agent calls to Ollama; 0 keeps the "
+            "server default. It sets each model's VRAM footprint (at 131072 gemma4:e4b "
+            "needs ~21 GiB, at 32768 ~11 GiB). Keep it constant: every new value reloads the model."
+        )
+    )
+    agent_ollama_think_phases: str = Field(
+        default="",
+        description=(
+            "Comma-separated agent call sites in which thinking-capable Ollama models may "
+            "reason before answering (analyze, plan, evaluate, synthesize, fast_synthesize, "
+            "summarize, refine_query, or 'all'). Elsewhere think=false. Hidden reasoning is "
+            "dropped by LiteLLM but counts against max_tokens."
+        )
+    )
+    agent_ollama_think_budget: int = Field(
+        default=4096,
+        description=(
+            "Tokens added to max_tokens for calls where thinking is enabled "
+            "(agent_ollama_think_phases), so hidden reasoning does not cut the visible answer."
+        )
+    )
+    agent_ollama_json_mode: bool = Field(
+        default=True,
+        description="Ask Ollama for grammar-constrained JSON (format=json) in the analyze, plan and evaluate phases."
+    )
+    agent_ollama_repeat_penalty: float = Field(
+        default=1.05,
+        description="repeat_penalty for Ollama text generation; JSON phases always use 1.0."
+    )
+    agent_json_retry: bool = Field(
+        default=True,
+        description="Retry an orchestrator JSON phase once with a stricter instruction when its output cannot be parsed."
+    )
+    agent_anchor_raw_query: bool = Field(
+        default=True,
+        description=(
+            "In thinking mode, always also search the user's own question next to the "
+            "planner's rewritten queries, so retrieval is never worse than fast mode."
+        )
+    )
     agent_default_mode: str = Field(
         default="auto",
         description="Default agent mode: auto, thinking, or fast"
