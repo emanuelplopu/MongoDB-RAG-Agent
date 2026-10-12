@@ -75,6 +75,7 @@ installer/tray-app/.vs/
 
 # Installer build outputs
 installer/output/
+installer/embedder/
 installer/*.exe
 
 # Telemetry Viewer

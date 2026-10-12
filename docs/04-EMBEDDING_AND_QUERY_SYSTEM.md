@@ -215,8 +215,62 @@ EMBEDDING_DIMENSION=768
 ```
 
 Tunables: `EMBEDDER_HF_MODEL`, `EMBEDDER_CTX` (total context, split across
-`EMBEDDER_SLOTS`), `EMBEDDER_THREADS` (CPU), `EMBEDDER_GPU_LAYERS` (GPU). The
-GGUF is cached in the `embedder_models` volume.
+`EMBEDDER_SLOTS`), `EMBEDDER_THREADS` (CPU), `EMBEDDER_GPU_LAYERS` (GPU),
+`EMBEDDER_OFFLINE` (`1` maps to llama.cpp `--offline`: serve from the cached
+GGUF, never contact Hugging Face). The GGUF (310 MB) and its mmproj (555 MB)
+live in the `embedder_models` volume in Hugging Face hub-cache layout
+(`/root/.cache/huggingface/hub/models--ggml-org--embeddinggemma-2-GGUF/`:
+content-addressed `blobs/`, `snapshots/<rev>/*.gguf` symlinks, `refs/main`).
+
+#### Offline packages and the Windows installer
+
+The llama.cpp images are not part of the default export (~1.2 GB each) and the
+model is a Docker volume, not an image, so both are opt-in:
+
+```powershell
+# Backup package: server image(s) into images\, volume contents into embedder\
+.\scripts\full-backup.ps1 -Tenant recallhub -All -IncludeEmbedder                         # CPU image
+.\scripts\full-backup.ps1 -Tenant recallhub -All -IncludeEmbedder -EmbedderVariant gpu     # or both
+
+# Standalone pieces (both support -WhatIf)
+.\scripts\export-docker-images.ps1 -OutputPath .\images -Tenant recallhub -IncludeEmbedder -EmbedderVariant both -WhatIf
+.\scripts\export-embedder-models.ps1 -OutputPath .\embedder
+
+# Hardened Windows installer (or set "embedder.enabled": true in installer\config.json)
+.\installer\build.ps1 -IncludeEmbedder -EmbedderVariant cpu
+```
+
+- `export-docker-images.ps1 -IncludeEmbedder` writes
+  `images/embedder-llamacpp-server.tar` (`ghcr.io/ggml-org/llama.cpp:server`)
+  and/or `images/embedder-llamacpp-server-cuda.tar` (`…:server-cuda`).
+- `export-embedder-models.ps1` archives the root of `recallhub_embedder_models`
+  into `embedder/embedder-models.tar` (~0.8 GB) plus
+  `embedder-models-manifest.json` (model reference, file list). It refuses to
+  run while the volume holds no model, i.e. before the first successful start
+  of the embedder.
+- On the target, `INSTALL.ps1` / `full-restore.ps1` load the image with the
+  others, seed the volume through `installer/scripts/Import-EmbedderModels.ps1`
+  (idempotent: skips when a GGUF is already present), write `EMBEDDER_OFFLINE=1`
+  to `.env`, start the stack with `--profile <tenant> --profile embedder` (or
+  `embedder-gpu`) and give the tray app `composeProfile: "<tenant>,embedder"`.
+  `-Embedder auto|none|cpu|gpu` overrides what the backup manifest says
+  (`embedder_included`, `embedder_variant`); `auto` picks the CPU image for a
+  "both" package. The restore warns when `.env` and the chosen profile disagree
+  about `EMBEDDING_BASE_URL=http://embedder:8080/v1`.
+- Hardened installer: `installer/config.json` → `"embedder": { "enabled": true,
+  "variant": "cpu" | "gpu", ... }` makes `New-BuildConfig.ps1` emit
+  `COMPOSE_PROFILES=embedder` (or `embedder-gpu`), `EMBEDDING_PROVIDER=openai`,
+  `EMBEDDING_BASE_URL=http://embedder:8080/v1`, `EMBEDDING_MODEL=embeddinggemma-2`,
+  `EMBEDDING_DIMENSION=768` (plus the `EMBEDDER_*` tunables) into `hardened.env`,
+  and makes `build.ps1` bundle the image and the cache; `setup.iss` ships
+  `embedder\` and runs `Import-EmbedderModels.ps1` before `Start-Services.ps1`.
+  `docker-compose.hardened.yml` carries the profile-gated `embedder` /
+  `embedder-gpu` services on the internal network only (alias `embedder`, no
+  port mapping, `LLAMA_ARG_OFFLINE=1`) and the `embedder_models` volume with the
+  fixed name `recallhub_embedder_models`. The checked-in `hardened.env` keeps
+  Ollama embeddings and documents the swap as a commented block.
+- Stored vectors are model-specific (768-d EmbeddingGemma 2 vs. 1536/3072-d
+  OpenAI): switching the provider on an existing tenant requires re-ingesting.
 
 Notes:
 

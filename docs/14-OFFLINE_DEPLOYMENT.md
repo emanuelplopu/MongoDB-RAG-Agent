@@ -35,7 +35,11 @@ Quellex_v0.8.8_YYYYMMDD_HHMMSS/
 │   ├── backend-quellex.tar      (tenant backend)
 │   ├── frontend-quellex.tar     (tenant frontend)
 │   ├── ingestion-worker.tar     (shared)
-│   └── mongodb-atlas-local.tar  (shared)
+│   ├── mongodb-atlas-local.tar  (shared)
+│   └── embedder-llamacpp-server[-cuda].tar  (optional: -IncludeEmbedder, ~1.2 GB each)
+├── embedder/                    (optional: -IncludeEmbedder)
+│   ├── embedder-models.tar      (contents of the embedder_models volume: GGUF + mmproj, ~0.8 GB)
+│   └── embedder-models-manifest.json
 ├── models/                      (Ollama AI models)
 ├── mongodb/dump/
 │   ├── admin/                   (shared)
@@ -117,11 +121,12 @@ The installer runs in 3 phases:
 1. Reads tenant from `manifest.json` (e.g., `quellex` or `recallhub`)
 2. Copies source code from `source/` to `InstallPath` (default: `C:\<Tenant>`)
 3. Writes `.env` and `.env.docker` with tenant-specific configuration
-4. Loads tenant Docker images from `images/*.tar` via `docker load`
+4. Loads tenant Docker images from `images/*.tar` via `docker load` (including the llama.cpp embedder image when bundled)
 5. Starts MongoDB container
 6. Restores tenant databases from `mongodb/dump/` via `mongorestore`
 7. Copies documents to configured path
-8. Starts tenant services via `docker compose --profile <tenant> up -d`
+7b. Seeds the `recallhub_embedder_models` volume from `embedder/embedder-models.tar` via `installer/scripts/Import-EmbedderModels.ps1` and sets `EMBEDDER_OFFLINE=1` in `.env` (when bundled)
+8. Starts tenant services via `docker compose --profile <tenant> [--profile embedder|embedder-gpu] up -d`
 9. Runs health checks on tenant endpoints
 10. Writes `%LocalAppData%\RecallHub\config.json` + service scripts for the desktop app (`Write-TrayConfig.ps1`)
 11. Writes install manifest for future uninstall/upgrade
@@ -139,6 +144,7 @@ The installer runs in 3 phases:
 | `-InstallPath` | `C:\<Tenant>` | Where source code is deployed (auto-set from tenant) |
 | `-TestDataPath` | `C:\Test_Data` | Where document corpus is stored |
 | `-SkipPrerequisites` | false | Skip Docker/Ollama install (use after restart) |
+| `-Embedder` | `auto` | Local llama.cpp embedder: `auto` follows the manifest (`-IncludeEmbedder` packages), `none` disables it, `cpu`/`gpu` force the `embedder`/`embedder-gpu` profile |
 | `-Repair` | false | Re-run restore steps without reinstalling prerequisites |
 | `-PurgeTestData` | false | In `-Repair` mode also delete `Test_Data` (kept by default: it is user data) |
 | `-TakeOverStack` | false | Allow taking over a stack that runs from a different install folder |
@@ -173,6 +179,30 @@ The backup folder is created at `E:\Backups\Quellex_v0.8.8_YYYYMMDD_HHMMSS\` (or
 .\scripts\backup-ollama-models.ps1 -OutputPath "E:\Backups\Quellex_v0.8.8_...\models"
 ```
 
+### Package the local llama.cpp embedder (optional)
+
+The `embedder` / `embedder-gpu` compose profiles are not part of the default
+package: each server image is ~1.2 GB and the EmbeddingGemma 2 GGUF lives in the
+`embedder_models` Docker volume, not in an image. Opt in on the source machine
+after the embedder has started at least once (the volume must hold the GGUF):
+
+```powershell
+.\scripts\full-backup.ps1 -Tenant recallhub -All -IncludeEmbedder                       # CPU image (implies -IncludeDockerImages)
+.\scripts\full-backup.ps1 -Tenant recallhub -All -IncludeEmbedder -EmbedderVariant gpu   # CUDA image; "both" ships both
+
+# or standalone (both support -WhatIf)
+.\scripts\export-docker-images.ps1 -OutputPath "E:\Backups\...\images" -Tenant recallhub -IncludeEmbedder -EmbedderVariant both
+.\scripts\export-embedder-models.ps1 -OutputPath "E:\Backups\...\embedder"
+```
+
+`manifest.json` then records `embedder_included`, `embedder_variant`,
+`embedder_images_list` and `embedder_model`. On the target, `INSTALL.ps1` /
+`full-restore.ps1 -Embedder auto|none|cpu|gpu` (default `auto` = follow the
+manifest, CPU image for a "both" package) load the image, seed the volume with
+`installer/scripts/Import-EmbedderModels.ps1`, write `EMBEDDER_OFFLINE=1` to
+`.env`, start the extra profile and configure the tray app accordingly. See
+`docs/04-EMBEDDING_AND_QUERY_SYSTEM.md` → "Local Embedding Server".
+
 ### Bundle prerequisite installers
 
 ```powershell
@@ -186,7 +216,8 @@ A valid per-tenant backup must contain:
 - `INSTALL.ps1` — copied from `scripts/INSTALL.ps1`
 - `manifest.json` — valid JSON with `tenant`, `version`, and backup metadata
 - `apps/` — both installers present
-- `images/` — tenant backend + frontend tars, plus shared images
+- `images/` — tenant backend + frontend tars, plus shared images (plus `embedder-llamacpp-server[-cuda].tar` with `-IncludeEmbedder`)
+- `embedder/embedder-models.tar` — only with `-IncludeEmbedder`; the package is marked incomplete when it is missing
 - `models/blobs/` — non-empty
 - `source/` — contains `docker-compose.yml`
 - `mongodb/dump/` — tenant databases + shared auth DB
@@ -307,6 +338,8 @@ The containers belong to another install folder. Either install into that folder
 
 The restored `config/.env` decides which LLM and embedding provider the tenant uses. The default dev configuration uses OpenAI (`gpt-5.2`, `text-embedding-3-large`, 3072 dimensions), so the bundled Ollama models are only used if `.env` is switched to Ollama — and the embedding model cannot be switched without re-ingesting, because the stored vectors have 3072 dimensions. Decide this on the source machine before creating the package.
 
+The same applies to the local llama.cpp embedder (`EMBEDDING_BASE_URL=http://embedder:8080/v1`, EmbeddingGemma 2, 768 dimensions): the package must be created with `-IncludeEmbedder` and the source `.env` must already point at the embedder. `full-restore.ps1` warns when `.env` and the enabled profile disagree.
+
 ### "Docker not ready after restart"
 
 Docker Desktop takes 30–60 seconds to fully initialize after login. Re-run with `-SkipPrerequisites`:
@@ -371,8 +404,10 @@ Some antivirus solutions flag PowerShell automation. Temporarily disable real-ti
 | `scripts/restore-ollama-models.ps1` | Restore model blobs and manifests |
 | `scripts/full-restore.ps1` | Tenant-aware restore (auto-detects from manifest) |
 | `scripts/full-backup.ps1` | Create per-tenant backup (`-Tenant quellex\|recallhub`) |
-| `scripts/export-docker-images.ps1` | Export tenant-specific Docker images (`-Tenant`) |
+| `scripts/export-docker-images.ps1` | Export tenant-specific Docker images (`-Tenant`, `-IncludeEmbedder -EmbedderVariant cpu\|gpu\|both`, `-WhatIf`) |
 | `scripts/backup-ollama-models.ps1` | Export Ollama model files |
+| `scripts/export-embedder-models.ps1` | Archive the llama.cpp GGUF cache volume (`recallhub_embedder_models`) into `embedder/embedder-models.tar` (`-WhatIf`) |
+| `installer/scripts/Import-EmbedderModels.ps1` | Seed that volume from the archive on the target (used by `full-restore.ps1`, `INSTALL.ps1` and the hardened installer) |
 
 ## Version History
 
@@ -380,3 +415,4 @@ Some antivirus solutions flag PowerShell automation. Temporarily disable real-ti
 |---------|------|-------|
 | v0.8.8 | 2026-05-13 | Initial offline deployment package |
 | v0.8.8 | 2026-10-10 | Pinned Compose project/image names, tenant-aware tray config, start scripts no longer abort on Docker stderr, install verified by health check, package completeness check |
+| v0.8.8 | 2026-10-10 | Optional llama.cpp embedder in the package (`-IncludeEmbedder`): server image export, `embedder_models` volume export/import, `-Embedder` restore switch, hardened installer `embedder` config |

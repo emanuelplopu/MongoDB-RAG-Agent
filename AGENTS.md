@@ -1,6 +1,6 @@
 # RecallHub Development Instructions
 
-Last reviewed: 2026-05-18
+Last reviewed: 2026-10-10
 
 `AGENTS.md` and `CLAUDE.md` must stay functionally identical. Update both in the same change.
 
@@ -115,6 +115,8 @@ docker compose --profile recallhub --profile embedder-gpu up -d  # + NVIDIA vari
 ```
 
 The Compose project name is pinned (`name: recallhub`) and every service has an explicit `image:` (`recallhub-backend`, `recallhub-ingestion-worker`, `recallhub-frontend`, `recallhub-frontend-quellex`), so container, network and image names do not depend on the checkout folder. Only one folder per machine can own the stack; both tenants are profiles of that one stack. The offline installer (`scripts/INSTALL.ps1`, `scripts/full-backup.ps1`, `installer/scripts/*.ps1`) relies on these names - see `docs/14-OFFLINE_DEPLOYMENT.md` and `docs/19-INSTALL_TEST_POSTMORTEM.md`.
+
+The llama.cpp embedder (`embedder` / `embedder-gpu` profiles) is opt-in in offline packages: `scripts/full-backup.ps1 -IncludeEmbedder [-EmbedderVariant cpu|gpu|both]` exports the server image(s) and the `embedder_models` volume (`scripts/export-embedder-models.ps1`), `INSTALL.ps1` / `full-restore.ps1 -Embedder auto|none|cpu|gpu` seed the volume through `installer/scripts/Import-EmbedderModels.ps1`, and the hardened installer takes `"embedder": { "enabled": true }` in `installer/config.json` (`installer/build.ps1 -IncludeEmbedder`). Details in `docs/04-EMBEDDING_AND_QUERY_SYSTEM.md`, section "Local Embedding Server".
 
 Default local ports:
 
