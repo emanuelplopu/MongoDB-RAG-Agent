@@ -309,7 +309,7 @@
 
 **Ingestion Job Model:**
 ```
-{job_id: string, status: "pending"|"running"|"paused"|"completed"|"failed"|"cancelled"|"stopped", started_at: datetime, completed_at: datetime|null, total_files: int, processed_files: int, current_file: string, chunks_created: int, progress_percent: float, document_count: int, image_count: int, audio_count: int, video_count: int, failed_files: int, duplicates_skipped: int, error: string|null}
+{job_id: string, status: "pending"|"running"|"paused"|"completed"|"failed"|"cancelled"|"stopped"|"INTERRUPTED", resume_paused: bool (INTERRUPTED only), started_at: datetime, completed_at: datetime|null, total_files: int, processed_files: int, current_file: string, chunks_created: int, progress_percent: float, document_count: int, image_count: int, audio_count: int, video_count: int, failed_files: int, duplicates_skipped: int, error: string|null}
 ```
 
 **Storage:** MongoDB collection `ingestion_jobs` with `_id = job_id`.
@@ -322,11 +322,10 @@
 5. **Storage:** Upsert documents and chunks into MongoDB with deduplication
 6. **Classification:** Update file registry with processing result category
 
-**Graceful Shutdown:**
-- Signal handlers capture SIGTERM/SIGINT
-- `_shutdown_requested` flag checked between file processing iterations
-- Current job saved with `INTERRUPTED` status for resume on restart
-- `check_and_resume_interrupted_jobs()` called on startup
+**Stop vs. Graceful Shutdown:**
+- A user stop (`POST /stop`, `POST /cancel/{job_id}`) ends the job `stopped` (`cancelled`): no new file starts, files in progress finish, stats of processed files are saved. Final in sequential and concurrent (`max_concurrent_files > 1`) runs; never auto-resumed.
+- Shutdown (SIGTERM/SIGINT, lifespan shutdown) sets `_shutdown_requested`, checked at the same per-file points; the job is saved as `INTERRUPTED` (reported as `interrupted`) and `check_and_resume_interrupted_jobs()` resumes it on the next API start. Jobs a crash left `running` or `paused` are marked `INTERRUPTED` at startup.
+- Restart while paused: a job paused (or pausing) at shutdown is saved `INTERRUPTED` with `resume_paused: true`. The next start resumes it held before any work (no pipeline setup, cleaning or discovery), reporting `paused` until the user resumes or stops it.
 
 **File Classification (FileClassification enum):**
 - `NORMAL` — successfully processed with chunks
@@ -342,9 +341,9 @@
 | POST | `/api/v1/ingestion/start` | Start ingestion job |
 | GET | `/api/v1/ingestion/status` | Current job status |
 | GET | `/api/v1/ingestion/status/{job_id}` | Specific job status |
-| POST | `/api/v1/ingestion/stop` | Stop current job |
-| POST | `/api/v1/ingestion/pause` | Pause current job |
-| POST | `/api/v1/ingestion/resume` | Resume paused job |
+| POST | `/api/v1/ingestion/stop` | Stop current job: files in progress finish, then it ends `stopped` (final, never auto-resumed) |
+| POST | `/api/v1/ingestion/pause` | Pause current job: no new file starts, files in progress finish (the pipeline awaits a pause point before each file) |
+| POST | `/api/v1/ingestion/resume` | Resume paused job (`is_paused` clears at once; status returns to `running` at the next pause-point poll) |
 | GET | `/api/v1/ingestion/history` | Job history list |
 | GET | `/api/v1/ingestion/logs` | Ingestion log buffer |
 | GET | `/api/v1/ingestion/stats` | Ingestion statistics |

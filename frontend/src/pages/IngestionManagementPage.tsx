@@ -559,7 +559,7 @@ export default function IngestionManagementPage() {
               {ingestionStatus.status === 'paused' ? (
                 <button 
                   onClick={handleResume} 
-                  disabled={isOperationPending || !ingestionStatus.can_pause}
+                  disabled={isOperationPending || !ingestionStatus.is_paused}
                   className="flex items-center gap-2 rounded-xl bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <PlayIcon className="h-4 w-4" /> {t('ingestion.resume')}
