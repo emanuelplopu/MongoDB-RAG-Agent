@@ -411,6 +411,7 @@ async def _run_ingestion_job(job: Dict[str, Any], db):
     """Run a single ingestion job with proper tracking."""
     from src.ingestion.ingest import DocumentIngestionPipeline, IngestionConfig
     from src.profile import get_profile_manager
+    from backend.core.ingestion_jobs import RUNNER_API
     from backend.routers.ingestion import (
         save_job_to_db, _ingestion_logs, _log_handler,
         IngestionStatus
@@ -425,6 +426,7 @@ async def _run_ingestion_job(job: Dict[str, Any], db):
     job_state = {
         "job_id": job_id,
         "status": IngestionStatus.RUNNING,
+        "runner": RUNNER_API,  # Runs in the API process; the API resumes it after a shutdown
         "started_at": datetime.now().isoformat(),
         "completed_at": None,
         "total_files": 0,

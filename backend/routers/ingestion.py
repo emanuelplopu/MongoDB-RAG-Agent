@@ -18,6 +18,9 @@ from backend.models.schemas import (
     IngestionRunSummary, IngestionRunsResponse, FileClassification
 )
 from backend.core.config import settings
+from backend.core.ingestion_jobs import (
+    API_OWNED, INTERRUPTED_STATUS, RUNNER_API, reached_files, resume_config
+)
 from backend.routers.auth import require_admin, UserResponse
 from backend.routers.backup import trigger_post_ingestion_backup
 from backend.services.file_registry import FileRegistryService
@@ -29,10 +32,6 @@ router = APIRouter()
 
 # Collection name for persisted ingestion jobs
 INGESTION_JOBS_COLLECTION = "ingestion_jobs"
-
-# Persisted status of a run ended by shutdown/restart (reported as IngestionStatus.INTERRUPTED).
-# Upper case because existing documents and the ingestion worker resume exactly this value.
-INTERRUPTED_STATUS = "INTERRUPTED"
 
 # Strong reference to a run started outside a request (resume at API start); the event loop
 # keeps only weak references to tasks
@@ -192,16 +191,18 @@ async def mark_job_interrupted(db, job_id: str, paused: bool = False):
 
 
 async def _mark_live_jobs_interrupted(collection) -> int:
-    """Mark every job left running or paused by a previous process as interrupted.
+    """Mark every API job left running or paused by a previous API process as interrupted.
+
+    Jobs the ingestion worker runs are left alone: they may still be running there.
 
     Returns:
         Number of jobs marked.
     """
     running = await collection.update_many(
-        {"status": IngestionStatus.RUNNING}, {"$set": _interrupted_fields(paused=False)}
+        {"status": IngestionStatus.RUNNING, **API_OWNED}, {"$set": _interrupted_fields(paused=False)}
     )
     paused = await collection.update_many(
-        {"status": IngestionStatus.PAUSED}, {"$set": _interrupted_fields(paused=True)}
+        {"status": IngestionStatus.PAUSED, **API_OWNED}, {"$set": _interrupted_fields(paused=True)}
     )
     return running.modified_count + paused.modified_count
 
@@ -210,10 +211,13 @@ async def check_and_resume_interrupted_jobs(db) -> Optional[str]:
     """
     Check for interrupted ingestion jobs and resume them.
 
-    Called at startup to recover from container restarts. A job that was paused when
+    Called at startup to recover from container restarts. Only jobs the API ran are
+    resumed; the ingestion worker resumes its own. The resumed run continues where the
+    interrupted one stopped (see ``resume_config``): once that run had reached its files
+    it never cleans again and skips files already ingested. A job that was paused when
     the API went down is resumed held at its first pause point (status ``paused``):
-    nothing is processed until the user resumes or stops it. Stopped jobs are final
-    and never resumed.
+    nothing is processed until the user resumes or stops it. Stopped jobs are final and
+    never resumed.
     Returns the job_id if a job was resumed, None otherwise.
     """
     global _active_ingestion_task
@@ -225,21 +229,17 @@ async def check_and_resume_interrupted_jobs(db) -> Optional[str]:
         logger.info(f"Marked {marked} running/paused job(s) as interrupted")
 
     # Check for interrupted jobs to resume
-    interrupted_job = await collection.find_one({"status": INTERRUPTED_STATUS})
+    interrupted_job = await collection.find_one({"status": INTERRUPTED_STATUS, **API_OWNED})
 
     if interrupted_job:
         job_id = interrupted_job["_id"]
         config = interrupted_job.get("config", {})
         start_paused = bool(interrupted_job.get("resume_paused"))
 
-        # If config doesn't have incremental set, default to True for resume
-        if "incremental" not in config:
-            config["incremental"] = True
-
         logger.info(f"Found interrupted job {job_id}, resuming" + (" paused" if start_paused else "") + "...")
 
         _active_ingestion_task = asyncio.create_task(
-            run_ingestion(job_id, config, db, start_paused=start_paused)
+            run_ingestion(job_id, config, db, start_paused=start_paused, resumed_job=interrupted_job)
         )
 
         return job_id
@@ -789,20 +789,34 @@ async def _calculate_job_extended_metrics(db, job_id: str) -> dict:
         return {}
 
 
-async def run_ingestion(job_id: str, config: dict, db, start_paused: bool = False):
+async def run_ingestion(
+    job_id: str, config: dict, db, start_paused: bool = False, resumed_job: Optional[dict] = None
+):
     """Run ingestion in background with DB persistence.
 
     Args:
         job_id: Job to run (or resume).
-        config: Ingestion request config, stored on the job for resume.
+        config: Ingestion request config as submitted. It is stored on the job unchanged,
+            so the job keeps the flags it was started with.
         db: Database manager.
         start_paused: Hold before any work until resumed or stopped. Used when a job
             that was paused at shutdown is resumed on the next API start.
+        resumed_job: The stored job when it is resumed after a shutdown. The run then
+            uses ``resume_config(resumed_job)``: it continues where the interrupted run
+            stopped instead of cleaning or re-ingesting what that run already did.
 
     A user stop (``/stop``, ``/cancel``) ends the job with that final status; a shutdown
     or any other cancellation ends it as ``INTERRUPTED`` so the next API start resumes it.
     """
     global _current_job_id, _shutdown_requested, _pause_requested, _stop_requested, _stop_status, _is_paused, _current_job_state, _pending_files_queue
+    # The rest of the run reads `config`; the job stores the request as submitted
+    requested_config = config
+    files_started_at = None
+    if resumed_job is not None:
+        config = resume_config(resumed_job)
+        if reached_files(resumed_job):
+            # Continuing a run that already reached its files (jobs from before the field get "now")
+            files_started_at = resumed_job.get("files_started_at") or datetime.now().isoformat()
     _current_job_id = job_id
     _shutdown_requested = False
     _pause_requested = start_paused
@@ -837,7 +851,11 @@ async def run_ingestion(job_id: str, config: dict, db, start_paused: bool = Fals
         "current_file": None,
         "errors": [],
         "progress_percent": 0.0,
-        "config": config,  # Store config for resume capability
+        "config": requested_config,  # The request as submitted: job history, and what a resume starts from
+        "runner": RUNNER_API,  # This process (not the ingestion worker) resumes the job after a shutdown
+        "resumed_at": datetime.now().isoformat() if resumed_job is not None else None,
+        # Set at the first file (any cleaning done): from then on a resume continues the run
+        "files_started_at": files_started_at,
         "profile": config.get("profile"),
         # Phase tracking for transparency
         "phase": "initializing",
@@ -877,7 +895,12 @@ async def run_ingestion(job_id: str, config: dict, db, start_paused: bool = Fals
         _ingestion_logs.append({
             "timestamp": datetime.now().isoformat(),
             "level": "INFO",
-            "message": f"Starting ingestion job {job_id}",
+            "message": (
+                f"Starting ingestion job {job_id}" if resumed_job is None
+                else f"Resuming interrupted ingestion job {job_id} (no cleaning, already ingested files are skipped)"
+                if files_started_at
+                else f"Restarting interrupted ingestion job {job_id} from the beginning (it stopped before its first file)"
+            ),
             "logger": "ingestion"
         })
 
@@ -1061,14 +1084,22 @@ async def run_ingestion(job_id: str, config: dict, db, start_paused: bool = Fals
         max_concurrent = perf_config.get("max_concurrent_files", 1) if perf_config else 1
         
         logger.info(f"Running ingestion with max_concurrent_files={max_concurrent}")
-        
+
+        async def pause_checkpoint() -> None:
+            # The pipeline cleans before its file loop: from the first file on, a resume
+            # must continue this run instead of cleaning or re-ingesting again
+            if job_state["files_started_at"] is None:
+                job_state["files_started_at"] = datetime.now().isoformat()
+                await save_job_to_db(db, job_state)
+            await _hold_while_paused(job_state, db)
+
         # Run ingestion with configured concurrency
         results = await pipeline.ingest_documents(
             progress_callback=progress_callback,
             incremental=config.get("incremental", True),
             max_concurrent_files=max_concurrent,
             job_id=job_id,
-            pause_checkpoint=lambda: _hold_while_paused(job_state, db)
+            pause_checkpoint=pause_checkpoint
         )
         
         # Update phase to finalizing
@@ -1253,6 +1284,7 @@ async def start_ingestion(
     job = {
         "job_id": job_id,
         "status": IngestionStatus.PENDING,
+        "runner": RUNNER_API,
         "started_at": None,
         "completed_at": None,
         "total_files": 0,

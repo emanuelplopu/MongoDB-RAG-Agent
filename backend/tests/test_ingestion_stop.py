@@ -30,7 +30,8 @@ _real_get_job_from_db = ingestion.get_job_from_db  # the harness replaces it wit
 
 
 class _JobsCollection:
-    """In-memory ``ingestion_jobs``: the queries and updates of the stop and restart paths."""
+    """In-memory ``ingestion_jobs``: the queries and updates of the stop and restart paths
+    (the API's and the ingestion worker's)."""
 
     def __init__(self) -> None:
         self.docs: dict[str, dict] = {}
@@ -46,8 +47,15 @@ class _JobsCollection:
                 return False
         return True
 
-    async def find_one(self, query: dict) -> Optional[dict]:
+    async def find_one(self, query: dict, projection: Optional[dict] = None) -> Optional[dict]:
         return next((dict(doc) for doc in self.docs.values() if self._matches(doc, query)), None)
+
+    async def find_one_and_update(self, query: dict, update: dict, **_options: Any) -> Optional[dict]:
+        """The worker's atomic claim; returns the updated document."""
+        doc = next((doc for doc in self.docs.values() if self._matches(doc, query)), None)
+        if doc is not None:
+            doc.update(update["$set"])
+        return dict(doc) if doc is not None else None
 
     async def replace_one(self, query: dict, doc: dict, upsert: bool = False) -> None:
         self.docs[query["_id"]] = dict(doc)
@@ -173,7 +181,9 @@ async def test_shutdown_ends_as_interrupted_and_resumes_on_restart(
 
     assert await _restart(harness) == JOB_ID
     await _resumed_run_finishes()
-    assert sorted(harness.started) == FILE_NAMES
+    # The resumed run continues: only the files the interrupted run had not ingested
+    assert sorted(harness.started) == FILE_NAMES[2:]
+    assert harness.ingested == set(FILE_NAMES)
     assert jobs.docs[JOB_ID]["status"] == IngestionStatus.COMPLETED
 
 
@@ -200,7 +210,8 @@ async def test_shutdown_while_paused_resumes_held_until_the_user_resumes(
 
     await ingestion.resume_ingestion(harness.request)
     await _resumed_run_finishes()
-    assert sorted(harness.started) == FILE_NAMES
+    assert sorted(harness.started) == sorted(set(FILE_NAMES) - set(held))  # each file ingested once
+    assert harness.ingested == set(FILE_NAMES)
     assert jobs.docs[JOB_ID]["status"] == IngestionStatus.COMPLETED
 
 

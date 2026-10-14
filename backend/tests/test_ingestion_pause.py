@@ -46,6 +46,10 @@ class _Harness:
     def __init__(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         self.started: list[str] = []
         self.in_flight = 0
+        # Stands in for the documents collection: sources of ingested files; survives a restart
+        self.ingested: set[str] = set()
+        self.cleans = 0  # pipeline _clean_databases calls
+        self.pipelines: list[dict] = []  # keyword arguments of each pipeline created
         self.saved: list[dict] = []
         self.pause_when_file_starts: Optional[int] = None  # 1-based: request a pause while this file runs
         # 1-based file number -> coroutine function awaited while that file runs (e.g. a stop request)
@@ -61,13 +65,25 @@ class _Harness:
         harness = self
 
         class _Pipeline(ingest.DocumentIngestionPipeline):
-            def __init__(self, **_kwargs: Any) -> None:
+            def __init__(self, **kwargs: Any) -> None:
+                harness.pipelines.append(kwargs)
                 self._initialized = True
-                self.clean_before_ingest = False
+                self.clean_before_ingest = kwargs.get("clean_before_ingest", False)
+                self.documents_folders: list[str] = []  # a file's source is its name
                 self.db = None
 
             def _find_document_files(self) -> list[str]:
                 return list(files)
+
+            async def _clean_databases(self) -> None:
+                harness.cleans += 1
+                harness.ingested.clear()
+
+            async def _get_existing_sources(self) -> set:
+                return set(harness.ingested)
+
+            async def _get_existing_hashes(self) -> dict:
+                return {}
 
             async def _ingest_single_document(self, file_path: str, content_hash: str):
                 harness.started.append(Path(file_path).name)
@@ -79,6 +95,7 @@ class _Harness:
                     if action is not None:
                         await action()
                     await asyncio.sleep(0.02)
+                    harness.ingested.add(Path(file_path).name)
                     return ingest.IngestionResult(
                         document_id=content_hash, title=Path(file_path).name,
                         chunks_created=1, processing_time_ms=1.0, errors=[],
@@ -118,9 +135,10 @@ class _Harness:
         self.request.app.state.db = db
         return db
 
-    def start(self, max_concurrent: int) -> asyncio.Task:
+    def start(self, max_concurrent: int, **config: Any) -> asyncio.Task:
+        """Start run_ingestion; ``config`` overrides the request (default: a non-incremental run)."""
         db = self.connect(max_concurrent)
-        config = {"incremental": False, "clean_before_ingest": False}
+        config = {"incremental": False, "clean_before_ingest": False, **config}
         self.job = asyncio.create_task(ingestion.run_ingestion("job-pause-test", config, db))
         return self.job
 
