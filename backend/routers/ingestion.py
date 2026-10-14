@@ -1230,7 +1230,16 @@ async def start_ingestion(
     Initiates a background ingestion job for documents in the configured folder.
     """
     db = request_obj.app.state.db
-    
+
+    # A run live in this process blocks a new one even when its DB status is not RUNNING:
+    # it may be paused, or stopped but still finishing its in-flight files. A second
+    # run_ingestion would reset the shared pause/stop flags and both runs would process files.
+    if _current_job_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Ingestion job {_current_job_id} is still running, paused or stopping"
+        )
+
     # Check if another job is running (in DB)
     running_job = await get_running_job_from_db(db)
     if running_job and running_job.get("status") == IngestionStatus.RUNNING:

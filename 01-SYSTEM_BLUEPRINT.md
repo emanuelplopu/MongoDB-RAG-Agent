@@ -338,7 +338,7 @@
 **API Endpoints:**
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/ingestion/start` | Start ingestion job |
+| POST | `/api/v1/ingestion/start` | Start ingestion job. `409` while a run is live in the API process (running, paused, or stopped but still finishing its in-flight files) or a job is `running` in the DB |
 | GET | `/api/v1/ingestion/status` | Current job status |
 | GET | `/api/v1/ingestion/status/{job_id}` | Specific job status |
 | POST | `/api/v1/ingestion/stop` | Stop current job: files in progress finish, then it ends `stopped` (final, never auto-resumed) |
