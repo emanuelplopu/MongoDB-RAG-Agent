@@ -77,25 +77,86 @@ public class ServiceManager
         }
     }
 
+    private const string DefaultDesktopPath = @"C:\Program Files\Docker\Docker\Docker Desktop.exe";
+
     /// <summary>
-    /// Ensure Docker Desktop is running. Auto-starts if configured.
+    /// Make sure the Docker engine is reachable.
+    /// <para>
+    /// Docker Desktop is single-instance: starting "Docker Desktop.exe" while it is
+    /// already running - or still booting after login - starts nothing, it only tells
+    /// the running instance to show its Dashboard window. This app and Docker Desktop
+    /// both autostart at login and the engine needs 20-60 s before <c>docker info</c>
+    /// answers, so the old "no answer, so relaunch" logic opened the Dashboard in
+    /// front of every user at every login. Therefore: while a Docker Desktop process
+    /// exists we only wait (up to <see cref="DockerConfig.StartupTimeout"/>); only
+    /// when no process exists and <see cref="DockerConfig.AutoStart"/> is true do we
+    /// start Docker Desktop, and then quietly.
+    /// </para>
     /// </summary>
     public async Task<bool> EnsureDockerRunningAsync()
     {
-        // Check if Docker daemon is already responding
         if (await IsDockerRunningAsync())
             return true;
 
+        var timeout = TimeSpan.FromSeconds(Math.Max(30, _config.Docker?.StartupTimeout ?? 120));
+
+        if (IsDockerDesktopProcessRunning())
+        {
+            TrayLog.Info($"Docker Desktop is running but its engine is not ready yet - waiting up to {timeout.TotalSeconds:0}s (not relaunching it: that would only open the Dashboard window)");
+            return await WaitForDockerEngineAsync(timeout);
+        }
+
         if (_config.Docker?.AutoStart != true)
+        {
+            TrayLog.Warn("Docker engine is not reachable and docker.autoStart is false");
+            return false;
+        }
+
+        if (!await StartDockerDesktopQuietlyAsync())
             return false;
 
-        // Try to start Docker Desktop
-        var desktopPath = _config.Docker?.DesktopPath
-            ?? @"C:\Program Files\Docker\Docker\Docker Desktop.exe";
+        return await WaitForDockerEngineAsync(timeout);
+    }
 
+    /// <summary>True when a "Docker Desktop" process exists (running or still booting).</summary>
+    public static bool IsDockerDesktopProcessRunning()
+    {
+        var processes = Process.GetProcessesByName("Docker Desktop");
+        try
+        {
+            return processes.Length > 0;
+        }
+        finally
+        {
+            foreach (var process in processes)
+                process.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Launch Docker Desktop without bringing its Dashboard to the front: through the
+    /// Docker Desktop CLI (<c>docker desktop start</c>, bundled since 4.37) when it is
+    /// available, otherwise the executable from config, minimized. Only call this when
+    /// <see cref="IsDockerDesktopProcessRunning"/> is false.
+    /// </summary>
+    private async Task<bool> StartDockerDesktopQuietlyAsync()
+    {
+        var cli = await RunProcessAsync("docker", "desktop version", timeoutMs: 10000);
+        if (cli.ExitCode == 0)
+        {
+            var start = await RunProcessAsync("docker", "desktop start --detach", timeoutMs: 30000);
+            if (start.ExitCode == 0)
+            {
+                TrayLog.Info("Docker Desktop start requested via 'docker desktop start'");
+                return true;
+            }
+            TrayLog.Warn($"'docker desktop start' failed (exit {start.ExitCode}): {start.StdErr.Trim()} - falling back to the executable");
+        }
+
+        var desktopPath = _config.Docker?.DesktopPath ?? DefaultDesktopPath;
         if (!File.Exists(desktopPath))
         {
-            Debug.WriteLine($"Docker Desktop not found at: {desktopPath}");
+            TrayLog.Error($"Docker Desktop not found at {desktopPath}");
             return false;
         }
 
@@ -104,42 +165,75 @@ public class ServiceManager
             Process.Start(new ProcessStartInfo
             {
                 FileName = desktopPath,
-                UseShellExecute = true
+                UseShellExecute = true,
+                WindowStyle = ProcessWindowStyle.Minimized
             });
+            TrayLog.Info($"Docker Desktop started from {desktopPath}");
+            return true;
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to start Docker Desktop: {ex.Message}");
+            TrayLog.Error($"Failed to start Docker Desktop: {ex.Message}");
             return false;
         }
+    }
 
-        // Wait for Docker daemon to become ready (up to 60s)
-        var timeout = TimeSpan.FromSeconds(60);
-        var started = DateTime.Now;
-        while (DateTime.Now - started < timeout)
+    /// <summary>Poll the engine every 3s until it answers or <paramref name="timeout"/> elapses.</summary>
+    private async Task<bool> WaitForDockerEngineAsync(TimeSpan timeout)
+    {
+        var started = DateTime.UtcNow;
+        while (DateTime.UtcNow - started < timeout)
         {
-            await Task.Delay(2000);
+            await Task.Delay(3000);
             if (await IsDockerRunningAsync())
+            {
+                TrayLog.Info($"Docker engine ready after {(DateTime.UtcNow - started).TotalSeconds:0}s");
                 return true;
+            }
         }
 
-        Debug.WriteLine("Docker Desktop did not start within 60 seconds");
+        TrayLog.Error($"Docker engine did not answer within {timeout.TotalSeconds:0}s - Docker Desktop may be showing a dialog; open it from its tray icon");
         return false;
     }
 
     /// <summary>
-    /// Check if Docker daemon is responsive.
+    /// Check if the Docker engine is responsive: a cheap named-pipe check first (no
+    /// process spawn every 5s while Docker is down), then <c>docker info</c> with a
+    /// timeout long enough for a busy machine - the previous 5s made a slow but
+    /// healthy engine look stopped.
     /// </summary>
     public async Task<bool> IsDockerRunningAsync()
     {
+        if (!DockerEnginePipeExists())
+            return false;
+
         try
         {
-            var result = await RunProcessAsync("docker", "info", timeoutMs: 5000);
+            var result = await RunProcessAsync("docker", "info", timeoutMs: 15000);
             return result.ExitCode == 0;
         }
         catch
         {
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Docker Desktop exposes the engine as named pipes (docker_engine,
+    /// dockerDesktopLinuxEngine, ...). None present means the engine is certainly
+    /// down. When the enumeration itself fails, docker info decides.
+    /// </summary>
+    private static bool DockerEnginePipeExists()
+    {
+        try
+        {
+            return Directory.GetFiles(@"\\.\pipe\").Any(pipe =>
+                pipe.Contains("docker", StringComparison.OrdinalIgnoreCase)
+                && pipe.Contains("engine", StringComparison.OrdinalIgnoreCase));
+        }
+        catch
+        {
+            return true;
         }
     }
 

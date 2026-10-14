@@ -315,14 +315,69 @@ if (-not $dockerInstalled -and -not $SkipDocker) {
 }
 
 # ─── Docker Desktop Headless Configuration ──────────────────────────────────────
+function Merge-JsonSettingsFile {
+    <#
+    .SYNOPSIS
+        Adds or overwrites keys in a JSON settings file, keeping every other key.
+        Creates the file when it does not exist.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][hashtable]$Values
+    )
+    $merged = [ordered]@{}
+    if (Test-Path $Path) {
+        try {
+            $raw = Get-Content -Path $Path -Raw -ErrorAction Stop
+            if ($raw -and $raw.Trim().Length -gt 0) {
+                ($raw | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $merged[$_.Name] = $_.Value }
+            }
+        } catch {
+            Write-Warn "Could not parse $Path ($_) - rewriting it with the headless keys only"
+            $merged = [ordered]@{}
+        }
+    }
+    foreach ($key in $Values.Keys) { $merged[$key] = $Values[$key] }
+    $merged | ConvertTo-Json -Depth 10 | Set-Content -Path $Path -Encoding UTF8 -Force
+}
+
 if ($Headless) {
     Write-Step "Docker Desktop Headless Configuration"
 
     $dockerSettingsDir = Join-Path $env:APPDATA "Docker"
-    $dockerSettingsPath = Join-Path $dockerSettingsDir "settings.json"
+    if (-not (Test-Path $dockerSettingsDir)) {
+        New-Item -ItemType Directory -Path $dockerSettingsDir -Force | Out-Null
+    }
 
-    # Desired headless settings
-    $headlessSettings = @{
+    # Docker Desktop 4.35+ keeps its settings in settings-store.json (keys are the
+    # backend's field names, PascalCase); 4.34 and older read settings.json
+    # (camelCase). Both files are written, and the store is created when it does
+    # not exist yet (fresh install, Docker Desktop never started). Earlier versions
+    # of this script only patched an existing store, so on a new PC none of this
+    # took effect and users got the Dashboard, the onboarding survey and update
+    # banners. Docker Desktop applies the file at its next start.
+    #   AutoStart               - start Docker Desktop at sign-in (the tray app then only waits for it)
+    #   OpenUIOnStartupDisabled - never open the Dashboard window at startup
+    #   DisplayedOnboarding     - skip the onboarding survey
+    #   DisableUpdate           - no update checks or banners
+    #   AnalyticsEnabled        - no telemetry
+    #   UseResourceSaver        - an idle Docker Desktop frees RAM and CPU
+    #   WslEngineEnabled        - WSL 2 backend
+    $storeSettings = @{
+        "AutoStart"               = $true
+        "OpenUIOnStartupDisabled" = $true
+        "DisplayedOnboarding"     = $true
+        "DisableUpdate"           = $true
+        "AnalyticsEnabled"        = $false
+        "UseResourceSaver"        = $true
+        "WslEngineEnabled"        = $true
+    }
+    $storePath = Join-Path $dockerSettingsDir "settings-store.json"
+    Merge-JsonSettingsFile -Path $storePath -Values $storeSettings
+    Write-OK "Docker Desktop settings-store.json configured for headless operation (no Dashboard at startup)"
+    Write-Info "  Path: $storePath"
+
+    $legacySettings = @{
         "autoStart"                = $true
         "displayedWelcomeMessage"  = $true
         "displayedTutorialMessage" = $true
@@ -334,54 +389,10 @@ if ($Headless) {
         "wslEngineEnabled"         = $true
         "useResourceSaver"         = $true
     }
-
-    # Ensure directory exists
-    if (-not (Test-Path $dockerSettingsDir)) {
-        New-Item -ItemType Directory -Path $dockerSettingsDir -Force | Out-Null
-    }
-
-    # Merge with existing settings if file exists
-    $existingSettings = @{}
-    if (Test-Path $dockerSettingsPath) {
-        try {
-            $rawJson = Get-Content -Path $dockerSettingsPath -Raw -ErrorAction Stop
-            if ($rawJson -and $rawJson.Trim().Length -gt 0) {
-                $existingSettings = $rawJson | ConvertFrom-Json
-                # Convert PSCustomObject to hashtable for merging
-                $mergedHash = @{}
-                $existingSettings.PSObject.Properties | ForEach-Object { $mergedHash[$_.Name] = $_.Value }
-                $existingSettings = $mergedHash
-            }
-        } catch {
-            Write-Info "Could not parse existing settings.json, creating fresh"
-            $existingSettings = @{}
-        }
-    }
-
-    # Merge: add/update headless keys without removing existing ones
-    foreach ($key in $headlessSettings.Keys) {
-        $existingSettings[$key] = $headlessSettings[$key]
-    }
-
-    # Write merged settings (newer Docker Desktop builds read settings-store.json, older ones settings.json)
-    $jsonOutput = $existingSettings | ConvertTo-Json -Depth 10
-    Set-Content -Path $dockerSettingsPath -Value $jsonOutput -Encoding UTF8 -Force
-    $storePath = Join-Path $dockerSettingsDir "settings-store.json"
-    if (Test-Path $storePath) {
-        try {
-            $store = @{}
-            $storeRaw = Get-Content -Path $storePath -Raw -ErrorAction Stop
-            if ($storeRaw -and $storeRaw.Trim()) { ($storeRaw | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $store[$_.Name] = $_.Value } }
-            $store["AutoStart"] = $true
-            $store["OpenUIOnStartupDisabled"] = $true
-            $store["DisplayedOnboarding"] = $true
-            $store | ConvertTo-Json -Depth 10 | Set-Content -Path $storePath -Encoding UTF8 -Force
-        } catch {
-            Write-Info "Could not update settings-store.json: $_"
-        }
-    }
-    Write-OK "Docker Desktop settings.json configured for headless operation"
-    Write-Info "  Path: $dockerSettingsPath"
+    $legacyPath = Join-Path $dockerSettingsDir "settings.json"
+    Merge-JsonSettingsFile -Path $legacyPath -Values $legacySettings
+    Write-OK "Legacy settings.json written for Docker Desktop 4.34 and older"
+    Write-Info "  Path: $legacyPath"
 }
 
 # ─── Ollama ─────────────────────────────────────────────────────────────────────
@@ -512,9 +523,9 @@ if ($Headless) {
     if ($wslConfigExists) {
         Write-Host "    WSL2:           .wslconfig written (${wslMemoryGB}GB RAM, $wslProcessors cores)" -ForegroundColor Gray
     }
-    $dockerSettingsExists = Test-Path (Join-Path $env:APPDATA "Docker\settings.json")
+    $dockerSettingsExists = Test-Path (Join-Path $env:APPDATA "Docker\settings-store.json")
     if ($dockerSettingsExists) {
-        Write-Host "    Docker Desktop: Headless mode, auto-start enabled" -ForegroundColor Gray
+        Write-Host "    Docker Desktop: Headless mode (starts at sign-in, no Dashboard window, no update prompts)" -ForegroundColor Gray
     }
     Write-Host "    Ollama:         Service mode, models at default path" -ForegroundColor Gray
 } else {

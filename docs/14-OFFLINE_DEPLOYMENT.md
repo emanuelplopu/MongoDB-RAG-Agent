@@ -107,6 +107,7 @@ The installer runs in 3 phases:
 
 - Enables Hyper-V and Containers Windows features
 - Installs Docker Desktop silently from `apps/DockerDesktopInstaller.exe` (configured for Hyper-V backend)
+- Writes Docker Desktop's quiet-mode settings to `%APPDATA%\Docker\settings-store.json` (Docker Desktop 4.35+, created when missing) and the legacy `settings.json`: start at sign-in, no Dashboard window at startup, no onboarding survey, no update banners, no telemetry
 - Installs Ollama silently from `apps/OllamaSetup.exe` (runs natively on the host)
 - Sets `OLLAMA_MODELS` environment variable
 - **Triggers restart** if Hyper-V was freshly enabled
@@ -339,6 +340,10 @@ The containers belong to another install folder. Either install into that folder
 The restored `config/.env` decides which LLM and embedding provider the tenant uses. The default dev configuration uses OpenAI (`gpt-5.2`, `text-embedding-3-large`, 3072 dimensions), so the bundled Ollama models are only used if `.env` is switched to Ollama — and the embedding model cannot be switched without re-ingesting, because the stored vectors have 3072 dimensions. Decide this on the source machine before creating the package.
 
 The same applies to the local llama.cpp embedder (`EMBEDDING_BASE_URL=http://embedder:8080/v1`, EmbeddingGemma 2, 768 dimensions): the package must be created with `-IncludeEmbedder` and the source `.env` must already point at the embedder. `full-restore.ps1` warns when `.env` and the enabled profile disagree.
+
+### Docker Desktop window opens at every login
+
+Docker Desktop is single-instance: launching `Docker Desktop.exe` while it is already running (or still booting after sign-in) starts nothing, it only opens the Dashboard window. Tray app builds and `Start-Services.ps1` copies from before October 2026 did exactly that whenever `docker info` did not answer yet, so non-technical users saw the Docker Dashboard at every login. Current versions wait for a booting Docker Desktop and start it only when no process exists, quietly through `docker desktop start`. An existing install needs the new tray exe and scripts: re-run `INSTALL.ps1 -SkipPrerequisites` from a current package, or copy `installer\scripts\*.ps1` and `*.psm1` to `%LocalAppData%\RecallHub\scripts` and replace `RecallHubTray.exe`. A healthy `start-services-*.log` then says "Docker engine is ready" or "waiting up to …s (not relaunching it …)", never "Docker Desktop started from". Details: `docs/13-DESKTOP_APP.md`, "Why Docker Desktop is never relaunched".
 
 ### "Docker not ready after restart"
 
