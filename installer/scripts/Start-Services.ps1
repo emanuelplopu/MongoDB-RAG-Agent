@@ -21,7 +21,12 @@
     Seconds to wait for health when -Wait is given (config docker.startupTimeout wins).
 .PARAMETER DryRun
     Resolve config and profiles, print the docker command that would run, and
-    exit 0 without starting anything (diagnostics).
+    exit 0 without starting anything (diagnostics). Skips the Docker engine
+    check, so Docker Desktop is not started either.
+.PARAMETER DockerOnly
+    Diagnostic switch: only make sure the Docker engine is reachable (waiting for a
+    booting Docker Desktop or starting it quietly), then exit 0 without touching
+    the compose stack. Exit 1 when the engine never answers.
 .OUTPUTS
     Exit 0 = started (and healthy when -Wait), 1 = Docker unavailable,
     2 = compose file missing, 3 = docker compose up failed, 4 = health timeout.
@@ -30,17 +35,19 @@ param(
     [switch]$Detached = $true,
     [switch]$Wait,
     [int]$Timeout = 180,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$DockerOnly
 )
 
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Import-Module (Join-Path $ScriptDir "RecallHub-Logging.psm1") -Force
+Import-Module (Join-Path $ScriptDir "RecallHub-Docker.psm1") -Force
 
 $logFile = Initialize-InstallLog -LogName "start-services"
 Write-InstallLog "Starting services (Docker Desktop mode)" -Source "Start-Services"
-Write-InstallLog "Parameters: Wait=$Wait, Timeout=$Timeout" -Level DEBUG -Source "Start-Services"
+Write-InstallLog "Parameters: Wait=$Wait, Timeout=$Timeout, DryRun=$DryRun, DockerOnly=$DockerOnly" -Level DEBUG -Source "Start-Services"
 
 # --- Configuration -----------------------------------------------------------
 function Get-ConfigValue {
@@ -101,35 +108,34 @@ if ($installPath -eq "auto") { $installPath = Split-Path $ScriptDir -Parent }
 
 Write-InstallLog "installPath=$installPath composeFile=$composeFile profile='$composeProfile' frontendPort=$frontendPort backendPort=$backendPort" -Source "Start-Services"
 
-# --- Step 1: Docker daemon ---------------------------------------------------
-function Test-DockerDaemon {
-    $null = docker info 2>&1
-    return ($LASTEXITCODE -eq 0)
-}
-
-Write-InstallLog "Checking Docker daemon..." -Source "Start-Services"
-$dockerReady = Test-DockerDaemon
-if (-not $dockerReady) {
-    if (Test-Path $dockerDesktopPath) {
-        Write-InstallLog "Starting Docker Desktop..." -Source "Start-Services"
-        Start-Process $dockerDesktopPath
-        $waited = 0
-        while ($waited -lt 120) {
-            Start-Sleep -Seconds 3
-            $waited += 3
-            if (Test-DockerDaemon) {
-                $dockerReady = $true
-                Write-InstallLog "Docker Desktop started after ${waited}s" -Source "Start-Services"
-                break
-            }
-        }
-    } else {
-        Write-InstallLog "Docker Desktop not found at $dockerDesktopPath" -Level ERROR -Source "Start-Services"
+# --- Step 1: Docker engine ---------------------------------------------------
+# Docker Desktop is single-instance: launching the exe while it is already running
+# (or still booting after login) starts nothing - it only opens the Dashboard
+# window. That is what users saw at every login while this step relaunched the
+# exe whenever `docker info` did not answer yet. Confirm-DockerEngine
+# (RecallHub-Docker.psm1) waits while a Docker Desktop process exists and starts
+# Docker Desktop quietly only when there is none.
+if ($DryRun) {
+    Write-InstallLog "Dry run: Docker engine check skipped (nothing is started)" -Source "Start-Services"
+} else {
+    Write-InstallLog "Checking Docker engine..." -Source "Start-Services"
+    $dockerState = Confirm-DockerEngine -DesktopPath $dockerDesktopPath -TimeoutSeconds $startupTimeout -Log {
+        param([string]$Message, [string]$Level)
+        Write-InstallLog $Message -Level $Level -Source "Start-Services"
     }
-    if (-not $dockerReady) {
-        Write-InstallLog "Docker daemon not available" -Level ERROR -Source "Start-Services"
-        Write-InstallDiagnostic -ErrorCode "DOCKER-001" -Component "Docker" -Message "Docker daemon not available"
+    if (-not $dockerState.Ready) {
+        Write-InstallLog $dockerState.Message -Level ERROR -Source "Start-Services"
+        Write-InstallDiagnostic -ErrorCode "DOCKER-001" -Component "Docker" -Message $dockerState.Message -Context @{
+            action         = $dockerState.Action
+            desktopPath    = $dockerDesktopPath
+            timeoutSeconds = $startupTimeout
+        }
         exit 1
+    }
+    Write-InstallLog $dockerState.Message -Source "Start-Services"
+    if ($DockerOnly) {
+        Write-InstallLog "Docker-only check complete" -Source "Start-Services"
+        exit 0
     }
 }
 
