@@ -16,10 +16,12 @@ import {
 } from '@heroicons/react/24/outline'
 import { authApi, UserListItem, CreateUserRequest, UpdateUserRequest } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
+import { canManageUsers, isSuperAdmin } from '../api/roles'
 
 export default function UserManagementPage() {
   const { t } = useTranslation()
   const { user: currentUser } = useAuth()
+  const actorIsSuperAdmin = isSuperAdmin(currentUser)
   const [users, setUsers] = useState<UserListItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -31,6 +33,7 @@ export default function UserManagementPage() {
     name: '',
     password: '',
     is_admin: false,
+    is_org_admin: false,
   })
   const [showPassword, setShowPassword] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
@@ -72,7 +75,7 @@ export default function UserManagementPage() {
     try {
       await authApi.createUser(createForm)
       setShowCreateForm(false)
-      setCreateForm({ email: '', name: '', password: '', is_admin: false })
+      setCreateForm({ email: '', name: '', password: '', is_admin: false, is_org_admin: false })
       await loadUsers()
     } catch (err: any) {
       setCreateError(err.response?.data?.detail || t('users.createFailed', 'Failed to create user'))
@@ -93,7 +96,9 @@ export default function UserManagementPage() {
       const updateData: UpdateUserRequest = {}
       if (editForm.name) updateData.name = editForm.name
       if (editForm.email) updateData.email = editForm.email
-      if (editForm.is_admin !== undefined) updateData.is_admin = editForm.is_admin
+      // Only superadmins may change the superadmin flag; the API rejects it otherwise
+      if (actorIsSuperAdmin && editForm.is_admin !== undefined) updateData.is_admin = editForm.is_admin
+      if (editForm.is_org_admin !== undefined) updateData.is_org_admin = editForm.is_org_admin
       if (editForm.new_password) updateData.new_password = editForm.new_password
       
       await authApi.updateUser(editingUser.id, updateData)
@@ -137,13 +142,14 @@ export default function UserManagementPage() {
       name: user.name,
       email: user.email,
       is_admin: user.is_admin,
+      is_org_admin: user.is_org_admin ?? false,
       new_password: '',
     })
     setShowEditPassword(false)
     setUpdateError(null)
   }
 
-  if (!currentUser?.is_admin) {
+  if (!canManageUsers(currentUser)) {
     return (
       <div className="min-h-screen bg-background dark:bg-gray-900 p-6">
         <div className="max-w-4xl mx-auto">
@@ -262,15 +268,30 @@ export default function UserManagementPage() {
                 <div className="flex items-center gap-2">
                   <input
                     type="checkbox"
-                    id="is_admin"
-                    checked={createForm.is_admin}
-                    onChange={(e) => setCreateForm({ ...createForm, is_admin: e.target.checked })}
+                    id="is_org_admin"
+                    checked={createForm.is_org_admin || false}
+                    onChange={(e) => setCreateForm({ ...createForm, is_org_admin: e.target.checked })}
                     className="rounded"
                   />
-                  <label htmlFor="is_admin" className="text-sm text-primary-900 dark:text-gray-200">
-                    {t('users.adminPrivileges', 'Administrator privileges')}
+                  <label htmlFor="is_org_admin" className="text-sm text-primary-900 dark:text-gray-200">
+                    {t('users.orgAdminPrivileges', 'Organisation admin (manages team users)')}
                   </label>
                 </div>
+
+                {actorIsSuperAdmin && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="is_admin"
+                      checked={createForm.is_admin}
+                      onChange={(e) => setCreateForm({ ...createForm, is_admin: e.target.checked })}
+                      className="rounded"
+                    />
+                    <label htmlFor="is_admin" className="text-sm text-primary-900 dark:text-gray-200">
+                      {t('users.adminPrivileges', 'Administrator privileges')}
+                    </label>
+                  </div>
+                )}
                 
                 {createError && (
                   <div className="text-sm text-red-600 dark:text-red-400">
@@ -359,19 +380,38 @@ export default function UserManagementPage() {
                 <div className="flex items-center gap-2">
                   <input
                     type="checkbox"
-                    id="edit_is_admin"
-                    checked={editForm.is_admin || false}
-                    onChange={(e) => setEditForm({ ...editForm, is_admin: e.target.checked })}
-                    disabled={editingUser.id === currentUser?.id}
+                    id="edit_is_org_admin"
+                    checked={editForm.is_org_admin || false}
+                    onChange={(e) => setEditForm({ ...editForm, is_org_admin: e.target.checked })}
+                    disabled={editingUser.id === currentUser?.id && !actorIsSuperAdmin}
                     className="rounded"
                   />
-                  <label htmlFor="edit_is_admin" className="text-sm text-primary-900 dark:text-gray-200">
-                    {t('users.adminPrivileges', 'Administrator privileges')}
+                  <label htmlFor="edit_is_org_admin" className="text-sm text-primary-900 dark:text-gray-200">
+                    {t('users.orgAdminPrivileges', 'Organisation admin (manages team users)')}
                   </label>
-                  {editingUser.id === currentUser?.id && (
-                    <span className="text-xs text-secondary dark:text-gray-500">({t('users.cannotModifyOwn', 'cannot modify your own admin status')})</span>
+                  {editingUser.id === currentUser?.id && !actorIsSuperAdmin && (
+                    <span className="text-xs text-secondary dark:text-gray-500">({t('users.cannotModifyOwnOrgAdmin', 'cannot modify your own organisation admin status')})</span>
                   )}
                 </div>
+
+                {actorIsSuperAdmin && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="edit_is_admin"
+                      checked={editForm.is_admin || false}
+                      onChange={(e) => setEditForm({ ...editForm, is_admin: e.target.checked })}
+                      disabled={editingUser.id === currentUser?.id}
+                      className="rounded"
+                    />
+                    <label htmlFor="edit_is_admin" className="text-sm text-primary-900 dark:text-gray-200">
+                      {t('users.adminPrivileges', 'Administrator privileges')}
+                    </label>
+                    {editingUser.id === currentUser?.id && (
+                      <span className="text-xs text-secondary dark:text-gray-500">({t('users.cannotModifyOwn', 'cannot modify your own admin status')})</span>
+                    )}
+                  </div>
+                )}
                 
                 {updateError && (
                   <div className="text-sm text-red-600 dark:text-red-400">
@@ -467,10 +507,14 @@ export default function UserManagementPage() {
                         <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
                           user.is_admin
                             ? 'bg-purple-100 dark:bg-purple-900/30'
+                            : user.is_org_admin
+                            ? 'bg-blue-100 dark:bg-blue-900/30'
                             : 'bg-gray-100 dark:bg-gray-700'
                         }`}>
                           {user.is_admin ? (
                             <ShieldCheckIcon className="h-5 w-5 text-purple-600 dark:text-purple-400" />
+                          ) : user.is_org_admin ? (
+                            <ShieldCheckIcon className="h-5 w-5 text-blue-600 dark:text-blue-400" />
                           ) : (
                             <UserCircleIcon className="h-5 w-5 text-gray-500" />
                           )}
@@ -498,9 +542,11 @@ export default function UserManagementPage() {
                       <span className={`px-2 py-1 rounded text-xs font-medium ${
                         user.is_admin
                           ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400'
+                          : user.is_org_admin
+                          ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
                           : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-400'
                       }`}>
-                        {user.is_admin ? t('users.admin') : t('users.user')}
+                        {user.is_admin ? t('users.admin') : user.is_org_admin ? t('users.orgAdmin', 'Org admin') : t('users.user')}
                       </span>
                     </td>
                     <td className="py-4 px-4 text-sm text-secondary dark:text-gray-500">
@@ -575,7 +621,7 @@ export default function UserManagementPage() {
           <div className="rounded-xl bg-surface dark:bg-gray-800 p-4 shadow-elevation-1">
             <p className="text-sm text-secondary dark:text-gray-400">{t('users.administrators', 'Administrators')}</p>
             <p className="text-2xl font-bold text-purple-600 dark:text-purple-400">
-              {users.filter(u => u.is_admin).length}
+              {users.filter(u => u.is_admin || u.is_org_admin).length}
             </p>
           </div>
         </div>

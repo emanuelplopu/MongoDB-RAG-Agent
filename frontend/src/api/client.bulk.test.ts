@@ -445,6 +445,21 @@ describe('api client broad wrapper coverage', () => {
     await expect(documentsApi.findBySource('/missing.md')).resolves.toBeNull()
   })
 
+  it('sends the session token on the raw fetch used for message streaming', async () => {
+    localStorage.setItem('auth_token', 'tok-123')
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 503, body: null }) as unknown as Response)
+    vi.stubGlobal('fetch', fetchMock)
+
+    sessionsApi.sendMessageStream('session-9', 'hello', {}, { onError: vi.fn() })
+
+    await waitForAssertion(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/v1/sessions/session-9/messages/stream',
+        expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer tok-123' }) })
+      )
+    )
+  })
+
   it('streams session messages through SSE callbacks and handles stream errors', async () => {
     const encoder = new TextEncoder()
     const makeStreamResponse = (events: string[]) =>

@@ -57,7 +57,8 @@ class User(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
     is_active: bool = True
-    is_admin: bool = False
+    is_admin: bool = False  # superadmin: full system configuration
+    is_org_admin: bool = False  # organisation admin: manages the organisation's users only
 
 
 class UserPreferences(BaseModel):
@@ -99,6 +100,7 @@ class UserResponse(BaseModel):
     created_at: datetime
     is_active: bool
     is_admin: bool = False
+    is_org_admin: bool = False
     preferences: Optional[UserPreferences] = None
 
 
@@ -290,6 +292,7 @@ async def get_current_user(
         created_at=user_doc["created_at"],
         is_active=user_doc.get("is_active", True),
         is_admin=user_doc.get("is_admin", False),
+        is_org_admin=user_doc.get("is_org_admin", False),
         preferences=UserPreferences(**user_doc["preferences"]) if user_doc.get("preferences") else None
     )
 
@@ -323,6 +326,61 @@ async def require_admin(
             detail="Admin access required"
         )
     return user
+
+
+async def require_org_admin(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key")
+) -> UserResponse:
+    """Require a user manager: a superadmin or an organisation admin.
+
+    Organisation admins manage the accounts of their own organisation (the
+    ``users`` collection of the active database) and the profile access of
+    those accounts. They never see or modify superadmin accounts and never
+    reach system configuration such as prompts, models or ingestion; those
+    endpoints keep using :func:`require_admin`.
+
+    Raises:
+        HTTPException: 401 when unauthenticated, 403 for ordinary members.
+    """
+    user = await require_auth(request, credentials, x_api_key)
+    if not (user.is_admin or user.is_org_admin):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin or organisation admin access required"
+        )
+    return user
+
+
+def visible_users_filter(actor: UserResponse) -> dict:
+    """Mongo filter for the accounts an actor may see.
+
+    Superadmins see everyone. Organisation admins only see their team, so
+    superadmin accounts are excluded from their listings.
+    """
+    return {} if actor.is_admin else {"is_admin": {"$ne": True}}
+
+
+def assert_can_manage_target(actor: UserResponse, target_doc: dict) -> None:
+    """Block organisation admins from touching superadmin accounts.
+
+    Superadmin accounts are invisible to organisation admins, so the refusal
+    is reported as 404 instead of 403 to avoid confirming that they exist.
+    """
+    if actor.is_admin:
+        return
+    if target_doc.get("is_admin", False):
+        raise HTTPException(status_code=404, detail="User not found")
+
+
+def assert_can_grant_superadmin(actor: UserResponse, wants_superadmin: Optional[bool]) -> None:
+    """Only superadmins may create or promote superadmin accounts."""
+    if wants_superadmin and not actor.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only a superadmin can grant superadmin privileges"
+        )
 
 
 # ============== Auth Endpoints ==============
@@ -398,6 +456,7 @@ async def register(request: Request, reg_request: RegisterRequest):
         created_at=user.created_at,
         is_active=user.is_active,
         is_admin=user.is_admin,
+        is_org_admin=user.is_org_admin,
         preferences=None  # New user, no preferences yet
     )
     
@@ -448,6 +507,7 @@ async def login(request: Request, login_request: LoginRequest):
         created_at=user_doc["created_at"],
         is_active=user_doc.get("is_active", True),
         is_admin=user_doc.get("is_admin", False),
+        is_org_admin=user_doc.get("is_org_admin", False),
         preferences=UserPreferences(**user_doc["preferences"]) if user_doc.get("preferences") else None
     )
     
@@ -593,6 +653,7 @@ class UserListResponse(BaseModel):
     title_suffix: Optional[str] = None
     is_active: bool
     is_admin: bool
+    is_org_admin: bool = False
     created_at: datetime
 
 
@@ -626,12 +687,12 @@ async def get_profile_access_collection(request: Request):
 @router.get("/users", response_model=list[UserListResponse])
 async def list_users(
     request: Request,
-    admin: UserResponse = Depends(require_admin)
+    admin: UserResponse = Depends(require_org_admin)
 ):
-    """List all users (admin only)."""
+    """List users. Superadmins see everyone; organisation admins see their team only."""
     collection = await get_users_collection(request)
     users = []
-    async for doc in collection.find({}):
+    async for doc in collection.find(visible_users_filter(admin)):
         users.append(UserListResponse(
             id=str(doc["_id"]),
             email=doc["email"],
@@ -640,6 +701,7 @@ async def list_users(
             title_suffix=doc.get("title_suffix"),
             is_active=doc.get("is_active", True),
             is_admin=doc.get("is_admin", False),
+            is_org_admin=doc.get("is_org_admin", False),
             created_at=doc["created_at"]
         ))
     return users
@@ -648,15 +710,19 @@ async def list_users(
 @router.get("/access-matrix", response_model=ProfileAccessMatrix)
 async def get_access_matrix(
     request: Request,
-    admin: UserResponse = Depends(require_admin)
+    admin: UserResponse = Depends(require_org_admin)
 ):
-    """Get profile access matrix (admin only)."""
+    """Get the profile access matrix.
+
+    Superadmins get every user and every profile. Organisation admins get
+    their team (no superadmins) and only the profiles they can access.
+    """
     users_collection = await get_users_collection(request)
     access_collection = await get_profile_access_collection(request)
-    
-    # Get all users
+
+    # Get the users the actor may see
     users = []
-    async for doc in users_collection.find({}):
+    async for doc in users_collection.find(visible_users_filter(admin)):
         users.append(UserListResponse(
             id=str(doc["_id"]),
             email=doc["email"],
@@ -665,17 +731,24 @@ async def get_access_matrix(
             title_suffix=doc.get("title_suffix"),
             is_active=doc.get("is_active", True),
             is_admin=doc.get("is_admin", False),
+            is_org_admin=doc.get("is_org_admin", False),
             created_at=doc["created_at"]
         ))
     
-    # Get all profiles from profile manager
+    # Superadmins see every profile; organisation admins only the ones they can access
     from src.profile import get_profile_manager
-    profiles = list(get_profile_manager().list_profiles().keys())
-    
+    if admin.is_admin:
+        profiles = list(get_profile_manager().list_profiles().keys())
+    else:
+        profiles = await get_user_accessible_profiles(request, admin.id)
+    visible_user_ids = {user.id for user in users}
+
     # Get access entries
     access: dict[str, list[str]] = {}
     async for entry in access_collection.find({}):
         user_id = entry["user_id"]
+        if not admin.is_admin and (user_id not in visible_user_ids or entry["profile_key"] not in profiles):
+            continue
         if user_id not in access:
             access[user_id] = []
         access[user_id].append(entry["profile_key"])
@@ -696,23 +769,36 @@ async def get_access_matrix(
 async def set_profile_access(
     request: Request,
     access_request: SetAccessRequest,
-    admin: UserResponse = Depends(require_admin)
+    admin: UserResponse = Depends(require_org_admin)
 ):
-    """Set profile access for a user (admin only)."""
+    """Set profile access for a user.
+
+    Organisation admins can only manage team members (never superadmins)
+    and only grant profiles they have access to themselves.
+    """
     access_collection = await get_profile_access_collection(request)
     users_collection = await get_users_collection(request)
-    
-    # Verify user exists
+
+    # Verify user exists and may be managed by the actor
     user_doc = await users_collection.find_one({"_id": access_request.user_id})
     if not user_doc:
         raise HTTPException(status_code=404, detail="User not found")
-    
+    assert_can_manage_target(admin, user_doc)
+
     # Verify profile exists
     from src.profile import get_profile_manager
     profiles = get_profile_manager().list_profiles()
     if access_request.profile_key not in profiles:
         raise HTTPException(status_code=404, detail="Profile not found")
-    
+
+    if not admin.is_admin:
+        accessible = await get_user_accessible_profiles(request, admin.id)
+        if access_request.profile_key not in accessible:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only manage access to profiles you have access to"
+            )
+
     if access_request.has_access:
         # Grant access (upsert)
         await access_collection.update_one(
@@ -785,6 +871,7 @@ class AdminCreateUserRequest(BaseModel):
     title_suffix: Optional[str] = Field(None, max_length=100)
     password: str = Field(..., min_length=6, max_length=100)
     is_admin: bool = False
+    is_org_admin: bool = False
 
 
 class AdminUpdateUserRequest(BaseModel):
@@ -794,6 +881,7 @@ class AdminUpdateUserRequest(BaseModel):
     title_prefix: Optional[str] = Field(None, max_length=50)
     title_suffix: Optional[str] = Field(None, max_length=100)
     is_admin: Optional[bool] = None
+    is_org_admin: Optional[bool] = None
     new_password: Optional[str] = Field(None, min_length=6, max_length=100)
 
 
@@ -806,15 +894,17 @@ class UserStatusRequest(BaseModel):
 async def admin_create_user(
     request: Request,
     create_request: AdminCreateUserRequest,
-    admin: UserResponse = Depends(require_admin)
+    admin: UserResponse = Depends(require_org_admin)
 ):
     """
-    Create a new user (admin only).
-    
-    Allows admin to create users with email and password.
+    Create a new user (superadmin or organisation admin).
+
+    Organisation admins can add team members and other organisation admins,
+    but only a superadmin can create another superadmin.
     """
+    assert_can_grant_superadmin(admin, create_request.is_admin)
     collection = await get_users_collection(request)
-    
+
     # Check if email already exists
     existing = await collection.find_one({"email": create_request.email.lower()})
     if existing:
@@ -830,7 +920,8 @@ async def admin_create_user(
         title_prefix=create_request.title_prefix,
         title_suffix=create_request.title_suffix,
         password_hash=get_password_hash(create_request.password),
-        is_admin=create_request.is_admin
+        is_admin=create_request.is_admin,
+        is_org_admin=create_request.is_org_admin
     )
     
     doc = user.model_dump()
@@ -848,6 +939,7 @@ async def admin_create_user(
         title_suffix=user.title_suffix,
         is_active=user.is_active,
         is_admin=user.is_admin,
+        is_org_admin=user.is_org_admin,
         created_at=user.created_at
     )
 
@@ -857,27 +949,35 @@ async def admin_update_user(
     request: Request,
     user_id: str,
     update_request: AdminUpdateUserRequest,
-    admin: UserResponse = Depends(require_admin)
+    admin: UserResponse = Depends(require_org_admin)
 ):
     """
-    Update a user (admin only).
-    
-    Allows admin to update user name, email, admin status, and password.
+    Update a user (superadmin or organisation admin).
+
+    Allows updating name, email, role flags, and password. Organisation
+    admins cannot touch superadmin accounts or grant superadmin rights.
     """
     collection = await get_users_collection(request)
-    
+
     # Get existing user
     user_doc = await collection.find_one({"_id": user_id})
     if not user_doc:
         raise HTTPException(status_code=404, detail="User not found")
-    
+    assert_can_manage_target(admin, user_doc)
+    assert_can_grant_superadmin(admin, update_request.is_admin)
+
     # Prevent admin from removing their own admin status
     if user_id == admin.id and update_request.is_admin is False:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot remove your own admin status"
         )
-    
+    if user_id == admin.id and not admin.is_admin and update_request.is_org_admin is False:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot remove your own organisation admin status"
+        )
+
     # Build update dict
     update_dict = {"updated_at": datetime.now()}
     
@@ -905,7 +1005,10 @@ async def admin_update_user(
     
     if update_request.is_admin is not None:
         update_dict["is_admin"] = update_request.is_admin
-    
+
+    if update_request.is_org_admin is not None:
+        update_dict["is_org_admin"] = update_request.is_org_admin
+
     if update_request.new_password is not None:
         update_dict["password_hash"] = get_password_hash(update_request.new_password)
     
@@ -924,6 +1027,7 @@ async def admin_update_user(
         title_suffix=updated_doc.get("title_suffix"),
         is_active=updated_doc.get("is_active", True),
         is_admin=updated_doc.get("is_admin", False),
+        is_org_admin=updated_doc.get("is_org_admin", False),
         created_at=updated_doc["created_at"]
     )
 
@@ -933,20 +1037,21 @@ async def admin_set_user_status(
     request: Request,
     user_id: str,
     status_request: UserStatusRequest,
-    admin: UserResponse = Depends(require_admin)
+    admin: UserResponse = Depends(require_org_admin)
 ):
     """
-    Activate or deactivate a user account (admin only).
-    
+    Activate or deactivate a user account (superadmin or organisation admin).
+
     Deactivated users cannot log in but their data is preserved.
     """
     collection = await get_users_collection(request)
-    
+
     # Get user
     user_doc = await collection.find_one({"_id": user_id})
     if not user_doc:
         raise HTTPException(status_code=404, detail="User not found")
-    
+    assert_can_manage_target(admin, user_doc)
+
     # Prevent admin from deactivating themselves
     if user_id == admin.id and not status_request.is_active:
         raise HTTPException(
@@ -972,21 +1077,22 @@ async def admin_set_user_status(
 async def admin_delete_user(
     request: Request,
     user_id: str,
-    admin: UserResponse = Depends(require_admin)
+    admin: UserResponse = Depends(require_org_admin)
 ):
     """
-    Delete a user (admin only).
-    
+    Delete a user (superadmin or organisation admin).
+
     Permanently removes the user account and their profile access.
     """
     collection = await get_users_collection(request)
     access_collection = await get_profile_access_collection(request)
-    
+
     # Get user
     user_doc = await collection.find_one({"_id": user_id})
     if not user_doc:
         raise HTTPException(status_code=404, detail="User not found")
-    
+    assert_can_manage_target(admin, user_doc)
+
     # Prevent admin from deleting themselves
     if user_id == admin.id:
         raise HTTPException(
@@ -1150,20 +1256,22 @@ async def toggle_api_key(
 @router.get("/admin/api-keys", response_model=List[APIKeyResponse])
 async def admin_list_all_api_keys(
     request: Request,
-    admin: UserResponse = Depends(require_admin)
+    admin: UserResponse = Depends(require_org_admin)
 ):
     """
-    List all API keys in the system (admin only).
+    List API keys. Superadmins see every key; organisation admins see their team's keys.
     """
     collection = await get_api_keys_collection(request)
     users_collection = await get_users_collection(request)
-    
+
     keys = []
     async for doc in collection.find({}).sort("created_at", -1):
         # Get user email for context
         user_doc = await users_collection.find_one({"_id": doc["user_id"]})
+        if not admin.is_admin and (not user_doc or user_doc.get("is_admin", False)):
+            continue
         user_email = user_doc["email"] if user_doc else "unknown"
-        
+
         keys.append(APIKeyResponse(
             id=str(doc["_id"]),
             name=f"{doc['name']} ({user_email})",

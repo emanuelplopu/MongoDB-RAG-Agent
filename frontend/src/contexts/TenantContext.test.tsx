@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import { vi } from 'vitest'
 
-import { TenantProvider, useTenant } from './TenantContext'
+import { TenantProvider, applyRuntimeOverrides, useTenant } from './TenantContext'
 
 const {
   getTenantConfigMock,
@@ -117,5 +117,49 @@ describe('TenantContext', () => {
     expect(updateDocumentTitleMock).toHaveBeenCalledWith('Quellex')
     expect(updateFaviconMock).toHaveBeenCalledWith('/favicon.ico')
     expect(applyI18nOverridesMock).toHaveBeenCalled()
+  })
+
+  it('switches requireAuth on when the backend enforces authentication', async () => {
+    vi.mocked(global.fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ tenant_id: 'recallhub', require_auth: true }),
+    } as Response)
+
+    function FeatureHarness() {
+      const { tenant, isLoading } = useTenant()
+      return <div>{isLoading ? 'loading' : `requireAuth=${String(tenant.features.requireAuth)}`}</div>
+    }
+
+    render(
+      <TenantProvider>
+        <FeatureHarness />
+      </TenantProvider>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('requireAuth=true')).toBeInTheDocument()
+    })
+  })
+
+  it('never relaxes a tenant that already requires authentication', () => {
+    const config = {
+      ...baseTenant,
+      features: { requireAuth: true, startPage: 'login' },
+    } as unknown as Parameters<typeof applyRuntimeOverrides>[0]
+
+    expect(applyRuntimeOverrides(config, { require_auth: false })).toBe(config)
+    expect(applyRuntimeOverrides(config, {})).toBe(config)
+
+    const guestConfig = {
+      ...baseTenant,
+      features: { requireAuth: false, startPage: 'landing' },
+    } as unknown as Parameters<typeof applyRuntimeOverrides>[0]
+
+    expect(applyRuntimeOverrides(guestConfig, { require_auth: false })).toBe(guestConfig)
+    expect(applyRuntimeOverrides(guestConfig, { require_auth: 'yes' })).toBe(guestConfig)
+    expect(applyRuntimeOverrides(guestConfig, { require_auth: true }).features).toEqual({
+      requireAuth: true,
+      startPage: 'landing',
+    })
   })
 })

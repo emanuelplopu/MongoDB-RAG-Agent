@@ -51,10 +51,11 @@ If docs and code disagree, trust the current code first, then fix the docs.
 - Profiles and tenant-aware model selection: `backend/routers/profiles.py`, `profiles.yaml`, `src/profile.py`
 - Cloud source providers and registry: `backend/providers/`, `backend/providers/registry.py`
 - Backups: `backend/services/backup_service.py`, `backend/routers/backup.py`
+- Network access / login enforcement: `backend/core/auth_middleware.py` (`REQUIRE_AUTH`), `gateway/Caddyfile.template` + the `gateway`/`gateway-quellex` Compose services (TLS edge, `BIND_ADDRESS`), `frontend/src/components/StartPage.tsx` + `RequireAuth.tsx` (tenant `startPage` / `requireAuth`), `installer/tray-app/LanNameAdvertiser.cs` + `Branding.cs`, `installer/scripts/Configure-LanAccess.ps1`, `Export-LanCertificate.ps1`, `Write-TrayConfig.ps1`; documented in `docs/21-LAN_ACCESS.md`
 - Frontend API client: `frontend/src/api/client.ts`
 - Frontend tenants: `frontend/src/tenants/configs/`
 - Frontend tests and MSW setup: `frontend/src/test/`
-- Documentation: top-level master spec `01-SYSTEM_BLUEPRINT.md`; numbered blueprint set in `docs/` (`02-SYSTEM_BLUEPRINTS.md` … `18-RESPONSE_QUALITY_IMPROVEMENTS.md`). Strategy OS deep-dive is `docs/07-STRATEGY_OS_OVERVIEW.md` through `docs/11-EXPLORATION_AND_SCHEDULER.md`.
+- Documentation: top-level master spec `01-SYSTEM_BLUEPRINT.md`; numbered blueprint set in `docs/` (`02-SYSTEM_BLUEPRINTS.md` … `21-LAN_ACCESS.md`). Strategy OS deep-dive is `docs/07-STRATEGY_OS_OVERVIEW.md` through `docs/11-EXPLORATION_AND_SCHEDULER.md`.
 
 ## Non-Negotiable Rules
 
@@ -127,6 +128,9 @@ Default local ports:
 - Quellex backend/frontend: `11001` / `11081`
 - Airbyte web/API/builder when enabled: `11020` / `11021` / `11022`
 - llama.cpp embedding server when enabled: `11090`
+- LAN gateway (Caddy TLS edge, the only ports meant for other computers): Quellex `443` / `80` (`https://quellex.local`), RecallHub `11443` / `11480`
+
+All other ports bind to `BIND_ADDRESS` (default `127.0.0.1`); set `BIND_ADDRESS=0.0.0.0` in `.env` only on dev boxes that need raw-port access (e.g. over Tailscale). The Quellex backend runs with `REQUIRE_AUTH=true`: guests get 401 outside health, tenant config, login and register.
 
 ## CRITICAL: Backend Docker Build Commands
 
@@ -203,6 +207,7 @@ docker compose --profile quellex build frontend-quellex
 - Keep tenant behavior in `frontend/src/tenants/configs/`, `TenantContext`, and feature guards.
 - Do not hardcode API base URLs in components when proxy/client helpers already exist.
 - Keep auth, retry, timeout, and error behavior consistent with the central API client.
+- Any request that bypasses the axios instance (raw `fetch`, `EventSource`, `window.open`, iframe/img/media `src`) must carry the session token itself: use `getAuthHeaders()` from `frontend/src/api/client.ts`, or `?token=` only for SSE endpoints the middleware allows, and hand the browser blob URLs for embeds and downloads. The Quellex backend runs with login enforcement, so anonymous calls get 401.
 - Never place secrets in `VITE_*` variables.
 
 ### 6. Testing work
@@ -258,6 +263,7 @@ docker compose --profile quellex build frontend-quellex
 - The repo currently mixes PyMongo Async and Motor. New code should move toward PyMongo Async, not deepen the split.
 - `backend/providers/registry.py` tries to load some optional providers dynamically. Missing imports can be expected; do not "fix" them by removing extensibility.
 - `backend/routers/chat.py` and `backend/routers/sessions.py` both participate in chat behavior. Verify which path the UI actually uses before changing chat flows.
+- User roles are two flags on the `users` document: `is_admin` (superadmin) and `is_org_admin` (organisation admin). Guard system configuration with `require_admin`; use `require_org_admin` only for user management, profile access and the team API-key listing, and keep organisation admins away from superadmin accounts (see `assert_can_manage_target` in `backend/routers/auth.py`).
 - `frontend/src/api/client.ts` is the real frontend contract hub. If you change backend payloads and skip it, the UI will drift.
 - `openapi.json` is generated output. Do not hand-edit it.
 - There is historical config in the repo that uses embedded defaults for secret-like values. Do not repeat that pattern.

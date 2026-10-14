@@ -19,6 +19,9 @@
     Block until the frontend and the backend health endpoint answer, or Timeout elapses.
 .PARAMETER Timeout
     Seconds to wait for health when -Wait is given (config docker.startupTimeout wins).
+.PARAMETER DryRun
+    Resolve config and profiles, print the docker command that would run, and
+    exit 0 without starting anything (diagnostics).
 .OUTPUTS
     Exit 0 = started (and healthy when -Wait), 1 = Docker unavailable,
     2 = compose file missing, 3 = docker compose up failed, 4 = health timeout.
@@ -26,7 +29,8 @@
 param(
     [switch]$Detached = $true,
     [switch]$Wait,
-    [int]$Timeout = 180
+    [int]$Timeout = 180,
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Continue"
@@ -46,6 +50,24 @@ function Get-ConfigValue {
         if ($prop -and $null -ne $prop.Value -and "$($prop.Value)" -ne "") { return $prop.Value }
     }
     return $Default
+}
+
+function Get-ComposeProfiles {
+    # Tenant profile from config.json (may be comma separated) plus COMPOSE_PROFILES
+    # from <InstallPath>\.env, de-duplicated. Must match Stop-Services.ps1.
+    param([string]$ConfigProfile, [string]$InstallPath)
+    $list = New-Object System.Collections.Generic.List[string]
+    foreach ($p in ("$ConfigProfile" -split ",")) { $t = $p.Trim(); if ($t -and -not $list.Contains($t)) { $list.Add($t) } }
+    $envFile = Join-Path $InstallPath ".env"
+    if (Test-Path $envFile) {
+        foreach ($line in Get-Content $envFile) {
+            if ($line -match '^\s*COMPOSE_PROFILES\s*=\s*(.*)$') {
+                $value = $Matches[1].Trim().Trim('"').Trim("'")
+                foreach ($p in ($value -split ",")) { $t = $p.Trim(); if ($t -and -not $list.Contains($t)) { $list.Add($t) } }
+            }
+        }
+    }
+    return @($list)
 }
 
 $configPath = Join-Path (Split-Path $ScriptDir -Parent) "config.json"
@@ -124,10 +146,20 @@ $overridePath = Join-Path $installPath "docker-compose.override.yml"
 if ($composeFile -eq "docker-compose.yml" -and (Test-Path $overridePath)) {
     $composeBase += @("-f", $overridePath)
 }
-if ($composeProfile) { $composeBase += @("--profile", $composeProfile) }
+# Profiles: the tenant from config.json plus COMPOSE_PROFILES from the install's
+# .env (e.g. "quellex,embedder-gpu" for the local embedding server). An explicit
+# --profile flag would otherwise REPLACE the .env list, and the stack would come
+# up without the embedder after a reboot.
+$profiles = Get-ComposeProfiles -ConfigProfile $composeProfile -InstallPath $installPath
+foreach ($p in $profiles) { $composeBase += @("--profile", $p) }
+Write-InstallLog "Compose profiles: $(if ($profiles) { $profiles -join ', ' } else { '(none)' })" -Source "Start-Services"
 
 $upArgs = $composeBase + @("up", "-d", "--remove-orphans")
 Write-InstallLog "Running: docker $($upArgs -join ' ')  (cwd: $installPath)" -Source "Start-Services"
+if ($DryRun) {
+    Write-Host "DRY RUN: docker $($upArgs -join ' ')  (cwd: $installPath)"
+    exit 0
+}
 Push-Location $installPath
 try {
     $output = & docker @upArgs 2>&1 | ForEach-Object { "$_" }

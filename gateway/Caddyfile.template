@@ -1,0 +1,44 @@
+# LAN gateway for RecallHub / Quellex - rendered into /etc/caddy/Caddyfile by
+# the container command in docker-compose.yml:
+#   __HOSTS__     <- GATEWAY_HOSTS     e.g. "https://quellex.local, https://quellex"
+#   __UPSTREAM__  <- GATEWAY_UPSTREAM  e.g. "frontend-quellex:80"
+#
+# Caddy terminates TLS with a certificate from its own local CA (tls internal),
+# redirects http:// to https:// automatically and forwards everything to the
+# tenant's frontend nginx, which serves the UI and proxies /api to the backend.
+# Login enforcement happens in the backend (REQUIRE_AUTH); this layer only makes
+# sure credentials and session tokens never cross the office network in clear.
+
+{
+	# No admin API: nothing on the LAN may reconfigure the gateway.
+	admin off
+	# The container has no system trust store to install the CA into.
+	skip_install_trust
+}
+
+__HOSTS__ {
+	tls internal
+
+	encode zstd gzip
+
+	header {
+		# Browsers keep using HTTPS for a year once they have seen this.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# Do not advertise the server software.
+		-Server
+	}
+
+	reverse_proxy __UPSTREAM__ {
+		# Chat answers stream as Server-Sent Events; flush every chunk.
+		flush_interval -1
+		# Long-running LLM calls (nginx allows up to 10 minutes on the stream route).
+		transport http {
+			response_header_timeout 660s
+		}
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

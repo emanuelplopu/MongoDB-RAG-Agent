@@ -14,7 +14,16 @@ class BackendSettings(BaseSettings):
     api_workers: int = Field(default=4, description="Number of API workers")
     debug: bool = Field(default=False, description="Debug mode")
     tenant_id: str = Field(default="recallhub", description="Tenant identifier for branding")
-    
+    require_auth: bool = Field(
+        default=False,
+        description=(
+            "Reject every API request without a valid session or API key, except "
+            "health, tenant config, login and register (backend/core/auth_middleware.py). "
+            "docker-compose.yml turns this on for the Quellex tenant; the frontend "
+            "mirrors it through GET /api/v1/tenant/config."
+        ),
+    )
+
     # CORS Settings
     cors_origins: List[str] = Field(
         default=["http://localhost:3000", "http://localhost:8080", "http://127.0.0.1:3000"],

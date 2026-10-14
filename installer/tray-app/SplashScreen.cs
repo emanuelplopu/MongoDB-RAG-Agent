@@ -49,11 +49,7 @@ public class SplashScreen : Form
         // Load icon
         try
         {
-            var iconPath = Path.Combine(AppContext.BaseDirectory, "icon.ico");
-            if (File.Exists(iconPath))
-            {
-                Icon = new Icon(iconPath);
-            }
+            Icon = Branding.LoadIcon();
         }
         catch
         {
@@ -63,7 +59,7 @@ public class SplashScreen : Form
         // Title
         _titleLabel = new Label
         {
-            Text = "RecallHub",
+            Text = Branding.AppName,
             Font = new Font("Segoe UI", 28f, FontStyle.Bold),
             ForeColor = Color.White,
             AutoSize = false,
@@ -75,7 +71,7 @@ public class SplashScreen : Form
         // Subtitle
         _subtitleLabel = new Label
         {
-            Text = "Local-First AI Knowledge Base",
+            Text = Branding.Tagline,
             Font = new Font("Segoe UI", 10f, FontStyle.Regular),
             ForeColor = Color.FromArgb(160, 160, 180),
             AutoSize = false,

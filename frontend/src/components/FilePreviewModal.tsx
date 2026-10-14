@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { XMarkIcon, ArrowDownTrayIcon, ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline'
 import ReactMarkdown from 'react-markdown'
+import { getAuthHeaders } from '../api/client'
 
 // File type categories
 const IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico']
@@ -40,11 +41,26 @@ interface FilePreviewModalProps {
   fallbackContent?: string
 }
 
+/**
+ * Fetch a protected file with the session token and return a blob URL.
+ *
+ * Browser-driven loads (iframe, img, audio, video, window.open) cannot send
+ * the Authorization header, and the backend rejects anonymous file requests
+ * when login enforcement is on, so the file is downloaded once here and the
+ * browser is handed a blob URL instead of the API URL.
+ */
+async function fetchBlobUrl(url: string): Promise<string> {
+  const res = await fetch(url, { headers: getAuthHeaders() })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return URL.createObjectURL(await res.blob())
+}
+
 export default function FilePreviewModal({ isOpen, onClose, fileUrl, filename, fallbackContent }: FilePreviewModalProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [renderedContent, setRenderedContent] = useState<string>('')
   const [xlsxHtml, setXlsxHtml] = useState<string>('')
+  const [mediaUrl, setMediaUrl] = useState<string | null>(null)
 
   const category = getFileCategory(filename)
 
@@ -71,12 +87,13 @@ export default function FilePreviewModal({ isOpen, onClose, fileUrl, filename, f
     setError(null)
     setRenderedContent('')
     setXlsxHtml('')
+    setMediaUrl(null)
 
     const inlineUrl = fileUrl + (fileUrl.includes('?') ? '&' : '?') + 'inline=true'
 
     if (category === 'docx') {
       // Fetch DOCX as ArrayBuffer and convert with mammoth
-      fetch(inlineUrl)
+      fetch(inlineUrl, { headers: getAuthHeaders() })
         .then(res => {
           if (!res.ok) throw new Error(`HTTP ${res.status}`)
           return res.arrayBuffer()
@@ -94,7 +111,7 @@ export default function FilePreviewModal({ isOpen, onClose, fileUrl, filename, f
         })
     } else if (category === 'xlsx') {
       // Fetch XLSX as ArrayBuffer and render with SheetJS
-      fetch(inlineUrl)
+      fetch(inlineUrl, { headers: getAuthHeaders() })
         .then(res => {
           if (!res.ok) throw new Error(`HTTP ${res.status}`)
           return res.arrayBuffer()
@@ -118,7 +135,7 @@ export default function FilePreviewModal({ isOpen, onClose, fileUrl, filename, f
         })
     } else if (category === 'text' || category === 'code' || category === 'markdown') {
       // Fetch as text
-      fetch(inlineUrl)
+      fetch(inlineUrl, { headers: getAuthHeaders() })
         .then(res => {
           if (!res.ok) throw new Error(`HTTP ${res.status}`)
           return res.text()
@@ -133,8 +150,29 @@ export default function FilePreviewModal({ isOpen, onClose, fileUrl, filename, f
           setLoading(false)
         })
     } else if (category === 'image' || category === 'pdf' || category === 'audio' || category === 'video') {
-      // These use direct URL embedding — just mark as loaded
-      setLoading(false)
+      // Embeds cannot send the session token: load the file once and embed a blob URL
+      let cancelled = false
+      let objectUrl: string | null = null
+      fetchBlobUrl(inlineUrl)
+        .then(url => {
+          if (cancelled) {
+            URL.revokeObjectURL(url)
+            return
+          }
+          objectUrl = url
+          setMediaUrl(url)
+          setLoading(false)
+        })
+        .catch(err => {
+          if (cancelled) return
+          console.error('Media preview error:', err)
+          setError('Failed to load file')
+          setLoading(false)
+        })
+      return () => {
+        cancelled = true
+        if (objectUrl) URL.revokeObjectURL(objectUrl)
+      }
     } else {
       // Unknown type — use fallback content
       if (fallbackContent) {
@@ -149,11 +187,32 @@ export default function FilePreviewModal({ isOpen, onClose, fileUrl, filename, f
   const inlineUrl = fileUrl + (fileUrl.includes('?') ? '&' : '?') + 'inline=true'
 
   const handleDownload = () => {
-    window.open(fileUrl, '_blank')
+    fetchBlobUrl(fileUrl)
+      .then(url => {
+        const anchor = document.createElement('a')
+        anchor.href = url
+        anchor.download = filename
+        document.body.appendChild(anchor)
+        anchor.click()
+        anchor.remove()
+        // Give the browser time to start the download before freeing the blob
+        setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      })
+      .catch(err => {
+        console.error('Download error:', err)
+        setError('Failed to download file')
+      })
   }
 
   const handleOpenNewTab = () => {
-    window.open(inlineUrl, '_blank')
+    fetchBlobUrl(inlineUrl)
+      .then(url => {
+        window.open(url, '_blank')
+      })
+      .catch(err => {
+        console.error('Open in new tab error:', err)
+        setError('Failed to open file')
+      })
   }
 
   const renderPreviewContent = () => {
@@ -188,7 +247,7 @@ export default function FilePreviewModal({ isOpen, onClose, fileUrl, filename, f
       case 'pdf':
         return (
           <iframe
-            src={inlineUrl}
+            src={mediaUrl ?? inlineUrl}
             className="w-full h-full min-h-[75vh] rounded-lg border-0"
             title={`Preview: ${filename}`}
           />
@@ -198,7 +257,7 @@ export default function FilePreviewModal({ isOpen, onClose, fileUrl, filename, f
         return (
           <div className="flex items-center justify-center p-4 overflow-auto max-h-[80vh]">
             <img
-              src={inlineUrl}
+              src={mediaUrl ?? inlineUrl}
               alt={filename}
               className="max-w-full max-h-[75vh] object-contain rounded-lg shadow-lg"
               onError={() => setError('Failed to load image')}
@@ -212,7 +271,7 @@ export default function FilePreviewModal({ isOpen, onClose, fileUrl, filename, f
             <div className="text-6xl mb-2">🎵</div>
             <p className="text-primary-900 dark:text-gray-200 font-medium">{filename}</p>
             <audio controls className="w-full max-w-lg" preload="metadata">
-              <source src={inlineUrl} />
+              <source src={mediaUrl ?? inlineUrl} />
               Your browser does not support audio playback.
             </audio>
           </div>
@@ -226,7 +285,7 @@ export default function FilePreviewModal({ isOpen, onClose, fileUrl, filename, f
               className="max-w-full max-h-[75vh] rounded-lg shadow-lg"
               preload="metadata"
             >
-              <source src={inlineUrl} />
+              <source src={mediaUrl ?? inlineUrl} />
               Your browser does not support video playback.
             </video>
           </div>

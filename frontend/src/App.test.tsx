@@ -2,7 +2,7 @@
  * Unit tests for App component - routing configuration.
  */
 
-import { describe, it, expect, vi } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import App from './App'
@@ -42,10 +42,19 @@ vi.mock('./components/Layout', async () => {
   }
 })
 
+// Mutable auth / tenant state so individual tests can flip start page and auth rules
+let authState: { isAuthenticated: boolean; user: unknown; isLoading: boolean; sessionExpired: boolean }
+let tenantState: { tenant: { features: { startPage: 'landing' | 'login'; requireAuth: boolean } } }
+
 // Mock contexts
 vi.mock('./contexts/AuthContext', () => ({
   AuthProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  useAuth: () => ({ isAuthenticated: false, user: null, isLoading: false }),
+  useAuth: () => authState,
+}))
+
+vi.mock('./contexts/TenantContext', () => ({
+  TenantProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  useTenant: () => tenantState,
 }))
 
 vi.mock('./contexts/SettingsSyncContext', () => ({
@@ -89,6 +98,77 @@ const renderApp = (initialRoute = '/') => {
 }
 
 describe('App', () => {
+  beforeEach(() => {
+    authState = { isAuthenticated: false, user: null, isLoading: false, sessionExpired: false }
+    tenantState = { tenant: { features: { startPage: 'landing', requireAuth: false } } }
+  })
+
+  describe('Start page (tenant features.startPage)', () => {
+    it('sends guests to the login page when the tenant starts on login', () => {
+      tenantState.tenant.features.startPage = 'login'
+      renderApp('/')
+      expect(screen.getByTestId('login-page')).toBeInTheDocument()
+      expect(screen.queryByTestId('landing-page')).not.toBeInTheDocument()
+    })
+
+    it('sends signed-in users straight to the dashboard when the tenant starts on login', () => {
+      tenantState.tenant.features.startPage = 'login'
+      authState = { isAuthenticated: true, user: { name: 'Alex' }, isLoading: false, sessionExpired: false }
+      renderApp('/')
+      expect(screen.getByTestId('dashboard-page')).toBeInTheDocument()
+      expect(screen.getByTestId('layout')).toBeInTheDocument()
+    })
+
+    it('shows a loading state instead of guessing while the session is still being validated', () => {
+      tenantState.tenant.features.startPage = 'login'
+      authState = { isAuthenticated: false, user: null, isLoading: true, sessionExpired: false }
+      renderApp('/')
+      expect(screen.getByTestId('start-page-loading')).toBeInTheDocument()
+      expect(screen.queryByTestId('login-page')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('dashboard-page')).not.toBeInTheDocument()
+    })
+
+    it('keeps the language prefix when redirecting from the root', () => {
+      tenantState.tenant.features.startPage = 'login'
+      renderApp('/de/')
+      expect(screen.getByTestId('login-page')).toBeInTheDocument()
+    })
+  })
+
+  describe('Required authentication (tenant features.requireAuth)', () => {
+    beforeEach(() => {
+      tenantState.tenant.features.requireAuth = true
+    })
+
+    it.each(['/dashboard', '/chat', '/search', '/documents/doc1', '/system/users', '/api-docs'])(
+      'redirects guests from %s to the login page',
+      (route) => {
+        renderApp(route)
+        expect(screen.getByTestId('login-page')).toBeInTheDocument()
+        expect(screen.queryByTestId('layout')).not.toBeInTheDocument()
+      }
+    )
+
+    it('renders protected pages for signed-in users', () => {
+      authState = { isAuthenticated: true, user: { name: 'Alex' }, isLoading: false, sessionExpired: false }
+      renderApp('/chat')
+      expect(screen.getByTestId('chat-page')).toBeInTheDocument()
+    })
+
+    it('holds protected pages back while the session is being validated', () => {
+      authState = { isAuthenticated: false, user: null, isLoading: true, sessionExpired: false }
+      renderApp('/chat')
+      expect(screen.getByTestId('auth-loading')).toBeInTheDocument()
+      expect(screen.queryByTestId('chat-page')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('login-page')).not.toBeInTheDocument()
+    })
+
+    it('still serves the login page itself to guests', () => {
+      renderApp('/login')
+      expect(screen.getByTestId('login-page')).toBeInTheDocument()
+    })
+  })
+
   describe('Routing', () => {
     it('should render landing page at root path', () => {
       renderApp('/')

@@ -89,4 +89,19 @@ describe('SessionExpiredModal', () => {
     expect(navigate).not.toHaveBeenCalled()
     expect(screen.getByText('errors.sessionExpired.message')).toBeInTheDocument()
   })
+
+  it('offers no guest option when the tenant requires a login', () => {
+    render(
+      <SessionExpiredModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onContinueAsGuest={vi.fn()}
+        allowGuest={false}
+      />
+    )
+
+    expect(screen.getByRole('button', { name: 'Log In Again' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Continue as Guest' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/Guest users can browse/)).not.toBeInTheDocument()
+  })
 })

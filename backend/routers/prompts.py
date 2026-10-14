@@ -23,7 +23,7 @@ from backend.models.schemas import (
     SuccessResponse
 )
 from backend.core.config import get_settings
-from backend.routers.auth import get_current_user, UserResponse
+from backend.routers.auth import require_admin, UserResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["prompts"])
@@ -95,7 +95,7 @@ def openai_format_to_tool_schema(tool_dict: dict) -> ToolSchema:
 async def reinitialize_prompts(
     request: Request,
     force_update: bool = False,
-    current_user: Optional[UserResponse] = Depends(get_current_user)
+    current_user: UserResponse = Depends(require_admin)
 ):
     """Re-initialize prompt templates with defaults.
     
@@ -116,7 +116,7 @@ async def reinitialize_prompts(
 async def list_templates(
     request: Request,
     category: Optional[str] = None,
-    current_user: Optional[UserResponse] = Depends(get_current_user)
+    current_user: UserResponse = Depends(require_admin)
 ):
     """List all prompt templates."""
     collection = get_prompts_collection(request)
@@ -139,7 +139,7 @@ async def list_templates(
 async def get_template(
     template_id: str,
     request: Request,
-    current_user: Optional[UserResponse] = Depends(get_current_user)
+    current_user: UserResponse = Depends(require_admin)
 ):
     """Get a specific prompt template."""
     collection = get_prompts_collection(request)
@@ -156,7 +156,7 @@ async def get_template(
 async def create_template(
     template_data: PromptTemplateCreate,
     request: Request,
-    current_user: Optional[UserResponse] = Depends(get_current_user)
+    current_user: UserResponse = Depends(require_admin)
 ):
     """Create a new prompt template with initial version."""
     collection = get_prompts_collection(request)
@@ -197,7 +197,7 @@ async def update_template(
     template_id: str,
     update_data: PromptTemplateUpdate,
     request: Request,
-    current_user: Optional[UserResponse] = Depends(get_current_user)
+    current_user: UserResponse = Depends(require_admin)
 ):
     """Update prompt template metadata (not versions)."""
     collection = get_prompts_collection(request)
@@ -227,7 +227,7 @@ async def update_template(
 async def delete_template(
     template_id: str,
     request: Request,
-    current_user: Optional[UserResponse] = Depends(get_current_user)
+    current_user: UserResponse = Depends(require_admin)
 ):
     """Delete a prompt template."""
     collection = get_prompts_collection(request)
@@ -248,7 +248,7 @@ async def create_version(
     template_id: str,
     version_data: PromptVersionCreate,
     request: Request,
-    current_user: Optional[UserResponse] = Depends(get_current_user)
+    current_user: UserResponse = Depends(require_admin)
 ):
     """Create a new version of a prompt template."""
     collection = get_prompts_collection(request)
@@ -291,7 +291,7 @@ async def activate_version(
     template_id: str,
     version: int,
     request: Request,
-    current_user: Optional[UserResponse] = Depends(get_current_user)
+    current_user: UserResponse = Depends(require_admin)
 ):
     """Activate a specific version of a prompt template."""
     collection = get_prompts_collection(request)
@@ -332,7 +332,7 @@ async def get_version(
     template_id: str,
     version: int,
     request: Request,
-    current_user: Optional[UserResponse] = Depends(get_current_user)
+    current_user: UserResponse = Depends(require_admin)
 ):
     """Get a specific version of a prompt template."""
     collection = get_prompts_collection(request)
@@ -355,7 +355,7 @@ async def get_version(
 async def test_prompt(
     test_data: PromptTestRequest,
     request: Request,
-    current_user: Optional[UserResponse] = Depends(get_current_user)
+    current_user: UserResponse = Depends(require_admin)
 ):
     """Test a prompt template with a sample message."""
     collection = get_prompts_collection(request)
@@ -452,7 +452,7 @@ async def test_prompt(
 async def compare_versions(
     compare_data: PromptCompareRequest,
     request: Request,
-    current_user: Optional[UserResponse] = Depends(get_current_user)
+    current_user: UserResponse = Depends(require_admin)
 ):
     """Compare two versions of a prompt template."""
     collection = get_prompts_collection(request)

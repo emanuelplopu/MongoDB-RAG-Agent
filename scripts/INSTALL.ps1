@@ -40,6 +40,12 @@
     Do not start the desktop app at the end (automation / tests).
 .PARAMETER NonInteractive
     Never wait for a key press or an Enter (automation / tests).
+.PARAMETER NoLanAccess
+    Skip the Windows Firewall rules for network access (https://<tenant>.local)
+    and tell the tray app not to announce the name on the LAN. The stack still
+    starts the TLS gateway; see docs/21-LAN_ACCESS.md.
+.PARAMETER LanHostname
+    Name other computers use (default: the tenant id, e.g. quellex -> https://quellex.local).
 .EXAMPLE
     .\INSTALL.ps1
     .\INSTALL.ps1 -TestDataPath "D:\Test_Data" -InstallPath "D:\Quellex"
@@ -59,7 +65,9 @@ param(
     [switch]$PurgeTestData,
     [switch]$TakeOverStack,
     [switch]$NoLaunch,
-    [switch]$NonInteractive
+    [switch]$NonInteractive,
+    [switch]$NoLanAccess,
+    [string]$LanHostname = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -533,7 +541,10 @@ if (-not $SkipDesktopApp) {
     # regardless of tenant - the main reason earlier test installs never worked.
     $trayCfgScript = Join-Path $InstallPath "installer\scripts\Write-TrayConfig.ps1"
     if (Test-Path $trayCfgScript) {
-        & $trayCfgScript -InstallPath $InstallPath -Tenant $tenant
+        $trayCfgArgs = @{ InstallPath = $InstallPath; Tenant = $tenant }
+        if ($LanHostname) { $trayCfgArgs.LanHostname = $LanHostname }
+        if ($NoLanAccess) { $trayCfgArgs.NoLanAdvertise = $true }
+        & $trayCfgScript @trayCfgArgs
     } else {
         Write-Host "  [WARN] Write-TrayConfig.ps1 not found at $trayCfgScript - tray app will use defaults" -ForegroundColor Yellow
     }
@@ -588,37 +599,48 @@ if (-not $SkipDesktopApp) {
         Copy-Item -Path $trayExe -Destination (Join-Path $appDir "RecallHubTray.exe") -Force
         Write-Host "  [OK] Executable copied" -ForegroundColor Green
 
-        # Copy the icon if available
-        $iconSource = Join-Path $InstallPath "installer"
-        $iconSource = Join-Path $iconSource "assets"
-        $iconSource = Join-Path $iconSource "icon.ico"
+        # Copy the icons (generic + tenant icon; the tray app picks the tenant one)
+        $assetsSource = Join-Path $InstallPath "installer"
+        $assetsSource = Join-Path $assetsSource "assets"
         $assetsDir = Join-Path $appDir "assets"
+        $tenantIconName = if ($tenant -eq "quellex") { "quellex.ico" } else { "icon.ico" }
 
-        if (Test-Path $iconSource) {
-            if (-not (Test-Path $assetsDir)) {
-                New-Item -Path $assetsDir -ItemType Directory -Force | Out-Null
+        foreach ($iconName in @("icon.ico", $tenantIconName) | Select-Object -Unique) {
+            $iconSource = Join-Path $assetsSource $iconName
+            if (Test-Path $iconSource) {
+                if (-not (Test-Path $assetsDir)) {
+                    New-Item -Path $assetsDir -ItemType Directory -Force | Out-Null
+                }
+                Copy-Item -Path $iconSource -Destination (Join-Path $assetsDir $iconName) -Force
+                Write-Host "  [OK] Icon copied: $iconName" -ForegroundColor Green
             }
-            Copy-Item -Path $iconSource -Destination (Join-Path $assetsDir "icon.ico") -Force
-            Write-Host "  [OK] Icon copied" -ForegroundColor Green
         }
 
         $exePath = Join-Path $appDir "RecallHubTray.exe"
-        $iconPath = Join-Path $assetsDir "icon.ico"
+        $iconPath = Join-Path $assetsDir $tenantIconName
+        if (-not (Test-Path $iconPath)) { $iconPath = Join-Path $assetsDir "icon.ico" }
+        $shortcutDescription = if ($tenant -eq "quellex") { "Quellex - Ihr Kanzleiwissen. Schnell gefunden." } else { "RecallHub - AI Knowledge Assistant" }
 
-        # Create Desktop Shortcut
+        # Create Desktop Shortcut (named after the tenant)
         Write-Host "  Creating desktop shortcut..." -ForegroundColor Gray
         try {
             $WshShell = New-Object -ComObject WScript.Shell
             $desktopPath = [Environment]::GetFolderPath('Desktop')
-            $Shortcut = $WshShell.CreateShortcut("$desktopPath\RecallHub.lnk")
+            # Remove the generic shortcut left by earlier installs of the other tenant name
+            foreach ($stale in @("RecallHub.lnk", "Quellex.lnk")) {
+                if ($stale -ne "$tenantName.lnk" -and (Test-Path "$desktopPath\$stale")) {
+                    Remove-Item "$desktopPath\$stale" -Force -ErrorAction SilentlyContinue
+                }
+            }
+            $Shortcut = $WshShell.CreateShortcut("$desktopPath\$tenantName.lnk")
             $Shortcut.TargetPath = $exePath
             if (Test-Path $iconPath) {
                 $Shortcut.IconLocation = $iconPath
             }
-            $Shortcut.Description = "RecallHub - AI Knowledge Assistant"
+            $Shortcut.Description = $shortcutDescription
             $Shortcut.WorkingDirectory = $appDir
             $Shortcut.Save()
-            Write-Host "  [OK] Desktop shortcut created" -ForegroundColor Green
+            Write-Host "  [OK] Desktop shortcut created: $tenantName.lnk" -ForegroundColor Green
         } catch {
             Write-Host "  [WARN] Failed to create desktop shortcut: $_" -ForegroundColor Yellow
         }
@@ -630,17 +652,17 @@ if (-not $SkipDesktopApp) {
             $startMenuBase = Join-Path $startMenuBase "Windows"
             $startMenuBase = Join-Path $startMenuBase "Start Menu"
             $startMenuBase = Join-Path $startMenuBase "Programs"
-            $startMenuDir = Join-Path $startMenuBase "RecallHub"
+            $startMenuDir = Join-Path $startMenuBase $tenantName
             if (-not (Test-Path $startMenuDir)) {
                 New-Item -Path $startMenuDir -ItemType Directory -Force | Out-Null
             }
             $WshShell = New-Object -ComObject WScript.Shell
-            $smShortcut = $WshShell.CreateShortcut("$startMenuDir\RecallHub.lnk")
+            $smShortcut = $WshShell.CreateShortcut("$startMenuDir\$tenantName.lnk")
             $smShortcut.TargetPath = $exePath
             if (Test-Path $iconPath) {
                 $smShortcut.IconLocation = $iconPath
             }
-            $smShortcut.Description = "RecallHub - AI Knowledge Assistant"
+            $smShortcut.Description = $shortcutDescription
             $smShortcut.WorkingDirectory = $appDir
             $smShortcut.Save()
             Write-Host "  [OK] Start Menu shortcut created" -ForegroundColor Green
@@ -683,11 +705,34 @@ if (-not $SkipDesktopApp) {
             desktop_app_path = $exePath
         }
 
+        # Network access: firewall rules for the TLS gateway (443/80) and the
+        # tray app's name announcer (UDP 5353/5355). Needs admin; INSTALL.ps1
+        # runs elevated unless -SkipPrerequisites/-Repair, so try here and
+        # otherwise leave the command for later.
+        $lanScript = Join-Path $InstallPath "installer\scripts\Configure-LanAccess.ps1"
+        if ($NoLanAccess) {
+            Write-Host "  (network access skipped: -NoLanAccess)" -ForegroundColor DarkGray
+        } elseif (-not (Test-Path $lanScript)) {
+            Write-Host "  [WARN] Configure-LanAccess.ps1 not found - firewall rules for https://$tenant.local not created" -ForegroundColor Yellow
+        } else {
+            $isElevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+            if ($isElevated) {
+                try {
+                    & $lanScript -Tenant $tenant -NoElevate
+                } catch {
+                    Write-Host "  [WARN] Firewall rules failed: $_" -ForegroundColor Yellow
+                }
+            } else {
+                Write-Host "  [WARN] Not elevated - run this once as Administrator to allow network access:" -ForegroundColor Yellow
+                Write-Host "         powershell -ExecutionPolicy Bypass -File `"$lanScript`"" -ForegroundColor Gray
+            }
+        }
+
         # Launch the app
         if ($NoLaunch) {
             Write-Host "  (desktop app not launched: -NoLaunch)" -ForegroundColor DarkGray
         } else {
-            Write-Host "  Launching RecallHub desktop app..." -ForegroundColor Gray
+            Write-Host "  Launching $tenantName desktop app..." -ForegroundColor Gray
             try {
                 Start-Process -FilePath $exePath
                 Write-Host "  [OK] Desktop app launched" -ForegroundColor Green
@@ -697,13 +742,21 @@ if (-not $SkipDesktopApp) {
         }
 
         # Phase 4 summary
+        $lanName = if ($LanHostname) { $LanHostname } else { $tenant }
+        $lanUrl = if ($tenant -eq "quellex") { "https://$lanName.local" } else { "https://$lanName.local:11443" }
         Write-Host ""
         Write-Host "  Desktop App deployed successfully!" -ForegroundColor Green
         Write-Host "    Location:         $exePath" -ForegroundColor White
-        Write-Host "    Desktop shortcut: Created" -ForegroundColor White
-        Write-Host "    Start Menu:       Created" -ForegroundColor White
+        Write-Host "    Window title:     $tenantName" -ForegroundColor White
+        Write-Host "    Desktop shortcut: $tenantName.lnk" -ForegroundColor White
+        Write-Host "    Start Menu:       $tenantName\$tenantName.lnk" -ForegroundColor White
         Write-Host "    Protocol handler: recallhub:// registered" -ForegroundColor White
         Write-Host "    Windows startup:  Configured" -ForegroundColor White
+        if ($NoLanAccess) {
+            Write-Host "    Network address:  (disabled with -NoLanAccess)" -ForegroundColor White
+        } else {
+            Write-Host "    Network address:  $lanUrl  (export the certificate: installer\scripts\Export-LanCertificate.ps1)" -ForegroundColor White
+        }
     }
 } else {
     Write-Host ""
@@ -730,6 +783,18 @@ if ($healthy) {
     Write-Host "  [OK] Frontend and backend are answering" -ForegroundColor Green
 } else {
     Write-Host "  [ERROR] Frontend/backend did not answer within 180s - see: docker compose --profile $tenant ps / logs (in $InstallPath)" -ForegroundColor Red
+}
+
+# The LAN gateway is informational: it only serves the tenant's host names, so
+# probe the TCP port rather than an HTTPS request with a mismatched name.
+$gatewayPort = if ($tenant -eq "quellex") { 443 } else { 11443 }
+try {
+    $tcp = New-Object System.Net.Sockets.TcpClient
+    $tcp.Connect("127.0.0.1", $gatewayPort)
+    $tcp.Close()
+    Write-Host "  [OK] LAN gateway is listening on port $gatewayPort" -ForegroundColor Green
+} catch {
+    Write-Host "  [WARN] LAN gateway not listening on port $gatewayPort (docker compose --profile $tenant ps; is another program using the port?)" -ForegroundColor Yellow
 }
 
 # --- Finalize manifest ---

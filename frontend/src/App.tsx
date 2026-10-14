@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { useTenant } from './contexts/TenantContext'
 import { ChatSidebarProvider } from './contexts/ChatSidebarContext'
 import { LanguageProvider } from './contexts/LanguageContext'
 import { ThemeProvider } from './contexts/ThemeContext'
@@ -11,7 +12,8 @@ import Layout from './components/Layout'
 import SessionExpiredModal from './components/SessionExpiredModal'
 import ChatPageNew from './pages/ChatPageNew'
 import DashboardPage from './pages/DashboardPage'
-import LandingPage from './pages/LandingPage'
+import StartPage from './components/StartPage'
+import RequireAuth from './components/RequireAuth'
 import SearchPage from './pages/SearchPage'
 import DocumentsPage from './pages/DocumentsPage'
 import DocumentPreviewPage from './pages/DocumentPreviewPage'
@@ -81,6 +83,10 @@ function LanguageValidation({ children }: { children: React.ReactNode }) {
 // Wrapper that provides SettingsSyncProvider with auth state and coordinates preference application
 function SyncedProviders({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, showSessionModal, closeSessionModal, continueAsGuest } = useAuth()
+  const { tenant } = useTenant()
+  // Tenants that require a login never offer "continue as guest": RequireAuth
+  // already redirects an expired session to the login page, which explains why.
+  const allowGuest = !tenant.features.requireAuth
 
   return (
     <SettingsSyncProvider isAuthenticated={isAuthenticated}>
@@ -90,9 +96,10 @@ function SyncedProviders({ children }: { children: React.ReactNode }) {
             {children}
           </UserPreferencesProvider>
           <SessionExpiredModal
-            isOpen={showSessionModal}
+            isOpen={showSessionModal && allowGuest}
             onClose={closeSessionModal}
             onContinueAsGuest={continueAsGuest}
+            allowGuest={allowGuest}
           />
         </LanguageProvider>
       </ThemeProvider>
@@ -115,8 +122,10 @@ function AppRoutes() {
             <Route path="/:lang/*" element={
               <LanguageValidation>
                 <Routes>
-                  <Route path="/" element={<LandingPage />} />
+                  <Route path="/" element={<StartPage />} />
                   <Route path="/login" element={<LoginPage />} />
+                  {/* Everything below needs a session when the tenant sets features.requireAuth */}
+                  <Route element={<RequireAuth />}>
                   <Route path="/api-docs" element={<DeveloperDocsPage />} />
                   <Route path="/dashboard" element={<Layout />}>
                     <Route index element={<DashboardPage />} />
@@ -149,6 +158,7 @@ function AppRoutes() {
                     <Route path="cloud-sources/connections/:connectionId" element={<FeatureGuard feature="showCloudSources"><CloudSourceConnectionsPage /></FeatureGuard>} />
                     <Route path="cloud-sources/connect/:providerType" element={<FeatureGuard feature="showCloudSources"><CloudSourceConnectPage /></FeatureGuard>} />
                     <Route path="email-cloud-config" element={<FeatureGuard feature="showEmailConfig"><EmailCloudConfigPage /></FeatureGuard>} />
+                  </Route>
                   </Route>
                   <Route path="*" element={<NotFoundPage />} />
                 </Routes>

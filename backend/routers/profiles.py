@@ -753,7 +753,7 @@ async def get_profile_models(
         pm = get_profile_manager()
         
         # Check if user has access to this profile
-        accessible_profiles = await get_user_accessible_profiles(user, request)
+        accessible_profiles = await get_user_accessible_profiles(request, user.id)
         if profile_key not in accessible_profiles:
             raise HTTPException(
                 status_code=403,
@@ -785,7 +785,7 @@ async def update_profile_models(
     profile_key: str,
     request: Request,
     model_updates: dict,
-    user: UserResponse = Depends(require_auth)
+    user: UserResponse = Depends(require_admin)
 ):
     """
     Update model configuration for a specific profile.
@@ -796,7 +796,7 @@ async def update_profile_models(
         pm = get_profile_manager()
         
         # Check if user has access to this profile
-        accessible_profiles = await get_user_accessible_profiles(user, request)
+        accessible_profiles = await get_user_accessible_profiles(request, user.id)
         if profile_key not in accessible_profiles:
             raise HTTPException(
                 status_code=403,

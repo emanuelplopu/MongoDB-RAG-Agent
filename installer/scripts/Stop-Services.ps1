@@ -10,12 +10,15 @@
     Use a short 10 second container shutdown timeout.
 .PARAMETER Timeout
     Maximum seconds to wait for containers to stop (default: 60).
+.PARAMETER DryRun
+    Print the docker command that would run and exit without stopping anything.
 .OUTPUTS
     Exit 0 = stopped or nothing to stop, 3 = docker compose down failed.
 #>
 param(
     [switch]$Force,
-    [int]$Timeout = 60
+    [int]$Timeout = 60,
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Continue"
@@ -33,6 +36,24 @@ function Get-ConfigValue {
         if ($prop -and $null -ne $prop.Value -and "$($prop.Value)" -ne "") { return $prop.Value }
     }
     return $Default
+}
+
+function Get-ComposeProfiles {
+    # Tenant profile from config.json (may be comma separated) plus COMPOSE_PROFILES
+    # from <InstallPath>\.env, de-duplicated. Must match Start-Services.ps1.
+    param([string]$ConfigProfile, [string]$InstallPath)
+    $list = New-Object System.Collections.Generic.List[string]
+    foreach ($p in ("$ConfigProfile" -split ",")) { $t = $p.Trim(); if ($t -and -not $list.Contains($t)) { $list.Add($t) } }
+    $envFile = Join-Path $InstallPath ".env"
+    if (Test-Path $envFile) {
+        foreach ($line in Get-Content $envFile) {
+            if ($line -match '^\s*COMPOSE_PROFILES\s*=\s*(.*)$') {
+                $value = $Matches[1].Trim().Trim('"').Trim("'")
+                foreach ($p in ($value -split ",")) { $t = $p.Trim(); if ($t -and -not $list.Contains($t)) { $list.Add($t) } }
+            }
+        }
+    }
+    return @($list)
 }
 
 $configPath = Join-Path (Split-Path $ScriptDir -Parent) "config.json"
@@ -64,10 +85,18 @@ $stopTimeout = if ($Force) { 10 } else { $Timeout }
 $downArgs = @("compose", "-f", $composePath)
 $overridePath = Join-Path $installPath "docker-compose.override.yml"
 if ($composeFile -eq "docker-compose.yml" -and (Test-Path $overridePath)) { $downArgs += @("-f", $overridePath) }
-if ($composeProfile) { $downArgs += @("--profile", $composeProfile) }
+# Same profile set as Start-Services.ps1 (config.json tenant + .env COMPOSE_PROFILES),
+# otherwise e.g. the embedder container would survive "Stop Services".
+$profiles = Get-ComposeProfiles -ConfigProfile $composeProfile -InstallPath $installPath
+foreach ($p in $profiles) { $downArgs += @("--profile", $p) }
 $downArgs += @("down", "--timeout", "$stopTimeout")
 
+Write-InstallLog "Compose profiles: $(if ($profiles) { $profiles -join ', ' } else { '(none)' })" -Source "Stop-Services"
 Write-InstallLog "Running: docker $($downArgs -join ' ')  (cwd: $installPath)" -Source "Stop-Services"
+if ($DryRun) {
+    Write-Host "DRY RUN: docker $($downArgs -join ' ')  (cwd: $installPath)"
+    exit 0
+}
 Push-Location $installPath
 try {
     $output = & docker @downArgs 2>&1 | ForEach-Object { "$_" }

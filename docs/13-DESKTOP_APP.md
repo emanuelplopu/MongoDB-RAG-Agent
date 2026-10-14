@@ -14,12 +14,14 @@ All data stays local — no cloud, no tracking, no external dependencies.
 2. **WebView2** — Embedded Chromium browser (Microsoft.Web.WebView2 v1.0.2792.45) rendering the React frontend
 3. **ServiceManager** — Docker Compose orchestration (start/stop/health/restart)
 4. **SplashScreen** — Startup progress UI shown while services initialize
-5. **Start-Services.ps1** / **Stop-Services.ps1** — PowerShell service scripts (fallback and CLI use)
+5. **Branding** (`Branding.cs`) — window title, tray text, splash title, dialogs and icon from `config.json` (`app.name` / `app.tenant`): a Quellex install shows "Quellex" and `quellex.ico` everywhere, RecallHub stays the default
+6. **LanNameAdvertiser** (`LanNameAdvertiser.cs`) — mDNS/LLMNR responder that makes `https://quellex.local` resolvable on the office network (see `docs/21-LAN_ACCESS.md`)
+7. **Start-Services.ps1** / **Stop-Services.ps1** — PowerShell service scripts (fallback and CLI use)
 
 ### Runtime Flow
 
 1. User launches RecallHubTray.exe (or auto-starts via Task Scheduler)
-2. Tray app loads `config.json` from app directory or `%LocalAppData%\RecallHub\`
+2. Tray app loads `config.json` from app directory or `%LocalAppData%\RecallHub\`, applies the tenant branding and, when `network.advertise` is true, starts answering `quellex.local` / `quellex` name queries
 3. Quick-checks if services are already running (GET `http://localhost:11080/`)
 4. If already running: opens WebView2 main window immediately
 5. If not running: shows SplashScreen and begins startup sequence:
@@ -36,27 +38,49 @@ All data stays local — no cloud, no tracking, no external dependencies.
 | Menu Item | Action |
 |-----------|--------|
 | Status: Running/Stopped | Display-only status indicator |
-| **Open RecallHub** | Show/focus WebView2 window |
+| **Open RecallHub** / **Open Quellex** | Show/focus WebView2 window (label follows `app.name`) |
 | Open Admin Panel | Navigate WebView2 to `/admin` |
+| Network: https://quellex.local | Submenu: open the network address in the browser, copy it, *Create trust package for other computers...* (folder picker, then runs `Export-LanCertificate.ps1 -PackagePath` in a PowerShell window), and the announcer state (which addresses `quellex.local` resolves to). Hidden when `config.json` has no `network.hostname` |
 | Show/Hide Window | Toggle main window visibility |
 | Start Services | Start Docker Compose stack |
 | Stop Services | Stop Docker Compose stack |
 | Restart Services | Stop then start with 2s delay |
 | View Logs | Open logs folder in Explorer |
 | Check for Updates | Scan for `.rhu` update files |
-| About RecallHub | Version and description dialog |
-| Exit | Optional stop services, then quit |
+| About RecallHub / About Quellex | Version, tagline and network address |
+| Exit | Optional stop services, then quit (also sends the mDNS goodbye) |
+
+The main window's title bar, the tray tooltip ("Quellex - Running") and every
+dialog use the same name, so a Quellex install never shows "RecallHub" to the
+user. Internal paths (`%LocalAppData%\RecallHub`, the log file, the
+`recallhub://` protocol handler, the single-instance mutex) keep their names.
 
 ## Configuration (installer/config.json)
 
 The config file is the single source of truth for all build and runtime parameters.
+
+### App Section
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `name` | `RecallHub` / `Quellex` | Display name (window title, tray, splash, dialogs). Written per tenant by `Write-TrayConfig.ps1`; an older config that still says `RecallHub` for the quellex tenant is shown as "Quellex" anyway (`Branding.ResolveAppName`) |
+| `tenant` | _(tenant)_ | `recallhub` or `quellex`; selects `quellex.ico` and the splash tagline |
+| `version` | from `pyproject.toml` | Shown in About |
+
+### Network Section
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `hostname` | _(tenant id)_ | Single label announced via mDNS (`<hostname>.local`) and LLMNR (`<hostname>`) |
+| `advertise` | `true` (installs), `false` (missing section) | Run the responder. `Write-TrayConfig.ps1 -NoLanAdvertise` switches it off |
+| `httpsPort` / `httpPort` | `443` / `80` (quellex), `11443` / `11480` (recallhub) | Gateway ports; only used to build the URL shown in the menu |
 
 ### Docker Section
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `composeFile` | `docker-compose.yml` | Path to compose file (relative to installPath) |
-| `composeProfile` | _(tenant)_ | Compose profile to enable: `recallhub` or `quellex`. Set by `Write-TrayConfig.ps1` |
+| `composeProfile` | _(tenant)_ | Compose profile to enable: `recallhub` or `quellex`. Set by `Write-TrayConfig.ps1`. The scripts and the tray app merge it with `COMPOSE_PROFILES` from `<installPath>\.env` (e.g. `quellex,embedder-gpu` for the local embedding server): an explicit `--profile` flag would otherwise replace the `.env` list and the stack would start without the embedder. `Start-Services.ps1 -DryRun` / `Stop-Services.ps1 -DryRun` print the resolved command |
 | `installPath` | `C:\RecallHub` | Installation root directory. `auto` (the hardened installer's `config.json`) means the parent folder of the `scripts` directory the service scripts run from. |
 | `startupTimeout` | `120` | Seconds to wait for services to become healthy |
 | `healthCheckInterval` | `5` | Polling interval in seconds |
@@ -119,6 +143,7 @@ Located at `installer/scripts/Start-Services.ps1`.
 - `-Detached` (default: true) — run in background
 - `-Wait` — block until services are healthy
 - `-Timeout` (default: 180) — max seconds to wait
+- `-DryRun` — print the resolved `docker compose` command (profiles from `config.json` plus `.env` `COMPOSE_PROFILES`) and exit
 
 **Steps:**
 1. Imports `RecallHub-Logging.psm1` for structured logging
@@ -160,6 +185,7 @@ Located at `installer/scripts/Stop-Services.ps1`.
 |---------|------|
 | Application root | `C:\RecallHub` (configurable via `docker.installPath`) |
 | Tray executable | `<installPath>\RecallHubTray.exe` |
+| Icons | `%LocalAppData%\RecallHub\assets\icon.ico` and `quellex.ico` (INSTALL.ps1 copies both; `Branding.LoadIcon` also looks next to the exe) |
 | Scripts | `%LocalAppData%\RecallHub\scripts\` (deployed copy of `<installPath>\installer\scripts\`) |
 | Config | `<installPath>\config.json` or `%LocalAppData%\RecallHub\config.json` |
 | Logs | `%LocalAppData%\RecallHub\logs\` |
@@ -184,6 +210,16 @@ dotnet publish -c Release
 Output: `bin/Release/net8.0-windows/win-x64/publish/RecallHubTray.exe`
 
 The csproj sets `IncludeNativeLibrariesForSelfExtract=true`: `WebView2Loader.dll` and the WinForms native DLLs are embedded in the single exe. Without it they are written next to the exe, and because `INSTALL.ps1` deploys only `RecallHubTray.exe`, the app fails with "Browser Initialization Error" (`DllNotFoundException`). Check `%LocalAppData%\RecallHub\logs\tray-app.log` for the logged exception.
+
+The tenant icon `installer/assets/quellex.ico` is generated from the frontend's
+`quellex-q-icon.png` with `installer\scripts\New-IcoFromPng.ps1` (multi-size,
+PNG-compressed ICO, no external tools); regenerate it when the logo changes.
+
+The name announcer has no third-party dependency: `LanNameAdvertiser.cs` parses
+and builds the DNS packets itself (A answers plus an NSEC "no AAAA" record for
+mDNS, unicast answers for LLMNR). It binds UDP 5353/5355 with address reuse next
+to Windows' own DNS client; the firewall rules for the process come from
+`installer\scripts\Configure-LanAccess.ps1`.
 
 ### Project Configuration (RecallHubTray.csproj)
 

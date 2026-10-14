@@ -1,3 +1,4 @@
+import { getAuthHeaders } from '../api/client'
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
@@ -79,10 +80,10 @@ export default function IngestionAnalyticsPage() {
     setError(null)
     try {
       const [overviewRes, outliersRes, extensionsRes, timelineRes] = await Promise.all([
-        fetch('/api/v1/ingestion/analytics/overview'),
-        fetch('/api/v1/ingestion/analytics/outliers?threshold_std=2.0&limit=50'),
-        fetch('/api/v1/ingestion/analytics/by-extension'),
-        fetch('/api/v1/ingestion/analytics/timeline?hours=48')
+        fetch('/api/v1/ingestion/analytics/overview', { headers: getAuthHeaders() }),
+        fetch('/api/v1/ingestion/analytics/outliers?threshold_std=2.0&limit=50', { headers: getAuthHeaders() }),
+        fetch('/api/v1/ingestion/analytics/by-extension', { headers: getAuthHeaders() }),
+        fetch('/api/v1/ingestion/analytics/timeline?hours=48', { headers: getAuthHeaders() })
       ])
       
       if (!overviewRes.ok || !outliersRes.ok || !extensionsRes.ok || !timelineRes.ok) {
@@ -129,7 +130,8 @@ export default function IngestionAnalyticsPage() {
     if (!confirm('Clear analytics data older than 30 days?')) return
     try {
       const res = await fetch('/api/v1/ingestion/analytics/clear?older_than_days=30', {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: getAuthHeaders(),
       })
       if (!res.ok) throw new Error('Failed to clear')
       fetchData()

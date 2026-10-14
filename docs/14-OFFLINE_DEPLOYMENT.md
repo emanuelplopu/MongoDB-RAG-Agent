@@ -133,9 +133,13 @@ The installer runs in 3 phases:
 
 ### Phase 4: Desktop App + verification
 
-- Copies the newest `RecallHubTray.exe` from `installer\tray-app\bin\publish` or `bin\Release\net8.0-windows\win-x64\publish`
-- Creates desktop / Start Menu shortcuts, the `recallhub://` protocol handler and the HKCU Run entry
-- Polls the tenant frontend and backend; only then marks `install_complete: true` (exit code 2 otherwise)
+- Writes the tray config (`Write-TrayConfig.ps1`): tenant branding (`app.name` = `Quellex` / `RecallHub`) and the `network` section (`hostname`, `advertise`) for the LAN name
+- Copies the newest `RecallHubTray.exe` from `installer\tray-app\bin\publish` or `bin\Release\net8.0-windows\win-x64\publish`, plus `icon.ico` and the tenant icon (`quellex.ico`)
+- Creates desktop / Start Menu shortcuts named after the tenant (`Quellex.lnk`), the `recallhub://` protocol handler and the HKCU Run entry
+- When running elevated, creates the Windows Firewall rules for network access (`Configure-LanAccess.ps1`: TCP 443/80 for the TLS gateway, UDP 5353/5355 for the name announcer); otherwise prints the command to run later
+- Polls the tenant frontend and backend; only then marks `install_complete: true` (exit code 2 otherwise). Also probes the gateway port (443 for Quellex)
+
+Other computers then open `https://quellex.local` (see `docs/21-LAN_ACCESS.md`, including how to distribute the gateway's root certificate with `Export-LanCertificate.ps1`).
 
 ### Installer Parameters
 
@@ -150,6 +154,8 @@ The installer runs in 3 phases:
 | `-TakeOverStack` | false | Allow taking over a stack that runs from a different install folder |
 | `-NoLaunch` | false | Do not start the desktop app at the end (automation) |
 | `-NonInteractive` | false | Never wait for a key press or a restart confirmation (automation) |
+| `-NoLanAccess` | false | Skip the firewall rules and tell the tray app not to announce the LAN name (the gateway container still runs) |
+| `-LanHostname` | tenant id | Name other computers use (`quellex` -> `https://quellex.local`) |
 
 The tenant is always read from `manifest.json` — there is no `-Tenant` parameter on `INSTALL.ps1`.
 
@@ -269,13 +275,18 @@ The uninstaller removes (in order):
 
 ### Default Ports
 
-| Service | Port |
-|---------|------|
-| RecallHub Backend | 11000 |
-| RecallHub Frontend | 11080 |
-| Quellex Backend | 11001 |
-| Quellex Frontend | 11081 |
-| MongoDB Atlas Local | 11017 |
+| Service | Port | Reachable from |
+|---------|------|----------------|
+| RecallHub Backend | 11000 | this machine (`BIND_ADDRESS`, default `127.0.0.1`) |
+| RecallHub Frontend | 11080 | this machine |
+| RecallHub LAN gateway (HTTPS / redirect) | 11443 / 11480 | network: `https://recallhub.local:11443` |
+| Quellex Backend | 11001 | this machine |
+| Quellex Frontend | 11081 | this machine |
+| Quellex LAN gateway (HTTPS / redirect) | 443 / 80 | network: `https://quellex.local` |
+| MongoDB Atlas Local | 11017 | this machine |
+
+The gateway image `caddy:2.10-alpine` is part of every image export
+(`export-docker-images.ps1`), so offline installs start it without a registry.
 
 ### Path Configuration
 
@@ -309,11 +320,16 @@ docker compose ls
 # 3. Tenant endpoints answer (Quellex: 11081 / 11001)
 Invoke-WebRequest http://localhost:11081/ -UseBasicParsing | Select-Object StatusCode
 Invoke-WebRequest http://localhost:11001/api/v1/system/health -UseBasicParsing | Select-Object StatusCode
-# 4. Tray app config points at the install folder and the tenant
+# 4. Tray app config points at the install folder and the tenant (app.name = Quellex, network.advertise = true)
 Get-Content $env:LOCALAPPDATA\RecallHub\config.json
 # 5. Tray app start path works end to end
 & $env:LOCALAPPDATA\RecallHub\scripts\Start-Services.ps1 -Wait; $LASTEXITCODE   # must be 0
 Get-Content $env:LOCALAPPDATA\RecallHub\logs\tray-app.log -Tail 20
+# 6. Network access: gateway answers with TLS, API refuses guests, name is announced
+curl.exe -k --resolve quellex.local:443:127.0.0.1 -I https://quellex.local/          # HTTP/1.1 200
+curl.exe -k --resolve quellex.local:443:127.0.0.1 https://quellex.local/api/v1/ingestion/documents   # 401
+Get-NetFirewallRule -DisplayName "Quellex LAN*" | Select-Object DisplayName, Enabled
+Resolve-DnsName quellex.local   # from another computer on the LAN
 ```
 
 ## Troubleshooting

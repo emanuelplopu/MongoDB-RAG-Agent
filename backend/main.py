@@ -47,6 +47,7 @@ from backend.services.backup_service import BackupService
 from backend.services.telemetry_service import TelemetryService
 from backend.core.config import settings
 from backend.core.database import DatabaseManager
+from backend.core.auth_middleware import RequireAuthMiddleware, extract_bearer_credentials
 from backend.core.security import (
     RateLimitMiddleware,
     SecurityHeadersMiddleware,
@@ -604,6 +605,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+async def resolve_request_user(request: Request):
+    """Resolve the caller for RequireAuthMiddleware with the auth router's rules.
+
+    Reuses ``get_current_user`` so JWT validation, API keys and the
+    ``is_active`` check are identical to the per-route dependency.
+    """
+    return await auth.get_current_user(
+        request,
+        extract_bearer_credentials(request),
+        request.headers.get("x-api-key"),
+    )
+
+
+# Server-side login enforcement (REQUIRE_AUTH). Registered right after CORS so
+# its 401 responses still carry CORS headers; rate limiting stays outside it.
+app.add_middleware(
+    RequireAuthMiddleware,
+    resolve_user=resolve_request_user,
+    enabled=settings.require_auth,
+)
+if settings.require_auth:
+    logger.info("REQUIRE_AUTH enabled: all API routes except health/tenant/login need a valid session")
 
 # Add security headers middleware
 app.add_middleware(SecurityHeadersMiddleware)

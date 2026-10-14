@@ -1,3 +1,4 @@
+import { getAuthHeaders } from '../api/client'
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
@@ -122,8 +123,8 @@ export default function JobHistoryPage() {
     try {
       setLoading(true)
       const [jobsRes, summaryRes] = await Promise.all([
-        fetch(`${API_BASE}/jobs?skip=${page * limit}&limit=${limit}`),
-        fetch(`${API_BASE}/jobs/stats/summary`)
+        fetch(`${API_BASE}/jobs?skip=${page * limit}&limit=${limit}`, { headers: getAuthHeaders() }),
+        fetch(`${API_BASE}/jobs/stats/summary`, { headers: getAuthHeaders() })
       ])
       
       if (jobsRes.ok) {
@@ -160,7 +161,7 @@ export default function JobHistoryPage() {
     // Load job details if not already loaded
     if (!jobDetails[jobId]) {
       try {
-        const res = await fetch(`${API_BASE}/jobs/${jobId}`)
+        const res = await fetch(`${API_BASE}/jobs/${jobId}`, { headers: getAuthHeaders() })
         if (res.ok) {
           const data = await res.json()
           setJobDetails(prev => ({ ...prev, [jobId]: data }))
@@ -174,7 +175,7 @@ export default function JobHistoryPage() {
   const loadJobLogs = async (jobId: string) => {
     if (jobLogs[jobId]) return
     try {
-      const res = await fetch(`${API_BASE}/jobs/${jobId}/logs`)
+      const res = await fetch(`${API_BASE}/jobs/${jobId}/logs`, { headers: getAuthHeaders() })
       if (res.ok) {
         const data = await res.json()
         setJobLogs(prev => ({ ...prev, [jobId]: data.logs }))
@@ -187,7 +188,7 @@ export default function JobHistoryPage() {
   const loadJobStats = async (jobId: string) => {
     if (jobStats[jobId]) return
     try {
-      const res = await fetch(`${API_BASE}/jobs/${jobId}/stats?limit=50`)
+      const res = await fetch(`${API_BASE}/jobs/${jobId}/stats?limit=50`, { headers: getAuthHeaders() })
       if (res.ok) {
         const data = await res.json()
         setJobStats(prev => ({ ...prev, [jobId]: data.stats }))
@@ -200,7 +201,7 @@ export default function JobHistoryPage() {
   const loadJobFailed = async (jobId: string) => {
     if (jobFailed[jobId]) return
     try {
-      const res = await fetch(`${API_BASE}/jobs/${jobId}/failed?limit=50`)
+      const res = await fetch(`${API_BASE}/jobs/${jobId}/failed?limit=50`, { headers: getAuthHeaders() })
       if (res.ok) {
         const data = await res.json()
         setJobFailed(prev => ({ ...prev, [jobId]: data.failed_documents }))
@@ -222,7 +223,7 @@ export default function JobHistoryPage() {
     if (!confirm(`Delete job ${jobId} and all related data?`)) return
     
     try {
-      const res = await fetch(`${API_BASE}/jobs/${jobId}`, { method: 'DELETE' })
+      const res = await fetch(`${API_BASE}/jobs/${jobId}`, { method: 'DELETE', headers: getAuthHeaders() })
       if (res.ok) {
         setJobs(prev => prev.filter(j => j.job_id !== jobId))
         if (expandedJob === jobId) setExpandedJob(null)

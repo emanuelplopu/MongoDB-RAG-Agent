@@ -28,6 +28,29 @@ function resolveTenantId(): string {
   return 'recallhub'
 }
 
+interface RuntimeTenantConfig {
+  tenant_id?: unknown
+  /** Mirrors the backend REQUIRE_AUTH setting (see backend/core/config.py). */
+  require_auth?: unknown
+}
+
+/**
+ * Merge backend-controlled security flags into the static tenant config.
+ * The backend can only tighten the rules: when it enforces authentication the
+ * frontend must guard its routes too, otherwise guests would see pages whose
+ * every request fails with 401.
+ */
+export function applyRuntimeOverrides(config: TenantConfig, runtime: RuntimeTenantConfig): TenantConfig {
+  const backendRequiresAuth = runtime.require_auth === true
+  if (!backendRequiresAuth || config.features.requireAuth) {
+    return config
+  }
+  return {
+    ...config,
+    features: { ...config.features, requireAuth: true },
+  }
+}
+
 export function TenantProvider({ children }: { children: ReactNode }) {
   const buildTimeTenantId = resolveTenantId()
   const [tenant, setTenant] = useState<TenantConfig>(() => getTenantConfig(buildTimeTenantId))
@@ -43,16 +66,17 @@ export function TenantProvider({ children }: { children: ReactNode }) {
       try {
         const response = await fetch('/api/v1/tenant/config')
         if (response.ok) {
-          const data = await response.json()
-          if (!cancelled && data.tenant_id) {
+          const data = (await response.json()) as RuntimeTenantConfig
+          if (!cancelled && typeof data.tenant_id === 'string' && data.tenant_id) {
             const runtimeTenantId = data.tenant_id
             if (!(runtimeTenantId in tenantConfigs)) {
               console.warn(
                 `[Tenant] Backend returned tenant ID "${runtimeTenantId}" which has no frontend config. ` +
                 `Falling back to build-time tenant "${buildTimeTenantId}".`
               )
+              setTenant(current => applyRuntimeOverrides(current, data))
             } else {
-              const runtimeConfig = getTenantConfig(runtimeTenantId)
+              const runtimeConfig = applyRuntimeOverrides(getTenantConfig(runtimeTenantId), data)
               setTenantId(runtimeTenantId)
               setTenant(runtimeConfig)
             }

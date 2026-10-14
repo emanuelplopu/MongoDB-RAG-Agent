@@ -74,6 +74,8 @@ export const recallhubConfig: TenantConfig = {
     showApiDocs: true,
     showWebSearch: true,
     landingPageVariant: 'default',
+    startPage: 'landing',
+    requireAuth: false,
   },
   content: {
     i18nOverrides: {},

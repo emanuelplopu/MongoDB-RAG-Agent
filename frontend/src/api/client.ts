@@ -197,6 +197,17 @@ export const getAuthToken = (): string | null => {
   return localStorage.getItem(AUTH_TOKEN_KEY)
 }
 
+/**
+ * Authorization header for requests made with raw fetch instead of the axios
+ * instance. The axios interceptor adds the token per request, so
+ * api.defaults.headers.common never contains it; raw fetch calls must add it
+ * themselves or the backend's login enforcement rejects them.
+ */
+export const getAuthHeaders = (): Record<string, string> => {
+  const token = getAuthToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
 // Types
 export interface ChatMessage {
   role: 'user' | 'assistant'
@@ -1564,6 +1575,7 @@ export const sessionsApi = {
           headers: {
             'Content-Type': 'application/json',
             ...api.defaults.headers.common as Record<string, string>,
+            ...getAuthHeaders(),
           },
           body: JSON.stringify({
             content,
@@ -1758,6 +1770,7 @@ export interface User {
   created_at: string
   is_active: boolean
   is_admin: boolean
+  is_org_admin?: boolean
   preferences?: UserPreferencesSync | null
 }
 
@@ -1792,6 +1805,7 @@ export interface UserListItem {
   title_suffix?: string | null
   is_active: boolean
   is_admin: boolean
+  is_org_admin?: boolean
   created_at: string
 }
 
@@ -1815,6 +1829,7 @@ export interface CreateUserRequest {
   title_suffix?: string
   password: string
   is_admin?: boolean
+  is_org_admin?: boolean
 }
 
 export interface UpdateUserRequest {
@@ -1823,6 +1838,7 @@ export interface UpdateUserRequest {
   title_prefix?: string
   title_suffix?: string
   is_admin?: boolean
+  is_org_admin?: boolean
   new_password?: string
 }
 

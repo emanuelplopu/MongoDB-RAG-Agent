@@ -81,6 +81,10 @@ export const quellexConfig: TenantConfig = {
     showApiDocs: false,
     showWebSearch: false,
     landingPageVariant: 'quellex',
+    // Quellex installs start on the login page (or the dashboard when a session
+    // exists) and never expose the application to guests.
+    startPage: 'login',
+    requireAuth: true,
   },
   content: {
     i18nOverrides: {

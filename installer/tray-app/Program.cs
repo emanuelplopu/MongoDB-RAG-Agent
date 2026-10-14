@@ -16,10 +16,12 @@ static class Program
 
         if (!createdNew)
         {
-            // Another instance is already running
+            // Another instance is already running. Branding is not configured
+            // yet at this point, so resolve the name from config.json directly.
+            Branding.Configure(TrayApplicationContext.LoadConfig());
             MessageBox.Show(
-                "RecallHub is already running in the system tray.",
-                "RecallHub",
+                $"{Branding.AppName} is already running in the system tray.",
+                Branding.AppName,
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information
             );

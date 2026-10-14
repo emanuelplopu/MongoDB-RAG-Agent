@@ -50,6 +50,7 @@ import { useChatSidebar } from '../contexts/ChatSidebarContext'
 import { useAuth } from '../contexts/AuthContext'
 import { useTenant } from '../contexts/TenantContext'
 import { ChatSession, indexesApi, profilesApi, ProfileListResponse } from '../api/client'
+import { canManageUsers } from '../api/roles'
 import SidebarWarningToast, { SidebarWarning } from './SidebarWarningToast'
 import SupportRequestButton from './SupportRequestButton'
 
@@ -271,6 +272,8 @@ export default function Layout() {
 
   // Filter system menu items based on tenant features
   const filteredSystemItems = systemMenuItems.filter(item => {
+    // Organisation admins only get user management; everything else is superadmin configuration
+    if (!user?.is_admin && item.href !== '/system/users') return false
     if (item.href === '/system/strategies' && !tenant.features.showStrategies) return false
     if (item.href === '/system/benchmark' && !tenant.features.showEmbeddingBenchmark) return false
     if (item.href === '/system/backups' && !tenant.features.showBackups) return false
@@ -775,8 +778,8 @@ export default function Layout() {
                 )
               })}
               
-              {/* System Menu with Submenu (admin only) */}
-              {user?.is_admin && (
+              {/* System Menu with Submenu (superadmins and organisation admins) */}
+              {canManageUsers(user) && (
                 <>
                   <button
                     onClick={() => setSystemMenuOpen(!systemMenuOpen)}
@@ -836,7 +839,7 @@ export default function Layout() {
             {/* Connection Status */}
             <div className="px-4 py-2 border-t border-surface-variant dark:border-gray-700 flex items-center justify-between">
               <span className="text-sm text-secondary dark:text-gray-400">API Status</span>
-              <ConnectionStatus healthCheckUrl="/api/health" showText size="sm" />
+              <ConnectionStatus healthCheckUrl="/api/v1/system/health" showText size="sm" />
             </div>
             
             {/* Auth Actions */}

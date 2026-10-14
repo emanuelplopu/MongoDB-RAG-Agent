@@ -12,6 +12,15 @@
 #   - Airbyte API:        11021  (optional, via docker-compose.airbyte.yml)
 #   - Airbyte Builder:    11022  (optional, via docker-compose.airbyte.yml)
 #   - Embedding server:   11090  (optional, profile: embedder [CPU] or embedder-gpu [NVIDIA])
+#   - LAN gateway Quellex: 443 / 80   (profile: quellex, TLS edge for https://quellex.local)
+#   - LAN gateway RecallHub: 11443 / 11480 (profile: recallhub, https://recallhub.local:11443)
+#
+# Network exposure:
+#   Every port above except the LAN gateways binds to BIND_ADDRESS, default
+#   127.0.0.1, so plain-HTTP frontends, the API and the unauthenticated MongoDB
+#   are reachable from this machine only. Other computers use the TLS gateway
+#   (gateway/README.md). Set BIND_ADDRESS=0.0.0.0 in .env to restore raw-port
+#   access (e.g. Tailscale access to a dev box).
 #
 # Usage:
 #   Dev (both tenants):       docker compose --profile recallhub --profile quellex up -d
@@ -38,10 +47,14 @@ services:
     container_name: rag-mongodb
     hostname: rag-mongodb-host
     ports:
-      - "11017:27017"
+      - "${BIND_ADDRESS:-127.0.0.1}:11017:27017"
     volumes:
       - ./data/mongoDB/db:/data/db
       - ./data/mongoDB/configdb:/data/configdb
+      # mongot (Atlas Search) keeps its Lucene index data here. Without this
+      # mount every container recreation rebuilt all search indexes from
+      # scratch, which takes hours for the larger profiles.
+      - ./data/mongoDB/mongot:/data/mongot
       - ./scripts:/docker-entrypoint-initdb.d:ro
     environment:
       - DO_NOT_TRACK=1
@@ -101,6 +114,7 @@ services:
       # Profile-specific document folders (create these on host to use)
       - ./mounts/parhelion-energy:/app/mounts/parhelion-energy:ro
       - ./mounts/gdrive-root:/app/mounts/gdrive-root:ro
+      - ./mounts/diejuristin:/app/mounts/diejuristin:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 30s
@@ -149,7 +163,7 @@ services:
       - "-t"
       - "${EMBEDDER_THREADS:-8}"
     ports:
-      - "11090:8080"
+      - "${BIND_ADDRESS:-127.0.0.1}:11090:8080"
     volumes:
       - embedder_models:/root/.cache
     healthcheck:
@@ -195,7 +209,7 @@ services:
       - "-ngl"
       - "${EMBEDDER_GPU_LAYERS:-999}"
     ports:
-      - "11090:8080"
+      - "${BIND_ADDRESS:-127.0.0.1}:11090:8080"
     volumes:
       - embedder_models:/root/.cache
     deploy:
@@ -240,7 +254,7 @@ services:
     image: recallhub-backend:latest
     container_name: rag-backend
     ports:
-      - "11000:8000"
+      - "${BIND_ADDRESS:-127.0.0.1}:11000:8000"
     depends_on:
       mongodb:
         condition: service_healthy
@@ -248,9 +262,13 @@ services:
       # MongoDB connection (internal container network)
       - MONGODB_URI=mongodb://mongodb:27017/?directConnection=true
       - MONGODB_DATABASE=${MONGODB_DATABASE:-rag_db}
-      
+
       # Tenant
       - TENANT_ID=recallhub
+      # Guest access stays allowed for RecallHub unless overridden in .env
+      - REQUIRE_AUTH=${RECALLHUB_REQUIRE_AUTH:-false}
+      - REGISTRATION_MODE=${REGISTRATION_MODE:-open}
+      - INVITE_CODES=${INVITE_CODES:-}
       
       # Profile (overrides profiles.yaml active_profile). Override per machine in .env
       # with RECALLHUB_ACTIVE_PROFILE / RECALLHUB_MONGODB_DATABASE instead of editing this file.
@@ -285,6 +303,7 @@ services:
       # Profile-specific document folders (create these on host to use)
       - ./mounts/parhelion-energy:/app/mounts/parhelion-energy:ro
       - ./mounts/gdrive-root:/app/mounts/gdrive-root:ro
+      - ./mounts/diejuristin:/app/mounts/diejuristin:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
@@ -313,7 +332,7 @@ services:
     image: recallhub-frontend:latest
     container_name: rag-frontend
     ports:
-      - "11080:80"
+      - "${BIND_ADDRESS:-127.0.0.1}:11080:80"
     environment:
       - BACKEND_HOST=backend
       - SERVER_DOMAINS=recallhub.app www.recallhub.app
@@ -326,6 +345,44 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+  # -------------------------------------------
+  # RecallHub LAN gateway - Caddy TLS edge (https://recallhub.local:11443)
+  # -------------------------------------------
+  # The only RecallHub port other computers are meant to reach. Caddy issues a
+  # certificate from its own local CA (export it with
+  # installer\scripts\Export-LanCertificate.ps1), redirects HTTP to HTTPS and
+  # forwards to the frontend nginx, which proxies /api to the backend.
+  # Name resolution (recallhub.local) is announced by the tray app; see
+  # gateway/README.md and docs/21-LAN_ACCESS.md.
+  gateway:
+    profiles: [recallhub]
+    image: caddy:2.10-alpine
+    container_name: rag-gateway
+    ports:
+      - "${RECALLHUB_GATEWAY_HTTPS_PORT:-11443}:443"
+      - "${RECALLHUB_GATEWAY_HTTP_PORT:-11480}:80"
+    environment:
+      - GATEWAY_HOSTS=${RECALLHUB_GATEWAY_HOSTS:-https://recallhub.local, https://recallhub}
+      - GATEWAY_UPSTREAM=frontend:80
+    command:
+      - sh
+      - -c
+      - 'tr -d "\015" < /etc/caddy/Caddyfile.template | sed -e "s|__HOSTS__|$$GATEWAY_HOSTS|g" -e "s|__UPSTREAM__|$$GATEWAY_UPSTREAM|g" > /etc/caddy/Caddyfile && exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile'
+    volumes:
+      - ./gateway/Caddyfile.template:/etc/caddy/Caddyfile.template:ro
+      - gateway_data:/data
+      - gateway_config:/config
+    depends_on:
+      - frontend
     logging:
       driver: "json-file"
       options:
@@ -350,24 +407,29 @@ services:
     image: recallhub-backend:latest
     container_name: rag-backend-quellex
     ports:
-      - "11001:8000"
+      - "${BIND_ADDRESS:-127.0.0.1}:11001:8000"
     depends_on:
       mongodb:
         condition: service_healthy
     environment:
       # MongoDB connection (internal container network)
       - MONGODB_URI=mongodb://mongodb:27017/?directConnection=true
-      - MONGODB_DATABASE=${QUELLEX_MONGODB_DATABASE:-rag_test_law}
-      
+      - MONGODB_DATABASE=${QUELLEX_MONGODB_DATABASE:-rag_diejuristin}
+
       # Tenant
       - TENANT_ID=quellex
+      - REGISTRATION_MODE=${REGISTRATION_MODE:-open}
+      - INVITE_CODES=${INVITE_CODES:-}
+      # Every API call needs a signed-in user (backend/core/auth_middleware.py);
+      # the frontend mirrors this via /api/v1/tenant/config.
+      - REQUIRE_AUTH=${QUELLEX_REQUIRE_AUTH:-true}
       
       # Tool Gating - Quellex is fully offline, no web tools
       - TENANT_DISABLED_TOOLS=web_search,browse_web
       
       # Profile (overrides profiles.yaml active_profile). Override per machine in .env
       # with QUELLEX_ACTIVE_PROFILE / QUELLEX_MONGODB_DATABASE instead of editing this file.
-      - ACTIVE_PROFILE=${QUELLEX_ACTIVE_PROFILE:-test-law}
+      - ACTIVE_PROFILE=${QUELLEX_ACTIVE_PROFILE:-diejuristin}
       
       # LLM Configuration
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}
@@ -398,6 +460,7 @@ services:
       # Profile-specific document folders (create these on host to use)
       - ./mounts/parhelion-energy:/app/mounts/parhelion-energy:ro
       - ./mounts/gdrive-root:/app/mounts/gdrive-root:ro
+      - ./mounts/diejuristin:/app/mounts/diejuristin:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
@@ -426,7 +489,7 @@ services:
     image: recallhub-frontend-quellex:latest
     container_name: rag-frontend-quellex
     ports:
-      - "11081:80"
+      - "${BIND_ADDRESS:-127.0.0.1}:11081:80"
     environment:
       - BACKEND_HOST=backend-quellex
       - SERVER_DOMAINS=test-0-8-7.quellex.at
@@ -439,6 +502,41 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+  # -------------------------------------------
+  # Quellex LAN gateway - Caddy TLS edge (https://quellex.local)
+  # -------------------------------------------
+  # Default ports 443/80 so colleagues simply open https://quellex.local (or
+  # https://quellex on Windows). The backend runs with REQUIRE_AUTH, so every
+  # request through here needs a login and a valid session.
+  gateway-quellex:
+    profiles: [quellex]
+    image: caddy:2.10-alpine
+    container_name: rag-gateway-quellex
+    ports:
+      - "${QUELLEX_GATEWAY_HTTPS_PORT:-443}:443"
+      - "${QUELLEX_GATEWAY_HTTP_PORT:-80}:80"
+    environment:
+      - GATEWAY_HOSTS=${QUELLEX_GATEWAY_HOSTS:-https://quellex.local, https://quellex}
+      - GATEWAY_UPSTREAM=frontend-quellex:80
+    command:
+      - sh
+      - -c
+      - 'tr -d "\015" < /etc/caddy/Caddyfile.template | sed -e "s|__HOSTS__|$$GATEWAY_HOSTS|g" -e "s|__UPSTREAM__|$$GATEWAY_UPSTREAM|g" > /etc/caddy/Caddyfile && exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile'
+    volumes:
+      - ./gateway/Caddyfile.template:/etc/caddy/Caddyfile.template:ro
+      - gateway_quellex_data:/data
+      - gateway_quellex_config:/config
+    depends_on:
+      - frontend-quellex
     logging:
       driver: "json-file"
       options:
@@ -492,4 +590,15 @@ networks:
 volumes:
   # GGUF cache for the llama.cpp embedding server (~310 MB for EmbeddingGemma 2 Q8_0)
   embedder_models:
+    driver: local
+  # Caddy state for the LAN gateways: the local CA and the issued certificates
+  # live in *_data. Deleting the volume creates a new CA, and every client
+  # that trusted the old root certificate has to import the new one.
+  gateway_data:
+    driver: local
+  gateway_config:
+    driver: local
+  gateway_quellex_data:
+    driver: local
+  gateway_quellex_config:
     driver: local

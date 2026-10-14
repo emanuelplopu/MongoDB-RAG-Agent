@@ -7,9 +7,16 @@ interface SessionExpiredModalProps {
   isOpen: boolean
   onClose: () => void
   onContinueAsGuest: () => void
+  /** Offer "Continue as Guest". Tenants that require a login pass false. */
+  allowGuest?: boolean
 }
 
-export default function SessionExpiredModal({ isOpen, onClose, onContinueAsGuest }: SessionExpiredModalProps) {
+export default function SessionExpiredModal({
+  isOpen,
+  onClose,
+  onContinueAsGuest,
+  allowGuest = true,
+}: SessionExpiredModalProps) {
   const navigate = useLocalizedNavigate()
   const { t } = useTranslation()
   const [isLoading, setIsLoading] = useState(false)
@@ -99,20 +106,24 @@ export default function SessionExpiredModal({ isOpen, onClose, onContinueAsGuest
             {isLoading ? 'Redirecting...' : 'Log In Again'}
           </button>
 
-          <button
-            type="button"
-            className="w-full inline-flex justify-center items-center gap-2 rounded-xl bg-gray-100 dark:bg-gray-700 px-4 py-3 text-sm font-semibold text-gray-900 dark:text-gray-100 shadow-sm hover:bg-gray-200 dark:hover:bg-gray-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-300 transition-colors"
-            onClick={handleContinueAsGuest}
-          >
-            <UserIcon className="h-5 w-5" />
-            Continue as Guest
-          </button>
+          {allowGuest && (
+            <button
+              type="button"
+              className="w-full inline-flex justify-center items-center gap-2 rounded-xl bg-gray-100 dark:bg-gray-700 px-4 py-3 text-sm font-semibold text-gray-900 dark:text-gray-100 shadow-sm hover:bg-gray-200 dark:hover:bg-gray-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-300 transition-colors"
+              onClick={handleContinueAsGuest}
+            >
+              <UserIcon className="h-5 w-5" />
+              Continue as Guest
+            </button>
+          )}
         </div>
 
         {/* Note */}
-        <p className="mt-4 text-xs text-gray-500 dark:text-gray-500 text-center">
-          Guest users can browse but won't have access to personalized features.
-        </p>
+        {allowGuest && (
+          <p className="mt-4 text-xs text-gray-500 dark:text-gray-500 text-center">
+            Guest users can browse but won't have access to personalized features.
+          </p>
+        )}
       </div>
     </div>
   )

@@ -18,6 +18,9 @@ public class ServiceManager
     private readonly string _scriptsPath;
     private readonly string[] _scriptCandidates;
 
+    /// <summary>Folder the deployed service scripts live in (also holds Export-LanCertificate.ps1).</summary>
+    public string ScriptsPath { get; }
+
     public ServiceManager(AppConfig config)
     {
         _config = config;
@@ -33,6 +36,7 @@ public class ServiceManager
         };
         _scriptsPath = _scriptCandidates.FirstOrDefault(d => File.Exists(Path.Combine(d, "Start-Services.ps1")))
             ?? _scriptCandidates[0];
+        ScriptsPath = _scriptsPath;
         TrayLog.Info($"ServiceManager: installPath={_installPath} scripts={_scriptsPath} "
             + $"profile={config.Docker?.ComposeProfile ?? "(none)"} frontendPort={config.Ports?.Frontend ?? 11080} backendPort={config.Ports?.Backend ?? 11000}");
 
@@ -239,10 +243,52 @@ public class ServiceManager
         {
             args += $" -f \"{overridePath}\"";
         }
-        var profile = _config.Docker?.ComposeProfile;
-        if (!string.IsNullOrWhiteSpace(profile))
+        foreach (var profile in ResolveComposeProfiles())
             args += $" --profile {profile}";
         return args;
+    }
+
+    /// <summary>
+    /// Profiles to enable: the tenant from config.json plus COMPOSE_PROFILES from
+    /// the install's .env (e.g. the local embedding server). Compose treats an
+    /// explicit --profile flag as a replacement for the .env list, so the two
+    /// have to be merged here (same rule as Start-Services.ps1).
+    /// </summary>
+    public IReadOnlyList<string> ResolveComposeProfiles()
+    {
+        var profiles = new List<string>();
+        void Add(string? csv)
+        {
+            foreach (var raw in (csv ?? string.Empty).Split(','))
+            {
+                var p = raw.Trim().Trim('"', '\'');
+                if (p.Length > 0 && !profiles.Contains(p, StringComparer.OrdinalIgnoreCase)) profiles.Add(p);
+            }
+        }
+
+        Add(_config.Docker?.ComposeProfile);
+        var envFile = Path.Combine(_installPath, ".env");
+        try
+        {
+            if (File.Exists(envFile))
+            {
+                foreach (var line in File.ReadLines(envFile))
+                {
+                    var trimmed = line.TrimStart();
+                    if (trimmed.StartsWith("COMPOSE_PROFILES", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var eq = trimmed.IndexOf('=');
+                        if (eq > 0 && trimmed.Substring(0, eq).Trim().Equals("COMPOSE_PROFILES", StringComparison.OrdinalIgnoreCase))
+                            Add(trimmed.Substring(eq + 1));
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            TrayLog.Warn($"Could not read COMPOSE_PROFILES from {envFile}: {ex.Message}");
+        }
+        return profiles;
     }
 
     /// <summary>
@@ -369,8 +415,42 @@ public class ProcessResult
 /// </summary>
 public class AppConfig
 {
+    public AppInfoConfig? App { get; set; }
     public DockerConfig? Docker { get; set; }
     public PortsConfig? Ports { get; set; }
+    public NetworkConfig? Network { get; set; }
+}
+
+/// <summary>"app" section of config.json: branding written by Write-TrayConfig.ps1.</summary>
+public class AppInfoConfig
+{
+    /// <summary>Display name: "Quellex" or "RecallHub".</summary>
+    public string? Name { get; set; }
+    /// <summary>Tenant id: recallhub | quellex.</summary>
+    public string? Tenant { get; set; }
+    public string? Version { get; set; }
+}
+
+/// <summary>
+/// "network" section of config.json: how the install is reachable from other
+/// computers (see docs/21-LAN_ACCESS.md).
+/// </summary>
+public class NetworkConfig
+{
+    /// <summary>Single-label name announced via mDNS (name.local) and LLMNR (name).</summary>
+    public string? Hostname { get; set; }
+    /// <summary>Run the mDNS/LLMNR responder in the tray app.</summary>
+    public bool Advertise { get; set; } = false;
+    /// <summary>Host port of the TLS gateway (443 = no port in the URL).</summary>
+    public int HttpsPort { get; set; } = 443;
+    /// <summary>Host port of the gateway's HTTP-to-HTTPS redirect listener.</summary>
+    public int HttpPort { get; set; } = 80;
+
+    /// <summary>URL colleagues open, e.g. https://quellex.local or https://recallhub.local:11443.</summary>
+    public string? NetworkUrl =>
+        string.IsNullOrWhiteSpace(Hostname)
+            ? null
+            : HttpsPort == 443 ? $"https://{Hostname}.local" : $"https://{Hostname}.local:{HttpsPort}";
 }
 
 public class DockerConfig

@@ -421,6 +421,7 @@ vi.mock('../components/SimplifiedLiveTrace', () => ({
 
 vi.mock('../api/client', () => ({
   ...apiMocks,
+  getAuthHeaders: () => ({}),
   ApiError: class ApiError extends Error {
     status: number
     constructor(message: string, status = 500) {
@@ -2439,12 +2440,12 @@ describe('large workflow page coverage smoke tests', () => {
     expect(screen.getByText('bad.txt')).toBeInTheDocument()
 
     await user.selectOptions(screen.getAllByRole('combobox')[0], 'timeout')
-    await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining('error_type=timeout')))
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining('error_type=timeout'), expect.anything()))
     await user.selectOptions(screen.getAllByRole('combobox')[1], 'true')
-    await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining('resolved=true')))
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining('resolved=true'), expect.anything()))
 
     await user.click(screen.getByRole('button', { name: 'Next' }))
-    await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining('skip=25')))
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining('skip=25'), expect.anything()))
     await user.click(screen.getByRole('button', { name: 'Previous' }))
 
     await user.click(screen.getByRole('button', { name: 'Resolve' }))

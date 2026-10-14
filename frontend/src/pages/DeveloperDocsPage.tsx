@@ -1,3 +1,4 @@
+import { getAuthHeaders } from '../api/client'
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -30,7 +31,7 @@ export default function DeveloperDocsPage() {
   const fetchOpenApiSpec = async () => {
     try {
       setError(null)
-      const response = await fetch(`${API_BASE_URL}/openapi.json`)
+      const response = await fetch(`${API_BASE_URL}/openapi.json`, { headers: getAuthHeaders() })
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`)
       }
