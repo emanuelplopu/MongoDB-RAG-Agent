@@ -221,7 +221,72 @@ class TestFederatedSearch:
         personal_sources = [s for s in sources if s.type == DataSourceType.PERSONAL]
         assert len(personal_sources) == 1
         assert "john_doe" in personal_sources[0].database
-    
+
+    @staticmethod
+    def _search_with_databases(names):
+        """A FederatedSearch whose server reports exactly these databases."""
+        from backend.agent.federated_search import FederatedSearch
+
+        fs = FederatedSearch(mongo_client=MagicMock())
+        fs._client.list_database_names = AsyncMock(return_value=names)
+        return fs
+
+    @staticmethod
+    async def _available(fs):
+        return await fs.get_available_sources(
+            user_id="user123",
+            user_email="john.doe@example.com",
+            active_profile_key="company",
+            active_profile_database="rag_company",
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_available_sources_drops_sources_without_a_database(self):
+        """Personal and cloud sources are only offered once their database exists."""
+        fs = self._search_with_databases(["rag_company", "cloud_john_doe"])
+        sources = await self._available(fs)
+        assert [s.type for s in sources] == [DataSourceType.PROFILE, DataSourceType.CLOUD_PRIVATE]
+        assert sources[1].database == "cloud_john_doe"
+
+    @pytest.mark.asyncio
+    async def test_get_available_sources_always_keeps_the_profile(self):
+        """The profile is the primary corpus and stays searchable even before ingestion."""
+        sources = await self._available(self._search_with_databases([]))
+        assert [s.type for s in sources] == [DataSourceType.PROFILE]
+
+    @pytest.mark.asyncio
+    async def test_get_available_sources_keeps_everything_when_listing_fails(self):
+        """Without listDatabases privilege the old behaviour (all candidates) is kept."""
+        fs = self._search_with_databases([])
+        fs._client.list_database_names = AsyncMock(side_effect=RuntimeError("not authorized"))
+        assert len(await self._available(fs)) == 4
+
+    @pytest.mark.asyncio
+    async def test_existing_databases_are_cached_briefly(self):
+        """The server is asked once per TTL, or again on force_refresh."""
+        fs = self._search_with_databases(["rag_company"])
+        assert await fs.existing_databases() == {"rag_company"}
+        assert await fs.existing_databases() == {"rag_company"}
+        fs._client.list_database_names.assert_awaited_once()
+        fs._client.list_database_names.return_value = ["rag_company", "cloud_john_doe"]
+        assert await fs.existing_databases(force_refresh=True) == {"rag_company", "cloud_john_doe"}
+
+    @pytest.mark.asyncio
+    async def test_search_for_a_missing_source_type_returns_nothing(self):
+        """A cloud search with no cloud database neither embeds nor queries anything."""
+        fs = self._search_with_databases(["rag_company"])
+        fs.get_embedding = AsyncMock()
+        documents, metadata = await fs.search(
+            query="Polizze",
+            user_id="user123",
+            user_email="john.doe@example.com",
+            sources=["cloud_shared", "cloud_private"],
+            active_profile_key="company",
+            active_profile_database="rag_company",
+        )
+        assert documents == [] and metadata["sources_searched"] == 0 and metadata["sources"] == []
+        fs.get_embedding.assert_not_awaited()
+
     def test_assess_result_quality(self):
         """Test result quality assessment."""
         from backend.agent.federated_search import FederatedSearch

@@ -182,6 +182,77 @@ async def test_plan_without_tasks_falls_back_to_the_question() -> None:
     assert "plan_default_tasks" in o.degradations
 
 
+_PROFILE_SOURCE = {"id": "profile_kanzlei", "type": "profile", "display_name": "Profile: kanzlei", "database": "rag_kanzlei"}
+_CLOUD_SOURCE = {"id": "cloud_private_u1", "type": "cloud_private", "display_name": "Private Cloud Storage",
+                 "database": "cloud_john_doe"}
+
+
+def test_unavailable_task_types_follow_the_sources() -> None:
+    assert Orchestrator.unavailable_task_types([]) == {TaskType.SEARCH_CLOUD, TaskType.SEARCH_PERSONAL}
+    assert Orchestrator.unavailable_task_types([_PROFILE_SOURCE]) == {TaskType.SEARCH_CLOUD, TaskType.SEARCH_PERSONAL}
+    assert Orchestrator.unavailable_task_types([_PROFILE_SOURCE, _CLOUD_SOURCE]) == {TaskType.SEARCH_PERSONAL}
+    assert Orchestrator.unavailable_task_types([{"type": "personal"}, {"type": "cloud_shared"}]) == set()
+
+
+@pytest.mark.asyncio
+async def test_plan_only_offers_search_types_that_have_a_source(monkeypatch) -> None:
+    monkeypatch.setattr(orch_module.settings, "agent_anchor_raw_query", False)
+    planned = [
+        {"id": "task_1", "type": "search_profile", "query": "Gritsch Optik Cyberversicherung"},
+        {"id": "task_2", "type": "search_cloud", "query": "Gritsch Optik Selbstbehalt"},
+        {"id": "task_3", "type": "search_personal", "query": "Gritsch Optik Polizze"},
+        {"id": "task_4", "type": "search_all", "query": "Gritsch Optik Versicherer"},
+    ]
+    o = Orchestrator()
+    o._user_message = "Bei welchem Cyberversicherer war die Gritsch Optik GmbH versichert?"
+    o._call_llm = AsyncMock(return_value={"tasks": planned})
+    plan = await o.plan({"intent_summary": "Versicherer"}, available_sources=[_PROFILE_SOURCE])
+    assert [t.type for t in plan.tasks] == [TaskType.SEARCH_PROFILE, TaskType.SEARCH_ALL]
+    assert o.degradations == ["plan_unavailable_task_type"]
+    prompt = o._call_llm.await_args.args[0]
+    allowed = prompt.split("You may ONLY use these task types: [")[1].split("]")[0]
+    assert "search_profile" in allowed and "search_all" in allowed
+    assert "search_cloud" not in allowed and "search_personal" not in allowed
+    assert "no source behind search_cloud, search_personal" in prompt
+
+    o = Orchestrator()
+    o._user_message = "Welche Dateien liegen im Drive?"
+    o._call_llm = AsyncMock(return_value={"tasks": planned})
+    plan = await o.plan({"intent_summary": "Drive"}, available_sources=[_PROFILE_SOURCE, _CLOUD_SOURCE])
+    assert [t.type for t in plan.tasks] == [TaskType.SEARCH_PROFILE, TaskType.SEARCH_CLOUD, TaskType.SEARCH_ALL]
+    prompt = o._call_llm.await_args.args[0]
+    assert "search_cloud" in prompt.split("You may ONLY use these task types: [")[1].split("]")[0]
+    assert "no source behind search_personal" in prompt and "search_cloud, search_personal" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_default_tasks_do_not_target_a_missing_source() -> None:
+    o = Orchestrator()
+    o._user_message = "Welche Dateien liegen im Drive?"
+    o._call_llm = AsyncMock(return_value={"response": "kaputt", "parse_error": True})
+    analysis = {"intent_summary": "", "search_queries": {"primary": ""}, "source_priority": "cloud"}
+    plan = await o.plan(analysis, available_sources=[_PROFILE_SOURCE])
+    assert plan.tasks[0].id == "default_primary" and plan.tasks[0].type == TaskType.SEARCH_ALL
+    plan = await o.plan(analysis, available_sources=[_PROFILE_SOURCE, _CLOUD_SOURCE])
+    assert plan.tasks[0].id == "default_primary" and plan.tasks[0].type == TaskType.SEARCH_CLOUD
+
+
+@pytest.mark.asyncio
+async def test_follow_up_tasks_without_a_source_are_dropped() -> None:
+    o = Orchestrator()
+    o._unavailable_task_types = {TaskType.SEARCH_CLOUD}
+    o._call_llm = AsyncMock(return_value={"decision": "need_refinement", "confidence": 0.5, "follow_up_tasks": [
+        {"id": "f1", "type": "search_cloud", "query": "Polizze"},
+        {"id": "f2", "type": "search_profile", "query": "Polizze Selbstbehalt"},
+    ]})
+    plan = SimpleNamespace(intent_summary="i", success_criteria="s")
+    d = await o.evaluate(plan, [WorkerResult(task_id="t", task_type=TaskType.SEARCH_ALL, query="q")], 1)
+    assert [t.id for t in d.follow_up_tasks] == ["f2"] and d.decision == "need_refinement"
+    assert o.degradations == ["evaluate_unavailable_task_type"]
+    o.reset()
+    assert o._unavailable_task_types == set()
+
+
 @pytest.mark.asyncio
 async def test_unreadable_evaluation_decides_from_results() -> None:
     o = Orchestrator()

@@ -12,7 +12,7 @@ Supports strategy-specific scoring through the strategy pattern.
 import asyncio
 import logging
 import time
-from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
+from typing import List, Optional, Dict, Any, Set, Tuple, TYPE_CHECKING
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from backend.agent.schemas import (
@@ -32,25 +32,56 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# How long the list of existing databases is reused before the server is asked again.
+# A freshly synced cloud source or ingested mailbox shows up for the planner within this time.
+DATABASE_LIST_TTL_SECONDS = 60.0
+
 
 class FederatedSearch:
     """Federated search across multiple databases with access control."""
-    
+
     def __init__(self, mongo_client: Optional[AsyncIOMotorClient] = None):
         """Initialize federated search.
-        
+
         Args:
             mongo_client: Optional MongoDB client. If not provided, creates one.
         """
         self._client = mongo_client
         self._embedding_client = None
-    
+        self._existing_databases: Optional[Set[str]] = None
+        self._existing_databases_checked_at: float = float("-inf")
+
     @property
     def client(self) -> AsyncIOMotorClient:
         """Get or create MongoDB client."""
         if self._client is None:
             self._client = AsyncIOMotorClient(settings.mongodb_uri)
         return self._client
+
+    async def existing_databases(self, force_refresh: bool = False) -> Optional[Set[str]]:
+        """Names of the databases that exist on the MongoDB server, cached briefly.
+
+        Personal and cloud databases are only created once something is ingested
+        into them, so their existence tells whether those sources hold anything.
+
+        Args:
+            force_refresh: Ask the server again even if the cached list is fresh.
+
+        Returns:
+            The set of database names, or ``None`` when the server could not be
+            asked (no privilege, connection error); callers then keep all sources.
+        """
+        now = time.monotonic()
+        if not force_refresh and now - self._existing_databases_checked_at < DATABASE_LIST_TTL_SECONDS:
+            return self._existing_databases
+        try:
+            names = await self.client.list_database_names()
+            self._existing_databases = set(names)
+        except Exception as e:
+            logger.warning(f"Could not list databases, keeping all candidate sources: {e}")
+            self._existing_databases = None
+        self._existing_databases_checked_at = now
+        return self._existing_databases
     
     async def get_embedding(self, text: str) -> List[float]:
         """Generate embedding for text using configured embedding model."""
@@ -76,15 +107,19 @@ class FederatedSearch:
         active_profile_database: Optional[str] = None,
         accessible_profile_keys: Optional[List[str]] = None
     ) -> List[DataSource]:
-        """Get list of data sources accessible to the user.
-        
+        """Get list of data sources the user may search, whether or not they hold data.
+
+        This is the access-control view: every source the user is entitled to.
+        Use :meth:`get_available_sources` for the sources that actually exist on
+        the server, which is what the planner and the search should see.
+
         Args:
             user_id: Current user's ID
             user_email: Current user's email
             active_profile_key: Currently active profile key
             active_profile_database: Database of the active profile
             accessible_profile_keys: List of profile keys user has access to
-        
+
         Returns:
             List of DataSource objects the user can search
         """
@@ -145,9 +180,53 @@ class FederatedSearch:
                 profile_key=active_profile_key,
                 display_name=f"Shared Cloud: {active_profile_key}"
             ))
-        
+
         return sources
-    
+
+    async def get_available_sources(
+        self,
+        user_id: str,
+        user_email: str,
+        active_profile_key: Optional[str] = None,
+        active_profile_database: Optional[str] = None,
+        accessible_profile_keys: Optional[List[str]] = None
+    ) -> List[DataSource]:
+        """Accessible sources whose database exists on the server.
+
+        The profile source is always kept: it is the primary corpus and the
+        planner must always be able to search it. Personal and cloud sources
+        are dropped while their database does not exist, so the planner is not
+        offered a "Cloud storage" that nothing was ever synced into.
+
+        Args:
+            user_id: Current user's ID
+            user_email: Current user's email
+            active_profile_key: Currently active profile key
+            active_profile_database: Database of the active profile
+            accessible_profile_keys: List of profile keys user has access to
+
+        Returns:
+            The accessible sources that can return results.
+        """
+        candidates = self.get_accessible_sources(
+            user_id=user_id,
+            user_email=user_email,
+            active_profile_key=active_profile_key,
+            active_profile_database=active_profile_database,
+            accessible_profile_keys=accessible_profile_keys,
+        )
+        existing = await self.existing_databases()
+        if existing is None:
+            return candidates
+
+        available: List[DataSource] = []
+        for source in candidates:
+            if source.type == DataSourceType.PROFILE or source.database in existing:
+                available.append(source)
+            else:
+                logger.debug(f"Source {source.id} skipped: database {source.database} does not exist")
+        return available
+
     async def _search_database(
         self,
         database_name: str,
@@ -433,16 +512,16 @@ class FederatedSearch:
             Tuple of (list of DocumentReference, search metadata dict)
         """
         start_time = time.time()
-        
-        # Get accessible sources
-        all_sources = self.get_accessible_sources(
+
+        # Get accessible sources that exist on the server
+        all_sources = await self.get_available_sources(
             user_id=user_id,
             user_email=user_email,
             active_profile_key=active_profile_key,
             active_profile_database=active_profile_database,
             accessible_profile_keys=accessible_profile_keys
         )
-        
+
         # Filter to requested sources
         if sources:
             # Handle special "all" source
@@ -476,8 +555,11 @@ class FederatedSearch:
                 all_sources = filtered
         
         if not all_sources:
-            logger.warning("No accessible sources found for user")
-            return [], {"sources_searched": 0, "duration_ms": 0}
+            if sources:
+                logger.info(f"None of the requested sources {sources} exist for this user; nothing to search")
+            else:
+                logger.warning("No accessible sources found for user")
+            return [], {"sources_searched": 0, "sources_with_results": 0, "duration_ms": 0, "sources": []}
         
         # Generate query embedding once
         query_embedding = await self.get_embedding(query)

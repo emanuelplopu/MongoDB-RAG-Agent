@@ -15,10 +15,10 @@ import json
 import logging
 import time
 import zlib
-from typing import List, Optional, Dict, Any, TYPE_CHECKING
+from typing import List, Optional, Dict, Any, Set, TYPE_CHECKING
 
 from backend.agent.schemas import (
-    TaskDefinition, TaskType, AgentPlan, EvaluationDecision,
+    DataSourceType, TaskDefinition, TaskType, AgentPlan, EvaluationDecision,
     OrchestratorStep, OrchestratorPhase, WorkerResult, DocumentReference
 )
 from backend.agent.tool_gate import ToolGate
@@ -49,6 +49,13 @@ _PHASE_MAX_TOKENS: Dict[str, int] = {
 
 # Module-level cold-start tracker: tracks which models have completed at least one call
 _model_first_call_done: set = set()
+
+# Search task types that only make sense when a source of the given type exists.
+# search_profile and search_all are always possible and are not listed.
+_SOURCE_TYPES_FOR_TASK: Dict[TaskType, Set[str]] = {
+    TaskType.SEARCH_CLOUD: {DataSourceType.CLOUD_SHARED.value, DataSourceType.CLOUD_PRIVATE.value},
+    TaskType.SEARCH_PERSONAL: {DataSourceType.PERSONAL.value},
+}
 
 
 _LOOP_MIN_LINE_CHARS = 40
@@ -230,7 +237,8 @@ class Orchestrator:
         self.req_id = req_id
         self.degradations: List[str] = []
         self._user_message: str = ""
-    
+        self._unavailable_task_types: Set[TaskType] = set()
+
     def _get_model_string(self) -> str:
         """Get the model string in LiteLLM format with provider prefix."""
         provider = self.provider.lower()
@@ -258,11 +266,44 @@ class Orchestrator:
         self._llm_calls = []
         self.degradations = []
         self._user_message = ""
+        self._unavailable_task_types = set()
 
     def _degrade(self, name: str) -> None:
         """Record a fallback path taken in this request; it ends up in the trace's ``degradations``."""
         self.degradations.append(name)
         logger.info(f"[req={self.req_id}] degradation: {name}")
+
+    @staticmethod
+    def unavailable_task_types(available_sources: List[Dict[str, Any]]) -> Set[TaskType]:
+        """Search task types that none of the available sources can serve.
+
+        ``search_cloud`` needs a cloud source and ``search_personal`` a personal
+        one; a user without a synced cloud drive or ingested mailbox has neither,
+        and planning them only produces empty searches. Profile and all-source
+        searches are always possible.
+
+        Args:
+            available_sources: Source dicts with a ``type`` key (``DataSourceType`` value).
+
+        Returns:
+            The task types the planner must not use for this request.
+        """
+        present = {str(s.get("type", "")) for s in available_sources}
+        return {
+            task_type for task_type, source_types in _SOURCE_TYPES_FOR_TASK.items()
+            if not (present & source_types)
+        }
+
+    def _drop_unavailable_tasks(self, tasks: List[TaskDefinition], phase: str) -> List[TaskDefinition]:
+        """Remove tasks whose type has no source behind it, recording a degradation once."""
+        if not self._unavailable_task_types:
+            return tasks
+        kept = [t for t in tasks if t.type not in self._unavailable_task_types]
+        if len(kept) < len(tasks):
+            dropped = [f"{t.id}:{t.type}" for t in tasks if t.type in self._unavailable_task_types]
+            logger.info(f"[req={self.req_id}] {phase}: dropped tasks without a source: {dropped}")
+            self._degrade(f"{phase}_unavailable_task_type")
+        return kept
     
     def _get_prompt(self, phase: str) -> str:
         """Get prompt for a phase, using strategy if available.
@@ -663,19 +704,29 @@ class Orchestrator:
             f"- {s.get('id', 'unknown')}: {s.get('display_name', '')} (type: {s.get('type', '')})"
             for s in available_sources
         ])
-        
-        # Build the list of allowed task types for this tenant
-        enabled_types = ToolGate.get_enabled_task_types()
+
+        # Build the list of allowed task types for this tenant, minus the search
+        # types that no available source can serve (e.g. no cloud storage synced)
+        self._unavailable_task_types = self.unavailable_task_types(available_sources)
+        unavailable_values = sorted(t.value for t in self._unavailable_task_types)
+        enabled_types = [
+            t for t in ToolGate.get_enabled_task_types() if t not in unavailable_values
+        ]
         enabled_types_str = ", ".join(enabled_types)
-        
+
         prompt = self._get_prompt("plan").format(
             analysis=json.dumps(analysis, indent=2),
             available_sources=sources_str
         )
-        
+
         # Inject tool availability constraint into the prompt
         prompt += f"\n\n**IMPORTANT: You may ONLY use these task types: [{enabled_types_str}]. Do NOT create tasks with any other type.**"
-        
+        if unavailable_values:
+            prompt += (
+                f"\n**The user has no source behind {', '.join(unavailable_values)}: "
+                "those searches would find nothing, so do not plan them.**"
+            )
+
         result = await self._call_llm(prompt, OrchestratorPhase.PLAN)
         
         # Parse tasks
@@ -709,7 +760,10 @@ class Orchestrator:
                 tasks.append(task)
             except Exception as e:
                 logger.warning(f"[req={self.req_id}] Failed to parse task: {e}")
-        
+
+        # The LLM may still plan a cloud/personal search it was told not to
+        tasks = self._drop_unavailable_tasks(tasks, "plan")
+
         # If no tasks were created, create smart default tasks based on analysis
         if not tasks:
             self._degrade("plan_default_tasks")
@@ -801,7 +855,10 @@ class Orchestrator:
         }
         
         primary_type = source_type_map.get(source_priority, TaskType.SEARCH_ALL)
-        
+        if primary_type in self._unavailable_task_types:
+            # e.g. "cloud" priority while nothing was ever synced: search what exists
+            primary_type = TaskType.SEARCH_ALL
+
         tasks.append(TaskDefinition(
             id="default_primary",
             type=primary_type,
@@ -928,9 +985,10 @@ class Orchestrator:
             except Exception as e:
                 logger.warning(f"[req={self.req_id}] Failed to parse follow-up task: {e}")
         
-        # Filter out disabled task types from follow-up tasks
+        # Filter out disabled task types and sourceless search types from follow-up tasks
         follow_up_tasks = ToolGate.filter_tasks(follow_up_tasks)
-        
+        follow_up_tasks = self._drop_unavailable_tasks(follow_up_tasks, "evaluate")
+
         decision = str(result.get("decision") or "sufficient").strip().lower()
         if decision not in ("sufficient", "need_refinement", "need_expansion", "cannot_answer"):
             self._degrade("evaluate_invalid_decision")
