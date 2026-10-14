@@ -597,6 +597,10 @@ Creates an execution plan with targeted search tasks.
 - `browse_url`: Fetch specific URL content
 - `summarize`: Summarize results
 
+`search_cloud` and `search_personal` are only offered to the planner when a cloud or personal database exists for the user (`FederatedSearch.get_available_sources`); the prompt says so, and planned or follow-up tasks of those types are dropped anyway (`plan_unavailable_task_type` / `evaluate_unavailable_task_type` in the trace's degradations). A `source_priority` of `cloud` or `personal` without such a database falls back to `search_all`.
+
+The orchestrator also appends `anchor_user_question`, a `search_all` task with the user's verbatim question (`AGENT_ANCHOR_RAW_QUERY`), next to the planner's rewritten queries. The live trace labels planned searches by type plus query and shows this task as "Your question as typed, all sources", so two all-source searches stay distinguishable. The `worker_step` stream event carries `documents_count` (all documents found) next to a three-document `documents` preview; the UI shows the count.
+
 **Plan Structure:**
 - Intent summary
 - Reasoning explanation

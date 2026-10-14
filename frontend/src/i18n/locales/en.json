@@ -1523,6 +1523,7 @@
     "liveTrace": {
       "understood": "I understood",
       "willSearch": "Planned searches",
+      "anchorQuestion": "Your question as typed, all sources",
       "searchProgress": "Search progress",
       "searchComplete": "found",
       "searchInProgress": "searching...",

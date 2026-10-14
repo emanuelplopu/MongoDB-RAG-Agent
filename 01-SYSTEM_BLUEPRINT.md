@@ -200,6 +200,7 @@
 - Profile sources only if user has active profile access
 - Personal/cloud-private restricted to owner only (matched by user_id)
 - Cloud-shared available to all users with profile access
+- `get_available_sources(...)` (async) keeps only the accessible sources whose database exists on the server (`existing_databases()`, a `listDatabases` result cached for 60 s); the profile source is always kept. The coordinator hands this list to the planner and `search()` uses it, so a user without a synced cloud drive or ingested mailbox is never offered `search_cloud` / `search_personal`. If the server cannot be asked (no privilege, connection error) all candidates are kept.
 
 **Search Method:**
 - `search(query, user_id, user_email, sources, ..., match_count, search_type, strategy) -> Tuple[List[DocumentReference], metadata_dict]`

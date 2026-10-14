@@ -1533,7 +1533,9 @@ export const sessionsApi = {
         task_id: string
         task_type: string
         tool: string
-        input: Record<string, unknown>
+        /** The query the worker ran, truncated by the backend. */
+        input: string
+        /** Every document found; `documents` below is a three-entry preview. */
         documents_count: number
         links_count: number
         duration_ms: number
