@@ -3,6 +3,7 @@
 # Contains all heavy dependencies that rarely change:
 # - PyTorch, Transformers, Whisper, Docling (~8GB)
 # - Playwright + Chromium browser (~400MB)
+# - Docling models: layout, TableFormer, RapidOCR (~0.8GB, see below)
 # - API dependencies (FastAPI, etc.)
 #
 # Build this image ONCE and reuse it:
@@ -100,6 +101,22 @@ WORKDIR /app
 # Copy virtual environment and playwright from builder
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /root/.cache/ms-playwright /root/.cache/ms-playwright
+
+# ============================================
+# Docling models (baked in, no runtime download)
+# ============================================
+# Docling fetches its models from huggingface.co the first time a scanned
+# page is converted. Without this layer every recreated backend / worker
+# container downloads ~0.5 GB again (and fails without internet, which breaks
+# the offline installer). DOCLING_ARTIFACTS_PATH makes docling load the
+# models from here instead of its cache. The layer is ~0.8 GB (layout heron
+# in safetensors + ONNX form, TableFormer, PP-OCRv6 small ONNX + torch). The
+# set matches what the ingestion pipeline enables (layout, tables, OCR); enabling other
+# docling enrichments (code/formula, picture classification, VLM) requires
+# adding their models here too, because docling does NOT fall back to a
+# download when an artifacts path is set.
+ENV DOCLING_ARTIFACTS_PATH=/opt/docling-models
+RUN docling-tools models download -o /opt/docling-models layout tableformer rapidocr     && rm -rf /root/.cache/huggingface /opt/docling-models/.cache
 
 # Create app directories
 RUN mkdir -p /app/projects /app/data /app/documents /app/src /app/backend
