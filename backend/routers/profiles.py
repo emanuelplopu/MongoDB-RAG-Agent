@@ -19,8 +19,9 @@ from backend.models.schemas import (
     ProfileCreateRequest, ProfileUpdateRequest, SuccessResponse,
     CloudSourceAssociation, CloudSourceCreateRequest, CloudSourceUpdateRequest,
     CloudSourceListResponse, AirbyteConfigUpdateRequest, AirbyteConfig,
-    CloudSourceType, FolderBrowseResponse
+    CloudSourceType, FolderBrowseResponse, IngestEstimate
 )
+from backend.services.ingestion_estimator import IngestionEstimator
 from backend.core.config import settings
 from backend.core.profile_models import (
     ProfileModelManager,
@@ -423,6 +424,62 @@ async def get_profile(
         raise
     except Exception as e:
         logger.error(f"Failed to get profile: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{profile_key}/ingest/estimate", response_model=IngestEstimate)
+async def estimate_ingestion(
+    request: Request,
+    profile_key: str,
+    incremental: bool = True,
+    sample: int = 16,
+    user: UserResponse = Depends(require_auth)
+):
+    """Estimate the volume, time and embedding cost of ingesting a profile's folders.
+
+    A read-only forecast computed *before* a run: it walks the profile's document
+    folders (reusing the ingestion file filter), optionally skips already-ingested
+    files, and derives tokens/chunks/time/cost from past-run history and the latest
+    embedding benchmark. All figures are rough; see ``assumptions`` and ``is_rough``.
+
+    Guarded like the other profile reads: any logged-in user who has access to the
+    profile may run it (superadmins have access to all).
+    """
+    try:
+        pm = get_profile_manager()
+        profiles = pm.list_profiles()
+
+        if profile_key not in profiles:
+            raise HTTPException(status_code=404, detail=f"Profile '{profile_key}' not found")
+
+        if not user.is_admin:
+            accessible_keys = await get_user_accessible_profiles(request, user.id)
+            if profile_key not in accessible_keys:
+                raise HTTPException(status_code=403, detail="You don't have access to this profile")
+
+        profile = profiles[profile_key]
+        db_manager = request.app.state.db
+        profile_db = db_manager.client[profile.database]
+
+        estimator = IngestionEstimator(
+            profile_db,
+            benchmark_db=db_manager.db,
+            documents_collection=profile.collection_documents,
+            chunks_collection=profile.collection_chunks,
+            embedding_model=(profile.embedding_model or settings.embedding_model),
+            embedding_provider=settings.embedding_provider,
+        )
+        return await estimator.estimate(
+            profile.documents_folders,
+            profile_key,
+            incremental=incremental,
+            sample_files=max(0, sample),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to estimate ingestion for {profile_key}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

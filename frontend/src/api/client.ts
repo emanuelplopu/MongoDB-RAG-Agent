@@ -770,6 +770,49 @@ export interface PendingFilesResponse {
   error?: string
 }
 
+export interface IngestEstimateByType {
+  extension: string
+  file_count: number
+  total_bytes: number
+  estimated_chunks: number
+  estimated_tokens: number
+  avg_processing_time_ms?: number | null
+}
+
+export interface IngestEstimate {
+  profile_key: string
+  folders: string[]
+  missing_folders: string[]
+  incremental: boolean
+  scanned_files: number
+  skipped_existing: number
+  file_count: number
+  total_bytes: number
+  total_size_gb: number
+  estimated_chunks: number
+  estimated_tokens: number
+  estimated_tokens_low: number
+  estimated_tokens_high: number
+  token_method: string
+  estimated_time_seconds: number
+  estimated_time_low_seconds: number
+  estimated_time_high_seconds: number
+  estimated_time_human: string
+  estimated_embedding_seconds?: number | null
+  concurrency: number
+  time_method: string
+  estimated_cost_usd: number
+  estimated_cost_low_usd: number
+  estimated_cost_high_usd: number
+  embedding_model: string
+  cost_per_million_tokens?: number | null
+  embedding_throughput_tokens_per_sec?: number | null
+  benchmark_date?: string | null
+  is_rough: boolean
+  assumptions: string[]
+  by_extension: IngestEstimateByType[]
+}
+
 export interface MetadataRebuildStatus {
   status: 'starting' | 'running' | 'completed' | 'failed' | 'cancelled'
   started_at: string
@@ -1286,6 +1329,15 @@ export const ingestionApi = {
 
   getPendingFiles: async (limit: number = 500): Promise<PendingFilesResponse> => {
     const response = await api.get('/ingestion/pending-files', { params: { limit } })
+    return response.data
+  },
+
+  // Pre-ingestion estimate for a profile's document folders (rough forecast).
+  estimate: async (profileKey: string, incremental: boolean = true): Promise<IngestEstimate> => {
+    const response = await api.get(
+      `/profiles/${encodeURIComponent(profileKey)}/ingest/estimate`,
+      { params: { incremental } }
+    )
     return response.data
   },
 

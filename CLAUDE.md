@@ -47,7 +47,8 @@ If docs and code disagree, trust the current code first, then fix the docs.
 - GPU thermal / mixed-placement stress test: `backend/services/gpu_stress.py`, `backend/cli/stress_commands.py`, `backend/config/gpu_stress/`, `quellexctl bench gpu-stress`, `scripts/gpu-stress.ps1`
 - Ingestion API: `backend/routers/ingestion.py`
 - Ingestion worker: `backend/workers/ingestion_worker.py`
-- Ingestion pipeline and chunking: `src/ingestion/`
+- Ingestion pipeline and chunking: `src/ingestion/` (`SUPPORTED_INGESTION_EXTENSIONS` is the canonical file filter)
+- Pre-ingestion estimator: `backend/services/ingestion_estimator.py`, `GET /api/v1/profiles/{key}/ingest/estimate` (in `backend/routers/profiles.py`), `quellexctl ingest estimate` (`backend/cli/ingest_commands.py`), the estimate line in `frontend/src/pages/IngestionManagementPage.tsx` (`ingestionApi.estimate`); documented in `docs/22-DOCUMENT_FOLDERS_AND_SHARES.md`
 - Profiles and tenant-aware model selection: `backend/routers/profiles.py`, `profiles.yaml`, `src/profile.py`
 - Profile document folders and network shares: `backend/services/document_folders.py` (`DOCUMENT_ROOTS` validation + browsing), `GET /api/v1/profiles/folders/browse`, `frontend/src/components/ServerFolderPicker.tsx`, the whole `./mounts` folder mounted at `/app/mounts` in `docker-compose.yml`, `docker-compose.shares.example.yml` + `installer/scripts/Add-NetworkShare.ps1` (CIFS volumes, loaded by `Start-Services.ps1`/`Stop-Services.ps1`/tray `ServiceManager.cs`); documented in `docs/22-DOCUMENT_FOLDERS_AND_SHARES.md`
 - Cloud source providers and registry: `backend/providers/`, `backend/providers/registry.py`

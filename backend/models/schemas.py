@@ -365,6 +365,97 @@ class IngestionRunsResponse(BaseModel):
     total_pages: int
 
 
+class IngestEstimateByType(BaseModel):
+    """Per-extension breakdown of a pre-ingestion estimate."""
+    extension: str = Field(..., description="File extension, lower-cased, without leading dot")
+    file_count: int = Field(..., ge=0, description="Files of this type that would be processed")
+    total_bytes: int = Field(..., ge=0, description="Total size of these files in bytes")
+    estimated_chunks: int = Field(..., ge=0, description="Estimated chunks these files produce")
+    estimated_tokens: int = Field(..., ge=0, description="Estimated tokens these files produce")
+    avg_processing_time_ms: Optional[float] = Field(
+        default=None,
+        description="Measured average per-file processing time for this type, if history exists",
+    )
+
+
+class IngestEstimate(BaseModel):
+    """Pre-ingestion estimate for a profile's document folders.
+
+    All figures are rough forecasts, not guarantees. The dominant cost for
+    scanned/PDF corpora is Docling conversion, which is estimated from past-run
+    history per file type where available and from coarse per-type defaults
+    otherwise. Token and cost figures are derived from the latest embedding
+    benchmark for the active model; ``is_rough`` and ``assumptions`` state which
+    inputs were measured and which were assumed.
+    """
+
+    profile_key: str = Field(..., description="Profile the estimate was computed for")
+    folders: List[str] = Field(default_factory=list, description="Document folders that were scanned")
+    missing_folders: List[str] = Field(
+        default_factory=list,
+        description="Configured folders that do not exist / were not reachable at scan time",
+    )
+    incremental: bool = Field(..., description="Whether already-ingested files were excluded")
+
+    # File counts
+    scanned_files: int = Field(..., ge=0, description="Supported files found on disk")
+    skipped_existing: int = Field(
+        ..., ge=0, description="Files skipped because they are already ingested (incremental mode)"
+    )
+    file_count: int = Field(..., ge=0, description="Files that would actually be processed")
+    total_bytes: int = Field(..., ge=0, description="Total size of the files to process, in bytes")
+    total_size_gb: float = Field(..., ge=0, description="Total size of the files to process, in GiB")
+
+    # Chunks
+    estimated_chunks: int = Field(..., ge=0, description="Estimated number of chunks produced")
+
+    # Tokens
+    estimated_tokens: int = Field(..., ge=0, description="Central estimate of embedding tokens")
+    estimated_tokens_low: int = Field(..., ge=0, description="Low end of the token range")
+    estimated_tokens_high: int = Field(..., ge=0, description="High end of the token range")
+    token_method: str = Field(
+        ..., description="How tokens were estimated: 'history', 'sampled' or 'heuristic'"
+    )
+
+    # Time
+    estimated_time_seconds: float = Field(..., ge=0, description="Central wall-clock estimate, seconds")
+    estimated_time_low_seconds: float = Field(..., ge=0, description="Optimistic wall-clock, seconds")
+    estimated_time_high_seconds: float = Field(..., ge=0, description="Pessimistic wall-clock, seconds")
+    estimated_time_human: str = Field(..., description="Human-readable central wall-clock estimate")
+    estimated_embedding_seconds: Optional[float] = Field(
+        default=None,
+        description="Embedding-only time component from benchmark throughput (subset of wall-clock)",
+    )
+    concurrency: int = Field(..., ge=1, description="Assumed concurrent-file setting used for wall-clock")
+    time_method: str = Field(..., description="How time was estimated: 'history' or 'defaults'")
+
+    # Cost
+    estimated_cost_usd: float = Field(..., ge=0, description="Central embedding cost estimate, USD")
+    estimated_cost_low_usd: float = Field(..., ge=0, description="Low end of the cost range, USD")
+    estimated_cost_high_usd: float = Field(..., ge=0, description="High end of the cost range, USD")
+    embedding_model: str = Field(..., description="Active embedding model used for cost/throughput")
+    cost_per_million_tokens: Optional[float] = Field(
+        default=None, description="USD per 1M tokens for the model (None/0 for local models)"
+    )
+
+    # Provenance / honesty
+    embedding_throughput_tokens_per_sec: Optional[float] = Field(
+        default=None, description="Throughput used for the embedding-time component"
+    )
+    benchmark_date: Optional[str] = Field(
+        default=None, description="ISO timestamp of the benchmark the figures are based on, if any"
+    )
+    is_rough: bool = Field(
+        ..., description="True when key inputs were missing and coarse defaults were used"
+    )
+    assumptions: List[str] = Field(
+        default_factory=list, description="Human-readable notes on the bases and assumptions used"
+    )
+    by_extension: List[IngestEstimateByType] = Field(
+        default_factory=list, description="Per-extension breakdown of the estimate"
+    )
+
+
 class DocumentInfo(BaseModel):
     """Document information."""
     id: str

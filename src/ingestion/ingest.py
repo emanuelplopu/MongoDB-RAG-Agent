@@ -114,6 +114,29 @@ def is_image_only_pdf(file_path: str, min_text_chars: int = 50, max_pages_to_che
         return False, f"Pre-check failed: {e}"
 
 
+#: Canonical set of file extensions the ingestion pipeline knows how to read.
+#:
+#: This is the authoritative filter used by :meth:`DocumentIngestionPipeline._find_document_files`
+#: when walking document folders. The pre-ingestion estimator
+#: (:mod:`backend.services.ingestion_estimator`) imports this set so its file
+#: count matches what a real run would process. Keep it in sync with the glob
+#: ``patterns`` in ``backend/routers/ingestion.py`` and the ``TYPE_PRIORITY``
+#: map below.
+SUPPORTED_INGESTION_EXTENSIONS: frozenset[str] = frozenset({
+    ".md", ".markdown", ".txt",  # Text formats
+    ".pdf",  # PDF
+    ".docx", ".doc", ".wbk",  # Word (incl. backup)
+    ".pptx", ".ppt",  # PowerPoint
+    ".xlsx", ".xls",  # Excel
+    ".html", ".htm",  # HTML
+    ".msg",  # Outlook email
+    ".eml",  # RFC 5322 email
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif",  # Images
+    ".mp3", ".wav", ".m4a", ".flac",  # Audio formats
+    ".mp4", ".avi", ".mkv", ".mov", ".webm",  # Video formats
+})
+
+
 @dataclass
 class IngestionConfig:
     """Configuration for document ingestion."""
@@ -663,21 +686,9 @@ class DocumentIngestionPipeline:
         Returns:
             List of file paths in optimal processing order
         """
-        # Supported extensions (converted from glob patterns)
-        extensions = {
-            ".md", ".markdown", ".txt",  # Text formats
-            ".pdf",  # PDF
-            ".docx", ".doc", ".wbk",  # Word (incl. backup)
-            ".pptx", ".ppt",  # PowerPoint
-            ".xlsx", ".xls",  # Excel
-            ".html", ".htm",  # HTML
-            ".msg",  # Outlook email
-            ".eml",  # RFC 5322 email
-            ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif",  # Images
-            ".mp3", ".wav", ".m4a", ".flac",  # Audio formats
-            ".mp4", ".avi", ".mkv", ".mov", ".webm",  # Video formats
-        }
-        
+        # Supported extensions (shared with the pre-ingestion estimator).
+        extensions = SUPPORTED_INGESTION_EXTENSIONS
+
         all_files = []
         
         for folder in self.documents_folders:
