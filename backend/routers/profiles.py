@@ -1,7 +1,17 @@
-"""Profile management router."""
+"""Profile management router.
 
+Superadmins manage every profile. Organisation admins (``is_org_admin``) may
+rename, describe and pick the document folders of the profiles they have
+access to; the folders are restricted to the configured document roots
+(``DOCUMENT_ROOTS``), see :mod:`backend.services.document_folders`. Creating
+and deleting profiles, and changing a profile's database, stay superadmin
+operations.
+"""
+
+import asyncio
 import logging
 from datetime import datetime
+from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, Depends
 
 from backend.models.schemas import (
@@ -9,16 +19,21 @@ from backend.models.schemas import (
     ProfileCreateRequest, ProfileUpdateRequest, SuccessResponse,
     CloudSourceAssociation, CloudSourceCreateRequest, CloudSourceUpdateRequest,
     CloudSourceListResponse, AirbyteConfigUpdateRequest, AirbyteConfig,
-    CloudSourceType
+    CloudSourceType, FolderBrowseResponse
 )
 from backend.core.config import settings
 from backend.core.profile_models import (
-    ProfileModelManager, 
+    ProfileModelManager,
     GlobalModelManager,
     get_active_profile_models,
     update_profile_model_settings
 )
-from backend.routers.auth import require_auth, require_admin, UserResponse, get_user_accessible_profiles
+from backend.routers.auth import (
+    require_auth, require_admin, require_org_admin, UserResponse, get_user_accessible_profiles
+)
+from backend.services.document_folders import (
+    FolderNotAllowedError, FolderNotFoundError, assert_folders_allowed, browse_folders
+)
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +118,27 @@ async def get_active_profile(user: UserResponse = Depends(require_auth)):
     except Exception as e:
         logger.error(f"Failed to get active profile: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/folders/browse", response_model=FolderBrowseResponse)
+async def browse_document_folders(
+    path: Optional[str] = None,
+    user: UserResponse = Depends(require_org_admin)
+):
+    """List the document roots, or the sub-folders of a directory below a root.
+
+    Backs the folder picker on the Profiles page. Without ``path`` the
+    configured roots (``DOCUMENT_ROOTS``) are returned, each flagged with
+    whether it is mounted; with ``path`` the immediate sub-directories of that
+    folder. Listing runs in a thread because network shares can be slow.
+    """
+    roots = settings.get_document_roots()
+    try:
+        return await asyncio.to_thread(browse_folders, path, roots)
+    except FolderNotAllowedError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FolderNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @router.post("/switch", response_model=SuccessResponse)
@@ -269,31 +305,56 @@ async def delete_profile(
 @router.put("/{profile_key}", response_model=SuccessResponse)
 async def update_profile(
     profile_key: str,
-    request: ProfileUpdateRequest,
-    admin: UserResponse = Depends(require_admin)
+    payload: ProfileUpdateRequest,
+    request: Request,
+    user: UserResponse = Depends(require_org_admin)
 ):
     """
     Update an existing profile.
-    
-    Updates the profile configuration with the provided values.
-    Only non-null fields will be updated.
+
+    Only non-null fields are updated. Superadmins may change everything.
+    Organisation admins may change the name, description and document
+    folders of profiles they have access to; their folders must be existing
+    directories below the configured document roots, and the database can
+    only be changed by a superadmin.
     """
     try:
         pm = get_profile_manager()
-        
+
         if profile_key not in pm.list_profiles():
             raise HTTPException(
                 status_code=404,
                 detail=f"Profile '{profile_key}' not found"
             )
-        
+
+        documents_folders = payload.documents_folders
+        if not user.is_admin:
+            accessible_keys = await get_user_accessible_profiles(request, user.id)
+            if profile_key not in accessible_keys:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You don't have access to this profile"
+                )
+            if payload.database is not None:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only a superadmin can change the database of a profile"
+                )
+            if documents_folders is not None:
+                try:
+                    documents_folders = await asyncio.to_thread(
+                        assert_folders_allowed, documents_folders, settings.get_document_roots()
+                    )
+                except (FolderNotAllowedError, FolderNotFoundError) as exc:
+                    raise HTTPException(status_code=400, detail=str(exc))
+
         # Update profile with provided values
         success = pm.update_profile(
             key=profile_key,
-            name=request.name,
-            description=request.description,
-            documents_folders=request.documents_folders,
-            database=request.database
+            name=payload.name,
+            description=payload.description,
+            documents_folders=documents_folders,
+            database=payload.database
         )
         
         if success:

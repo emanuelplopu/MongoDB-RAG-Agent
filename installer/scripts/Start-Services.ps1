@@ -148,9 +148,13 @@ if (-not (Test-Path $composePath)) {
 }
 
 $composeBase = @("compose", "-f", $composePath)
-$overridePath = Join-Path $installPath "docker-compose.override.yml"
-if ($composeFile -eq "docker-compose.yml" -and (Test-Path $overridePath)) {
-    $composeBase += @("-f", $overridePath)
+if ($composeFile -eq "docker-compose.yml") {
+    # Same file set as Stop-Services.ps1 and the tray app (ServiceManager.cs):
+    # the local override, then the network shares written by Add-NetworkShare.ps1.
+    foreach ($extra in @("docker-compose.override.yml", "docker-compose.shares.yml")) {
+        $extraPath = Join-Path $installPath $extra
+        if (Test-Path $extraPath) { $composeBase += @("-f", $extraPath) }
+    }
 }
 # Profiles: the tenant from config.json plus COMPOSE_PROFILES from the install's
 # .env (e.g. "quellex,embedder-gpu" for the local embedding server). An explicit

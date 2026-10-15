@@ -50,7 +50,7 @@ import { useChatSidebar } from '../contexts/ChatSidebarContext'
 import { useAuth } from '../contexts/AuthContext'
 import { useTenant } from '../contexts/TenantContext'
 import { ChatSession, indexesApi, profilesApi, ProfileListResponse } from '../api/client'
-import { canManageUsers } from '../api/roles'
+import { canManageProfiles, canManageUsers } from '../api/roles'
 import SidebarWarningToast, { SidebarWarning } from './SidebarWarningToast'
 import SupportRequestButton from './SupportRequestButton'
 
@@ -260,9 +260,11 @@ export default function Layout() {
     return item ? t(item.nameKey) : t('nav.chat')
   }
 
-  // Filter menu items based on user admin status and tenant features
+  // Filter menu items based on user roles and tenant features. Profiles are the
+  // one admin page organisation admins also get (they pick their document folders).
   const userMenuItems = baseMenuItems.filter(item => {
-    if (item.adminOnly && !user?.is_admin) return false
+    if (item.href === '/profiles' && !canManageProfiles(user)) return false
+    if (item.adminOnly && item.href !== '/profiles' && !user?.is_admin) return false
     if (item.href === '/cloud-sources' && !tenant.features.showCloudSources) return false
     if (item.href === '/email-cloud-config' && !tenant.features.showEmailConfig) return false
     if (item.href === '/profiles' && !tenant.features.showProfiles) return false

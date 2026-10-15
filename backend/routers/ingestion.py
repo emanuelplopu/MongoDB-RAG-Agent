@@ -921,10 +921,12 @@ async def run_ingestion(
         from src.ingestion.ingest import DocumentIngestionPipeline, IngestionConfig
         from src.profile import get_profile_manager
         
-        # Switch profile if specified
+        # Switch profile if specified. Reload first so folders added to
+        # profiles.yaml by hand (or by another process) are scanned too.
         expected_database = None
         if config.get("profile"):
             pm = get_profile_manager()
+            pm.reload()
             if not pm.switch_profile(config["profile"]):
                 raise ValueError(f"Profile '{config['profile']}' not found; nothing was ingested")
             expected_database = pm.active_profile.database if pm.active_profile else None

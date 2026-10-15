@@ -83,8 +83,13 @@ if (-not (Test-Path $composePath)) {
 
 $stopTimeout = if ($Force) { 10 } else { $Timeout }
 $downArgs = @("compose", "-f", $composePath)
-$overridePath = Join-Path $installPath "docker-compose.override.yml"
-if ($composeFile -eq "docker-compose.yml" -and (Test-Path $overridePath)) { $downArgs += @("-f", $overridePath) }
+if ($composeFile -eq "docker-compose.yml") {
+    # Same file set as Start-Services.ps1 and the tray app: override + network shares.
+    foreach ($extra in @("docker-compose.override.yml", "docker-compose.shares.yml")) {
+        $extraPath = Join-Path $installPath $extra
+        if (Test-Path $extraPath) { $downArgs += @("-f", $extraPath) }
+    }
+}
 # Same profile set as Start-Services.ps1 (config.json tenant + .env COMPOSE_PROFILES),
 # otherwise e.g. the embedder container would survive "Stop Services".
 $profiles = Get-ComposeProfiles -ConfigProfile $composeProfile -InstallPath $installPath

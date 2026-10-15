@@ -266,6 +266,26 @@ export interface ProfileListResponse {
   active_profile: string
 }
 
+/** One directory offered by the profile folder picker. */
+export interface FolderEntry {
+  name: string
+  /** Absolute container path, the value stored in `Profile.documents_folders`. */
+  path: string
+  /** False for a configured document root that is not mounted on the server. */
+  exists: boolean
+}
+
+/** Listing returned by `GET /profiles/folders/browse`. */
+export interface FolderBrowseResponse {
+  roots: string[]
+  /** Directory that was listed; null for the root listing. */
+  path: string | null
+  /** Parent directory; null at a root. */
+  parent: string | null
+  entries: FolderEntry[]
+  truncated: boolean
+}
+
 export interface Document {
   id: string
   title: string
@@ -1095,6 +1115,15 @@ export const profilesApi = {
 
   update: async (profileKey: string, data: { name?: string; description?: string; documents_folders?: string[]; database?: string }) => {
     const response = await api.put(`/profiles/${profileKey}`, data)
+    return response.data
+  },
+
+  /**
+   * List the server's document roots (no path) or the sub-folders of one
+   * directory below a root. Superadmins and organisation admins only.
+   */
+  browseFolders: async (path?: string | null): Promise<FolderBrowseResponse> => {
+    const response = await api.get('/profiles/folders/browse', { params: path ? { path } : {} })
     return response.data
   },
 }

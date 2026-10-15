@@ -1,0 +1,43 @@
+# Network shares (SMB/CIFS) as profile document folders
+#
+# Copy to docker-compose.shares.yml (git-ignored) or let
+# installer/scripts/Add-NetworkShare.ps1 write it. Each share becomes a Docker
+# volume that the Docker Desktop VM mounts with its built-in CIFS client and
+# that is attached read-only below /app/mounts in the API container(s) and the
+# ingestion worker, at the same path, so the Documents page can open what the
+# worker indexed. Profiles then list /app/mounts/<name>/<sub-folder> entries;
+# organisation admins pick them in the Profiles page (docs/22).
+#
+# Start-Services.ps1, Stop-Services.ps1 and the tray app add this file on their
+# own when it exists. For a plain "docker compose up -d" put
+#   COMPOSE_FILE=docker-compose.yml;docker-compose.override.yml;docker-compose.shares.yml
+# into .env (";" on Windows). Validate with:
+#   docker compose -f docker-compose.yml -f docker-compose.shares.yml config
+#
+# Credentials come from .env (SHARE_<NAME>_USER / SHARE_<NAME>_PASSWORD) and
+# must not contain "," (the mount option separator). Use a dedicated read-only
+# service account on the NAS. The volume is mounted when the first container
+# using it starts; a wrong password or unreachable server then fails
+# "docker compose up" with the CIFS error.
+
+volumes:
+  share_kanzlei:
+    driver: local
+    driver_opts:
+      type: cifs
+      # //<server or IP>/<share> (forward slashes, no trailing slash)
+      device: //nas.diejuristin/Kanzlei
+      # vers=3.1.1 for current NAS/Windows servers; 3.0 or 2.1 for older ones.
+      # domain=<AD domain> when the account is a domain account.
+      o: "username=${SHARE_KANZLEI_USER},password=${SHARE_KANZLEI_PASSWORD},vers=3.1.1,ro,noperm,iocharset=utf8,file_mode=0444,dir_mode=0555"
+
+services:
+  backend-quellex:
+    volumes:
+      - share_kanzlei:/app/mounts/kanzlei:ro
+  # backend:                       # add for the RecallHub tenant too
+  #   volumes:
+  #     - share_kanzlei:/app/mounts/kanzlei:ro
+  ingestion-worker:
+    volumes:
+      - share_kanzlei:/app/mounts/kanzlei:ro

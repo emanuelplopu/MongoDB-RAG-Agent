@@ -179,6 +179,22 @@ class ProfileUpdateRequest(BaseModel):
     owner_user_id: Optional[str] = None
 
 
+class FolderEntry(BaseModel):
+    """One directory offered by the profile folder picker."""
+    name: str = Field(..., description="Directory name (or the root path for root entries)")
+    path: str = Field(..., description="Absolute container path to store on the profile")
+    exists: bool = Field(True, description="False for a configured root that is not mounted")
+
+
+class FolderBrowseResponse(BaseModel):
+    """Listing returned by ``GET /profiles/folders/browse``."""
+    roots: List[str] = Field(default_factory=list, description="Configured document roots")
+    path: Optional[str] = Field(None, description="Directory that was listed; None for the root listing")
+    parent: Optional[str] = Field(None, description="Parent directory, None at a root")
+    entries: List[FolderEntry] = Field(default_factory=list)
+    truncated: bool = Field(False, description="True when the listing hit the entry limit")
+
+
 # ============== Cloud Source Models ==============
 
 class AirbyteConfig(BaseModel):

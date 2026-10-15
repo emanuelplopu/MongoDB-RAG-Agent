@@ -331,11 +331,16 @@ public class ServiceManager
     private string BuildComposeArgs(string composePath)
     {
         var args = $"compose -f \"{composePath}\"";
-        var overridePath = Path.Combine(_installPath, "docker-compose.override.yml");
-        if (File.Exists(overridePath)
-            && Path.GetFileName(composePath).Equals("docker-compose.yml", StringComparison.OrdinalIgnoreCase))
+        if (Path.GetFileName(composePath).Equals("docker-compose.yml", StringComparison.OrdinalIgnoreCase))
         {
-            args += $" -f \"{overridePath}\"";
+            // Same file set as Start-Services.ps1 / Stop-Services.ps1: the local
+            // override, then the network shares written by Add-NetworkShare.ps1.
+            foreach (var extra in new[] { "docker-compose.override.yml", "docker-compose.shares.yml" })
+            {
+                var extraPath = Path.Combine(_installPath, extra);
+                if (File.Exists(extraPath))
+                    args += $" -f \"{extraPath}\"";
+            }
         }
         foreach (var profile in ResolveComposeProfiles())
             args += $" --profile {profile}";

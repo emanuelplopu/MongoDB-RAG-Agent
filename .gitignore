@@ -89,3 +89,6 @@ Hub_Backups/
 
 # Synthetic corpus generator runs (default run.output_root)
 synthetic_runs/
+
+# Per-machine compose additions (local mounts, network shares written by installer/scripts/Add-NetworkShare.ps1)
+docker-compose.shares.yml

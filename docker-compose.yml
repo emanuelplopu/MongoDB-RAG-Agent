@@ -111,10 +111,8 @@ services:
       - ./documents:/app/documents:ro
       - ./projects:/app/projects:ro
       - ./profiles.yaml:/app/profiles.yaml:ro
-      # Profile-specific document folders (create these on host to use)
-      - ./mounts/parhelion-energy:/app/mounts/parhelion-energy:ro
-      - ./mounts/gdrive-root:/app/mounts/gdrive-root:ro
-      - ./mounts/diejuristin:/app/mounts/diejuristin:ro
+      # Profile document folders, same paths as the backends (see there)
+      - ./mounts:/app/mounts:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 30s
@@ -289,7 +287,13 @@ services:
       
       # Profile configuration
       - PROFILES_PATH=/app/profiles.yaml
-      
+      # Folders organisation admins may pick for a profile (docs/22). Local
+      # folders live in ./mounts, network shares are attached below /app/mounts
+      # by docker-compose.shares.yml (installer/scripts/Add-NetworkShare.ps1).
+      - DOCUMENT_ROOTS=${DOCUMENT_ROOTS:-/app/mounts,/app/documents}
+      # container_path=host_path|... so "Open in Explorer" can show the Windows/UNC path
+      - MOUNT_MAPPINGS=${MOUNT_MAPPINGS:-}
+
       # Airbyte Integration (optional - for Confluence/Jira)
       - AIRBYTE_ENABLED=${AIRBYTE_ENABLED:-false}
       - AIRBYTE_API_URL=${AIRBYTE_API_URL:-http://airbyte-server:8001}
@@ -300,10 +304,11 @@ services:
       - ./profiles.yaml:/app/profiles.yaml
       - ./data/backups:/app/data/backups
       - ./data/telemetry:/app/data/telemetry
-      # Profile-specific document folders (create these on host to use)
-      - ./mounts/parhelion-energy:/app/mounts/parhelion-energy:ro
-      - ./mounts/gdrive-root:/app/mounts/gdrive-root:ro
-      - ./mounts/diejuristin:/app/mounts/diejuristin:ro
+      # Profile document folders: every sub-folder of ./mounts is visible as
+      # /app/mounts/<name> here and in the ingestion worker (same path, so the
+      # document viewer finds what the worker indexed). Network shares are
+      # attached below /app/mounts by docker-compose.shares.yml (docs/22).
+      - ./mounts:/app/mounts:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
@@ -446,7 +451,13 @@ services:
       
       # Profile configuration
       - PROFILES_PATH=/app/profiles.yaml
-      
+      # Folders organisation admins may pick for a profile (docs/22). Local
+      # folders live in ./mounts, network shares are attached below /app/mounts
+      # by docker-compose.shares.yml (installer/scripts/Add-NetworkShare.ps1).
+      - DOCUMENT_ROOTS=${DOCUMENT_ROOTS:-/app/mounts,/app/documents}
+      # container_path=host_path|... so "Open in Explorer" can show the Windows/UNC path
+      - MOUNT_MAPPINGS=${MOUNT_MAPPINGS:-}
+
       # Airbyte Integration (optional - for Confluence/Jira)
       - AIRBYTE_ENABLED=${AIRBYTE_ENABLED:-false}
       - AIRBYTE_API_URL=${AIRBYTE_API_URL:-http://airbyte-server:8001}
@@ -457,10 +468,11 @@ services:
       - ./profiles.yaml:/app/profiles.yaml
       - ./data/backups:/app/data/backups
       - ./data/telemetry:/app/data/telemetry
-      # Profile-specific document folders (create these on host to use)
-      - ./mounts/parhelion-energy:/app/mounts/parhelion-energy:ro
-      - ./mounts/gdrive-root:/app/mounts/gdrive-root:ro
-      - ./mounts/diejuristin:/app/mounts/diejuristin:ro
+      # Profile document folders: every sub-folder of ./mounts is visible as
+      # /app/mounts/<name> here and in the ingestion worker (same path, so the
+      # document viewer finds what the worker indexed). Network shares are
+      # attached below /app/mounts by docker-compose.shares.yml (docs/22).
+      - ./mounts:/app/mounts:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
@@ -578,6 +590,7 @@ services:
       - ./documents:/app/documents
       - ./projects:/app/projects
       - ./profiles.yaml:/app/profiles.yaml
+      - ./mounts:/app/mounts:ro
     stdin_open: true
     tty: true
     networks:

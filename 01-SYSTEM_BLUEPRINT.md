@@ -44,7 +44,7 @@
 
 **Data Model:**
 - `User`: `{id: UUID, email: string (unique, lowercase), name: string, password_hash: string (bcrypt, 12 rounds), created_at: datetime, updated_at: datetime, is_active: bool, is_admin: bool, is_org_admin: bool}`
-- Roles: `is_admin` is the superadmin (every system setting: prompts, models, ingestion, backups, profiles). `is_org_admin` is the organisation admin: manages the organisation's user accounts and their profile access, cannot see or edit superadmin accounts, cannot grant superadmin rights, and has no access to system configuration.
+- Roles: `is_admin` is the superadmin (every system setting: prompts, models, ingestion, backups, profiles). `is_org_admin` is the organisation admin: manages the organisation's user accounts and their profile access, renames the profiles she has access to and picks their document folders (below `DOCUMENT_ROOTS`, see `docs/22-DOCUMENT_FOLDERS_AND_SHARES.md`), cannot see or edit superadmin accounts, cannot grant superadmin rights, cannot create/delete profiles or change their database, and has no access to system configuration.
 - `APIKey`: `{id: UUID, user_id: string, name: string, key_hash: SHA256, key_prefix: string (first 8 chars), created_at: datetime, last_used_at: datetime|null, expires_at: datetime|null, is_active: bool, scopes: list["read","write"]}`
 - `ProfileAccess`: `{user_id: string, profile_key: string, granted_at: datetime, granted_by: string}`
 
@@ -88,7 +88,7 @@
 - `get_current_user(request)` — dependency injector, returns `UserResponse | None`
 - `require_auth(request)` — dependency, raises 401 if not authenticated
 - `require_admin(request)` — dependency, raises 403 if not superadmin; guards all system configuration
-- `require_org_admin(request)` — dependency, raises 403 unless superadmin or organisation admin; used only by user management, profile access and the team API-key listing
+- `require_org_admin(request)` — dependency, raises 403 unless superadmin or organisation admin; used only by user management, profile access, the team API-key listing, `PUT /api/v1/profiles/{key}` (own profiles, name/description/folders) and `GET /api/v1/profiles/folders/browse`
 - `user_has_profile_access(request, user_id, profile_key)` — checks access rights
 - `get_user_accessible_profiles(request, user_id)` — returns list of profile keys
 
@@ -115,8 +115,9 @@
 | GET | `/api/v1/profiles/` | User | List all profiles + active |
 | POST | `/api/v1/profiles/` | Admin | Create new profile |
 | GET | `/api/v1/profiles/{key}` | User | Get profile details |
-| PUT | `/api/v1/profiles/{key}` | Admin | Update profile |
+| PUT | `/api/v1/profiles/{key}` | Admin / Org admin | Update profile (org admins: own profiles, name/description/folders only; folders must exist below `DOCUMENT_ROOTS`) |
 | DELETE | `/api/v1/profiles/{key}` | Admin | Delete profile |
+| GET | `/api/v1/profiles/folders/browse?path=` | Admin / Org admin | List the document roots or the sub-folders of one directory (folder picker) |
 | POST | `/api/v1/profiles/switch` | User | Switch active profile |
 
 **Integration Points:**

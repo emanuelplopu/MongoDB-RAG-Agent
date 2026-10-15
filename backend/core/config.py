@@ -270,7 +270,17 @@ class BackendSettings(BaseSettings):
     
     # Profile Settings
     profiles_path: str = Field(default="profiles.yaml")
-    
+    document_roots: str = Field(
+        default="/app/mounts,/app/documents",
+        description=(
+            "Comma-separated directories (as seen inside the API and worker "
+            "containers) under which organisation admins may pick profile "
+            "document folders. Local folders live in ./mounts, network shares "
+            "are attached below /app/mounts by docker-compose.shares.yml "
+            "(docs/22-DOCUMENT_FOLDERS_AND_SHARES.md)."
+        ),
+    )
+
     # Airbyte Integration Settings
     airbyte_enabled: bool = Field(
         default=False, 
@@ -437,6 +447,21 @@ class BackendSettings(BaseSettings):
         """Alias for brave_search_api_key for compatibility."""
         return self.brave_search_api_key
     
+    def get_document_roots(self) -> List[str]:
+        """Parse ``document_roots`` into a de-duplicated list of directory paths.
+
+        Returns:
+            Root directories, in configured order, with blanks dropped. An empty
+            list disables the root check for superadmins only; organisation
+            admins can then not add any folder at all.
+        """
+        roots: List[str] = []
+        for raw in (self.document_roots or "").split(","):
+            root = raw.strip()
+            if root and root not in roots:
+                roots.append(root)
+        return roots
+
     def get_disabled_tools(self) -> Set[str]:
         """Parse tenant_disabled_tools into a set of disabled tool names.
         

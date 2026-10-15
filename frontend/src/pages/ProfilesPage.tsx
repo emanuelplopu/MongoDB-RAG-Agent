@@ -11,9 +11,13 @@ import {
   CircleStackIcon,
   ShieldCheckIcon,
   PencilIcon,
+  XMarkIcon,
+  FolderPlusIcon,
 } from '@heroicons/react/24/outline'
 import { profilesApi, authApi, Profile, ProfileListResponse, ProfileAccessMatrix } from '../api/client'
+import { canManageProfiles, isOrgAdmin } from '../api/roles'
 import { useAuth } from '../contexts/AuthContext'
+import ServerFolderPicker from '../components/ServerFolderPicker'
 
 export default function ProfilesPage() {
   const navigate = useNavigate()
@@ -33,14 +37,26 @@ export default function ProfilesPage() {
 
   const [switchMessage, setSwitchMessage] = useState<string | null>(null)
 
-  // Edit form state
+  // Edit form state. Folders are kept as a list: they are picked from the
+  // server's document roots (or typed) one at a time, never comma-joined.
   const [editingProfile, setEditingProfile] = useState<string | null>(null)
-  const [editProfile, setEditProfile] = useState({
+  const [editProfile, setEditProfile] = useState<{
+    name: string
+    description: string
+    documents_folders: string[]
+    database: string
+  }>({
     name: '',
     description: '',
-    documents_folders: '',
+    documents_folders: [],
     database: '',
   })
+  const [newFolderPath, setNewFolderPath] = useState('')
+  const [showFolderPicker, setShowFolderPicker] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
+
+  const canEditProfiles = canManageProfiles(user)
+  const isSuperAdminUser = Boolean(user?.is_admin)
 
   // Create form state
   const [newProfile, setNewProfile] = useState({
@@ -62,7 +78,7 @@ export default function ProfilesPage() {
       console.error('Error fetching profiles:', err)
       // Handle 403 by redirecting non-admins
       if (err?.status === 403) {
-        setError(t('profiles.adminAccess'))
+        setError(t('profiles.managerAccess'))
       } else {
         setError(t('profiles.loadFailed', 'Failed to load profiles.'))
       }
@@ -71,9 +87,9 @@ export default function ProfilesPage() {
     }
   }
 
-  // Redirect non-admins after auth is loaded
+  // Redirect members after auth is loaded; superadmins and organisation admins stay
   useEffect(() => {
-    if (!isAuthLoading && user && !user.is_admin) {
+    if (!isAuthLoading && user && !canManageProfiles(user)) {
       navigate('/dashboard')
     }
   }, [isAuthLoading, user, navigate])
@@ -177,41 +193,70 @@ export default function ProfilesPage() {
 
   const handleStartEdit = (key: string, profile: Profile) => {
     setEditingProfile(key)
+    setEditError(null)
+    setNewFolderPath('')
     setEditProfile({
       name: profile.name,
       description: profile.description || '',
-      documents_folders: profile.documents_folders.join(', '),
+      documents_folders: [...profile.documents_folders],
       database: profile.database,
     })
   }
 
   const handleCancelEdit = () => {
     setEditingProfile(null)
-    setEditProfile({ name: '', description: '', documents_folders: '', database: '' })
+    setEditError(null)
+    setNewFolderPath('')
+    setShowFolderPicker(false)
+    setEditProfile({ name: '', description: '', documents_folders: [], database: '' })
+  }
+
+  const addFolder = (path: string) => {
+    const folder = path.trim()
+    if (!folder) return
+    setEditProfile((prev) =>
+      prev.documents_folders.includes(folder)
+        ? prev
+        : { ...prev, documents_folders: [...prev.documents_folders, folder] }
+    )
+    setNewFolderPath('')
+    setShowFolderPicker(false)
+  }
+
+  const removeFolder = (path: string) => {
+    setEditProfile((prev) => ({
+      ...prev,
+      documents_folders: prev.documents_folders.filter((f) => f !== path),
+    }))
   }
 
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!editingProfile) return
-    
+    if (editProfile.documents_folders.length === 0) {
+      setEditError(t('profiles.noFolders', 'No folders yet'))
+      return
+    }
+
     try {
+      setEditError(null)
       await profilesApi.update(editingProfile, {
         name: editProfile.name,
         description: editProfile.description || undefined,
-        documents_folders: editProfile.documents_folders
-          .split(',')
-          .map((f) => f.trim())
-          .filter(Boolean),
-        database: editProfile.database || undefined,
+        documents_folders: editProfile.documents_folders,
+        // Only superadmins may move a profile to another database
+        ...(isSuperAdminUser ? { database: editProfile.database || undefined } : {}),
       })
       setEditingProfile(null)
-      setEditProfile({ name: '', description: '', documents_folders: '', database: '' })
+      setEditProfile({ name: '', description: '', documents_folders: [], database: '' })
       setSwitchMessage(`Updated profile: ${editingProfile}`)
       setTimeout(() => setSwitchMessage(null), 3000)
       fetchProfiles()
     } catch (err) {
       console.error('Error updating profile:', err)
-      setError('Failed to update profile.')
+      // The backend explains refused folders (outside the document roots, not mounted)
+      const message = err instanceof Error && err.message ? err.message : ''
+      setEditError(message || t('profiles.updateFailed', 'Failed to update profile.'))
     }
   }
 
@@ -270,6 +315,13 @@ export default function ProfilesPage() {
       {/* Error */}
       {error && (
         <div className="rounded-2xl bg-red-50 dark:bg-red-900/30 p-4 text-red-700 dark:text-red-400">{error}</div>
+      )}
+
+      {/* What organisation admins can do here */}
+      {isOrgAdmin(user) && (
+        <div className="rounded-2xl bg-primary-50 dark:bg-primary-900/20 p-4 text-sm text-primary-800 dark:text-primary-200">
+          {t('profiles.orgAdminNote')}
+        </div>
       )}
 
       {/* Create form */}
@@ -496,27 +548,89 @@ export default function ProfilesPage() {
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-secondary dark:text-gray-400 mb-1">
-                      Documents Folders (comma-separated)
+                      {t('profiles.documentsFolders', 'Documents Folders')}
                     </label>
-                    <input
-                      type="text"
-                      value={editProfile.documents_folders}
-                      onChange={(e) => setEditProfile({ ...editProfile, documents_folders: e.target.value })}
-                      required
-                      className="w-full rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
-                    />
+                    {editProfile.documents_folders.length === 0 ? (
+                      <p className="text-xs text-secondary dark:text-gray-400 mb-2">{t('profiles.noFolders', 'No folders yet')}</p>
+                    ) : (
+                      <ul className="space-y-1 mb-2">
+                        {editProfile.documents_folders.map((folder) => (
+                          <li
+                            key={folder}
+                            className="flex items-center gap-2 rounded-lg bg-surface-variant dark:bg-gray-700 px-2 py-1 text-xs text-primary-900 dark:text-gray-200"
+                          >
+                            <FolderIcon className="h-4 w-4 text-secondary dark:text-gray-400 flex-shrink-0" />
+                            <span className="truncate flex-1" title={folder}>{folder}</span>
+                            <button
+                              type="button"
+                              onClick={() => removeFolder(folder)}
+                              className="rounded p-1 text-secondary hover:text-red-600 dark:hover:text-red-400"
+                              title={t('profiles.removeFolder', 'Remove folder')}
+                              aria-label={`${t('profiles.removeFolder', 'Remove folder')}: ${folder}`}
+                            >
+                              <XMarkIcon className="h-4 w-4" />
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={newFolderPath}
+                        onChange={(e) => setNewFolderPath(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            addFolder(newFolderPath)
+                          }
+                        }}
+                        placeholder={t('profiles.folderPathPlaceholder')}
+                        aria-label={t('profiles.addFolder', 'Add folder')}
+                        className="flex-1 min-w-0 rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => addFolder(newFolderPath)}
+                        disabled={!newFolderPath.trim()}
+                        className="rounded-lg bg-surface-variant dark:bg-gray-700 px-3 py-2 text-sm font-medium text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-gray-600 disabled:opacity-50"
+                      >
+                        {t('profiles.addFolder', 'Add folder')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowFolderPicker(true)}
+                        className="rounded-lg bg-primary-100 dark:bg-primary-900/50 p-2 text-primary-700 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-900"
+                        title={t('profiles.browseFolders', 'Browse server folders')}
+                        aria-label={t('profiles.browseFolders', 'Browse server folders')}
+                      >
+                        <FolderPlusIcon className="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-secondary dark:text-gray-400 mb-1">
-                      Database Name
-                    </label>
-                    <input
-                      type="text"
-                      value={editProfile.database}
-                      onChange={(e) => setEditProfile({ ...editProfile, database: e.target.value })}
-                      className="w-full rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
+                  {isSuperAdminUser && (
+                    <div>
+                      <label className="block text-xs font-medium text-secondary dark:text-gray-400 mb-1">
+                        Database Name
+                      </label>
+                      <input
+                        type="text"
+                        value={editProfile.database}
+                        onChange={(e) => setEditProfile({ ...editProfile, database: e.target.value })}
+                        className="w-full rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
+                      />
+                    </div>
+                  )}
+                  {editError && (
+                    <div className="rounded-lg bg-red-50 dark:bg-red-900/30 p-2 text-xs text-red-700 dark:text-red-400">{editError}</div>
+                  )}
+                  {showFolderPicker && (
+                    <ServerFolderPicker
+                      onSelect={addFolder}
+                      onClose={() => setShowFolderPicker(false)}
+                      initialPath={editProfile.documents_folders[0] ?? null}
                     />
-                  </div>
+                  )}
                   <div className="flex gap-2 pt-2">
                     <button
                       type="submit"
@@ -575,7 +689,7 @@ export default function ProfilesPage() {
                         Activate
                       </button>
                     )}
-                    {user?.is_admin && (
+                    {canEditProfiles && (
                       <button
                         onClick={() => handleStartEdit(key, profile)}
                         className="rounded-lg p-2 text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/30 transition-colors"

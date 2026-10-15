@@ -370,10 +370,16 @@ class IngestionWorker:
             from src.ingestion.ingest import DocumentIngestionPipeline, IngestionConfig
             from src.profile import get_profile_manager
             
+            # Re-read profiles.yaml: the API edits it (new document folders) and this
+            # process only holds a read-only copy, so never persist the switch here.
+            pm = get_profile_manager()
+            if pm.reload():
+                await self._write_log("INFO", "Reloaded profiles.yaml (changed since last job)")
+
             # Switch profile if specified
             if config.get("profile"):
-                pm = get_profile_manager()
-                pm.switch_profile(config["profile"])
+                if not pm.switch_profile(config["profile"], persist=False):
+                    raise ValueError(f"Profile '{config['profile']}' not found; nothing was ingested")
                 await self._write_log("INFO", f"Switched to profile: {config['profile']}")
             
             # Create ingestion config

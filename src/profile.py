@@ -183,7 +183,17 @@ class ProfileManager:
         """
         self.profiles_path = Path(profiles_path or DEFAULT_PROFILES_PATH)
         self._config: Optional[ProfilesConfig] = None
+        #: Modification time of the file as last read or written; see reload().
+        self._loaded_mtime_ns: Optional[int] = None
         self._load_profiles()
+        self._remember_mtime()
+
+    def _remember_mtime(self) -> None:
+        """Record the on-disk modification time of ``profiles.yaml``."""
+        try:
+            self._loaded_mtime_ns = self.profiles_path.stat().st_mtime_ns
+        except OSError:
+            self._loaded_mtime_ns = None
     
     def _load_profiles(self) -> None:
         """Load profiles from YAML configuration file."""
@@ -249,6 +259,7 @@ class ProfileManager:
             with open(self.profiles_path, 'w', encoding='utf-8') as f:
                 yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
             logger.info(f"Saved profiles to {self.profiles_path}")
+            self._remember_mtime()
         except Exception as e:
             logger.error(f"Failed to save profiles: {e}")
     
@@ -289,25 +300,55 @@ class ProfileManager:
             return None
         return self._config.profiles.get(name)
     
-    def switch_profile(self, name: str) -> bool:
+    def reload(self, force: bool = False) -> bool:
+        """Re-read ``profiles.yaml`` when it changed on disk.
+
+        The API process edits profiles through this manager, but the ingestion
+        worker runs in its own process with a read-only copy of the file, and
+        administrators may edit the file by hand. Callers that are about to
+        scan folders (ingestion jobs) reload first so new folders are seen
+        without a restart.
+
+        Args:
+            force: Re-read even when the modification time is unchanged.
+
+        Returns:
+            True when the file was re-read, False when it was unchanged or
+            missing (the in-memory configuration is kept in both cases).
+        """
+        try:
+            mtime = self.profiles_path.stat().st_mtime_ns
+        except OSError:
+            return False
+        if not force and mtime == self._loaded_mtime_ns:
+            return False
+        self._load_profiles()
+        self._loaded_mtime_ns = mtime
+        return True
+
+    def switch_profile(self, name: str, persist: bool = True) -> bool:
         """
         Switch to a different profile.
-        
+
         Args:
             name: Profile name to switch to
-            
+            persist: Write the new active profile to ``profiles.yaml``. Pass
+                False in processes that only hold a read-only copy of the file
+                (the ingestion worker) and must not try to write it.
+
         Returns:
             True if switch was successful, False if profile not found
         """
         if not self._config:
             return False
-        
+
         if name not in self._config.profiles:
             logger.error(f"Profile '{name}' not found")
             return False
-        
+
         self._config.active_profile = name
-        self._save_profiles()
+        if persist:
+            self._save_profiles()
         logger.info(f"Switched to profile: {name}")
         return True
     
