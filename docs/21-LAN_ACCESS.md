@@ -207,5 +207,6 @@ ping quellex.local
 | Certificate warning (`ERR_CERT_AUTHORITY_INVALID`) | Trust package not installed on that client, or the browser was not restarted after installing it. If the gateway volume was recreated there is a new CA: build a new package and re-install (the old installer refuses the new certificate by fingerprint) |
 | `ERR_SSL_UNRECOGNIZED_NAME` / handshake fails for an IP or other name | The name is not in `QUELLEX_GATEWAY_HOSTS` |
 | Everything answers 401 | Expected for API calls without a session; sign in. Health and tenant config stay public |
+| "Cannot login" / every `/api` call answers 502 while the backend is healthy | The frontend nginx had cached the backend container's IP at startup and the backend was recreated. Fixed on 2026-10-14 in `frontend/nginx.conf` (`resolver 127.0.0.11 valid=10s` + `$backend_upstream` variable, so the upstream is re-resolved at request time); with an older frontend image, `docker restart rag-frontend-quellex` clears it |
 | Port 443 or 80 already in use on the host | Set `QUELLEX_GATEWAY_HTTPS_PORT` / `QUELLEX_GATEWAY_HTTP_PORT` in `.env` and re-run `Write-TrayConfig.ps1 -HttpsPort <n> -HttpPort <m>` plus `Configure-LanAccess.ps1` |
 | Raw port access from another machine stopped working | Intended: `BIND_ADDRESS=127.0.0.1`. Use the gateway, or set `BIND_ADDRESS=0.0.0.0` on a dev box |
