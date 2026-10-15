@@ -650,6 +650,19 @@
       "skipImagePdfs": "Skip Image-Only PDFs",
       "retryModeInfo": "Retry mode: Only files matching the selected retry filters will be processed.",
       "activeFilters": "Active Filters"
+    },
+    "estimate": {
+      "title": "Estimate",
+      "loading": "Estimating…",
+      "error": "Estimate unavailable",
+      "selectProfile": "Select a profile to estimate this run",
+      "summary": "~{{files}} files · {{size}} GB · ~{{time}} · ~{{cost}}",
+      "tokensChunks": "~{{tokens}} tokens, ~{{chunks}} chunks ({{method}})",
+      "rough": "rough",
+      "skipped": "{{skipped}} already ingested will be skipped",
+      "benchmark": "Based on benchmark {{date}}",
+      "noBenchmark": "No embedding benchmark yet — run \"quellexctl bench embeddings\"",
+      "missingFolders": "Some folders are missing/unreachable"
     }
   },
   "indexes": {

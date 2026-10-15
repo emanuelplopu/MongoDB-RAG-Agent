@@ -118,6 +118,7 @@
 | PUT | `/api/v1/profiles/{key}` | Admin / Org admin | Update profile (org admins: own profiles, name/description/folders only; folders must exist below `DOCUMENT_ROOTS`) |
 | DELETE | `/api/v1/profiles/{key}` | Admin | Delete profile |
 | GET | `/api/v1/profiles/folders/browse?path=` | Admin / Org admin | List the document roots or the sub-folders of one directory (folder picker) |
+| GET | `/api/v1/profiles/{key}/ingest/estimate?incremental=&sample=` | User (profile access) | Pre-ingestion estimate for the profile's folders: files, bytes, ~tokens, ~chunks, ~time, ~cost (rough; see [docs/22](docs/22-DOCUMENT_FOLDERS_AND_SHARES.md)) |
 | POST | `/api/v1/profiles/switch` | User | Switch active profile |
 
 **Integration Points:**

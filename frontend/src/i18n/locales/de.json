@@ -650,6 +650,19 @@
       "skipImagePdfs": "Bild-PDFs überspringen",
       "retryModeInfo": "Wiederholungsmodus: Nur Dateien, die den ausgewählten Filtern entsprechen, werden verarbeitet.",
       "activeFilters": "Aktive Filter"
+    },
+    "estimate": {
+      "title": "Schätzung",
+      "loading": "Wird geschätzt…",
+      "error": "Schätzung nicht verfügbar",
+      "selectProfile": "Profil auswählen, um diesen Lauf zu schätzen",
+      "summary": "~{{files}} Dateien · {{size}} GB · ~{{time}} · ~{{cost}}",
+      "tokensChunks": "~{{tokens}} Tokens, ~{{chunks}} Segmente ({{method}})",
+      "rough": "grob",
+      "skipped": "{{skipped}} bereits importierte werden übersprungen",
+      "benchmark": "Basierend auf Benchmark {{date}}",
+      "noBenchmark": "Noch kein Embedding-Benchmark — \"quellexctl bench embeddings\" ausführen",
+      "missingFolders": "Einige Ordner fehlen/sind nicht erreichbar"
     }
   },
   "indexes": {

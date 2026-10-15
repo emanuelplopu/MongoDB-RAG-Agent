@@ -28,12 +28,165 @@ import {
   ExclamationTriangleIcon,
   ClockIcon,
 } from '@heroicons/react/24/outline'
-import { 
+import {
   ingestionApi, ingestionQueueApi, profilesApi, fileRegistryApi,
   QueueStatus, ScheduledIngestionJob, IngestionStatus, LogEntry,
-  Profile, IngestionStreamEvent, FileRegistryStats
+  Profile, IngestionStreamEvent, FileRegistryStats, IngestEstimate
 } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
+
+// ---- Pre-ingestion estimate helpers ----
+
+function formatEstDuration(seconds: number): string {
+  if (!seconds || seconds < 1) return '<1s'
+  if (seconds < 90) return `~${Math.round(seconds)}s`
+  const minutes = seconds / 60
+  if (minutes < 90) return `~${Math.round(minutes)}m`
+  const hours = Math.floor(minutes / 60)
+  const rem = Math.round(minutes - hours * 60)
+  if (hours < 24) return rem ? `~${hours}h ${rem}m` : `~${hours}h`
+  const days = Math.floor(hours / 24)
+  const rh = hours % 24
+  return rh ? `~${days}d ${rh}h` : `~${days}d`
+}
+
+function formatEstCost(usd: number): string {
+  if (!usd) return '$0'
+  if (usd < 0.01) return `$${usd.toFixed(4)}`
+  return `$${usd.toFixed(2)}`
+}
+
+interface AggregatedEstimate {
+  fileCount: number
+  sizeGb: number
+  timeSeconds: number
+  costUsd: number
+  tokens: number
+  chunks: number
+  skipped: number
+  isRough: boolean
+  tokenMethod: string
+  benchmarkDate: string | null
+  missingFolders: boolean
+  assumptions: string[]
+}
+
+function aggregateEstimates(results: IngestEstimate[]): AggregatedEstimate {
+  const agg: AggregatedEstimate = {
+    fileCount: 0, sizeGb: 0, timeSeconds: 0, costUsd: 0, tokens: 0, chunks: 0,
+    skipped: 0, isRough: false, tokenMethod: '', benchmarkDate: null,
+    missingFolders: false, assumptions: [],
+  }
+  for (const r of results) {
+    agg.fileCount += r.file_count
+    agg.sizeGb += r.total_size_gb
+    agg.timeSeconds += r.estimated_time_seconds
+    agg.costUsd += r.estimated_cost_usd
+    agg.tokens += r.estimated_tokens
+    agg.chunks += r.estimated_chunks
+    agg.skipped += r.skipped_existing
+    agg.isRough = agg.isRough || r.is_rough
+    agg.tokenMethod = agg.tokenMethod || r.token_method
+    agg.benchmarkDate = agg.benchmarkDate || r.benchmark_date || null
+    agg.missingFolders = agg.missingFolders || r.missing_folders.length > 0
+    for (const note of r.assumptions) {
+      if (!agg.assumptions.includes(note)) agg.assumptions.push(note)
+    }
+  }
+  return agg
+}
+
+function IngestEstimateLine({ profileKeys, incremental }: { profileKeys: string[]; incremental: boolean }) {
+  const { t } = useTranslation()
+  const [estimate, setEstimate] = useState<AggregatedEstimate | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(false)
+  const keyStr = profileKeys.join(',')
+
+  useEffect(() => {
+    if (profileKeys.length === 0) {
+      setEstimate(null)
+      setError(false)
+      return
+    }
+    let cancelled = false
+    setLoading(true)
+    setError(false)
+    const handle = setTimeout(() => {
+      Promise.all(profileKeys.map(k => ingestionApi.estimate(k, incremental)))
+        .then(results => {
+          if (cancelled) return
+          setEstimate(aggregateEstimates(results))
+        })
+        .catch(() => {
+          if (cancelled) return
+          setError(true)
+          setEstimate(null)
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }, 400)
+    return () => {
+      cancelled = true
+      clearTimeout(handle)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keyStr, incremental])
+
+  if (profileKeys.length === 0) {
+    return <p className="text-xs text-secondary dark:text-gray-400">{t('ingestion.estimate.selectProfile')}</p>
+  }
+
+  return (
+    <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-900/40 px-3 py-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <ClockIcon className="h-4 w-4 text-blue-600 dark:text-blue-300 flex-shrink-0" />
+        {loading && (
+          <span className="text-xs text-blue-700 dark:text-blue-300">{t('ingestion.estimate.loading')}</span>
+        )}
+        {!loading && error && (
+          <span className="text-xs text-blue-700 dark:text-blue-300">{t('ingestion.estimate.error')}</span>
+        )}
+        {!loading && !error && estimate && (
+          <>
+            <span className="text-xs font-medium text-blue-900 dark:text-blue-200">
+              {t('ingestion.estimate.summary', {
+                files: estimate.fileCount.toLocaleString(),
+                size: estimate.sizeGb.toFixed(2),
+                time: formatEstDuration(estimate.timeSeconds),
+                cost: formatEstCost(estimate.costUsd),
+              })}
+            </span>
+            {estimate.isRough && (
+              <span className="text-[10px] uppercase tracking-wide bg-blue-200 dark:bg-blue-800 text-blue-800 dark:text-blue-200 px-1.5 py-0.5 rounded">
+                {t('ingestion.estimate.rough')}
+              </span>
+            )}
+          </>
+        )}
+      </div>
+      {!loading && !error && estimate && (
+        <div
+          className="mt-1 text-[11px] text-blue-700/80 dark:text-blue-300/80"
+          title={estimate.assumptions.join('\n')}
+        >
+          {t('ingestion.estimate.tokensChunks', {
+            tokens: estimate.tokens.toLocaleString(),
+            chunks: estimate.chunks.toLocaleString(),
+            method: estimate.tokenMethod,
+          })}
+          {estimate.skipped > 0 && <> · {t('ingestion.estimate.skipped', { skipped: estimate.skipped.toLocaleString() })}</>}
+          {' · '}
+          {estimate.benchmarkDate
+            ? t('ingestion.estimate.benchmark', { date: new Date(estimate.benchmarkDate).toLocaleDateString() })
+            : t('ingestion.estimate.noBenchmark')}
+          {estimate.missingFolders && <> · {t('ingestion.estimate.missingFolders')}</>}
+        </div>
+      )}
+    </div>
+  )
+}
 
 // Phase configuration
 const PHASES = [
@@ -913,10 +1066,12 @@ export default function IngestionManagementPage() {
                 </div>
               </div>
               
+              <IngestEstimateLine profileKeys={selectedProfiles} incremental={incremental} />
+
               <div className="flex gap-2">
-                <button 
-                  onClick={handleAddToQueue} 
-                  disabled={selectedProfiles.length === 0 || isOperationPending || actionCooldown} 
+                <button
+                  onClick={handleAddToQueue}
+                  disabled={selectedProfiles.length === 0 || isOperationPending || actionCooldown}
                   className="px-4 py-2 rounded-xl bg-primary text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 >
                   {(isOperationPending || actionCooldown) && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
