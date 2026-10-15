@@ -56,7 +56,7 @@ If docs and code disagree, trust the current code first, then fix the docs.
 - Frontend API client: `frontend/src/api/client.ts`
 - Frontend tenants: `frontend/src/tenants/configs/`
 - Frontend tests and MSW setup: `frontend/src/test/`
-- Documentation: top-level master spec `01-SYSTEM_BLUEPRINT.md`; numbered blueprint set in `docs/` (`02-SYSTEM_BLUEPRINTS.md` … `22-DOCUMENT_FOLDERS_AND_SHARES.md`). Strategy OS deep-dive is `docs/07-STRATEGY_OS_OVERVIEW.md` through `docs/11-EXPLORATION_AND_SCHEDULER.md`.
+- Documentation: top-level master spec `01-SYSTEM_BLUEPRINT.md`; numbered blueprint set in `docs/` (`02-SYSTEM_BLUEPRINTS.md` … `23-SCAN_IMAGE_EMBEDDING_SPIKE.md`). Strategy OS deep-dive is `docs/07-STRATEGY_OS_OVERVIEW.md` through `docs/11-EXPLORATION_AND_SCHEDULER.md`.
 
 ## Non-Negotiable Rules
 

@@ -284,6 +284,11 @@ Notes:
 - Image embedding works through `/v1/embeddings` with
   `{"input": {"prompt_string": "<media_marker>", "multimodal_data": ["<base64>"]}}`;
   the flat `multimodal_data` form is silently ignored by the server.
+- Measured 2026-10-15: embedding scanned pages directly as images retrieves
+  *worse* than their OCR text in a mixed text+image index (a text query sits
+  ~0.06 closer to text than to an image of the same page, so image vectors sink
+  below clean-text noise) and costs ~11× per page; keep OCR as the scan
+  representation. See `docs/23-SCAN_IMAGE_EMBEDDING_SPIKE.md`.
 - Ollama's `embeddinggemma-2` tags are MLX-only (Apple Silicon) as of
   2026-10-10 and fail on Windows/Linux with "requires MLX support".
 
