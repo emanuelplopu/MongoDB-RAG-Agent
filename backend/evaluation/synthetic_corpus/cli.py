@@ -263,7 +263,9 @@ def status(
         _print(json.loads(usage.read_text(encoding="utf-8")).get("cumulative", {}))
 
 
-BaseUrlOpt = typer.Option("http://localhost:11001", "--base-url", help="Backend URL of the stack under test.")
+BaseUrlOpt = typer.Option("http://127.0.0.1:11001", "--base-url",
+                          help="Backend URL of the stack under test (127.0.0.1, not localhost: on Windows localhost costs ~2 s per connection).")
+SampleOpt = typer.Option(5.0, "--sample-interval", help="Seconds between resource samples (GPU, host, containers, Ollama).")
 ProfileOpt = typer.Option("synthetic-kanzlei", "--profile", help="Profile the corpus is ingested into.")
 DatabaseOpt = typer.Option("rag_synth_kanzlei_v1", "--database", help="MongoDB database of that profile.")
 MongoOpt = typer.Option("mongodb://localhost:11017/?directConnection=true", "--mongo-uri")
@@ -271,12 +273,12 @@ BenchOpt = typer.Option("bench1", "--bench-name", help="Results go to <run_dir>/
 
 
 def _bench_ctx(config: Optional[list[Path]], sets: Optional[list[str]], run_name: Optional[str], output_root: Optional[str],
-               base_url: str, profile: str, database: str, mongo_uri: str, bench_name: str) -> Any:
+               base_url: str, profile: str, database: str, mongo_uri: str, bench_name: str, sample_interval: float = 5.0) -> Any:
     from .bench import BenchContext
 
     cfg = _cfg(config, sets, run_name, output_root)
     return BenchContext(run_dir=cfg.run.run_dir, bench_name=bench_name, base_url=base_url, profile=profile,
-                        database=database, mongo_uri=mongo_uri)
+                        database=database, mongo_uri=mongo_uri, sample_interval_s=sample_interval)
 
 
 @app.command("bench-ingest")
@@ -285,13 +287,13 @@ def bench_ingest_cmd(
     output_root: Optional[str] = OutputOpt, base_url: str = BaseUrlOpt, profile: str = ProfileOpt, database: str = DatabaseOpt,
     mongo_uri: str = MongoOpt, bench_name: str = BenchOpt,
     clean: bool = typer.Option(True, "--clean/--incremental", help="Clean the profile database before ingesting."),
-    verbose: bool = VerboseOpt,
+    sample_interval: float = SampleOpt, verbose: bool = VerboseOpt,
 ) -> None:
     """Ingest the run's corpus into a profile of a running stack and benchmark the ingestion."""
     from .bench import bench_ingest
 
     _logging(verbose)
-    ctx = _bench_ctx(config, sets, run_name, output_root, base_url, profile, database, mongo_uri, bench_name)
+    ctx = _bench_ctx(config, sets, run_name, output_root, base_url, profile, database, mongo_uri, bench_name, sample_interval)
     result = bench_ingest(ctx, clean=clean)
     _print({k: v for k, v in result.items() if k not in ("timeline", "resource_samples")})
 
@@ -320,16 +322,17 @@ def bench_chat_cmd(
     limit: Optional[int] = typer.Option(None, "--limit"), question: Optional[list[str]] = typer.Option(None, "--question"),
     keep_sessions: bool = typer.Option(False, "--keep-sessions"),
     concurrency: int = typer.Option(1, "--concurrency", help="Questions in parallel (load probe; results in chat_<mode>_c<N>.jsonl)."),
-    verbose: bool = VerboseOpt,
+    sample_interval: float = SampleOpt, verbose: bool = VerboseOpt,
 ) -> None:
     """Run the gold questions through the streaming chat endpoint and score them (resumable)."""
     from .bench import bench_chat, load_gold
 
     _logging(verbose)
-    ctx = _bench_ctx(config, sets, run_name, output_root, base_url, profile, database, mongo_uri, bench_name)
+    ctx = _bench_ctx(config, sets, run_name, output_root, base_url, profile, database, mongo_uri, bench_name, sample_interval)
     summary = bench_chat(ctx, load_gold(ctx.run_dir), mode, limit=limit, keep_sessions=keep_sessions, ids=question,
                          concurrency=concurrency)
-    _print({"answerable": summary["answerable"], "failure_stages": summary["failure_stages"], "anomalies": summary.get("anomalies")})
+    _print({"answerable": summary["answerable"], "failure_stages": summary["failure_stages"], "anomalies": summary.get("anomalies"),
+            "telemetry_html": summary.get("telemetry_html")})
 
 
 @app.command("bench-query-rewrite")
@@ -385,12 +388,39 @@ def bench_report_cmd(
     output_root: Optional[str] = OutputOpt, bench_name: str = BenchOpt,
     baseline: Optional[str] = typer.Option(None, "--baseline", help="Earlier bench name to compare the chat runs with."),
 ) -> None:
-    """Render REPORT.md from the benchmark results of a run."""
+    """Render REPORT.md and the HTML telemetry pages from the benchmark results of a run."""
     from .bench_report import write_report
+    from .telemetry_html import write_all_telemetry_html
 
     cfg = _cfg(config, sets, run_name, output_root)
     bench_dir = cfg.run.run_dir / "bench"
+    for page in write_all_telemetry_html(bench_dir / bench_name):
+        console.print(f"wrote {page}")
     console.print(f"wrote {write_report(bench_dir / bench_name, bench_dir / baseline if baseline else None)}")
+
+
+@app.command("bench-telemetry")
+def bench_telemetry_cmd(
+    config: Optional[list[Path]] = ConfigOpt, sets: Optional[list[str]] = SetOpt, run_name: Optional[str] = RunNameOpt,
+    output_root: Optional[str] = OutputOpt, bench_name: str = BenchOpt,
+    run: Optional[list[str]] = typer.Option(None, "--run", help="Series to render, e.g. chat_thinking, chat_fast_c3 or ingest "
+                                                                "(default: every resources_*.jsonl of the bench)."),
+    verbose: bool = VerboseOpt,
+) -> None:
+    """Render the one-page HTML telemetry report (GPU, host, containers, questions) of a benchmark run.
+
+    Works while a run is still going: the sampler appends to the files this reads.
+    """
+    from .telemetry_html import write_all_telemetry_html, write_telemetry_html
+
+    _logging(verbose)
+    cfg = _cfg(config, sets, run_name, output_root)
+    bench_dir = cfg.run.run_dir / "bench" / bench_name
+    pages = [write_telemetry_html(bench_dir, r) for r in run] if run else write_all_telemetry_html(bench_dir)
+    if not pages:
+        raise typer.BadParameter(f"no resources_*.jsonl in {bench_dir}")
+    for page in pages:
+        console.print(f"wrote {page}")
 
 
 def main() -> None:

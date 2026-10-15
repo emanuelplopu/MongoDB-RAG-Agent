@@ -298,6 +298,20 @@ def _telemetry_section(summary: dict[str, Any]) -> list[str]:
             lines += ["", f"GPU: utilisation mean {_fmt(g['util_pct'].get('mean'))} %, memory max {_fmt(g['mem_mb'].get('max'))} MB, "
                           f"power max {_fmt(g['power_w'].get('max'))} W, temperature max {_fmt((g.get('temp_c') or {}).get('max'))} C, "
                           f"SM clock median {_fmt((g.get('sm_mhz') or {}).get('p50'))} MHz, throttled samples {g.get('throttled_samples', '–')}."]
+            if g.get("reasons_s") is not None:
+                limits = ", ".join(f"{k} {v} s" for k, v in (g.get("reasons_s") or {}).items()) or "none"
+                lines += [f"GPU clock limits by reason: {limits}; thermal slowdown {g.get('thermal_s', 0)} s"
+                          + (f"; closest to the thermal limit {_fmt(g['tlimit_min_c'])} C" if g.get("tlimit_min_c") is not None else "")
+                          + (f"; fan max {_fmt((g.get('fan_pct') or {}).get('max'))} %" if g.get("fan_pct") else "") + "."]
+        h = res.get("host") or {}
+        if h:
+            procs = h.get("procs") or {}
+            lines += ["", f"Host: CPU mean {_fmt((h.get('cpu_pct') or {}).get('mean'))} % (max {_fmt((h.get('cpu_pct') or {}).get('max'))} %), "
+                          f"RAM max {_fmt((h.get('ram_used_gb') or {}).get('max'))} of {_fmt(h.get('ram_total_gb'))} GB, "
+                          f"swap max {_fmt((h.get('swap_used_gb') or {}).get('max'))} GB"
+                          + (f", Ollama processes RSS max {_fmt(procs['ollama']['rss_gb'].get('max'))} GB" if procs.get("ollama") else "")
+                          + (f", Docker VM RSS max {_fmt(procs['docker_vm']['rss_gb'].get('max'))} GB" if procs.get("docker_vm") else "")
+                          + (f", board thermal zone max {_fmt((h.get('cpu_temp_c') or {}).get('max'))} C" if h.get("cpu_temp_c") else "") + "."]
         if res.get("ollama"):
             ol = res["ollama"]
             lines += ["", f"Ollama residency: models seen {ol.get('models_seen')}, at most {ol.get('max_models_loaded')} loaded at once, "
@@ -358,7 +372,11 @@ def write_report(bench_dir: Path, baseline_dir: Optional[Path] = None) -> Path:
         rows_path = bench_dir / f"chat_{mode}.jsonl"
         rows = [json.loads(x) for x in rows_path.read_text(encoding="utf-8").splitlines() if x.strip()] if rows_path.is_file() else []
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
-        lines += _chat_section(mode, summary, rows) + _telemetry_section(summary) + [""]
+        lines += _chat_section(mode, summary, rows) + _telemetry_section(summary)
+        if (bench_dir / f"telemetry_chat_{mode}.html").is_file():
+            lines += ["", f"Telemetry page with charts (GPU temperature, clocks, power, VRAM, host RAM and CPU, containers, per question): "
+                          f"`telemetry_chat_{mode}.html`"]
+        lines += [""]
     out = bench_dir / "REPORT.md"
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return out
