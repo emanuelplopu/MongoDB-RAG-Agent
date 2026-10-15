@@ -320,20 +320,42 @@ Exact-value matching could pick up the first three with a normalisation of
 (the layout model dominates; Tesseract CLI adds one `--psm 0` OSD call and
 one recognition call per OCR rectangle).
 
-### What was not done
+### Live re-ingestion (2026-10-16, `bench5_tesseract`)
 
-- `quellexctl synth bench-ingest` was **not** re-run: it ingests through the
-  live worker (`C:\RecallHub-Verify`), which still runs the old image, and
-  it writes to the synthetic profile — not a read-only use of the stack.
-  The offline fact-retention above is the same metric on the same files;
-  re-run the bench after the worker is redeployed to confirm the chunk-level
-  number (`chunk_recall`) as well.
-- The firm's real scans are still unsampled (see "Blocker"). Tesseract is
-  the weaker engine on poor scans (low contrast, faxes, handwriting), so the
-  real-sample check remains the gate before trusting amounts from NAS scans.
-- Images built for the benchmark were tagged `recallhub-ingestion-worker:
-  ocr-tesseract`, not `:latest`, so the live stack is unaffected until the
-  branch is merged and the `:latest` images are rebuilt from `main`.
+The live stack in `C:\RecallHub-Verify` was redeployed with the merged
+images (this branch + the baked Docling models of `docs/15`, base 1.1.0;
+`docker compose up -d` from the live folder, worker and backend-quellex
+recreated, nothing else) and the synthetic corpus re-ingested with
+`quellexctl synth bench-ingest --clean --bench-name bench5_tesseract`
+(`RECALLHUB_API_KEY` set, see `docs/20`; results in
+`C:\RecallHub_Synthetic\kanzlei_v1\bench\bench5_tesseract\`):
+
+| | bench3 (2026-10-11, RapidOCR) | 2026-10-14 re-ingestion | bench5_tesseract |
+|---|---|---|---|
+| `scan_jpg` facts in content / in chunks | 0.436 / 0.436 | 0.667 | **0.949 / 0.949** (111 of 117) |
+| all formats, facts in chunks | | | 0.994 (1299 of 1307; pdf 0.997, docx 1.0, eml 1.0) |
+| documents / chunks / failed | 141 / 777 / 0 | | 141 / 774 / 0 |
+| ingestion wall time | 424.8 s | | 280.7 s |
+
+The six lost scan facts are exactly the six of the offline run above, so
+chunking loses nothing on top of the OCR. The shorter wall time is mostly
+the model cache: the worker no longer downloads the Docling models on its
+first scanned page. The stored `content` of the scans carries the Tesseract
+signature (`insbesondere nach $ 1096 Abs. 1 ABGB` with spaces, where
+RapidOCR stored `§ 1096Abs.1ABGB`). Note that the worker's container log
+does not show the `Docling OCR engine:` line: per-file conversion runs in
+the isolated ingestion process, whose logging is not forwarded to the
+container's stdout.
+
+### Still open
+
+- The firm's real scans: the sibling check (`firm_in`/`firm_out*` in the
+  same bench folder) found Tesseract materially better on them too (5 of
+  42 pages with material loss vs 16 of 42) but with its own residuals
+  (`§` read as `$`/`5`, digits under handwritten ticks, rotated letterhead
+  text), so a `§` repair in text normalisation is the next lever.
+- Other profiles with scans (`diejuristin`) keep their RapidOCR text until
+  they are re-ingested.
 
 ### Re-ingestion is required for existing scans
 
