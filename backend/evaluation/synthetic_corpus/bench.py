@@ -71,6 +71,14 @@ class BenchContext:
     health_wait_s: float = 600.0
     max_consecutive_errors: int = 5
     sample_interval_s: float = 5.0
+    # API key of a user of the stack (``X-API-Key``); required when the backend runs with
+    # REQUIRE_AUTH=true (the Quellex tenant). Taken from RECALLHUB_API_KEY by the CLI, never from a config file.
+    api_key: Optional[str] = None
+
+    @property
+    def http_headers(self) -> dict[str, str]:
+        """Headers every request to the stack carries (the API key when one is set)."""
+        return {"X-API-Key": self.api_key} if self.api_key else {}
 
     @property
     def out_dir(self) -> Path:
@@ -235,7 +243,7 @@ def bench_ingest(ctx: BenchContext, *, clean: bool = True, dimensions: int = 307
     timeline: list[dict[str, Any]] = []
     sampler = ResourceSampler(ctx.containers, ctx.sample_interval_s, out_path=ctx.out_dir / "resources_ingest.jsonl",
                               ollama_url=ctx.ollama_url, health_url=ctx.base_url.rstrip("/") + "/health")
-    with httpx.Client(timeout=60) as http, sampler:
+    with httpx.Client(timeout=60, headers=ctx.http_headers) as http, sampler:
         t0 = time.monotonic()
         r = http.post(ctx.api("/ingestion/start"), json={"profile": ctx.profile, "clean_before_ingest": clean, "incremental": not clean})
         r.raise_for_status()
@@ -416,7 +424,7 @@ def bench_retrieval(ctx: BenchContext, gold: list[GoldCase], modes: tuple[str, .
                     k: int = 10) -> dict[str, Any]:
     """Send each answerable question to the search API and score the ranking."""
     rows = []
-    with httpx.Client(timeout=120) as http:
+    with httpx.Client(timeout=120, headers=ctx.http_headers) as http:
         for g in gold:
             if g.unanswerable:
                 continue
@@ -481,7 +489,7 @@ def bench_query_rewrite(ctx: BenchContext, gold: list[GoldCase], chat_file: str 
     retrieval = json.loads((ctx.out_dir / "retrieval.json").read_text(encoding="utf-8"))
     raw = {r["id"]: r for r in retrieval["rows"] if r.get("mode") == "hybrid" and "error" not in r}
     out_rows = []
-    with httpx.Client(timeout=120) as http:
+    with httpx.Client(timeout=120, headers=ctx.http_headers) as http:
         for r in rows:
             g = by_id.get(r["id"])
             queries = [str(q) for q in (r.get("queries") or []) if _usable_query(q)]
@@ -960,7 +968,7 @@ def bench_chat(ctx: BenchContext, gold: list[GoldCase], mode: str, *, limit: Opt
                          health_url=ctx.base_url.rstrip("/") + "/health") as sampler, \
             tm.MongoProfiler(db, slow_ms=100) as profiler:
         if concurrency <= 1:
-            with httpx.Client(timeout=timeout) as http:
+            with httpx.Client(timeout=timeout, headers=ctx.http_headers) as http:
                 for n, g in enumerate(todo, start=1):
                     rec = _run_question(ctx, http, g, mode, chunk_text, keep_sessions=keep_sessions, slice_logs=True,
                                         ollama_tail=ollama_tail, blobs=blobs)
@@ -972,7 +980,7 @@ def bench_chat(ctx: BenchContext, gold: list[GoldCase], mode: str, *, limit: Opt
                         break
         else:
             def worker(g: GoldCase) -> dict[str, Any]:
-                with httpx.Client(timeout=timeout) as http:
+                with httpx.Client(timeout=timeout, headers=ctx.http_headers) as http:
                     return _run_question(ctx, http, g, mode, chunk_text, keep_sessions=keep_sessions, slice_logs=False,
                                          ollama_tail=ollama_tail, blobs=blobs)
 

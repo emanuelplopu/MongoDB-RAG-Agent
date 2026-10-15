@@ -103,6 +103,13 @@ uv run python -m backend.evaluation.synthetic_corpus bench-report -c synth.json 
 uv run python -m backend.evaluation.synthetic_corpus bench-ab -c synth.json --a bench2 --b bench3
 ```
 
+All `bench-*` commands talk to the stack as a user: when the backend runs
+with `REQUIRE_AUTH=true` (the Quellex tenant, `docs/21-LAN_ACCESS.md`) set
+`RECALLHUB_API_KEY` to an API key of a user of that tenant (created in the
+UI under API keys, or a short-lived one for the run); it is sent as
+`X-API-Key`, read from the environment only and never written to a config or
+results file. Without it every call gets 401.
+
 ### `bench-ingest`
 
 - Starts `POST /api/v1/ingestion/start` for the profile, polls the job, and samples the GPU, the host and the containers every 5 s (`--sample-interval`) into `resources_ingest.jsonl`; renders `telemetry_ingest.html` at the end (see `bench-telemetry`).
