@@ -14,6 +14,10 @@
 # into .env (";" on Windows). Validate with:
 #   docker compose -f docker-compose.yml -f docker-compose.shares.yml config
 #
+# The host folder <install>\mounts\<name> must exist (empty) for every share:
+# /app/mounts is a read-only bind mount of <install>\mounts, so Docker cannot
+# create the mount point itself and the container would fail to start.
+#
 # Credentials come from .env (SHARE_<NAME>_USER / SHARE_<NAME>_PASSWORD) and
 # must not contain "," (the mount option separator). Use a dedicated read-only
 # service account on the NAS. The volume is mounted when the first container

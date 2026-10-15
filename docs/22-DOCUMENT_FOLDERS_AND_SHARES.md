@@ -103,9 +103,13 @@ The script asks for the password, then:
 2. writes `SHARE_KANZLEI_NAME/_UNC/_USER/_PASSWORD/_OPTIONS/_TENANT` into
    `.env` (the password lives only there; `.env` is git-ignored and part of
    the backup set);
-3. regenerates `docker-compose.shares.yml` from all `SHARE_*` entries:
-   a `local` volume with `type: cifs` per share, attached read-only at
-   `/app/mounts/<name>` in `ingestion-worker` and the tenant backend(s);
+3. creates the empty mount point `<install>\mounts\<name>` (the volume is
+   mounted over it; `/app/mounts` itself is a read-only bind mount, so
+   Docker cannot create the directory on the fly and the container would
+   fail to start) and regenerates `docker-compose.shares.yml` from all
+   `SHARE_*` entries: a `local` volume with `type: cifs` per share, attached
+   read-only at `/app/mounts/<name>` in `ingestion-worker` and the tenant
+   backend(s);
 4. sets `MOUNT_MAPPINGS` (`/app/mounts/kanzlei=\\nas.diejuristin\Kanzlei`)
    and `COMPOSE_FILE` in `.env` so a plain `docker compose up -d` loads the
    shares file as well (the installer scripts and the tray app add it on
@@ -117,7 +121,8 @@ Repeat per share. `-Remove` detaches a share (profiles that still list it
 show it as not reachable). `-NoRestart` only writes the configuration.
 
 Manual alternative: copy `docker-compose.shares.example.yml` to
-`docker-compose.shares.yml`, edit it, put the credentials into `.env`, add
+`docker-compose.shares.yml`, edit it, create the empty folder
+`<install>\mounts\<name>`, put the credentials into `.env`, add
 `COMPOSE_FILE=docker-compose.yml;docker-compose.override.yml;docker-compose.shares.yml`
 to `.env` and run `docker compose up -d`. `docker compose config` validates
 the files without mounting.
@@ -178,6 +183,7 @@ skips files that are already indexed.
 |---|---|
 | Script: `docker volume create failed` / `Mounting the share failed` | Server name not resolvable from the Docker VM (use the IP), wrong share path, account or password, or the server needs an older dialect (`-SmbVersion 3.0`/`2.1`). SMB1-only devices are not supported. |
 | `docker compose up` fails with `permission denied` / `mount error(13)` after a password change | Update `SHARE_<NAME>_PASSWORD` in `.env`, then `docker compose down` and `up -d`: the volume keeps the old options until it is recreated (`docker volume rm recallhub_share_<name>`). |
+| Container fails to start after adding a share: `mkdir /app/mounts/<name>: read-only file system` | The host mount point `<install>\mounts\<name>` is missing (hand-written shares file, or the folder was deleted). Create the empty folder and `docker compose up -d`; the script creates it itself. |
 | Folder picker shows the root as *not mounted* | The container was started before the share/folder existed, or the shares file is not in the compose file set (`COMPOSE_FILE` in `.env`; installer scripts add it automatically). `docker compose up -d`. |
 | Saving the profile: *outside the document roots* | The path is not below `DOCUMENT_ROOTS`; attach the folder as in A or B first. |
 | Saving: *not reachable from the server* | Typo, or the share is offline/unmounted in the API container (`docker exec rag-backend-quellex ls <path>`). |

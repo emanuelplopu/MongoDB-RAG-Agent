@@ -9,7 +9,9 @@
       1. tests the share with a throwaway Docker volume (skip with -SkipTest),
       2. stores the share in <install>\.env as SHARE_<NAME>_UNC / _USER /
          _PASSWORD / _OPTIONS / _TENANT (the password only lives there),
-      3. regenerates <install>\docker-compose.shares.yml from those entries:
+      3. creates the empty mount point <install>\mounts\<name> (the volume is
+         mounted over it inside the read-only /app/mounts bind mount) and
+         regenerates <install>\docker-compose.shares.yml from those entries:
          one CIFS volume per share, attached read-only at /app/mounts/<name>
          in the tenant backend(s) and the ingestion worker,
       4. keeps MOUNT_MAPPINGS (for "Open in Explorer") and COMPOSE_FILE in .env
@@ -317,6 +319,15 @@ if ($Remove) {
     if ($Domain) { $options += ",domain=$Domain" }
 
     if (-not $SkipTest) { Test-ShareMount -Device $device -User $Username -PlainPassword $plain -Options $options }
+
+    # The volume is mounted at /app/mounts/<name> on top of the read-only bind
+    # mount of <install>\mounts, so the mount point must already exist on the
+    # host or the container fails to start ("mkdir ... read-only file system").
+    $mountPoint = Join-Path $install "mounts\$Name"
+    if (-not (Test-Path $mountPoint)) {
+        New-Item -ItemType Directory -Path $mountPoint -Force | Out-Null
+        Write-Host "  Created mount point $mountPoint (stays empty; the share is mounted over it)" -ForegroundColor Gray
+    }
 
     $lines = Set-EnvValue -Lines $lines -Key "SHARE_${keyName}_NAME" -Value $Name
     $lines = Set-EnvValue -Lines $lines -Key "SHARE_${keyName}_UNC" -Value $device
