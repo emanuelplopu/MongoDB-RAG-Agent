@@ -26,6 +26,13 @@ runs, zero glued tokens and all 49 amounts / dates / Geschäftszahlen /
 Harness: `scripts/ocr_scan_check.py` (no pipeline change). Raw outputs of
 the synthetic dry run: session scratchpad `dryrun/out*` (not kept in git).
 
+**Update 2026-10-16: implemented.** The OCR engine is now a setting
+(`OCR_ENGINE`, default `tesseract`; `OCR_LANGUAGES`, default `deu,eng`) and
+Tesseract 5 with the German and English packs is part of the base image. On
+all 27 synthetic scan pages the planned-fact retention (the `bench._fidelity`
+`scan_jpg` number) goes from **0.667 to 0.949**; see "Implemented" at the end.
+Already ingested scans keep their old OCR text until they are re-ingested.
+
 ## Blocker: no access to the firm's scans from this server
 
 - `C:\RecallHub-Verify\mounts\diejuristin` (the folder the live profile
@@ -245,3 +252,95 @@ annotations; PDF and image scans; note the scanner model if known):
 - Independently of the engine: give the worker a model-cache volume (side
   finding 1) before the NAS ingestion, or the first scan after each
   restart costs minutes and needs internet.
+
+## Implemented (2026-10-16): configurable engine, Tesseract `deu+eng` by default
+
+### The change
+
+- `backend/Dockerfile.base` (base version 1.1.0) installs `tesseract-ocr
+  tesseract-ocr-deu tesseract-ocr-eng` (Tesseract 5.5.0, Debian trixie,
+  ≈ 30 MB). Rebuild the base image before the app images
+  (`docker build -f backend/Dockerfile.base -t recallhub-backend-base:latest .`;
+  the builder stage stays cached, only the apt layer and the venv copy run).
+- `OCR_ENGINE` = `tesseract` (default) | `rapidocr` | `easyocr` | `auto`, and
+  `OCR_LANGUAGES` = ISO 639-2 codes, default `deu,eng`. Declared identically
+  in `src/settings.py` and `backend/core/config.py`, documented in
+  `.env.example`, passed through by `docker-compose.yml` for the worker, both
+  backends and the `cli` service. The code default is Tesseract, so a Compose
+  file without the entries (the hand-maintained live one) gets the new
+  engine as well; the entries only matter for overrides.
+- `src/ingestion/ingest.py`: `resolve_ocr_config()` → `OcrConfig`,
+  `build_ocr_options()` maps it to Docling (`TesseractCliOcrOptions(lang=
+  ["deu","eng"])`, `RapidOcrOptions()`, `EasyOcrOptions(lang=["de","en"])`,
+  or nothing for `auto`, which keeps `OcrAutoOptions`), `apply_ocr_options()`
+  sets it on the pipeline options and logs the resolved engine once per
+  process. `create_document_converter()` (PDF path) and the new
+  `create_image_converter()` (image branch of `process_file`, previously an
+  inline copy) both go through it. An unknown engine name is logged and
+  replaced by the default rather than crashing the worker. Tests:
+  `backend/tests/test_ocr_engine_config.py` (option mapping only, no model
+  downloads).
+- The harness now imports `create_image_converter()` instead of copying it,
+  so "production" means whatever `OCR_ENGINE` says; `--engine rapidocr`
+  reproduces the old behaviour inside the new image.
+
+### Result on all 27 synthetic scan pages
+
+Sample: every `scan_jpg` primary page of `C:\RecallHub_Synthetic\kanzlei_v1`
+(27 pages, 117 planned facts — the same population `bench._fidelity` scores),
+gold text from the manifests, run inside the rebuilt worker image
+(`recallhub-ingestion-worker:ocr-tesseract`, Docling 2.137.0, CPU) once with
+the production default and once with `-e OCR_ENGINE=rapidocr`. Fact
+retention is computed exactly like `bench._fidelity`'s `content_recall`
+(`normalize_for_match(value) in normalize_for_match(document.md)`), i.e. the
+number the 2026-10-14 live ingestion scored as 0.667 (`docs/23`).
+
+| engine (same image, same pages) | facts in content | mean word recall (23 pages ≥ 20 gold words) | min | mean line recall | garbled runs | merged tokens | s/page |
+|---|---|---|---|---|---|---|---|
+| `rapidocr` (old default via `auto`) | 78 / 117 = **0.667** | 0.828 | 0.538 | 0.568 | 28 | 114 | 4.6 |
+| `tesseract deu+eng` (new default) | 111 / 117 = **0.949** | 0.993 | 0.969 | 0.868 | 0 | 0 | 4.3 |
+
+The RapidOCR run through the new code path reproduces the live 0.667 to
+the digit, so the harness measures the same thing the ingestion benchmark
+does. Tesseract lands at the predicted ~0.95. The six facts it still misses
+are all single-character or layout effects, not lost lines:
+
+- `84 m²` → `84 m?` (the superscript ² is not in the deu/eng character set);
+- `§ 1096 Abs. 1 ABGB` → `$ 1096 Abs. 1 ABGB` (§ read as `$`; RapidOCR got
+  the § but glued everything: `§ 1096Abs.1ABGB`);
+- `08.01.2025` → `08.01 .2025` (stray space) on one page;
+- `… stimmt der vollständigen Sanierung zu.` → `Sanierung Zu.`;
+- `Baumängelstreit` → `Baumangelstreit` (one umlaut) inside a long
+  jurisdiction clause, which fails the verbatim match of the whole sentence;
+- the line `Pauschalpreis brutto: EUR 120.000,00` is absent from one page's
+  text (the only genuinely missing line in the 27 pages).
+
+Exact-value matching could pick up the first three with a normalisation of
+`§`/`$` and `m?`/`m²` before comparison; not done here. Speed is unchanged
+(the layout model dominates; Tesseract CLI adds one `--psm 0` OSD call and
+one recognition call per OCR rectangle).
+
+### What was not done
+
+- `quellexctl synth bench-ingest` was **not** re-run: it ingests through the
+  live worker (`C:\RecallHub-Verify`), which still runs the old image, and
+  it writes to the synthetic profile — not a read-only use of the stack.
+  The offline fact-retention above is the same metric on the same files;
+  re-run the bench after the worker is redeployed to confirm the chunk-level
+  number (`chunk_recall`) as well.
+- The firm's real scans are still unsampled (see "Blocker"). Tesseract is
+  the weaker engine on poor scans (low contrast, faxes, handwriting), so the
+  real-sample check remains the gate before trusting amounts from NAS scans.
+- Images built for the benchmark were tagged `recallhub-ingestion-worker:
+  ocr-tesseract`, not `:latest`, so the live stack is unaffected until the
+  branch is merged and the `:latest` images are rebuilt from `main`.
+
+### Re-ingestion is required for existing scans
+
+The stored `content` of a scanned document *is* its OCR text and the chunks
+and embeddings are derived from it. Changing `OCR_ENGINE` therefore only
+affects documents ingested afterwards; scans ingested with RapidOCR keep the
+letter-soup lines until they are re-ingested (delete the documents of the
+profile or run a full re-ingestion). The same applies to the synthetic
+profile: the 0.667 in the live index stays until `bench-ingest --clean` runs
+against the redeployed worker.

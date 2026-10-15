@@ -103,8 +103,8 @@ class Variant:
 
     ocr_scale: Optional[float] = None  # docling ocr_options.scale (production: 3.0)
     force_full_page_ocr: Optional[bool] = None  # production: False
-    lang: Optional[List[str]] = None  # production: [] (engine default)
-    engine: Optional[str] = None  # "rapidocr", "easyocr", "tesseract", ... (production: auto)
+    lang: Optional[List[str]] = None  # production: OCR_LANGUAGES (deu,eng)
+    engine: Optional[str] = None  # "rapidocr", "easyocr", "tesseract", ... (production: OCR_ENGINE, tesseract)
     upscale: Optional[float] = None  # pre-processing: resample input images by this factor
 
     def is_production(self) -> bool:
@@ -146,23 +146,17 @@ def _pdf_converter(variant: Variant) -> Any:
 
 
 def _image_converter(variant: Variant) -> Any:
-    """The converter ``process_file`` builds for image files (copied, not imported)."""
-    from docling.datamodel.base_models import InputFormat
-    from docling.datamodel.pipeline_options import PdfPipelineOptions
-    from docling.document_converter import DocumentConverter, ImageFormatOption
+    """The converter ``process_file`` builds for image files (``create_image_converter``)."""
+    sys.path.insert(0, "/app")
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from src.ingestion.ingest import create_image_converter  # type: ignore
 
-    from src.ingestion.ingest import get_effective_device  # type: ignore
-
-    pipeline_options = PdfPipelineOptions()
-    pipeline_options.do_ocr = True
-    device = get_effective_device()
-    if device in ["cuda", "mps"]:
-        pipeline_options.accelerator_options = {"device": device}
+    converter = create_image_converter()
     if not variant.is_production():
-        _apply_variant(pipeline_options, variant)
-    return DocumentConverter(
-        format_options={InputFormat.IMAGE: ImageFormatOption(pipeline_options=pipeline_options)}
-    )
+        from docling.datamodel.base_models import InputFormat
+
+        _apply_variant(converter.format_to_options[InputFormat.IMAGE].pipeline_options, variant)
+    return converter
 
 
 def _upscaled_copy(path: Path, factor: float, work_dir: Path) -> Path:

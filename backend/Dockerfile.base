@@ -11,7 +11,7 @@
 # Then use Dockerfile.fast for quick code-only rebuilds
 #
 # VERSION: Update this when changing dependencies
-ARG BASE_VERSION=1.0.0
+ARG BASE_VERSION=1.1.0
 
 FROM python:3.11-slim AS builder
 
@@ -68,6 +68,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ffmpeg \
     antiword \
+    # Tesseract 5 OCR engine + German/English language packs for Docling
+    # (OCR_ENGINE=tesseract, OCR_LANGUAGES=deu,eng; see src/ingestion/ingest.py)
+    tesseract-ocr \
+    tesseract-ocr-deu \
+    tesseract-ocr-eng \
     # Playwright runtime dependencies
     libnss3 \
     libnspr4 \
@@ -100,7 +105,7 @@ COPY --from=builder /root/.cache/ms-playwright /root/.cache/ms-playwright
 RUN mkdir -p /app/projects /app/data /app/documents /app/src /app/backend
 
 # Label for version tracking
-ARG BASE_VERSION=1.0.0
+ARG BASE_VERSION=1.1.0
 LABEL recallhub.base.version="${BASE_VERSION}" \
       recallhub.base.description="Pre-built base image with ML deps + Playwright"
 

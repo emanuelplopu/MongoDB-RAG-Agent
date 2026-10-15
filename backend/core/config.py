@@ -267,7 +267,24 @@ class BackendSettings(BaseSettings):
         ge=0.5, le=10.0,
         description="Interval in seconds for worker to poll for new jobs"
     )
-    
+
+    # OCR Settings (Docling, scanned PDFs and image files; applied in
+    # src/ingestion/ingest.py). Must stay identical to src/settings.py.
+    ocr_engine: str = Field(
+        default="tesseract",
+        description=(
+            "Docling OCR engine for scanned pages: auto (Docling picks, RapidOCR today), "
+            "rapidocr, tesseract (CLI, needs tesseract-ocr + language packs) or easyocr"
+        ),
+    )
+    ocr_languages: str = Field(
+        default="deu,eng",
+        description=(
+            "Comma-separated OCR languages as ISO 639-2 codes (deu, eng, fra, ...); "
+            "mapped to the engine's own codes, ignored by auto/rapidocr"
+        ),
+    )
+
     # Profile Settings
     profiles_path: str = Field(default="profiles.yaml")
     document_roots: str = Field(
@@ -565,6 +582,8 @@ def get_settings() -> BackendSettings:
             max_match_count=main_settings.max_match_count,
             default_text_weight=main_settings.default_text_weight,
             profiles_path=main_settings.profiles_path,
+            ocr_engine=main_settings.ocr_engine,
+            ocr_languages=main_settings.ocr_languages,
         )
     except Exception:
         # Fallback to environment variables only

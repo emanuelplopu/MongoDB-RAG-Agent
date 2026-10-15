@@ -79,6 +79,26 @@ The ingestion pipeline scans configured document folders and classifies files by
 - Outputs normalized Markdown format
 - Handles OCR for scanned documents when needed
 
+**OCR engine for scanned pages** (`OCR_ENGINE`, `OCR_LANGUAGES`; applied by
+`create_document_converter()` for PDFs and `create_image_converter()` for
+image files in `src/ingestion/ingest.py`, read from both `src/settings.py`
+and `backend/core/config.py`):
+
+| `OCR_ENGINE` | Docling options | Notes |
+|---|---|---|
+| `tesseract` (default) | `TesseractCliOcrOptions(lang=[...])` | Tesseract 5 binary + `tesseract-ocr-deu`/`-eng` packs are baked into `backend/Dockerfile.base`. 0.99 word recall on the synthetic law-firm scans. |
+| `rapidocr` | `RapidOcrOptions()` | Docling's bundled ONNX engine; no language hint possible. What `auto` picked before: 0.84 word recall, whole legible lines turned into letter soup, tokens glued (`1110Wien`). |
+| `easyocr` | `EasyOcrOptions(lang=[...])` | Needs the `easyocr` package (not installed). Language codes are derived from the ISO 639-2 setting (`deu` → `de`). |
+| `auto` | Docling default (`OcrAutoOptions`) | Lets Docling choose; languages are ignored. |
+
+`OCR_LANGUAGES` is a comma-separated list of ISO 639-2 codes (`deu,eng` by
+default; `de`/`ger` style aliases are normalised). Tesseract needs the matching
+`tesseract-ocr-<lang>` package in the image. The resolved engine is logged once
+per worker process (`Docling OCR engine: tesseract lang=deu+eng`). Changing the
+engine only affects documents ingested afterwards: the stored `content` of a
+scan *is* its OCR text, so already ingested scans must be re-ingested.
+Evidence and the measurement harness: `docs/24-OCR_SCAN_QUALITY_CHECK.md`.
+
 **Audio Processing** uses Whisper:
 - Transcribes audio content to text
 - Preserves speaker identification when available
