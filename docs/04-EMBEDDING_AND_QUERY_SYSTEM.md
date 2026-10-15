@@ -78,6 +78,11 @@ The ingestion pipeline scans configured document folders and classifies files by
 - Maintains document hierarchy and formatting
 - Outputs normalized Markdown format
 - Handles OCR for scanned documents when needed
+- Loads its models (layout analysis, TableFormer, RapidOCR) from
+  `DOCLING_ARTIFACTS_PATH`, which the backend/worker base image fills at build
+  time (`backend/Dockerfile.base`), so conversion never downloads from
+  huggingface.co at runtime and works on offline installs; see
+  `docs/15-DOCKER_BUILD_GUIDE.md` → "Docling models in the base image"
 
 **Audio Processing** uses Whisper:
 - Transcribes audio content to text
