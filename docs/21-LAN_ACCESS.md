@@ -55,6 +55,7 @@ other PC  --https://quellex.local-->  Windows host
 | Frontend guard | `frontend/src/components/RequireAuth.tsx`, `StartPage.tsx`, `pages/LoginPage.tsx`, `tenants/configs/*.ts` | `requireAuth` and `startPage` per tenant |
 | Name announcer | `installer/tray-app/LanNameAdvertiser.cs`, `network` section of `%LocalAppData%\RecallHub\config.json` | Written by `installer/scripts/Write-TrayConfig.ps1` |
 | Firewall | `installer/scripts/Configure-LanAccess.ps1` | Run once as Administrator (INSTALL.ps1 does it when elevated) |
+| Uplinks | `installer/scripts/Configure-Uplinks.ps1` | Server with two adapters: interface metrics, static routes for routed customer subnets, firewall scope (see "Two uplinks and routed customer networks") |
 | Certificate | `installer/scripts/Export-LanCertificate.ps1` (tray menu *Network → Create trust package...*) | Builds the trust package (certificate, fingerprint-pinned Windows installer, Apple profile, README) for a share |
 
 ## Setting it up
@@ -161,6 +162,57 @@ pages, the OpenAPI load and the sidebar status probe.
   `QUELLEX_GATEWAY_HOSTS` in `.env` (`https://quellex.local, https://quellex, https://100.x.y.z`)
   and run `Configure-LanAccess.ps1 -AllowTailscale`.
 
+## Two uplinks and routed customer networks
+
+The server at Die Juristin (2026-10-15) is the reference case: the customer's
+wired network is `192.168.43.0/24` (DHCP domain `diejuristin`, router
+`192.168.43.1`, DNS = Pi-hole v6 at `192.168.43.202`), a second customer subnet
+`192.168.44.0/24` sits behind the same router, and a separate TCL router on
+`192.168.1.0/24` is the debug / download uplink (Ollama models, docker pulls,
+updates). Three things break in that layout, none of them inside the containers:
+
+1. **Routing.** Both DHCP adapters get a default route with the same metric, so
+   Windows picks one of them for everything that is not on-link, including the
+   path to `192.168.44.0/24` (`Find-NetRoute -RemoteIPAddress 192.168.44.10`
+   named the TCL uplink). `installer/scripts/Configure-Uplinks.ps1` pins the
+   policy: the Internet uplink gets metric 10 and therefore the default route,
+   the customer LAN gets metric 50 plus one persistent route per routed subnet
+   via the LAN router, and the `Quellex LAN - Gateway *` firewall rules accept
+   those subnets:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File installer\scripts\Configure-Uplinks.ps1 -LanInterface Ethernet -RoutedSubnets 192.168.44.0/24 -InternetInterface "Ethernet 2"
+   ```
+
+   `-DryRun` prints the current and the planned state without elevation,
+   `-Remove` restores automatic metrics and deletes the routes. Re-run it after
+   `Configure-LanAccess.ps1` (which recreates its rules with `LocalSubnet` only)
+   and whenever adapters or subnets change. If the download uplink goes down,
+   the LAN's own default route takes over by itself.
+2. **Firewall scope.** `Configure-LanAccess.ps1` allows `LocalSubnet` only, so a
+   client on a routed subnet is dropped by Windows Firewall even when the name
+   resolves. `Configure-Uplinks.ps1` widens the two gateway rules;
+   `Configure-LanAccess.ps1 -AnyRemote` is the blunt alternative.
+3. **Name resolution.** mDNS/LLMNR never cross a router, and the announcer
+   ignores off-link queries anyway. Worse, an office DNS that treats `.local`
+   as its own zone (Pi-hole with `local=/local/`) answers `quellex.local` with an
+   empty NOERROR instead of NXDOMAIN; the Windows resolver takes that as the
+   final answer and does not fall back to mDNS, on every subnet including the
+   server itself (`ping quellex.local` fails while
+   `Resolve-DnsName quellex.local -LlmnrNetbiosOnly` still works). Fix it in the
+   office DNS, not on the clients:
+   - Pi-hole v6: *Settings → Local DNS Records*, add `quellex.local -> <LAN IP>`
+     and `quellex.<dhcp-domain> -> <LAN IP>` (here `192.168.43.113`).
+   - Apple and Android devices never ask unicast DNS for `.local`, so on a
+     routed subnet they need the name inside the office DNS domain. Add it to
+     the gateway in `.env`:
+     `QUELLEX_GATEWAY_HOSTS=https://quellex.local, https://quellex, https://quellex.diejuristin`,
+     then `docker compose up -d --no-deps gateway-quellex`. Caddy issues the
+     extra certificate from the same internal CA, so the trust package stays
+     valid.
+   - Clients on the debug subnet keep using mDNS: the TCL router answers
+     NXDOMAIN and Windows falls through to the tray app.
+
 ## Configuration reference
 
 `.env` (all optional):
@@ -169,7 +221,7 @@ pages, the OpenAPI load and the sidebar status probe.
 |----------|---------|---------|
 | `BIND_ADDRESS` | `127.0.0.1` | Host address for the raw ports 11000/11001/11080/11081/11017/11090 |
 | `QUELLEX_GATEWAY_HTTPS_PORT` / `QUELLEX_GATEWAY_HTTP_PORT` | `443` / `80` | Host ports of the Quellex gateway. With a non-443 port the URL becomes `https://quellex.local:<port>` and the HTTP redirect does not add the port |
-| `QUELLEX_GATEWAY_HOSTS` | `https://quellex.local, https://quellex` | Site addresses Caddy serves (comma separated). Add `https://<IP>` to allow the raw address |
+| `QUELLEX_GATEWAY_HOSTS` | `https://quellex.local, https://quellex` | Site addresses Caddy serves (comma separated). Add `https://<IP>` to allow the raw address, or a name inside the office DNS domain (`https://quellex.diejuristin`) for clients on other subnets |
 | `RECALLHUB_GATEWAY_*` | `11443` / `11480` / `https://recallhub.local, https://recallhub` | Same for the RecallHub tenant (non-default ports so both tenants can run on one dev box) |
 | `QUELLEX_REQUIRE_AUTH` | `true` | Login enforcement for backend-quellex |
 | `RECALLHUB_REQUIRE_AUTH` | `false` | RecallHub keeps guest access unless set |
@@ -202,6 +254,8 @@ ping quellex.local
 |---------|-------|
 | `ERR_NAME_NOT_RESOLVED` / `ping quellex.local` fails, even on the server itself | The name only exists while `RecallHubTray.exe` runs (the responder lives in the tray app). Check the tray icon, `Get-Process RecallHubTray`, and the Application event log for an "Application Hang" / crash entry; start the app again from the Start Menu or `%LocalAppData%\RecallHub\RecallHubTray.exe` |
 | `quellex.local` does not resolve on another computer | Tray app running? `tray-app.log` shows "answering quellex.local"? Firewall rules present (`Get-NetFirewallRule -DisplayName "Quellex LAN*"`)? Same subnet / multicast allowed on the Wi-Fi (guest networks often block it)? |
+| `ping quellex.local` fails on the server and on same-subnet Windows clients although the tray app answers (`Resolve-DnsName quellex.local -LlmnrNetbiosOnly` works) | The office DNS answers `*.local` itself: `nslookup quellex.local <dns-server>` prints the name but no address (empty NOERROR). Add `quellex.local -> <LAN IP>` as a local record on that DNS server (Pi-hole: *Settings → Local DNS Records*); see "Two uplinks and routed customer networks" |
+| Works on the server's subnet, not from another office subnet / VLAN | Multicast does not cross routers: those clients need the DNS record above (plus `quellex.<dhcp-domain>` for Apple/Android). Then the firewall rules must accept that subnet and, on a server with two uplinks, the reply path must leave through the customer LAN (`Find-NetRoute -RemoteIPAddress <client>` must name the LAN adapter): `Configure-Uplinks.ps1 -RoutedSubnets <subnet>` does both |
 | Resolves to a Tailscale / vEthernet address instead of the LAN address | Fixed in the 2026-10-14 build: only physical adapters with a default gateway are announced (`LanInterface.IsLanUplink`); the log line "LAN name advertiser: answering ... preferred: <addresses>" shows what is handed out |
 | Resolves, but the browser times out | TCP 443 rule missing, or the gateway is down (`docker logs rag-gateway-quellex`) |
 | Certificate warning (`ERR_CERT_AUTHORITY_INVALID`) | Trust package not installed on that client, or the browser was not restarted after installing it. If the gateway volume was recreated there is a new CA: build a new package and re-install (the old installer refuses the new certificate by fingerprint) |
