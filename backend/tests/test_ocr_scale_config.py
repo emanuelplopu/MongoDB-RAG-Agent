@@ -228,12 +228,12 @@ def test_reading_score_weights_confidence_by_characters() -> None:
 # Page furniture (headers / footers) in content and chunks
 # ---------------------------------------------------------------------------
 
-def test_page_furniture_setting_defaults_on_both_surfaces(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_page_furniture_setting_defaults_off_on_both_surfaces(monkeypatch: pytest.MonkeyPatch) -> None:
     from backend.core.config import BackendSettings
     from src.settings import Settings
 
     for cls in (Settings, BackendSettings):
-        assert cls.model_fields["ingest_page_furniture"].default is True
+        assert cls.model_fields["ingest_page_furniture"].default is False
     monkeypatch.setenv("INGEST_PAGE_FURNITURE", "false")
     assert ingest.include_page_furniture() is False
     assert ingest.document_content_layers() is None
@@ -305,7 +305,7 @@ def test_image_noise_gate_setting(monkeypatch: pytest.MonkeyPatch) -> None:
     from src.settings import Settings
 
     for cls in (Settings, BackendSettings):
-        assert cls.model_fields["ocr_image_noise_gate"].default is True
+        assert cls.model_fields["ocr_image_noise_gate"].default is False
     monkeypatch.setenv("OCR_IMAGE_NOISE_GATE", "false")
     assert ingest.image_noise_gate_enabled() is False
     monkeypatch.setenv("OCR_IMAGE_NOISE_GATE", "1")

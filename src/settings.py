@@ -176,7 +176,7 @@ class Settings(BaseSettings):
     )
 
     ocr_image_noise_gate: bool = Field(
-        default=True,
+        default=False,
         description=(
             "Store no text for image files whose OCR output is letter soup (photos of "
             "objects); photographed documents and screenshots still pass"
@@ -200,7 +200,7 @@ class Settings(BaseSettings):
     )
 
     ingest_page_furniture: bool = Field(
-        default=True,
+        default=False,
         description=(
             "Keep page headers and footers (Docling's furniture layer: Geschäftszahl headers, "
             "ERV stamps, bank-detail footers) in the stored content and the chunks"

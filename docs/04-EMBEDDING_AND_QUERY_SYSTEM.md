@@ -124,8 +124,8 @@ settings surfaces, passed through by `docker-compose.yml`; evidence in
 | `OCR_PSM`, `OCR_TESSDATA_PATH` | empty | Tesseract page segmentation mode and an alternative traineddata directory (e.g. `tessdata_best`). Both were measured and not adopted; available for experiments. Image files Docling cannot load (MPO containers, JPEGs with a `(0, 0)` DPI tag) are re-saved as PNG before conversion. |
 | `INGEST_TABLE_STRUCTURE` | `true` | Docling's table-structure stage (TableFormer). Off keeps table text as plain lines and saves ~40 % of the conversion time; on produces Markdown tables but drops the OCR cells it cannot place. Measured, left on (product decision). |
 | `OCR_RECT_DILATION` | `20` | Dilation of the layout clusters before touching ones are merged into one OCR rectangle (Docling's value). Smaller values keep stacked tables apart but measured worse overall. |
-| `INGEST_PAGE_FURNITURE` | `true` | Keep Docling's furniture layer (page headers/footers: Geschäftszahl headers, `Hinterlegt am …` ERV stamps, IBAN/UID footers) in the stored Markdown **and** in the HybridChunker's chunks. Docling drops it by default for every format; it never reached the index before. |
-| `OCR_IMAGE_NOISE_GATE` | `true` | Store `[Image: … - no readable text]` instead of letter soup for image files whose OCR output has a word-like token ratio < 0.45 and OCR confidence < 0.65 (or ratio < 0.25); photographed letters, forms and screenshots pass. |
+| `INGEST_PAGE_FURNITURE` | `false` | Keep Docling's furniture layer (page headers/footers: Geschäftszahl headers, `Hinterlegt am …` ERV stamps, IBAN/UID footers) in the stored Markdown **and** in the HybridChunker's chunks. Docling drops it by default for every format; it never reached the index before. |
+| `OCR_IMAGE_NOISE_GATE` | `false` | Store `[Image: … - no readable text]` instead of letter soup for image files whose OCR output has a word-like token ratio < 0.45 and OCR confidence < 0.65 (or ratio < 0.25); photographed letters, forms and screenshots pass. |
 
 Converters are cached per worker thread and configuration
 (`create_document_converter()` / `create_image_converter()`); Docling keeps
