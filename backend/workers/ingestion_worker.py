@@ -23,6 +23,10 @@ from pymongo import AsyncMongoClient
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 from dotenv import load_dotenv
 
+from backend.core.ingestion_jobs import (
+    FILES_STARTED_FIELD, RUNNER_WORKER, WORKER_OWNED, reached_files, resume_config
+)
+
 # Import backup service for post-ingestion backups
 try:
     from backend.services.backup_service import BackupService
@@ -44,6 +48,9 @@ logger = logging.getLogger(__name__)
 INGESTION_JOBS_COLLECTION = "ingestion_jobs"
 INGESTION_LOGS_COLLECTION = "ingestion_logs"
 INGESTION_CONFIG_COLLECTION = "ingestion_config"
+
+# How often a paused job re-checks for RESUME/STOP commands and shutdown
+_PAUSE_POLL_SECONDS: float = 1.0
 
 # Status constants (matching backend schemas)
 class IngestionStatus:
@@ -69,6 +76,9 @@ class IngestionWorker:
     def __init__(self):
         self.shutdown_requested = False
         self.current_job_id: Optional[str] = None
+        # State of the current job: a STOP command makes it final, a pause is resumed held
+        self._stop_requested = False
+        self._paused = False
         self.mongo_client: Optional[AsyncMongoClient] = None
         self.db = None
         self.pid = os.getpid()
@@ -189,21 +199,27 @@ class IngestionWorker:
         finally:
             # Mark any running job as interrupted
             if self.current_job_id:
-                await self._mark_job_interrupted(self.current_job_id)
+                await self._mark_job_interrupted(self.current_job_id, paused=self._paused)
             
             await self.close()
             logger.info("Ingestion worker stopped")
     
     async def _poll_next_job(self) -> Optional[Dict]:
-        """Poll for the next pending job."""
+        """Poll for the next pending job.
+
+        A claimed job is tagged ``runner: "worker"``: from then on only the worker
+        resumes it after an interruption.
+        """
         jobs_collection = self.db[INGESTION_JOBS_COLLECTION]
         
-        # Find and claim a PENDING job atomically
+        # Find and claim a PENDING job atomically (queued jobs are untagged until claimed;
+        # never claim a job the API runs)
         job = await jobs_collection.find_one_and_update(
-            {"status": IngestionStatus.PENDING},
+            {"status": IngestionStatus.PENDING, "runner": {"$in": [RUNNER_WORKER, None]}},
             {
                 "$set": {
                     "status": IngestionStatus.RUNNING,
+                    "runner": RUNNER_WORKER,
                     "started_at": datetime.now().isoformat(),
                     "worker_pid": self.pid,
                     "worker_heartbeat": datetime.now(),
@@ -219,32 +235,41 @@ class IngestionWorker:
         
         return job
     
-    async def _resume_interrupted_jobs(self):
-        """Check for and resume any interrupted jobs on startup."""
+    async def _resume_interrupted_jobs(self) -> int:
+        """Re-queue this worker's interrupted jobs on startup so the poll loop resumes them.
+
+        Only jobs the worker ran (``runner: "worker"``) are re-queued: jobs the API ran
+        are resumed by the API's own startup check, and re-queuing them here ran them
+        twice. ``resumed_at`` makes ``_process_job`` continue the run instead of
+        starting it over, and ``resume_paused`` stays on the job so it resumes held.
+
+        Returns:
+            Number of jobs re-queued.
+        """
         jobs_collection = self.db[INGESTION_JOBS_COLLECTION]
         
-        # Find interrupted jobs
-        interrupted = await jobs_collection.find_one(
-            {"status": IngestionStatus.INTERRUPTED}
-        )
-        
-        if interrupted:
-            job_id = str(interrupted["_id"])
-            logger.info(f"Found interrupted job {job_id}, resuming...")
-            
-            # Re-queue as PENDING so it gets picked up
-            await jobs_collection.update_one(
-                {"_id": interrupted["_id"]},
-                {
-                    "$set": {
-                        "status": IngestionStatus.PENDING,
-                        "resumed_at": datetime.now().isoformat(),
-                    }
+        # Conditional per job: a job that is no longer INTERRUPTED is left alone
+        result = await jobs_collection.update_many(
+            {"status": IngestionStatus.INTERRUPTED, **WORKER_OWNED},
+            {
+                "$set": {
+                    "status": IngestionStatus.PENDING,
+                    "resumed_at": datetime.now().isoformat(),
                 }
-            )
-    
-    async def _mark_job_interrupted(self, job_id: str):
-        """Mark a job as interrupted for later resumption."""
+            }
+        )
+        if result.modified_count:
+            logger.info(f"Re-queued {result.modified_count} interrupted job(s) for resume")
+        return result.modified_count
+        
+    async def _mark_job_interrupted(self, job_id: str, paused: bool = False):
+        """Mark a job as interrupted for later resumption.
+
+        Args:
+            job_id: Job to mark.
+            paused: The job was paused: the next worker start resumes it held until
+                a RESUME or STOP command.
+        """
         jobs_collection = self.db[INGESTION_JOBS_COLLECTION]
         
         await jobs_collection.update_one(
@@ -253,16 +278,32 @@ class IngestionWorker:
                 "$set": {
                     "status": IngestionStatus.INTERRUPTED,
                     "interrupted_at": datetime.now().isoformat(),
+                    "resume_paused": paused,
                 }
             }
         )
-        logger.info(f"Marked job {job_id} as interrupted")
+        logger.info(f"Marked job {job_id} as interrupted" + (" (paused)" if paused else ""))
     
     async def _process_job(self, job: Dict):
-        """Process a single ingestion job."""
+        """Process a single ingestion job.
+
+        A job re-queued by ``_resume_interrupted_jobs`` continues where it stopped (see
+        ``resume_config``: once its run had reached its files it never cleans again and
+        skips files already ingested); one that was paused when the worker went down is
+        held paused before any work. A STOP ends the job ``STOPPED`` (final); a worker
+        shutdown ends it ``INTERRUPTED``.
+        """
         job_id = job["job_id"]
         config = job.get("config", {})
+        files_started_at = None
+        if job.get("resumed_at"):
+            # The job keeps the config it was started with; the resumed run derives its own
+            config = resume_config(job)
+            if reached_files(job):
+                files_started_at = job.get(FILES_STARTED_FIELD) or datetime.now().isoformat()
         self.current_job_id = job_id
+        self._stop_requested = False
+        self._paused = False
         
         jobs_collection = self.db[INGESTION_JOBS_COLLECTION]
         
@@ -298,11 +339,25 @@ class IngestionWorker:
             # Processing rate tracking
             "first_file_time": None,
             "processing_rate": 0.0,
+            # Set at the first file (any cleaning done): from then on a resume continues the run
+            FILES_STARTED_FIELD: files_started_at,
         }
         
-        await self._write_log("INFO", f"Starting ingestion job {job_id}")
+        await self._write_log(
+            "INFO",
+            f"Starting ingestion job {job_id}" if not job.get("resumed_at")
+            else f"Resuming interrupted ingestion job {job_id} (no cleaning, already ingested files are skipped)"
+            if files_started_at
+            else f"Restarting interrupted ingestion job {job_id} from the beginning (it stopped before its first file)"
+        )
         
         try:
+            if job.get("resume_paused"):
+                # Paused when the worker went down: hold before pipeline setup, cleaning or discovery
+                await self._write_log("INFO", "Job was paused at shutdown - send RESUME or STOP to continue")
+                await self._handle_pause(job_id)
+                await jobs_collection.update_one({"_id": job_id}, {"$set": {"resume_paused": False}})
+
             # Apply offline mode config
             await self._apply_offline_mode_config()
             
@@ -315,10 +370,16 @@ class IngestionWorker:
             from src.ingestion.ingest import DocumentIngestionPipeline, IngestionConfig
             from src.profile import get_profile_manager
             
+            # Re-read profiles.yaml: the API edits it (new document folders) and this
+            # process only holds a read-only copy, so never persist the switch here.
+            pm = get_profile_manager()
+            if pm.reload():
+                await self._write_log("INFO", "Reloaded profiles.yaml (changed since last job)")
+
             # Switch profile if specified
             if config.get("profile"):
-                pm = get_profile_manager()
-                pm.switch_profile(config["profile"])
+                if not pm.switch_profile(config["profile"], persist=False):
+                    raise ValueError(f"Profile '{config['profile']}' not found; nothing was ingested")
                 await self._write_log("INFO", f"Switched to profile: {config['profile']}")
             
             # Create ingestion config
@@ -357,6 +418,7 @@ class IngestionWorker:
                 control_cmd = await self._check_control_command(job_id)
                 
                 if control_cmd == "STOP":
+                    self._stop_requested = True
                     raise asyncio.CancelledError("Stop requested by user")
                 
                 if control_cmd == "PAUSE":
@@ -410,6 +472,10 @@ class IngestionWorker:
             
             # Sync wrapper for progress callback
             def sync_progress_callback(current: int, total: int, current_file: str = None, chunks_in_file: int = 0):
+                # The pipeline cleans before its file loop: from the first file on, a resume
+                # must continue this run instead of cleaning or re-ingesting again
+                if job_state[FILES_STARTED_FIELD] is None:
+                    job_state[FILES_STARTED_FIELD] = datetime.now().isoformat()
                 asyncio.create_task(progress_callback(current, total, current_file, chunks_in_file))
             
             # Run ingestion with configured concurrency
@@ -488,17 +554,27 @@ class IngestionWorker:
                     logger.warning(f"Post-ingestion backup failed (non-critical): {backup_error}")
             
         except asyncio.CancelledError:
-            logger.warning(f"Job {job_id} was cancelled/stopped")
-            await jobs_collection.update_one(
-                {"_id": job_id},
-                {
-                    "$set": {
-                        "status": IngestionStatus.STOPPED,
-                        "completed_at": datetime.now().isoformat(),
+            if self.shutdown_requested and not self._stop_requested:
+                # Worker shutdown: the next worker start resumes the job (held, if it was paused)
+                logger.warning(f"Job {job_id} was interrupted by worker shutdown")
+                await self._mark_job_interrupted(job_id, paused=self._paused)
+                await self._write_log(
+                    "WARNING",
+                    "Ingestion interrupted by worker shutdown (will resume on restart"
+                    + (", paused)" if self._paused else ")")
+                )
+            else:
+                logger.warning(f"Job {job_id} was cancelled/stopped")
+                await jobs_collection.update_one(
+                    {"_id": job_id},
+                    {
+                        "$set": {
+                            "status": IngestionStatus.STOPPED,
+                            "completed_at": datetime.now().isoformat(),
+                        }
                     }
-                }
-            )
-            await self._write_log("WARNING", "Ingestion stopped by user request")
+                )
+                await self._write_log("WARNING", "Ingestion stopped by user request")
             
         except Exception as e:
             logger.error(f"Job {job_id} failed: {e}", exc_info=True)
@@ -538,18 +614,23 @@ class IngestionWorker:
         return None
     
     async def _handle_pause(self, job_id: str):
-        """Handle pause command - wait until resumed or stopped."""
+        """Handle pause command - wait until resumed or stopped.
+
+        Raises:
+            asyncio.CancelledError: A STOP command or a worker shutdown arrived while paused.
+        """
         jobs_collection = self.db[INGESTION_JOBS_COLLECTION]
         
         await jobs_collection.update_one(
             {"_id": job_id},
             {"$set": {"status": IngestionStatus.PAUSED}}
         )
+        self._paused = True
         await self._write_log("INFO", "Ingestion paused")
         
         # Wait for resume or stop
         while True:
-            await asyncio.sleep(1)
+            await asyncio.sleep(_PAUSE_POLL_SECONDS)
             
             # Update heartbeat
             await jobs_collection.update_one(
@@ -560,6 +641,7 @@ class IngestionWorker:
             cmd = await self._check_control_command(job_id)
             
             if cmd == "STOP":
+                self._stop_requested = True
                 raise asyncio.CancelledError("Stop requested while paused")
             
             if cmd == "RESUME":
@@ -567,10 +649,12 @@ class IngestionWorker:
                     {"_id": job_id},
                     {"$set": {"status": IngestionStatus.RUNNING}}
                 )
+                self._paused = False
                 await self._write_log("INFO", "Ingestion resumed")
                 break
             
             if self.shutdown_requested:
+                # Still paused: the job is resumed held after the restart
                 raise asyncio.CancelledError("Worker shutdown while paused")
     
     async def _update_job_progress(self, job_id: str, state: Dict):
@@ -596,6 +680,7 @@ class IngestionWorker:
                     "discovery_progress": state.get("discovery_progress"),
                     "first_file_time": state.get("first_file_time"),
                     "processing_rate": state.get("processing_rate", 0.0),
+                    FILES_STARTED_FIELD: state.get(FILES_STARTED_FIELD),
                     "worker_heartbeat": datetime.now(),
                 }
             }

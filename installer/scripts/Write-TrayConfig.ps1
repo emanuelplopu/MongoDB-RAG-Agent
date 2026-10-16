@@ -9,22 +9,41 @@
     the hardened-installer layout and silently broke every backup/restore install
     (and every Quellex install, which listens on 11081/11001).
 
+    The file also carries the branding (app.name: "Quellex" for the quellex tenant,
+    shown as window title, tray text and splash title) and the "network" section
+    that makes the tray app announce the install on the LAN (mDNS quellex.local /
+    LLMNR quellex) and shows the gateway URL in its menu - see docs/21-LAN_ACCESS.md.
+
     This script is called by INSTALL.ps1 and full-restore.ps1, and can be re-run
-    whenever the install path or tenant changes.
+    whenever the install path, tenant or network name changes.
 .PARAMETER InstallPath
     Directory that contains docker-compose.yml (e.g. C:\RecallHub).
 .PARAMETER Tenant
-    recallhub | quellex - selects the compose profile and the ports.
+    recallhub | quellex - selects the compose profile, the ports and the branding.
 .PARAMETER TrayDir
     Tray app directory. Defaults to %LocalAppData%\RecallHub.
 .PARAMETER ScriptsSource
     Where to copy the service scripts from. Defaults to <InstallPath>\installer\scripts.
+.PARAMETER LanHostname
+    Single-label name announced on the LAN (default: the tenant id, i.e. "quellex").
+    Must match the names the gateway serves (QUELLEX_GATEWAY_HOSTS in .env).
+.PARAMETER NoLanAdvertise
+    Write network.advertise = false: the tray app does not answer mDNS/LLMNR queries.
+.PARAMETER HttpsPort
+    Host port of the TLS gateway (default 443 for quellex, 11443 for recallhub;
+    must match QUELLEX_/RECALLHUB_GATEWAY_HTTPS_PORT in .env).
+.PARAMETER HttpPort
+    Host port of the gateway's HTTP redirect (default 80 / 11480).
 #>
 param(
     [Parameter(Mandatory=$true)][string]$InstallPath,
     [Parameter(Mandatory=$true)][ValidateSet("recallhub", "quellex")][string]$Tenant,
     [string]$TrayDir = "",
-    [string]$ScriptsSource = ""
+    [string]$ScriptsSource = "",
+    [string]$LanHostname = "",
+    [switch]$NoLanAdvertise,
+    [int]$HttpsPort = 0,
+    [int]$HttpPort = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,10 +52,22 @@ if (-not $TrayDir) { $TrayDir = Join-Path $env:LOCALAPPDATA "RecallHub" }
 if (-not $ScriptsSource) { $ScriptsSource = Join-Path $InstallPath "installer\scripts" }
 
 $tenantPorts = @{
-    recallhub = @{ frontend = 11080; backend = 11000 }
-    quellex   = @{ frontend = 11081; backend = 11001 }
+    recallhub = @{ frontend = 11080; backend = 11000; https = 11443; http = 11480 }
+    quellex   = @{ frontend = 11081; backend = 11001; https = 443;   http = 80 }
+}
+$tenantNames = @{
+    recallhub = "RecallHub"
+    quellex   = "Quellex"
 }
 $ports = $tenantPorts[$Tenant]
+if ($HttpsPort -le 0) { $HttpsPort = $ports.https }
+if ($HttpPort -le 0)  { $HttpPort  = $ports.http }
+
+if (-not $LanHostname) { $LanHostname = $Tenant }
+$LanHostname = $LanHostname.Trim().ToLowerInvariant()
+if ($LanHostname -notmatch '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$') {
+    throw "LanHostname '$LanHostname' is not a valid single-label host name (letters, digits, hyphens; no dots)"
+}
 
 # Version from pyproject.toml when available
 $version = "0.8.8"
@@ -50,7 +81,7 @@ if (-not (Test-Path $TrayDir)) { New-Item -ItemType Directory -Path $TrayDir -Fo
 
 $config = [ordered]@{
     app = [ordered]@{
-        name    = "RecallHub"
+        name    = $tenantNames[$Tenant]
         tenant  = $Tenant
         version = $version
     }
@@ -69,11 +100,23 @@ $config = [ordered]@{
         mongodb  = 11017
         ollama   = 11434
     }
+    network = [ordered]@{
+        hostname  = $LanHostname
+        advertise = (-not $NoLanAdvertise)
+        httpsPort = $HttpsPort
+        httpPort  = $HttpPort
+    }
 }
 
 $configPath = Join-Path $TrayDir "config.json"
 $config | ConvertTo-Json -Depth 5 | Set-Content -Path $configPath -Encoding UTF8
-Write-Host "  [OK] Tray config written: $configPath (tenant=$Tenant, installPath=$InstallPath, frontend=$($ports.frontend), backend=$($ports.backend))" -ForegroundColor Green
+$networkUrl = if ($HttpsPort -eq 443) { "https://$LanHostname.local" } else { "https://$LanHostname.local:$HttpsPort" }
+Write-Host "  [OK] Tray config written: $configPath (app=$($tenantNames[$Tenant]), tenant=$Tenant, installPath=$InstallPath, frontend=$($ports.frontend), backend=$($ports.backend))" -ForegroundColor Green
+if ($NoLanAdvertise) {
+    Write-Host "  [OK] LAN name announcement disabled (network URL would be $networkUrl)" -ForegroundColor Green
+} else {
+    Write-Host "  [OK] LAN name: $LanHostname -> $networkUrl (announced by the tray app via mDNS/LLMNR)" -ForegroundColor Green
+}
 
 # Service scripts used by the tray app
 $scriptsDest = Join-Path $TrayDir "scripts"

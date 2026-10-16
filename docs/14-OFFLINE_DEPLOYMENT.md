@@ -8,6 +8,7 @@ RecallHub deploys as a fully self-contained offline package. Backups are **per-t
 - Ollama running natively on the Windows host with pre-loaded AI models
 - Tenant-specific Docker images (backend + frontend)
 - Shared service images (ingestion worker, MongoDB)
+- Docling document-conversion models (layout analysis, TableFormer, RapidOCR) baked into the backend and worker images, so scanned PDFs and images convert without internet access
 - Tenant-scoped MongoDB database dump
 - Complete source code and configuration
 
@@ -107,6 +108,7 @@ The installer runs in 3 phases:
 
 - Enables Hyper-V and Containers Windows features
 - Installs Docker Desktop silently from `apps/DockerDesktopInstaller.exe` (configured for Hyper-V backend)
+- Writes Docker Desktop's quiet-mode settings to `%APPDATA%\Docker\settings-store.json` (Docker Desktop 4.35+, created when missing) and the legacy `settings.json`: start at sign-in, no Dashboard window at startup, no onboarding survey, no update banners, no telemetry
 - Installs Ollama silently from `apps/OllamaSetup.exe` (runs natively on the host)
 - Sets `OLLAMA_MODELS` environment variable
 - **Triggers restart** if Hyper-V was freshly enabled
@@ -133,9 +135,13 @@ The installer runs in 3 phases:
 
 ### Phase 4: Desktop App + verification
 
-- Copies the newest `RecallHubTray.exe` from `installer\tray-app\bin\publish` or `bin\Release\net8.0-windows\win-x64\publish`
-- Creates desktop / Start Menu shortcuts, the `recallhub://` protocol handler and the HKCU Run entry
-- Polls the tenant frontend and backend; only then marks `install_complete: true` (exit code 2 otherwise)
+- Writes the tray config (`Write-TrayConfig.ps1`): tenant branding (`app.name` = `Quellex` / `RecallHub`) and the `network` section (`hostname`, `advertise`) for the LAN name
+- Copies the newest `RecallHubTray.exe` from `installer\tray-app\bin\publish` or `bin\Release\net8.0-windows\win-x64\publish`, plus `icon.ico` and the tenant icon (`quellex.ico`)
+- Creates desktop / Start Menu shortcuts named after the tenant (`Quellex.lnk`), the `recallhub://` protocol handler and the HKCU Run entry
+- When running elevated, creates the Windows Firewall rules for network access (`Configure-LanAccess.ps1`: TCP 443/80 for the TLS gateway, UDP 5353/5355 for the name announcer); otherwise prints the command to run later
+- Polls the tenant frontend and backend; only then marks `install_complete: true` (exit code 2 otherwise). Also probes the gateway port (443 for Quellex)
+
+Other computers then open `https://quellex.local` (see `docs/21-LAN_ACCESS.md`, including how to distribute the gateway's root certificate with `Export-LanCertificate.ps1`).
 
 ### Installer Parameters
 
@@ -150,6 +156,8 @@ The installer runs in 3 phases:
 | `-TakeOverStack` | false | Allow taking over a stack that runs from a different install folder |
 | `-NoLaunch` | false | Do not start the desktop app at the end (automation) |
 | `-NonInteractive` | false | Never wait for a key press or a restart confirmation (automation) |
+| `-NoLanAccess` | false | Skip the firewall rules and tell the tray app not to announce the LAN name (the gateway container still runs) |
+| `-LanHostname` | tenant id | Name other computers use (`quellex` -> `https://quellex.local`) |
 
 The tenant is always read from `manifest.json` — there is no `-Tenant` parameter on `INSTALL.ps1`.
 
@@ -269,13 +277,18 @@ The uninstaller removes (in order):
 
 ### Default Ports
 
-| Service | Port |
-|---------|------|
-| RecallHub Backend | 11000 |
-| RecallHub Frontend | 11080 |
-| Quellex Backend | 11001 |
-| Quellex Frontend | 11081 |
-| MongoDB Atlas Local | 11017 |
+| Service | Port | Reachable from |
+|---------|------|----------------|
+| RecallHub Backend | 11000 | this machine (`BIND_ADDRESS`, default `127.0.0.1`) |
+| RecallHub Frontend | 11080 | this machine |
+| RecallHub LAN gateway (HTTPS / redirect) | 11443 / 11480 | network: `https://recallhub.local:11443` |
+| Quellex Backend | 11001 | this machine |
+| Quellex Frontend | 11081 | this machine |
+| Quellex LAN gateway (HTTPS / redirect) | 443 / 80 | network: `https://quellex.local` |
+| MongoDB Atlas Local | 11017 | this machine |
+
+The gateway image `caddy:2.10-alpine` is part of every image export
+(`export-docker-images.ps1`), so offline installs start it without a registry.
 
 ### Path Configuration
 
@@ -309,11 +322,18 @@ docker compose ls
 # 3. Tenant endpoints answer (Quellex: 11081 / 11001)
 Invoke-WebRequest http://localhost:11081/ -UseBasicParsing | Select-Object StatusCode
 Invoke-WebRequest http://localhost:11001/api/v1/system/health -UseBasicParsing | Select-Object StatusCode
-# 4. Tray app config points at the install folder and the tenant
+# 4. Tray app config points at the install folder and the tenant (app.name = Quellex, network.advertise = true)
 Get-Content $env:LOCALAPPDATA\RecallHub\config.json
 # 5. Tray app start path works end to end
 & $env:LOCALAPPDATA\RecallHub\scripts\Start-Services.ps1 -Wait; $LASTEXITCODE   # must be 0
 Get-Content $env:LOCALAPPDATA\RecallHub\logs\tray-app.log -Tail 20
+# 6. Network access: gateway answers with TLS, API refuses guests, name is announced
+curl.exe -k --resolve quellex.local:443:127.0.0.1 -I https://quellex.local/          # HTTP/1.1 200
+curl.exe -k --resolve quellex.local:443:127.0.0.1 https://quellex.local/api/v1/ingestion/documents   # 401
+Get-NetFirewallRule -DisplayName "Quellex LAN*" | Select-Object DisplayName, Enabled
+Resolve-DnsName quellex.local   # from another computer on the LAN
+# 7. Docling models are in the images (scanned documents must not need huggingface.co)
+docker exec rag-ingestion-worker sh -c 'ls $DOCLING_ARTIFACTS_PATH'   # docling-project--docling-layout-heron, ds4sd--docling-models, RapidOcr, ...
 ```
 
 ## Troubleshooting
@@ -339,6 +359,10 @@ The containers belong to another install folder. Either install into that folder
 The restored `config/.env` decides which LLM and embedding provider the tenant uses. The default dev configuration uses OpenAI (`gpt-5.2`, `text-embedding-3-large`, 3072 dimensions), so the bundled Ollama models are only used if `.env` is switched to Ollama — and the embedding model cannot be switched without re-ingesting, because the stored vectors have 3072 dimensions. Decide this on the source machine before creating the package.
 
 The same applies to the local llama.cpp embedder (`EMBEDDING_BASE_URL=http://embedder:8080/v1`, EmbeddingGemma 2, 768 dimensions): the package must be created with `-IncludeEmbedder` and the source `.env` must already point at the embedder. `full-restore.ps1` warns when `.env` and the enabled profile disagree.
+
+### Docker Desktop window opens at every login
+
+Docker Desktop is single-instance: launching `Docker Desktop.exe` while it is already running (or still booting after sign-in) starts nothing, it only opens the Dashboard window. Tray app builds and `Start-Services.ps1` copies from before October 2026 did exactly that whenever `docker info` did not answer yet, so non-technical users saw the Docker Dashboard at every login. Current versions wait for a booting Docker Desktop and start it only when no process exists, quietly through `docker desktop start`. An existing install needs the new tray exe and scripts: re-run `INSTALL.ps1 -SkipPrerequisites` from a current package, or copy `installer\scripts\*.ps1` and `*.psm1` to `%LocalAppData%\RecallHub\scripts` and replace `RecallHubTray.exe`. A healthy `start-services-*.log` then says "Docker engine is ready" or "waiting up to …s (not relaunching it …)", never "Docker Desktop started from". Details: `docs/13-DESKTOP_APP.md`, "Why Docker Desktop is never relaunched".
 
 ### "Docker not ready after restart"
 
@@ -390,6 +414,23 @@ Ensure the tar files weren't corrupted during transfer. Re-export from source ma
 .\scripts\export-docker-images.ps1 -OutputPath "path\to\images"
 ```
 
+### Scanned PDFs or images fail to convert, log mentions huggingface.co
+
+The backend and worker images built before 2026-10-15 contained no Docling
+models: the first scanned page after every container recreate downloaded
+~0.5 GB from huggingface.co and failed on an offline machine. Current images
+ship the models under `DOCLING_ARTIFACTS_PATH` (`/opt/docling-models`, set in
+`backend/Dockerfile.base`). Check with:
+
+```powershell
+docker exec rag-ingestion-worker sh -c 'ls $DOCLING_ARTIFACTS_PATH'
+```
+
+If the variable is empty or the folder is missing, the package was exported
+from an old base image. Rebuild it on a machine with internet access
+(`.\build-backend.ps1 -Base`, then `-Fast` and `-Worker`) and re-export the
+images (`docs/15-DOCKER_BUILD_GUIDE.md`, "Docling models in the base image").
+
 ### "Antivirus blocking scripts"
 
 Some antivirus solutions flag PowerShell automation. Temporarily disable real-time protection or add an exclusion for the backup folder path.
@@ -416,3 +457,4 @@ Some antivirus solutions flag PowerShell automation. Temporarily disable real-ti
 | v0.8.8 | 2026-05-13 | Initial offline deployment package |
 | v0.8.8 | 2026-10-10 | Pinned Compose project/image names, tenant-aware tray config, start scripts no longer abort on Docker stderr, install verified by health check, package completeness check |
 | v0.8.8 | 2026-10-10 | Optional llama.cpp embedder in the package (`-IncludeEmbedder`): server image export, `embedder_models` volume export/import, `-Embedder` restore switch, hardened installer `embedder` config |
+| v0.8.8 | 2026-10-15 | Docling models (layout, TableFormer, RapidOCR) baked into the backend/worker base image (`DOCLING_ARTIFACTS_PATH`); scanned documents no longer need huggingface.co at runtime |

@@ -18,11 +18,12 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  recallhub-backend-base:latest (~5GB)                       │
+│  recallhub-backend-base:latest (~13GB)                      │
 │  ├── Python 3.11 + venv                                     │
-│  ├── PyTorch, Transformers, Whisper, Docling (~4GB)         │
+│  ├── PyTorch, Transformers, Whisper, Docling (~11GB)        │
 │  ├── FastAPI, Pydantic, LiteLLM, etc. (~500MB)              │
-│  └── Playwright + Chromium browser (~400MB)                 │
+│  ├── Playwright + Chromium browser (~400MB)                 │
+│  └── Docling models: layout, TableFormer, RapidOCR (~0.8GB) │
 │                                                             │
 │  BUILD ONCE - Only rebuild when dependencies change         │
 └─────────────────────────────────────────────────────────────┘
@@ -80,6 +81,43 @@ Edit `requirements-ml-heavy.txt` or `requirements-api.txt`, then:
 .\build-backend.ps1 -All
 ```
 
+### Docling models in the base image
+
+Docling downloads its layout, table-structure and OCR models from
+huggingface.co the first time a scanned page is converted. Containers have no
+persistent cache, so without countermeasures every recreated backend or
+worker container downloads ~0.5 GB again and scanned documents fail entirely
+on an offline install. `backend/Dockerfile.base` therefore runs
+
+```
+docling-tools models download -o /opt/docling-models layout tableformer rapidocr
+```
+
+at build time and sets `DOCLING_ARTIFACTS_PATH=/opt/docling-models`. Docling
+reads that variable (`docling.datamodel.settings`) whenever the pipeline
+options carry no explicit `artifacts_path`, which is the case for every
+converter in `src/ingestion/ingest.py`. The models are part of the base image,
+so `-Fast` / `-Worker` builds and the offline image export pick them up with
+no extra step, and no cache volume is needed. The layer is ~0.8 GB
+(`docling-project--docling-layout-heron` and its ONNX twin, 164 MB each;
+`docling-project--docling-models` with TableFormer, 342 MB; `RapidOcr` with
+the PP-OCRv6 small detector/recogniser in ONNX and torch form, 62 MB).
+
+Rules that follow from this:
+
+- `.\build-backend.ps1 -Base` needs internet access to huggingface.co (the
+  model layer is cached by BuildKit, so a rebuild without dependency changes
+  does not download again).
+- With an artifacts path set, docling does **not** fall back to a download for
+  a missing model. If you enable another docling feature in the ingestion
+  pipeline (code/formula enrichment, picture classification, a VLM pipeline,
+  EasyOCR), add its model to the `docling-tools models download` line in the
+  same change (`docling-tools models download --help` lists the names).
+- Check a running container with
+  `docker exec rag-ingestion-worker sh -c 'ls $DOCLING_ARTIFACTS_PATH'`.
+- Whisper (audio transcription) still downloads its model on first use; it is
+  not covered by this layer.
+
 ### Check Status
 ```powershell
 # See if base image exists
@@ -122,7 +160,7 @@ docker exec rag-ingestion-worker wc -l /app/backend/workers/ingestion_worker.py
 MongoDB-RAG-Agent/
 ├── build-backend.ps1              # Build helper script
 ├── backend/
-│   ├── Dockerfile.base            # Base image (deps only)
+│   ├── Dockerfile.base            # Base image (deps + Docling models)
 │   ├── Dockerfile.fast            # Fast backend build (code only)
 │   ├── Dockerfile.worker          # Fast worker build (code only)
 │   ├── Dockerfile.ml-heavy        # Full multi-stage (CI/CD)

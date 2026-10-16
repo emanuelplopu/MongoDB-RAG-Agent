@@ -19,6 +19,14 @@
     Block until the frontend and the backend health endpoint answer, or Timeout elapses.
 .PARAMETER Timeout
     Seconds to wait for health when -Wait is given (config docker.startupTimeout wins).
+.PARAMETER DryRun
+    Resolve config and profiles, print the docker command that would run, and
+    exit 0 without starting anything (diagnostics). Skips the Docker engine
+    check, so Docker Desktop is not started either.
+.PARAMETER DockerOnly
+    Diagnostic switch: only make sure the Docker engine is reachable (waiting for a
+    booting Docker Desktop or starting it quietly), then exit 0 without touching
+    the compose stack. Exit 1 when the engine never answers.
 .OUTPUTS
     Exit 0 = started (and healthy when -Wait), 1 = Docker unavailable,
     2 = compose file missing, 3 = docker compose up failed, 4 = health timeout.
@@ -26,17 +34,20 @@
 param(
     [switch]$Detached = $true,
     [switch]$Wait,
-    [int]$Timeout = 180
+    [int]$Timeout = 180,
+    [switch]$DryRun,
+    [switch]$DockerOnly
 )
 
 $ErrorActionPreference = "Continue"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Import-Module (Join-Path $ScriptDir "RecallHub-Logging.psm1") -Force
+Import-Module (Join-Path $ScriptDir "RecallHub-Docker.psm1") -Force
 
 $logFile = Initialize-InstallLog -LogName "start-services"
 Write-InstallLog "Starting services (Docker Desktop mode)" -Source "Start-Services"
-Write-InstallLog "Parameters: Wait=$Wait, Timeout=$Timeout" -Level DEBUG -Source "Start-Services"
+Write-InstallLog "Parameters: Wait=$Wait, Timeout=$Timeout, DryRun=$DryRun, DockerOnly=$DockerOnly" -Level DEBUG -Source "Start-Services"
 
 # --- Configuration -----------------------------------------------------------
 function Get-ConfigValue {
@@ -46,6 +57,24 @@ function Get-ConfigValue {
         if ($prop -and $null -ne $prop.Value -and "$($prop.Value)" -ne "") { return $prop.Value }
     }
     return $Default
+}
+
+function Get-ComposeProfiles {
+    # Tenant profile from config.json (may be comma separated) plus COMPOSE_PROFILES
+    # from <InstallPath>\.env, de-duplicated. Must match Stop-Services.ps1.
+    param([string]$ConfigProfile, [string]$InstallPath)
+    $list = New-Object System.Collections.Generic.List[string]
+    foreach ($p in ("$ConfigProfile" -split ",")) { $t = $p.Trim(); if ($t -and -not $list.Contains($t)) { $list.Add($t) } }
+    $envFile = Join-Path $InstallPath ".env"
+    if (Test-Path $envFile) {
+        foreach ($line in Get-Content $envFile) {
+            if ($line -match '^\s*COMPOSE_PROFILES\s*=\s*(.*)$') {
+                $value = $Matches[1].Trim().Trim('"').Trim("'")
+                foreach ($p in ($value -split ",")) { $t = $p.Trim(); if ($t -and -not $list.Contains($t)) { $list.Add($t) } }
+            }
+        }
+    }
+    return @($list)
 }
 
 $configPath = Join-Path (Split-Path $ScriptDir -Parent) "config.json"
@@ -79,35 +108,34 @@ if ($installPath -eq "auto") { $installPath = Split-Path $ScriptDir -Parent }
 
 Write-InstallLog "installPath=$installPath composeFile=$composeFile profile='$composeProfile' frontendPort=$frontendPort backendPort=$backendPort" -Source "Start-Services"
 
-# --- Step 1: Docker daemon ---------------------------------------------------
-function Test-DockerDaemon {
-    $null = docker info 2>&1
-    return ($LASTEXITCODE -eq 0)
-}
-
-Write-InstallLog "Checking Docker daemon..." -Source "Start-Services"
-$dockerReady = Test-DockerDaemon
-if (-not $dockerReady) {
-    if (Test-Path $dockerDesktopPath) {
-        Write-InstallLog "Starting Docker Desktop..." -Source "Start-Services"
-        Start-Process $dockerDesktopPath
-        $waited = 0
-        while ($waited -lt 120) {
-            Start-Sleep -Seconds 3
-            $waited += 3
-            if (Test-DockerDaemon) {
-                $dockerReady = $true
-                Write-InstallLog "Docker Desktop started after ${waited}s" -Source "Start-Services"
-                break
-            }
-        }
-    } else {
-        Write-InstallLog "Docker Desktop not found at $dockerDesktopPath" -Level ERROR -Source "Start-Services"
+# --- Step 1: Docker engine ---------------------------------------------------
+# Docker Desktop is single-instance: launching the exe while it is already running
+# (or still booting after login) starts nothing - it only opens the Dashboard
+# window. That is what users saw at every login while this step relaunched the
+# exe whenever `docker info` did not answer yet. Confirm-DockerEngine
+# (RecallHub-Docker.psm1) waits while a Docker Desktop process exists and starts
+# Docker Desktop quietly only when there is none.
+if ($DryRun) {
+    Write-InstallLog "Dry run: Docker engine check skipped (nothing is started)" -Source "Start-Services"
+} else {
+    Write-InstallLog "Checking Docker engine..." -Source "Start-Services"
+    $dockerState = Confirm-DockerEngine -DesktopPath $dockerDesktopPath -TimeoutSeconds $startupTimeout -Log {
+        param([string]$Message, [string]$Level)
+        Write-InstallLog $Message -Level $Level -Source "Start-Services"
     }
-    if (-not $dockerReady) {
-        Write-InstallLog "Docker daemon not available" -Level ERROR -Source "Start-Services"
-        Write-InstallDiagnostic -ErrorCode "DOCKER-001" -Component "Docker" -Message "Docker daemon not available"
+    if (-not $dockerState.Ready) {
+        Write-InstallLog $dockerState.Message -Level ERROR -Source "Start-Services"
+        Write-InstallDiagnostic -ErrorCode "DOCKER-001" -Component "Docker" -Message $dockerState.Message -Context @{
+            action         = $dockerState.Action
+            desktopPath    = $dockerDesktopPath
+            timeoutSeconds = $startupTimeout
+        }
         exit 1
+    }
+    Write-InstallLog $dockerState.Message -Source "Start-Services"
+    if ($DockerOnly) {
+        Write-InstallLog "Docker-only check complete" -Source "Start-Services"
+        exit 0
     }
 }
 
@@ -120,14 +148,28 @@ if (-not (Test-Path $composePath)) {
 }
 
 $composeBase = @("compose", "-f", $composePath)
-$overridePath = Join-Path $installPath "docker-compose.override.yml"
-if ($composeFile -eq "docker-compose.yml" -and (Test-Path $overridePath)) {
-    $composeBase += @("-f", $overridePath)
+if ($composeFile -eq "docker-compose.yml") {
+    # Same file set as Stop-Services.ps1 and the tray app (ServiceManager.cs):
+    # the local override, then the network shares written by Add-NetworkShare.ps1.
+    foreach ($extra in @("docker-compose.override.yml", "docker-compose.shares.yml")) {
+        $extraPath = Join-Path $installPath $extra
+        if (Test-Path $extraPath) { $composeBase += @("-f", $extraPath) }
+    }
 }
-if ($composeProfile) { $composeBase += @("--profile", $composeProfile) }
+# Profiles: the tenant from config.json plus COMPOSE_PROFILES from the install's
+# .env (e.g. "quellex,embedder-gpu" for the local embedding server). An explicit
+# --profile flag would otherwise REPLACE the .env list, and the stack would come
+# up without the embedder after a reboot.
+$profiles = Get-ComposeProfiles -ConfigProfile $composeProfile -InstallPath $installPath
+foreach ($p in $profiles) { $composeBase += @("--profile", $p) }
+Write-InstallLog "Compose profiles: $(if ($profiles) { $profiles -join ', ' } else { '(none)' })" -Source "Start-Services"
 
 $upArgs = $composeBase + @("up", "-d", "--remove-orphans")
 Write-InstallLog "Running: docker $($upArgs -join ' ')  (cwd: $installPath)" -Source "Start-Services"
+if ($DryRun) {
+    Write-Host "DRY RUN: docker $($upArgs -join ' ')  (cwd: $installPath)"
+    exit 0
+}
 Push-Location $installPath
 try {
     $output = & docker @upArgs 2>&1 | ForEach-Object { "$_" }

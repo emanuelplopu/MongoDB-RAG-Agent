@@ -8,6 +8,7 @@ import {
   BeakerIcon,
 } from '@heroicons/react/24/outline'
 import { useAuth } from '../contexts/AuthContext'
+import { isOrgAdmin } from '../api/roles'
 import { useTranslation } from 'react-i18next'
 
 // System page now serves as a hub to the 4 specialized pages
@@ -24,10 +25,15 @@ export default function SystemPage() {
   const { t } = useTranslation()
   const { user, isLoading: authLoading } = useAuth()
   
-  // Admin-only access check
+  // Superadmins get the hub; organisation admins go straight to user management
   useEffect(() => {
-    if (!authLoading && (!user || !user.is_admin)) {
+    if (authLoading) return
+    if (!user) {
       navigate('/dashboard')
+      return
+    }
+    if (!user.is_admin) {
+      navigate(isOrgAdmin(user) ? '/system/users' : '/dashboard')
     }
   }, [user, authLoading, navigate])
   

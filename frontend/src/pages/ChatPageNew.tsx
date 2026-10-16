@@ -125,7 +125,7 @@ export default function ChatPage() {
   const [lastFailedMessage, setLastFailedMessage] = useState<string | null>(null)  // Track last failed message for retry
   const [liveTrace, setLiveTrace] = useState<{
     orchestrator_steps: Array<{ phase: string; reasoning: string; output: string; duration_ms: number; tokens: number; tasks?: Array<{ id: string; type: string; query: string }> }>
-    worker_steps: Array<{ task_id: string; task_type: string; tool: string; duration_ms: number; success: boolean; documents: Array<{ title: string; score: number; excerpt: string }> }>
+    worker_steps: Array<{ task_id: string; task_type: string; tool: string; input?: string; documents_count?: number; duration_ms: number; success: boolean; documents: Array<{ title: string; score: number; excerpt: string }> }>
     strategy_nodes: StrategyNodeEvent[]
     stats: { total_tokens: number; orchestrator_tokens: number; worker_tokens: number; cost_usd: number }
     startTime: number
@@ -413,7 +413,7 @@ export default function ChatPage() {
       const startTime = Date.now()
       const accumulated = {
         orchestrator_steps: [] as Array<{ phase: string; reasoning: string; output: string; duration_ms: number; tokens: number; tasks?: Array<{ id: string; type: string; query: string }> }>,
-        worker_steps: [] as Array<{ task_id: string; task_type: string; tool: string; duration_ms: number; success: boolean; documents: Array<{ title: string; score: number; excerpt: string }> }>,
+        worker_steps: [] as Array<{ task_id: string; task_type: string; tool: string; input?: string; documents_count?: number; duration_ms: number; success: boolean; documents: Array<{ title: string; score: number; excerpt: string }> }>,
         strategy_nodes: [] as StrategyNodeEvent[],
         stats: { total_tokens: 0, orchestrator_tokens: 0, worker_tokens: 0, cost_usd: 0 },
         startTime,
@@ -1060,7 +1060,7 @@ export default function ChatPage() {
                               <div key={idx} className="text-[10px] text-gray-600 dark:text-gray-400 pl-4 border-l-2 border-blue-300 dark:border-blue-700">
                                 <span className="font-medium">{step.task_type}</span>
                                 <span className={`ml-2 ${step.success ? 'text-green-600' : 'text-red-600'}`}>
-                                  {step.documents.length} {t('chatPage.docs')}
+                                  {step.documents_count ?? step.documents.length} {t('chatPage.docs')}
                                 </span>
                                 <span className="text-secondary dark:text-gray-500 ml-2">{step.duration_ms.toFixed(0)}ms</span>
                               </div>

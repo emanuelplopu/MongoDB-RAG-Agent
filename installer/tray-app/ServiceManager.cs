@@ -18,6 +18,9 @@ public class ServiceManager
     private readonly string _scriptsPath;
     private readonly string[] _scriptCandidates;
 
+    /// <summary>Folder the deployed service scripts live in (also holds Export-LanCertificate.ps1).</summary>
+    public string ScriptsPath { get; }
+
     public ServiceManager(AppConfig config)
     {
         _config = config;
@@ -33,6 +36,7 @@ public class ServiceManager
         };
         _scriptsPath = _scriptCandidates.FirstOrDefault(d => File.Exists(Path.Combine(d, "Start-Services.ps1")))
             ?? _scriptCandidates[0];
+        ScriptsPath = _scriptsPath;
         TrayLog.Info($"ServiceManager: installPath={_installPath} scripts={_scriptsPath} "
             + $"profile={config.Docker?.ComposeProfile ?? "(none)"} frontendPort={config.Ports?.Frontend ?? 11080} backendPort={config.Ports?.Backend ?? 11000}");
 
@@ -77,25 +81,86 @@ public class ServiceManager
         }
     }
 
+    private const string DefaultDesktopPath = @"C:\Program Files\Docker\Docker\Docker Desktop.exe";
+
     /// <summary>
-    /// Ensure Docker Desktop is running. Auto-starts if configured.
+    /// Make sure the Docker engine is reachable.
+    /// <para>
+    /// Docker Desktop is single-instance: starting "Docker Desktop.exe" while it is
+    /// already running - or still booting after login - starts nothing, it only tells
+    /// the running instance to show its Dashboard window. This app and Docker Desktop
+    /// both autostart at login and the engine needs 20-60 s before <c>docker info</c>
+    /// answers, so the old "no answer, so relaunch" logic opened the Dashboard in
+    /// front of every user at every login. Therefore: while a Docker Desktop process
+    /// exists we only wait (up to <see cref="DockerConfig.StartupTimeout"/>); only
+    /// when no process exists and <see cref="DockerConfig.AutoStart"/> is true do we
+    /// start Docker Desktop, and then quietly.
+    /// </para>
     /// </summary>
     public async Task<bool> EnsureDockerRunningAsync()
     {
-        // Check if Docker daemon is already responding
         if (await IsDockerRunningAsync())
             return true;
 
+        var timeout = TimeSpan.FromSeconds(Math.Max(30, _config.Docker?.StartupTimeout ?? 120));
+
+        if (IsDockerDesktopProcessRunning())
+        {
+            TrayLog.Info($"Docker Desktop is running but its engine is not ready yet - waiting up to {timeout.TotalSeconds:0}s (not relaunching it: that would only open the Dashboard window)");
+            return await WaitForDockerEngineAsync(timeout);
+        }
+
         if (_config.Docker?.AutoStart != true)
+        {
+            TrayLog.Warn("Docker engine is not reachable and docker.autoStart is false");
+            return false;
+        }
+
+        if (!await StartDockerDesktopQuietlyAsync())
             return false;
 
-        // Try to start Docker Desktop
-        var desktopPath = _config.Docker?.DesktopPath
-            ?? @"C:\Program Files\Docker\Docker\Docker Desktop.exe";
+        return await WaitForDockerEngineAsync(timeout);
+    }
 
+    /// <summary>True when a "Docker Desktop" process exists (running or still booting).</summary>
+    public static bool IsDockerDesktopProcessRunning()
+    {
+        var processes = Process.GetProcessesByName("Docker Desktop");
+        try
+        {
+            return processes.Length > 0;
+        }
+        finally
+        {
+            foreach (var process in processes)
+                process.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Launch Docker Desktop without bringing its Dashboard to the front: through the
+    /// Docker Desktop CLI (<c>docker desktop start</c>, bundled since 4.37) when it is
+    /// available, otherwise the executable from config, minimized. Only call this when
+    /// <see cref="IsDockerDesktopProcessRunning"/> is false.
+    /// </summary>
+    private async Task<bool> StartDockerDesktopQuietlyAsync()
+    {
+        var cli = await RunProcessAsync("docker", "desktop version", timeoutMs: 10000);
+        if (cli.ExitCode == 0)
+        {
+            var start = await RunProcessAsync("docker", "desktop start --detach", timeoutMs: 30000);
+            if (start.ExitCode == 0)
+            {
+                TrayLog.Info("Docker Desktop start requested via 'docker desktop start'");
+                return true;
+            }
+            TrayLog.Warn($"'docker desktop start' failed (exit {start.ExitCode}): {start.StdErr.Trim()} - falling back to the executable");
+        }
+
+        var desktopPath = _config.Docker?.DesktopPath ?? DefaultDesktopPath;
         if (!File.Exists(desktopPath))
         {
-            Debug.WriteLine($"Docker Desktop not found at: {desktopPath}");
+            TrayLog.Error($"Docker Desktop not found at {desktopPath}");
             return false;
         }
 
@@ -104,42 +169,75 @@ public class ServiceManager
             Process.Start(new ProcessStartInfo
             {
                 FileName = desktopPath,
-                UseShellExecute = true
+                UseShellExecute = true,
+                WindowStyle = ProcessWindowStyle.Minimized
             });
+            TrayLog.Info($"Docker Desktop started from {desktopPath}");
+            return true;
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to start Docker Desktop: {ex.Message}");
+            TrayLog.Error($"Failed to start Docker Desktop: {ex.Message}");
             return false;
         }
+    }
 
-        // Wait for Docker daemon to become ready (up to 60s)
-        var timeout = TimeSpan.FromSeconds(60);
-        var started = DateTime.Now;
-        while (DateTime.Now - started < timeout)
+    /// <summary>Poll the engine every 3s until it answers or <paramref name="timeout"/> elapses.</summary>
+    private async Task<bool> WaitForDockerEngineAsync(TimeSpan timeout)
+    {
+        var started = DateTime.UtcNow;
+        while (DateTime.UtcNow - started < timeout)
         {
-            await Task.Delay(2000);
+            await Task.Delay(3000);
             if (await IsDockerRunningAsync())
+            {
+                TrayLog.Info($"Docker engine ready after {(DateTime.UtcNow - started).TotalSeconds:0}s");
                 return true;
+            }
         }
 
-        Debug.WriteLine("Docker Desktop did not start within 60 seconds");
+        TrayLog.Error($"Docker engine did not answer within {timeout.TotalSeconds:0}s - Docker Desktop may be showing a dialog; open it from its tray icon");
         return false;
     }
 
     /// <summary>
-    /// Check if Docker daemon is responsive.
+    /// Check if the Docker engine is responsive: a cheap named-pipe check first (no
+    /// process spawn every 5s while Docker is down), then <c>docker info</c> with a
+    /// timeout long enough for a busy machine - the previous 5s made a slow but
+    /// healthy engine look stopped.
     /// </summary>
     public async Task<bool> IsDockerRunningAsync()
     {
+        if (!DockerEnginePipeExists())
+            return false;
+
         try
         {
-            var result = await RunProcessAsync("docker", "info", timeoutMs: 5000);
+            var result = await RunProcessAsync("docker", "info", timeoutMs: 15000);
             return result.ExitCode == 0;
         }
         catch
         {
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Docker Desktop exposes the engine as named pipes (docker_engine,
+    /// dockerDesktopLinuxEngine, ...). None present means the engine is certainly
+    /// down. When the enumeration itself fails, docker info decides.
+    /// </summary>
+    private static bool DockerEnginePipeExists()
+    {
+        try
+        {
+            return Directory.GetFiles(@"\\.\pipe\").Any(pipe =>
+                pipe.Contains("docker", StringComparison.OrdinalIgnoreCase)
+                && pipe.Contains("engine", StringComparison.OrdinalIgnoreCase));
+        }
+        catch
+        {
+            return true;
         }
     }
 
@@ -233,16 +331,63 @@ public class ServiceManager
     private string BuildComposeArgs(string composePath)
     {
         var args = $"compose -f \"{composePath}\"";
-        var overridePath = Path.Combine(_installPath, "docker-compose.override.yml");
-        if (File.Exists(overridePath)
-            && Path.GetFileName(composePath).Equals("docker-compose.yml", StringComparison.OrdinalIgnoreCase))
+        if (Path.GetFileName(composePath).Equals("docker-compose.yml", StringComparison.OrdinalIgnoreCase))
         {
-            args += $" -f \"{overridePath}\"";
+            // Same file set as Start-Services.ps1 / Stop-Services.ps1: the local
+            // override, then the network shares written by Add-NetworkShare.ps1.
+            foreach (var extra in new[] { "docker-compose.override.yml", "docker-compose.shares.yml" })
+            {
+                var extraPath = Path.Combine(_installPath, extra);
+                if (File.Exists(extraPath))
+                    args += $" -f \"{extraPath}\"";
+            }
         }
-        var profile = _config.Docker?.ComposeProfile;
-        if (!string.IsNullOrWhiteSpace(profile))
+        foreach (var profile in ResolveComposeProfiles())
             args += $" --profile {profile}";
         return args;
+    }
+
+    /// <summary>
+    /// Profiles to enable: the tenant from config.json plus COMPOSE_PROFILES from
+    /// the install's .env (e.g. the local embedding server). Compose treats an
+    /// explicit --profile flag as a replacement for the .env list, so the two
+    /// have to be merged here (same rule as Start-Services.ps1).
+    /// </summary>
+    public IReadOnlyList<string> ResolveComposeProfiles()
+    {
+        var profiles = new List<string>();
+        void Add(string? csv)
+        {
+            foreach (var raw in (csv ?? string.Empty).Split(','))
+            {
+                var p = raw.Trim().Trim('"', '\'');
+                if (p.Length > 0 && !profiles.Contains(p, StringComparer.OrdinalIgnoreCase)) profiles.Add(p);
+            }
+        }
+
+        Add(_config.Docker?.ComposeProfile);
+        var envFile = Path.Combine(_installPath, ".env");
+        try
+        {
+            if (File.Exists(envFile))
+            {
+                foreach (var line in File.ReadLines(envFile))
+                {
+                    var trimmed = line.TrimStart();
+                    if (trimmed.StartsWith("COMPOSE_PROFILES", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var eq = trimmed.IndexOf('=');
+                        if (eq > 0 && trimmed.Substring(0, eq).Trim().Equals("COMPOSE_PROFILES", StringComparison.OrdinalIgnoreCase))
+                            Add(trimmed.Substring(eq + 1));
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            TrayLog.Warn($"Could not read COMPOSE_PROFILES from {envFile}: {ex.Message}");
+        }
+        return profiles;
     }
 
     /// <summary>
@@ -369,8 +514,42 @@ public class ProcessResult
 /// </summary>
 public class AppConfig
 {
+    public AppInfoConfig? App { get; set; }
     public DockerConfig? Docker { get; set; }
     public PortsConfig? Ports { get; set; }
+    public NetworkConfig? Network { get; set; }
+}
+
+/// <summary>"app" section of config.json: branding written by Write-TrayConfig.ps1.</summary>
+public class AppInfoConfig
+{
+    /// <summary>Display name: "Quellex" or "RecallHub".</summary>
+    public string? Name { get; set; }
+    /// <summary>Tenant id: recallhub | quellex.</summary>
+    public string? Tenant { get; set; }
+    public string? Version { get; set; }
+}
+
+/// <summary>
+/// "network" section of config.json: how the install is reachable from other
+/// computers (see docs/21-LAN_ACCESS.md).
+/// </summary>
+public class NetworkConfig
+{
+    /// <summary>Single-label name announced via mDNS (name.local) and LLMNR (name).</summary>
+    public string? Hostname { get; set; }
+    /// <summary>Run the mDNS/LLMNR responder in the tray app.</summary>
+    public bool Advertise { get; set; } = false;
+    /// <summary>Host port of the TLS gateway (443 = no port in the URL).</summary>
+    public int HttpsPort { get; set; } = 443;
+    /// <summary>Host port of the gateway's HTTP-to-HTTPS redirect listener.</summary>
+    public int HttpPort { get; set; } = 80;
+
+    /// <summary>URL colleagues open, e.g. https://quellex.local or https://recallhub.local:11443.</summary>
+    public string? NetworkUrl =>
+        string.IsNullOrWhiteSpace(Hostname)
+            ? null
+            : HttpsPort == 443 ? $"https://{Hostname}.local" : $"https://{Hostname}.local:{HttpsPort}";
 }
 
 public class DockerConfig

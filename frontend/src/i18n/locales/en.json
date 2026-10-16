@@ -478,7 +478,23 @@
     "grantAccess": "Grant access",
     "revokeAccess": "Revoke access",
     "noNonAdminUsers": "No non-admin users to manage. Create more users to set their access rights.",
-    "adminNote": "Admin users automatically have access to all profiles."
+    "adminNote": "Admin users automatically have access to all profiles.",
+    "managerAccess": "Admin or organisation admin access required to view profiles",
+    "orgAdminNote": "You can rename your profiles and choose their document folders. Folders you add are included in the next import run.",
+    "addFolder": "Add folder",
+    "browseFolders": "Browse server folders",
+    "removeFolder": "Remove folder",
+    "noFolders": "No folders yet",
+    "folderPathPlaceholder": "/app/mounts/<share>/<folder>",
+    "folderPickerTitle": "Choose a document folder",
+    "folderPickerHint": "Only folders below the server's document roots can be used. The administrator attaches local folders and network shares there.",
+    "folderRoots": "Document roots",
+    "folderUp": "Up",
+    "folderNotMounted": "not mounted",
+    "noSubfolders": "No sub-folders",
+    "folderListTruncated": "Only the first {{count}} folders are shown",
+    "selectFolder": "Use this folder",
+    "browseFailed": "Could not list the folder"
   },
   "status": {
     "title": "System Status",
@@ -529,6 +545,7 @@
     "role": "Role",
     "admin": "Admin",
     "user": "User",
+    "orgAdmin": "Org admin",
     "status": "Status",
     "active": "Active",
     "inactive": "Inactive",
@@ -546,6 +563,8 @@
     "noUsers": "No users found",
     "you": "You",
     "adminPrivileges": "Administrator privileges",
+    "orgAdminPrivileges": "Organisation admin (manages team users)",
+    "cannotModifyOwnOrgAdmin": "Cannot modify your own organisation admin status",
     "cannotModifyOwn": "Cannot modify your own admin status",
     "totalUsers": "Total Users",
     "administrators": "Administrators",
@@ -631,6 +650,19 @@
       "skipImagePdfs": "Skip Image-Only PDFs",
       "retryModeInfo": "Retry mode: Only files matching the selected retry filters will be processed.",
       "activeFilters": "Active Filters"
+    },
+    "estimate": {
+      "title": "Estimate",
+      "loading": "Estimating…",
+      "error": "Estimate unavailable",
+      "selectProfile": "Select a profile to estimate this run",
+      "summary": "~{{files}} files · {{size}} GB · ~{{time}} · ~{{cost}}",
+      "tokensChunks": "~{{tokens}} tokens, ~{{chunks}} chunks ({{method}})",
+      "rough": "rough",
+      "skipped": "{{skipped}} already ingested will be skipped",
+      "benchmark": "Based on benchmark {{date}}",
+      "noBenchmark": "No embedding benchmark yet — run \"quellexctl bench embeddings\"",
+      "missingFolders": "Some folders are missing/unreachable"
     }
   },
   "indexes": {
@@ -1520,6 +1552,7 @@
     "liveTrace": {
       "understood": "I understood",
       "willSearch": "Planned searches",
+      "anchorQuestion": "Your question as typed, all sources",
       "searchProgress": "Search progress",
       "searchComplete": "found",
       "searchInProgress": "searching...",

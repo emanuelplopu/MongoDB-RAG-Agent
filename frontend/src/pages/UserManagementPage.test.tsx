@@ -16,6 +16,7 @@ let authState: {
         email: string
         name: string
         is_admin: boolean
+        is_org_admin?: boolean
       }
     | null
 }
@@ -32,6 +33,9 @@ const translations: Record<string, string> = {
   'users.name': 'Name',
   'users.password': 'Password',
   'users.adminPrivileges': 'Administrator privileges',
+  'users.orgAdminPrivileges': 'Organisation admin (manages team users)',
+  'users.orgAdmin': 'Org admin',
+  'users.cannotModifyOwnOrgAdmin': 'cannot modify your own organisation admin status',
   'common.cancel': 'Cancel',
   'users.edit': 'Edit user',
   'users.newPasswordLabel': 'New Password (leave empty to keep current)',
@@ -187,6 +191,7 @@ describe('UserManagementPage', () => {
       name: 'New User',
       password: 'hunter22',
       is_admin: true,
+      is_org_admin: false,
     })
 
     await user.click(screen.getAllByTitle('Edit user')[1])
@@ -203,6 +208,7 @@ describe('UserManagementPage', () => {
       name: 'Analyst User Updated',
       email: 'updated@example.com',
       is_admin: false,
+      is_org_admin: false,
       new_password: 'new-secret',
     })
 
@@ -213,5 +219,49 @@ describe('UserManagementPage', () => {
     expect(await screen.findByText('Delete User?')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Delete' }))
     expect(deleteUserMock).toHaveBeenCalledWith('user-2')
+  }, 15000)
+
+  it('lets an organisation admin manage team users without superadmin controls', async () => {
+    const user = userEvent.setup()
+    authState = {
+      user: { id: 'org-1', email: 'org@example.com', name: 'Org Admin', is_admin: false, is_org_admin: true },
+    }
+    listUsersMock.mockResolvedValue([
+      { id: 'org-1', email: 'org@example.com', name: 'Org Admin', is_admin: false, is_org_admin: true, is_active: true, created_at: '2025-01-01T00:00:00Z' },
+      { id: 'user-2', email: 'analyst@example.com', name: 'Analyst User', is_admin: false, is_active: true, created_at: '2025-02-01T00:00:00Z' },
+    ])
+
+    render(<UserManagementPage />)
+
+    expect(await screen.findByText('Org Admin')).toBeInTheDocument()
+    expect(screen.queryByText('Access denied')).not.toBeInTheDocument()
+    expect(screen.getByText('Org admin')).toBeInTheDocument()
+
+    await user.click(screen.getAllByRole('button', { name: 'Create user' })[0])
+    expect(await screen.findByText('Create New User')).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: 'Administrator privileges' })).not.toBeInTheDocument()
+    await user.type(screen.getByPlaceholderText('user@example.com'), 'colleague@example.com')
+    await user.type(screen.getByPlaceholderText('John Doe'), 'New Colleague')
+    await user.type(screen.getByPlaceholderText('Minimum 6 characters'), 'hunter22')
+    await user.click(screen.getByRole('checkbox', { name: 'Organisation admin (manages team users)' }))
+    await user.click(screen.getAllByRole('button', { name: 'Create user' })[1])
+
+    expect(createUserMock).toHaveBeenCalledWith({
+      email: 'colleague@example.com',
+      name: 'New Colleague',
+      password: 'hunter22',
+      is_admin: false,
+      is_org_admin: true,
+    })
+
+    await user.click(screen.getAllByTitle('Edit user')[1])
+    expect(await screen.findByText('Edit user')).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: 'Administrator privileges' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(updateUserMock).toHaveBeenCalledWith('user-2', {
+      name: 'Analyst User',
+      email: 'analyst@example.com',
+      is_org_admin: false,
+    })
   }, 15000)
 })

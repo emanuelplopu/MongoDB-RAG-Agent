@@ -6,6 +6,7 @@ changing only the database layer while preserving all document processing logic.
 """
 
 import os
+import re
 import asyncio
 import logging
 import glob
@@ -32,6 +33,7 @@ except ImportError:
 
 from src.ingestion.chunker import ChunkingConfig, create_chunker, DocumentChunk
 from src.ingestion.embedder import create_embedder
+from src.ingestion.ocr_repair import repair_docling_document, repair_ocr_text
 from src.settings import load_settings
 from src.profile import get_profile_manager
 
@@ -112,6 +114,29 @@ def is_image_only_pdf(file_path: str, min_text_chars: int = 50, max_pages_to_che
         # If we can't read it, let Docling try
         logger.debug(f"Could not pre-check PDF {file_path}: {e}")
         return False, f"Pre-check failed: {e}"
+
+
+#: Canonical set of file extensions the ingestion pipeline knows how to read.
+#:
+#: This is the authoritative filter used by :meth:`DocumentIngestionPipeline._find_document_files`
+#: when walking document folders. The pre-ingestion estimator
+#: (:mod:`backend.services.ingestion_estimator`) imports this set so its file
+#: count matches what a real run would process. Keep it in sync with the glob
+#: ``patterns`` in ``backend/routers/ingestion.py`` and the ``TYPE_PRIORITY``
+#: map below.
+SUPPORTED_INGESTION_EXTENSIONS: frozenset[str] = frozenset({
+    ".md", ".markdown", ".txt",  # Text formats
+    ".pdf",  # PDF
+    ".docx", ".doc", ".wbk",  # Word (incl. backup)
+    ".pptx", ".ppt",  # PowerPoint
+    ".xlsx", ".xls",  # Excel
+    ".html", ".htm",  # HTML
+    ".msg",  # Outlook email
+    ".eml",  # RFC 5322 email
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif",  # Images
+    ".mp3", ".wav", ".m4a", ".flac",  # Audio formats
+    ".mp4", ".avi", ".mkv", ".mov", ".webm",  # Video formats
+})
 
 
 @dataclass
@@ -385,6 +410,169 @@ def update_accelerator_config(
     return _accelerator_config
 
 
+# ---------------------------------------------------------------------------
+# OCR engine configuration (Docling; scanned PDFs and image files)
+# ---------------------------------------------------------------------------
+
+OCR_ENGINE_AUTO = "auto"
+SUPPORTED_OCR_ENGINES: Tuple[str, ...] = (OCR_ENGINE_AUTO, "rapidocr", "tesseract", "easyocr")
+DEFAULT_OCR_ENGINE = "tesseract"
+DEFAULT_OCR_LANGUAGES = "deu,eng"
+
+# ISO 639-2/T codes (= Tesseract traineddata names) -> EasyOCR two-letter codes.
+# Two-letter input is accepted as well and normalised to the three-letter form.
+_OCR_LANGUAGE_CODES: Dict[str, str] = {
+    "deu": "de", "eng": "en", "fra": "fr", "ita": "it", "spa": "es", "nld": "nl",
+    "por": "pt", "pol": "pl", "ces": "cs", "slk": "sk", "slv": "sl", "hrv": "hr",
+    "hun": "hu", "ron": "ro", "tur": "tr", "rus": "ru", "ukr": "uk", "dan": "da",
+    "swe": "sv", "nor": "no", "fin": "fi", "ell": "el", "bul": "bg", "srp": "rs_latin",
+    "lat": "la",
+}
+_OCR_LANGUAGE_ALIASES: Dict[str, str] = {
+    **{two: three for three, two in _OCR_LANGUAGE_CODES.items() if len(two) == 2},
+    "ger": "deu", "german": "deu", "english": "eng", "fre": "fra", "french": "fra",
+    "dut": "nld", "cze": "ces", "rum": "ron", "gre": "ell", "scc": "srp",
+}
+
+
+@dataclass(frozen=True)
+class OcrConfig:
+    """Resolved OCR engine selection for Docling's PDF/image pipelines.
+
+    Attributes:
+        engine: One of ``SUPPORTED_OCR_ENGINES``. ``auto`` keeps Docling's own
+            ``OcrAutoOptions`` behaviour (today that resolves to RapidOCR).
+        languages: ISO 639-2 codes in priority order, e.g. ``("deu", "eng")``.
+            Mapped to the engine's own codes by :func:`build_ocr_options`.
+    """
+
+    engine: str = DEFAULT_OCR_ENGINE
+    languages: Tuple[str, ...] = ("deu", "eng")
+
+    def describe(self) -> str:
+        """Short human-readable form for logs."""
+        if self.engine == OCR_ENGINE_AUTO:
+            return "auto (Docling default)"
+        if self.engine == "rapidocr":
+            return "rapidocr (languages not configurable)"
+        return f"{self.engine} lang={'+'.join(self.languages)}"
+
+
+def parse_ocr_languages(value: Optional[str]) -> Tuple[str, ...]:
+    """Parse ``OCR_LANGUAGES`` into normalised ISO 639-2 codes.
+
+    Accepts comma/semicolon/plus/space separated codes in either two- or
+    three-letter form (``de``, ``deu``, ``ger``); unknown codes are kept as
+    given (lower-cased) so uncommon Tesseract packs still work. An empty value
+    falls back to ``DEFAULT_OCR_LANGUAGES``.
+
+    Args:
+        value: Raw setting value.
+
+    Returns:
+        Tuple of codes without duplicates, order preserved.
+    """
+    raw = (value or "").strip() or DEFAULT_OCR_LANGUAGES
+    out: List[str] = []
+    for token in [t for t in re.split(r"[,;+\s]+", raw) if t]:
+        code = token.strip().lower()
+        code = _OCR_LANGUAGE_ALIASES.get(code, code)
+        if code not in out:
+            out.append(code)
+    return tuple(out)
+
+
+def resolve_ocr_config(
+    engine: Optional[str] = None,
+    languages: Optional[str] = None,
+) -> OcrConfig:
+    """Resolve the OCR configuration from explicit values, settings or the environment.
+
+    Resolution order per value: explicit argument, ``src.settings.Settings``
+    (``OCR_ENGINE`` / ``OCR_LANGUAGES`` from the environment or ``.env``), then
+    the module defaults. An unknown engine name is logged and replaced by
+    ``DEFAULT_OCR_ENGINE`` rather than raising, so a typo in ``.env`` cannot
+    take the ingestion worker down.
+
+    Args:
+        engine: Engine name override.
+        languages: Language list override (raw string).
+
+    Returns:
+        Validated :class:`OcrConfig`.
+    """
+    if engine is None or languages is None:
+        try:
+            settings = load_settings(use_profile=False)
+            engine = settings.ocr_engine if engine is None else engine
+            languages = settings.ocr_languages if languages is None else languages
+        except Exception as exc:  # settings need MONGODB_URI etc.; the harness has none
+            logger.debug(f"OCR settings not available via src.settings ({exc}); using environment")
+            engine = os.environ.get("OCR_ENGINE", DEFAULT_OCR_ENGINE) if engine is None else engine
+            languages = os.environ.get("OCR_LANGUAGES", DEFAULT_OCR_LANGUAGES) if languages is None else languages
+
+    engine_name = (engine or DEFAULT_OCR_ENGINE).strip().lower()
+    if engine_name not in SUPPORTED_OCR_ENGINES:
+        logger.error(
+            f"Unknown OCR_ENGINE '{engine}' (supported: {', '.join(SUPPORTED_OCR_ENGINES)}); "
+            f"falling back to '{DEFAULT_OCR_ENGINE}'"
+        )
+        engine_name = DEFAULT_OCR_ENGINE
+    return OcrConfig(engine=engine_name, languages=parse_ocr_languages(languages))
+
+
+def build_ocr_options(config: OcrConfig):
+    """Translate an :class:`OcrConfig` into Docling ``ocr_options``.
+
+    Args:
+        config: Resolved OCR configuration.
+
+    Returns:
+        A Docling ``OcrOptions`` instance, or ``None`` for ``auto`` (leave the
+        pipeline's default ``OcrAutoOptions`` untouched).
+
+    Raises:
+        ImportError: If Docling is not installed.
+    """
+    from docling.datamodel import pipeline_options as po
+
+    if config.engine == OCR_ENGINE_AUTO:
+        return None
+    if config.engine == "rapidocr":
+        # Docling's RapidOCR wrapper does not take a language list.
+        return po.RapidOcrOptions()
+    if config.engine == "tesseract":
+        # The `tesseract` binary (apt tesseract-ocr + tesseract-ocr-<lang>), not tesserocr.
+        return po.TesseractCliOcrOptions(lang=list(config.languages))
+    if config.engine == "easyocr":
+        return po.EasyOcrOptions(lang=[_OCR_LANGUAGE_CODES.get(code, code) for code in config.languages])
+    raise ValueError(f"Unsupported OCR engine: {config.engine}")
+
+
+_ocr_engine_logged: bool = False
+
+
+def apply_ocr_options(pipeline_options, config: Optional[OcrConfig] = None) -> OcrConfig:
+    """Apply the configured OCR engine to Docling pipeline options (logged once per process).
+
+    Args:
+        pipeline_options: A Docling ``PdfPipelineOptions`` (shared by PDF and image pipelines).
+        config: Resolved configuration; resolved from settings when omitted.
+
+    Returns:
+        The configuration that was applied.
+    """
+    global _ocr_engine_logged
+    config = config or resolve_ocr_config()
+    options = build_ocr_options(config)
+    if options is not None:
+        pipeline_options.ocr_options = options
+    if not _ocr_engine_logged:
+        logger.info(f"Docling OCR engine: {config.describe()}")
+        _ocr_engine_logged = True
+    return config
+
+
 def detect_available_device() -> str:
     """
     Detect the best available device for processing.
@@ -430,12 +618,16 @@ def get_effective_device() -> str:
     return cfg.device
 
 
-def create_document_converter():
+def create_document_converter(ocr_config: Optional[OcrConfig] = None):
     """
     Create a DocumentConverter with optimal settings for the current environment.
-    
-    Configures GPU acceleration when available and enabled.
-    
+
+    Configures GPU acceleration when available and enabled, and the OCR engine
+    from ``OCR_ENGINE`` / ``OCR_LANGUAGES`` (see :func:`resolve_ocr_config`).
+
+    Args:
+        ocr_config: OCR engine selection; resolved from settings when omitted.
+
     Returns:
         Configured DocumentConverter instance
     """
@@ -443,14 +635,14 @@ def create_document_converter():
         from docling.document_converter import DocumentConverter, PdfFormatOption
         from docling.datamodel.pipeline_options import PdfPipelineOptions
         from docling.datamodel.base_models import InputFormat
-        
+
         # Get effective device
         device = get_effective_device()
         cfg = _accelerator_config
-        
+
         # Configure pipeline options for PDF processing
         pipeline_options = PdfPipelineOptions()
-        
+
         # Set accelerator device
         if device in ["cuda", "mps"]:
             pipeline_options.accelerator_options = {
@@ -458,16 +650,19 @@ def create_document_converter():
             }
             if device == "cuda" and cfg.cuda_device_id > 0:
                 pipeline_options.accelerator_options["device_id"] = cfg.cuda_device_id
-            
+
             logger.info(f"Docling converter using GPU acceleration: {device}")
         else:
             logger.info("Docling converter using CPU")
-        
+
         # Enable OCR with acceleration if configured
         if cfg.enable_ocr_acceleration:
             pipeline_options.do_ocr = True
             pipeline_options.do_table_structure = True
-        
+
+        # Select the OCR engine (tesseract deu+eng by default; auto keeps Docling's choice)
+        apply_ocr_options(pipeline_options, ocr_config)
+
         # Create format options
         format_options = {
             InputFormat.PDF: PdfFormatOption(
@@ -487,6 +682,47 @@ def create_document_converter():
         logger.error(f"Error creating DocumentConverter: {e}")
         from docling.document_converter import DocumentConverter
         return DocumentConverter()
+
+
+def create_image_converter(ocr_config: Optional[OcrConfig] = None):
+    """
+    Create the DocumentConverter used for image files (PNG, JPG, TIFF, ...).
+
+    Images go through Docling's PDF pipeline with OCR forced on; the OCR engine
+    and languages come from ``OCR_ENGINE`` / ``OCR_LANGUAGES`` exactly as for
+    scanned PDFs (:func:`create_document_converter`).
+
+    Args:
+        ocr_config: OCR engine selection; resolved from settings when omitted.
+
+    Returns:
+        Configured DocumentConverter instance for ``InputFormat.IMAGE``.
+
+    Raises:
+        ImportError: If Docling image support is not installed.
+    """
+    from docling.document_converter import DocumentConverter, ImageFormatOption
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.datamodel.base_models import InputFormat
+
+    # Configure OCR pipeline for images
+    pipeline_options = PdfPipelineOptions()
+    pipeline_options.do_ocr = True
+
+    # Get effective device for acceleration
+    device = get_effective_device()
+    if device in ["cuda", "mps"]:
+        pipeline_options.accelerator_options = {"device": device}
+
+    apply_ocr_options(pipeline_options, ocr_config)
+
+    format_options = {
+        InputFormat.IMAGE: ImageFormatOption(
+            pipeline_options=pipeline_options
+        )
+    }
+    return DocumentConverter(format_options=format_options)
+
 
 def get_file_size_safe(file_path: str) -> int:
     """Get file size safely, returning 0 if file not found."""
@@ -663,21 +899,9 @@ class DocumentIngestionPipeline:
         Returns:
             List of file paths in optimal processing order
         """
-        # Supported extensions (converted from glob patterns)
-        extensions = {
-            ".md", ".markdown", ".txt",  # Text formats
-            ".pdf",  # PDF
-            ".docx", ".doc", ".wbk",  # Word (incl. backup)
-            ".pptx", ".ppt",  # PowerPoint
-            ".xlsx", ".xls",  # Excel
-            ".html", ".htm",  # HTML
-            ".msg",  # Outlook email
-            ".eml",  # RFC 5322 email
-            ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif",  # Images
-            ".mp3", ".wav", ".m4a", ".flac",  # Audio formats
-            ".mp4", ".avi", ".mkv", ".mov", ".webm",  # Video formats
-        }
-        
+        # Supported extensions (shared with the pre-ingestion estimator).
+        extensions = SUPPORTED_INGESTION_EXTENSIONS
+
         all_files = []
         
         for folder in self.documents_folders:
@@ -825,26 +1049,7 @@ class DocumentIngestionPipeline:
                     f"{os.path.basename(file_path)}"
                 )
                 
-                from docling.document_converter import DocumentConverter, ImageFormatOption
-                from docling.datamodel.pipeline_options import PdfPipelineOptions
-                from docling.datamodel.base_models import InputFormat
-                
-                # Configure OCR pipeline for images
-                pipeline_options = PdfPipelineOptions()
-                pipeline_options.do_ocr = True
-                
-                # Get effective device for acceleration
-                device = get_effective_device()
-                if device in ["cuda", "mps"]:
-                    pipeline_options.accelerator_options = {"device": device}
-                
-                format_options = {
-                    InputFormat.IMAGE: ImageFormatOption(
-                        pipeline_options=pipeline_options
-                    )
-                }
-                
-                converter = DocumentConverter(format_options=format_options)
+                converter = create_image_converter()
                 result = converter.convert(file_path)
                 
                 markdown_content = result.document.export_to_markdown()
@@ -1706,7 +1911,18 @@ class DocumentIngestionPipeline:
             self._read_document,
             file_path
         )
-        
+
+        # Post-OCR repair of statute references ("$ 94 ÄrzteG" -> "§ 94 ÄrzteG"); the Docling
+        # document is repaired too because the chunker builds chunk text from its items.
+        repaired_items = repair_docling_document(docling_doc)
+        repaired_content = repair_ocr_text(document_content)
+        if repaired_items or repaired_content != document_content:
+            logger.info(
+                f"OCR repair: restored § references in {os.path.basename(file_path)} "
+                f"({repaired_items} document items)"
+            )
+            document_content = repaired_content
+
         # Yield control after heavy operation
         await asyncio.sleep(0)
         

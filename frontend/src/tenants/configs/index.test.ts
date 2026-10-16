@@ -12,9 +12,14 @@ describe('tenant configs', () => {
     expect(recallhubConfig.branding.appName).toBe('RecallHub')
     expect(recallhubConfig.features.showEmbeddingBenchmark).toBe(true)
     expect(recallhubConfig.features.showWebSearch).toBe(true)
+    expect(recallhubConfig.features.startPage).toBe('landing')
+    expect(recallhubConfig.features.requireAuth).toBe(false)
     expect(quellexConfig.branding.appName).toBe('Quellex')
     expect(quellexConfig.features.landingPageVariant).toBe('quellex')
     expect(quellexConfig.features.showWebSearch).toBe(false)
+    // Quellex installs open on the login page and never allow guests
+    expect(quellexConfig.features.startPage).toBe('login')
+    expect(quellexConfig.features.requireAuth).toBe(true)
     expect(quellexConfig.content.i18nOverrides.de['chatPage.assistantTitle']).toBe('Quellex-Assistent')
   })
 

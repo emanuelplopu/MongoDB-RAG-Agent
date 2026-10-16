@@ -5,13 +5,14 @@ import time
 import httpx
 from datetime import datetime
 from typing import Optional, List
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Depends, Request, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.models.schemas import (
     HealthResponse, SystemStatsResponse, ConfigResponse
 )
 from backend.core.config import settings
+from backend.routers.auth import require_admin, UserResponse
 
 logger = logging.getLogger(__name__)
 
@@ -1250,7 +1251,7 @@ async def get_config_options():
 
 
 @router.post("/config/update")
-async def update_config(update: ConfigUpdateRequest):
+async def update_config(update: ConfigUpdateRequest, admin: UserResponse = Depends(require_admin)):
     """
     Update runtime configuration.
     
@@ -1294,7 +1295,7 @@ async def update_config(update: ConfigUpdateRequest):
 
 
 @router.post("/config/save")
-async def save_config_to_db(request: Request, update: ConfigUpdateRequest):
+async def save_config_to_db(request: Request, update: ConfigUpdateRequest, admin: UserResponse = Depends(require_admin)):
     """
     Save configuration to database for persistence across restarts.
     
@@ -2066,7 +2067,7 @@ async def get_llm_provider_config(request: Request):
 
 
 @router.post("/llm-providers")
-async def save_llm_provider_config(request: Request, config: LLMProviderConfig):
+async def save_llm_provider_config(request: Request, config: LLMProviderConfig, admin: UserResponse = Depends(require_admin)):
     """
     Save LLM provider configuration to database.
     
@@ -2263,7 +2264,7 @@ async def get_provider_models_detailed(provider_id: str):
 
 
 @router.post("/llm-providers/fetch-models/{provider_id}")
-async def fetch_models_from_api(request: Request, provider_id: str, api_key: Optional[str] = None):
+async def fetch_models_from_api(request: Request, provider_id: str, api_key: Optional[str] = None, admin: UserResponse = Depends(require_admin)):
     """
     Fetch available models from the official provider API.
     
@@ -2612,7 +2613,7 @@ async def fetch_models_from_api(request: Request, provider_id: str, api_key: Opt
 
 
 @router.post("/llm-providers/test")
-async def test_provider_connection(request: Request, test_request: ProviderTestRequest):
+async def test_provider_connection(request: Request, test_request: ProviderTestRequest, admin: UserResponse = Depends(require_admin)):
     """
     Test a provider connection by sending a simple prompt.
     
@@ -3705,8 +3706,8 @@ async def test_agent_tool(request: Request, test_request: ToolTestRequest):
 
 # ==================== Model Capability Benchmark Endpoints ====================
 
-from fastapi import Depends, Query
-from backend.routers.auth import get_current_user, UserResponse
+from fastapi import Query
+from backend.routers.auth import get_current_user
 from backend.services.model_benchmark import ModelBenchmarkService
 
 

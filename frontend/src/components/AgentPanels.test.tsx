@@ -208,6 +208,8 @@ describe('SimplifiedLiveTrace', () => {
             { id: 'task-1', type: 'search_profile', query: 'contract dispute' },
             { id: 'task-2', type: 'web_search', query: 'consumer law update' },
             { id: 'task-3', type: 'summarize', query: 'hidden task' },
+            { id: 'task-4', type: 'search_all', query: 'insurance deductible' },
+            { id: 'anchor_user_question', type: 'search_all', query: 'Which insurer covered the breach?' },
           ],
         },
       ],
@@ -216,6 +218,8 @@ describe('SimplifiedLiveTrace', () => {
           task_id: 'task-1',
           task_type: 'search_profile',
           tool: 'vector',
+          input: 'contract dispute',
+          documents_count: 10,
           duration_ms: 0,
           success: true,
           documents: [{ title: 'Contract Guide', score: 0.9, excerpt: 'Excerpt' }],
@@ -237,8 +241,21 @@ describe('SimplifiedLiveTrace', () => {
 
     expect(screen.getByText('userView.phases.executing')).toBeInTheDocument()
     expect(screen.getByText(/This is a very long analysis sentence/)).toBeInTheDocument()
-    expect(screen.getByText('search_profile, web_search')).toBeInTheDocument()
-    expect(screen.getByText(/userView\.liveTrace\.searchInProgress/)).toBeInTheDocument()
+    // Planned searches carry their query, so two all-source searches stay distinguishable;
+    // the anchor task (the user's verbatim question) gets its own label
+    const plannedList = screen.getByText('userView.liveTrace.willSearch:').nextElementSibling as HTMLElement
+    expect(plannedList.textContent).toBe(
+      'search_profile: "contract dispute"' +
+        'web_search: "consumer law update"' +
+        'search_all: "insurance deductible"' +
+        'userView.liveTrace.anchorQuestion'
+    )
+    expect(screen.queryByText(/hidden task/)).not.toBeInTheDocument()
+    // The completed search shows the full count, not the length of the 3-document preview
+    expect(screen.getAllByText('search_profile: "contract dispute"')).toHaveLength(2)
+    expect(screen.getByText(/userView\.foundResults:10/)).toBeInTheDocument()
+    // Pending placeholders are matched by task id, so the second search_all task still waits
+    expect(screen.getAllByText(/userView\.liveTrace\.searchInProgress/)).toHaveLength(3)
 
     rerender(
       <SimplifiedLiveTrace
@@ -248,9 +265,41 @@ describe('SimplifiedLiveTrace', () => {
       />
     )
 
-    expect(screen.getByText('userView.liveTrace.totalFound:1')).toBeInTheDocument()
+    expect(screen.getByText('userView.liveTrace.totalFound:10')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /chatPage.stop/i }))
     expect(stopMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('labels follow-up searches by their own query and falls back to the preview length', () => {
+    render(
+      <SimplifiedLiveTrace
+        liveTrace={{
+          orchestrator_steps: [],
+          worker_steps: [
+            {
+              task_id: 'followup_0',
+              task_type: 'search_all',
+              tool: 'search_all_sources',
+              input: 'deductible amount cyber policy',
+              duration_ms: 0,
+              success: true,
+              documents: [
+                { title: 'Policy', score: 0.8, excerpt: '' },
+                { title: 'Invoice', score: 0.7, excerpt: '' },
+              ],
+            },
+          ],
+          stats: { total_tokens: 0, orchestrator_tokens: 0, worker_tokens: 0, cost_usd: 0 },
+          startTime: 0,
+          currentPhase: 'executing',
+        }}
+        elapsedTime={2}
+        onStop={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText('search_all: "deductible amount cyber policy"')).toBeInTheDocument()
+    expect(screen.getByText(/userView\.foundResults:2/)).toBeInTheDocument()
   })
 })
 

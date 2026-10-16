@@ -88,13 +88,14 @@ Paths can exceed 260 characters. The generator writes them with the Windows exte
 
 ## Benchmarking a running stack
 
-Results go to `<run_dir>/bench/<bench-name>/`. Every command takes `--base-url`, `--profile`, `--database` and `--mongo-uri`.
+Results go to `<run_dir>/bench/<bench-name>/`. Every command takes `--base-url`, `--profile`, `--database` and `--mongo-uri`. The defaults use `127.0.0.1`, not `localhost`: on Windows a new connection to `localhost` tries IPv6 first and waits about two seconds before it falls back, because the stack (`BIND_ADDRESS`) and Ollama bind IPv4 only.
 
 ```powershell
 uv run python -m backend.evaluation.synthetic_corpus bench-ingest -c synth.json --bench-name bench1
 uv run python -m backend.evaluation.synthetic_corpus bench-retrieval -c synth.json --bench-name bench1
 uv run python -m backend.evaluation.synthetic_corpus bench-chat -c synth.json --bench-name bench1 --mode fast
 uv run python -m backend.evaluation.synthetic_corpus bench-chat -c synth.json --bench-name bench1 --mode thinking
+uv run python -m backend.evaluation.synthetic_corpus bench-telemetry -c synth.json --bench-name bench1 --run chat_thinking
 uv run python -m backend.evaluation.synthetic_corpus bench-query-rewrite -c synth.json --bench-name bench1
 uv run python -m backend.evaluation.synthetic_corpus bench-rescore -c synth.json --bench-name bench1
 uv run python -m backend.evaluation.synthetic_corpus bench-report -c synth.json --bench-name bench1
@@ -102,9 +103,16 @@ uv run python -m backend.evaluation.synthetic_corpus bench-report -c synth.json 
 uv run python -m backend.evaluation.synthetic_corpus bench-ab -c synth.json --a bench2 --b bench3
 ```
 
+All `bench-*` commands talk to the stack as a user: when the backend runs
+with `REQUIRE_AUTH=true` (the Quellex tenant, `docs/21-LAN_ACCESS.md`) set
+`RECALLHUB_API_KEY` to an API key of a user of that tenant (created in the
+UI under API keys, or a short-lived one for the run); it is sent as
+`X-API-Key`, read from the environment only and never written to a config or
+results file. Without it every call gets 401.
+
 ### `bench-ingest`
 
-- Starts `POST /api/v1/ingestion/start` for the profile, polls the job, and samples `docker stats` and `nvidia-smi` every 5 s.
+- Starts `POST /api/v1/ingestion/start` for the profile, polls the job, and samples the GPU, the host and the containers every 5 s (`--sample-interval`) into `resources_ingest.jsonl`; renders `telemetry_ingest.html` at the end (see `bench-telemetry`).
 - Creates the search indexes and times how long they take to become READY.
 - Parses the backend log into per-file stage timings: convert, chunk, embed and store.
 - Measures **fact fidelity**: the share of planned values still present in the converted text and in the chunks, per file format.
@@ -145,7 +153,7 @@ uv run python -m backend.evaluation.synthetic_corpus bench-ab -c synth.json --a 
   - **Ollama server log**, sliced per question by byte offset: request status and server time, prefill and decode tokens and speed, context size and use, prompts truncated to fit, model loads and evictions, aborted requests, errors; plus which models are loaded and whether part of one runs on the CPU;
   - **backend log** per question: warnings, errors, tracebacks, exception types;
   - **robustness**: a health check before every question, per-question error capture (the run continues and stops after 5 consecutive failures), stream anomalies, container restarts and OOM kills, Ollama restarts or version changes;
-  - **resources** every 10 s into `resources_<run>.jsonl`: container CPU and memory (with drift over the run), GPU utilisation, memory, power, temperature, clock and throttle reasons;
+  - **resources** every 5 s (`--sample-interval`) into `resources_<run>.jsonl`, with the machine facts in `resources_<run>.meta.json`: GPU utilisation (SMs and memory controller), VRAM used and total, power and power limit, temperature and the headroom to the thermal slowdown limit, SM and memory clock, fan, P-state, the active clock-event reasons and the driver's cumulative throttle counters; host CPU (total and per core), RAM, swap, disk and network traffic, the ACPI thermal zone where Windows exposes one, RSS and CPU of the Ollama processes and of the Docker VM; per container CPU, memory, block and network I/O; Ollama's loaded models; the backend health round trip. The summary adds drift over the run, seconds under each clock limit, thermal slowdown time and host peaks, and `anomalies` flags thermal slowdowns, a GPU within 3 °C of its limit, RAM over 90 %, swap use and failing probes;
   - **MongoDB** operations slower than 100 ms (profiling level 1 on the benchmark database during the run);
   - **stability**: latency of the first vs the last third of the run, outliers, slowest phase of the slowest questions;
   - **isolation**: share of an answer's sources that come from another case.
@@ -162,6 +170,19 @@ Compares two runs question by question (paired A/B): correct answers in each arm
 ### `bench-rescore`
 
 Rescores stored chat results with the current scorer and rewrites the summaries. It makes no LLM calls. `--log-since` (and `--log-until`) also counts orchestrator LLM calls, JSON parse failures, repetition-guard cuts and evaluate decisions in the backend log for that window.
+
+### `bench-telemetry` and the HTML telemetry page
+
+`bench-chat` and `bench-ingest` end by rendering `telemetry_<run>.html` next to their results, `bench-report` renders a page for every `resources_*.jsonl` of a bench and links them from `REPORT.md`, and `bench-telemetry --run chat_thinking` renders one on demand, also while a run is still going (the sampler appends to the files the page reads). The page is one self-contained HTML file (inline SVG, no external resources, light and dark) and shows on one time axis:
+
+- stat tiles: run time, questions correct, GPU temperature max with the headroom to the slowdown limit, time at the power cap, thermal slowdown time, VRAM peak, GPU power, SM clock, host RAM and CPU peaks, Ollama decode and prefill speed;
+- the machine: GPU model, driver, VRAM, power limit, max clocks, PCIe link; host CPU, cores, RAM, Docker engine CPUs and memory; Ollama version, models and context lengths;
+- everything the summary lists under `anomalies`, plus thermal limits, the driver's throttle counters, swap and RAM pressure;
+- a question strip (outcome per question, agent phase below it) over line charts of GPU temperature with the slowdown limit, utilisation, power with its limit, SM clock with the clock-limit reasons shaded, VRAM with Ollama's share, fan, host memory (host, Docker VM, Ollama processes, swap), host CPU, disk and network rates, container CPU, memory and block reads, the backend health round trip, and a per-core CPU heatmap;
+- per question: answer time, Ollama decode and prefill speed as columns, and a table with the GPU temperature, utilisation, power, power-cap share and VRAM while each question ran;
+- events: model loads and unloads, failed health checks, container restarts, probe errors.
+
+Every chart has a crosshair tooltip that lists all series, arrow-key navigation and a per-minute table view. Series files written before the sampler recorded host metrics render too, with the charts their data supports.
 
 ## Agent fixes found by the benchmark
 

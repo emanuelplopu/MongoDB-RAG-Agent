@@ -672,6 +672,34 @@ describe('Layout', () => {
     expect(screen.queryAllByText('Backups')).toHaveLength(0)
   })
 
+  it('shows only user management in the system submenu for organisation admins', async () => {
+    mockStore.state.isAuthenticated = true
+    mockStore.state.user = { ...mockStore.state.user, is_admin: false, is_org_admin: true }
+
+    renderWithRouter('/chat')
+
+    fireEvent.click(screen.getAllByText('test@example.com')[0].closest('button')!)
+    await waitFor(() => expect(screen.getAllByText('Theme Switcher').length).toBeGreaterThan(0))
+    fireEvent.click(screen.getAllByText('System')[0])
+    await waitFor(() => expect(screen.getAllByText('Users').length).toBeGreaterThan(0))
+    expect(screen.queryAllByText('Status')).toHaveLength(0)
+    expect(screen.queryAllByText('Search indexes')).toHaveLength(0)
+    // Organisation admins pick their document folders on the Profiles page
+    expect(screen.getAllByText('Profiles').length).toBeGreaterThan(0)
+  })
+
+  it('hides the Profiles page from ordinary members', async () => {
+    mockStore.state.isAuthenticated = true
+    mockStore.state.user = { ...mockStore.state.user, is_admin: false, is_org_admin: false }
+
+    renderWithRouter('/chat')
+
+    fireEvent.click(screen.getAllByText('test@example.com')[0].closest('button')!)
+    await waitFor(() => expect(screen.getAllByText('Theme Switcher').length).toBeGreaterThan(0))
+    expect(screen.queryAllByText('Profiles')).toHaveLength(0)
+    expect(screen.queryAllByText('System')).toHaveLength(0)
+  })
+
   it('renders the active knowledge profile when profiles are loaded', async () => {
     mockStore.state.isAuthenticated = true
     mockStore.state.profilesResponse = {

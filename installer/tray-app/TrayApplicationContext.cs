@@ -24,14 +24,20 @@ public class TrayApplicationContext : ApplicationContext
     private ToolStripMenuItem _startMenuItem = null!;
     private ToolStripMenuItem _stopMenuItem = null!;
     private ToolStripMenuItem _showHideMenuItem = null!;
+    private ToolStripMenuItem _networkMenu = null!;
+    private ToolStripMenuItem _networkOpenMenuItem = null!;
+    private ToolStripMenuItem _networkStatusMenuItem = null!;
+
+    private LanNameAdvertiser? _lanAdvertiser;
 
     private bool _servicesRunning = false;
 
     public TrayApplicationContext()
     {
         _appConfig = LoadConfig();
+        Branding.Configure(_appConfig);
         MainWindow.BaseUrl = $"http://localhost:{_appConfig.Ports?.Frontend ?? 11080}";
-        TrayLog.Info($"RecallHubTray starting (frontend {MainWindow.BaseUrl})");
+        TrayLog.Info($"RecallHubTray starting as '{Branding.AppName}' (tenant {Branding.Tenant}, frontend {MainWindow.BaseUrl})");
         _serviceManager = new ServiceManager(_appConfig);
 
         // Create context menu
@@ -43,8 +49,12 @@ public class TrayApplicationContext : ApplicationContext
             Icon = LoadIcon(),
             ContextMenuStrip = _contextMenu,
             Visible = true,
-            Text = "RecallHub"
+            Text = Branding.AppName
         };
+
+        // Announce the LAN name (quellex.local) as soon as the app is up, so the
+        // address works while the services are still starting.
+        StartLanNameAdvertiser();
 
         // Handle double-click to show window
         _trayIcon.DoubleClick += OnTrayIconDoubleClick;
@@ -61,22 +71,77 @@ public class TrayApplicationContext : ApplicationContext
         _ = InitializeAsync();
     }
 
-    private Icon LoadIcon()
+    private static Icon LoadIcon()
     {
         try
         {
-            var iconPath = Path.Combine(AppContext.BaseDirectory, "icon.ico");
-            if (File.Exists(iconPath))
-            {
-                return new Icon(iconPath);
-            }
-
-            // Fallback to system icon
-            return SystemIcons.Application;
+            return Branding.LoadIcon();
         }
         catch
         {
             return SystemIcons.Application;
+        }
+    }
+
+    /// <summary>
+    /// Start the mDNS/LLMNR responder when config.json asks for it
+    /// (network.advertise = true, written by Write-TrayConfig.ps1).
+    /// </summary>
+    private void StartLanNameAdvertiser()
+    {
+        var network = _appConfig.Network;
+        if (network == null || !network.Advertise)
+        {
+            TrayLog.Info("LAN name advertiser disabled (network.advertise is not true in config.json)");
+            return;
+        }
+        if (!LanNameAdvertiser.IsValidHostname(network.Hostname))
+        {
+            TrayLog.Warn($"LAN name advertiser disabled: '{network.Hostname}' is not a valid host name");
+            return;
+        }
+
+        try
+        {
+            _lanAdvertiser = new LanNameAdvertiser(network.Hostname!);
+            _lanAdvertiser.Start();
+        }
+        catch (Exception ex)
+        {
+            TrayLog.Error($"LAN name advertiser failed: {ex.Message}");
+        }
+        UpdateNetworkMenu();
+    }
+
+    private string? NetworkUrl => _appConfig.Network?.NetworkUrl;
+
+    private void UpdateNetworkMenu()
+    {
+        var url = NetworkUrl;
+        if (url == null)
+        {
+            _networkMenu.Visible = false;
+            return;
+        }
+
+        _networkMenu.Visible = true;
+        _networkMenu.Text = $"Network: {url}";
+        _networkOpenMenuItem.Text = $"Open {url}";
+
+        var addresses = _lanAdvertiser?.AdvertisedAddresses ?? Array.Empty<System.Net.IPAddress>();
+        if (_lanAdvertiser == null)
+        {
+            _networkStatusMenuItem.Text = "Name announcement: off (network.advertise=false)";
+        }
+        else if (_lanAdvertiser.IsRunning)
+        {
+            _networkStatusMenuItem.Text = addresses.Count > 0
+                ? $"Announcing {_lanAdvertiser.MdnsName} -> {string.Join(", ", addresses)}"
+                : $"Announcing {_lanAdvertiser.MdnsName} (no LAN address found)";
+        }
+        else
+        {
+            _networkStatusMenuItem.Text = $"Name announcement failed: {_lanAdvertiser.LastError ?? "unknown error"}";
         }
     }
 
@@ -94,13 +159,26 @@ public class TrayApplicationContext : ApplicationContext
 
         menu.Items.Add(new ToolStripSeparator());
 
-        // Open RecallHub (shows main window)
-        var openItem = new ToolStripMenuItem("Open RecallHub", null, OnOpenClick);
+        // Open the app (shows main window)
+        var openItem = new ToolStripMenuItem($"Open {Branding.AppName}", null, OnOpenClick);
         openItem.Font = new Font(openItem.Font, FontStyle.Bold);
         menu.Items.Add(openItem);
 
         // Open Admin Panel
         menu.Items.Add(new ToolStripMenuItem("Open Admin Panel", null, OnOpenAdminClick));
+
+        // Network access (https://quellex.local): open, copy, announcement status
+        _networkMenu = new ToolStripMenuItem("Network") { Visible = false };
+        _networkOpenMenuItem = new ToolStripMenuItem("Open", null, OnOpenNetworkClick);
+        _networkMenu.DropDownItems.Add(_networkOpenMenuItem);
+        _networkMenu.DropDownItems.Add(new ToolStripMenuItem("Copy address", null, OnCopyNetworkClick));
+        _networkMenu.DropDownItems.Add(new ToolStripSeparator());
+        _networkMenu.DropDownItems.Add(new ToolStripMenuItem("Create trust package for other computers...", null, OnCreateTrustPackageClick));
+        _networkMenu.DropDownItems.Add(new ToolStripSeparator());
+        _networkStatusMenuItem = new ToolStripMenuItem("Name announcement: off") { Enabled = false };
+        _networkMenu.DropDownItems.Add(_networkStatusMenuItem);
+        _networkMenu.DropDownOpening += (_, _) => UpdateNetworkMenu();
+        menu.Items.Add(_networkMenu);
 
         // Show/Hide Window
         _showHideMenuItem = new ToolStripMenuItem("Hide Window", null, OnShowHideClick);
@@ -130,7 +208,7 @@ public class TrayApplicationContext : ApplicationContext
         menu.Items.Add(new ToolStripSeparator());
 
         // About
-        menu.Items.Add(new ToolStripMenuItem("About RecallHub", null, OnAboutClick));
+        menu.Items.Add(new ToolStripMenuItem($"About {Branding.AppName}", null, OnAboutClick));
 
         // Exit
         menu.Items.Add(new ToolStripMenuItem("Exit", null, OnExitClick));
@@ -203,7 +281,7 @@ public class TrayApplicationContext : ApplicationContext
 
                 _trayIcon.ShowBalloonTip(
                     5000,
-                    "RecallHub",
+                    Branding.AppName,
                     "Failed to start services. Right-click tray icon for options.",
                     ToolTipIcon.Warning
                 );
@@ -255,7 +333,7 @@ public class TrayApplicationContext : ApplicationContext
             _splashScreen?.CloseFromAnyThread();
             _trayIcon.ShowBalloonTip(
                 5000,
-                "RecallHub",
+                Branding.AppName,
                 $"Startup error: {ex.Message}",
                 ToolTipIcon.Error
             );
@@ -301,7 +379,7 @@ public class TrayApplicationContext : ApplicationContext
         {
             _statusMenuItem.Text = "Status: Running";
             _statusMenuItem.ForeColor = Color.Green;
-            _trayIcon.Text = "RecallHub - Running";
+            _trayIcon.Text = $"{Branding.AppName} - Running";
             _startMenuItem.Enabled = false;
             _stopMenuItem.Enabled = true;
         }
@@ -309,7 +387,7 @@ public class TrayApplicationContext : ApplicationContext
         {
             _statusMenuItem.Text = "Status: Stopped";
             _statusMenuItem.ForeColor = Color.Red;
-            _trayIcon.Text = "RecallHub - Stopped";
+            _trayIcon.Text = $"{Branding.AppName} - Stopped";
             _startMenuItem.Enabled = true;
             _stopMenuItem.Enabled = false;
         }
@@ -331,7 +409,7 @@ public class TrayApplicationContext : ApplicationContext
         {
             _statusMenuItem.Text = "Status: Unknown";
             _statusMenuItem.ForeColor = Color.Orange;
-            _trayIcon.Text = "RecallHub - Status Unknown";
+            _trayIcon.Text = $"{Branding.AppName} - Status Unknown";
             _startMenuItem.Enabled = true;
             _stopMenuItem.Enabled = true;
         }
@@ -344,6 +422,7 @@ public class TrayApplicationContext : ApplicationContext
 
     private void OnOpenClick(object? sender, EventArgs e)
     {
+        TrayLog.Info("Menu: open main window");
         if (_mainWindow != null && _mainWindow.IsWebViewReady)
         {
             ShowMainWindow();
@@ -359,6 +438,7 @@ public class TrayApplicationContext : ApplicationContext
 
     private void OnOpenAdminClick(object? sender, EventArgs e)
     {
+        TrayLog.Info("Menu: open admin panel");
         if (_mainWindow != null && _mainWindow.IsWebViewReady)
         {
             _mainWindow.NavigateTo("/admin");
@@ -369,6 +449,109 @@ public class TrayApplicationContext : ApplicationContext
             // Fallback to browser
             MainWindow.OpenInBrowser(MainWindow.BaseUrl + "/admin");
         }
+    }
+
+    private void OnOpenNetworkClick(object? sender, EventArgs e)
+    {
+        var url = NetworkUrl;
+        if (url == null) return;
+        TrayLog.Info($"Menu: open network address {url}");
+        MainWindow.OpenInBrowser(url);
+    }
+
+    private void OnCopyNetworkClick(object? sender, EventArgs e)
+    {
+        var url = NetworkUrl;
+        if (url == null) return;
+        TrayLog.Info($"Menu: copy network address {url}");
+
+        // Clipboard access needs an STA thread, and OleFlushClipboard can stall
+        // for seconds when another application holds the clipboard. Do it on
+        // a dedicated thread and report back on the UI thread.
+        var uiContext = SynchronizationContext.Current;
+        var worker = new Thread(() =>
+        {
+            string? error = null;
+            try
+            {
+                Clipboard.SetText(url);
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+            }
+
+            void Report()
+            {
+                if (error == null)
+                    _trayIcon.ShowBalloonTip(2000, Branding.AppName, $"{url} copied to the clipboard", ToolTipIcon.Info);
+                else
+                    _trayIcon.ShowBalloonTip(3000, Branding.AppName, $"Copy failed: {error}", ToolTipIcon.Warning);
+            }
+
+            if (uiContext != null) uiContext.Post(_ => Report(), null);
+            else TrayLog.Warn(error == null ? "Copied network address" : $"Copy failed: {error}");
+        })
+        {
+            IsBackground = true,
+            Name = "clipboard",
+        };
+        worker.SetApartmentState(ApartmentState.STA);
+        worker.Start();
+    }
+
+    /// <summary>
+    /// Ask for a folder (typically a read-only network share) and run
+    /// Export-LanCertificate.ps1 -PackagePath there in a visible PowerShell
+    /// window, so the administrator sees the fingerprint and the file list.
+    /// </summary>
+    private void OnCreateTrustPackageClick(object? sender, EventArgs e)
+    {
+        TrayLog.Info("Menu: create trust package");
+        var script = new[]
+            {
+                Path.Combine(_serviceManager.ScriptsPath, "Export-LanCertificate.ps1"),
+                Path.Combine(_appConfig.Docker?.InstallPath ?? string.Empty, "installer", "scripts", "Export-LanCertificate.ps1"),
+            }
+            .FirstOrDefault(File.Exists);
+        if (script == null)
+        {
+            ShowError("Script not found",
+                "Export-LanCertificate.ps1 was not found next to the service scripts.\n" +
+                "Re-run installer\\scripts\\Write-TrayConfig.ps1 to deploy it.");
+            return;
+        }
+
+        using var dialog = new FolderBrowserDialog
+        {
+            Description = $"Folder or network share that receives the {Branding.AppName} trust package " +
+                          "(certificate, one-click installer, README). Staff should have read-only access to it.",
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = true,
+        };
+        if (dialog.ShowDialog() != DialogResult.OK || string.IsNullOrWhiteSpace(dialog.SelectedPath))
+        {
+            return;
+        }
+
+        var target = dialog.SelectedPath;
+        TrayLog.Info($"Creating trust package in {target} via {script}");
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "powershell.exe",
+                    Arguments = $"-NoProfile -ExecutionPolicy Bypass -NoExit -File \"{script}\" -PackagePath \"{target}\"",
+                    UseShellExecute = true,
+                });
+            }
+            catch (Exception ex)
+            {
+                TrayLog.Error($"Could not start Export-LanCertificate.ps1: {ex.Message}");
+            }
+        });
     }
 
     private void OnShowHideClick(object? sender, EventArgs e)
@@ -398,7 +581,7 @@ public class TrayApplicationContext : ApplicationContext
             {
                 _trayIcon.ShowBalloonTip(
                     3000,
-                    "RecallHub",
+                    Branding.AppName,
                     "Services started successfully",
                     ToolTipIcon.Info
                 );
@@ -434,7 +617,7 @@ public class TrayApplicationContext : ApplicationContext
             {
                 _trayIcon.ShowBalloonTip(
                     3000,
-                    "RecallHub",
+                    Branding.AppName,
                     "Services stopped",
                     ToolTipIcon.Info
                 );
@@ -466,7 +649,7 @@ public class TrayApplicationContext : ApplicationContext
 
             _trayIcon.ShowBalloonTip(
                 3000,
-                "RecallHub",
+                Branding.AppName,
                 "Services restarted successfully",
                 ToolTipIcon.Info
             );
@@ -572,11 +755,14 @@ public class TrayApplicationContext : ApplicationContext
     {
         var version = typeof(Program).Assembly.GetName().Version?.ToString() ?? "1.0.0";
 
+        var networkLine = NetworkUrl != null ? $"Network address: {NetworkUrl}\n\n" : string.Empty;
         MessageBox.Show(
-            $"RecallHub\nVersion {version}\n\n" +
+            $"{Branding.AppName}\nVersion {version}\n\n" +
+            $"{Branding.Tagline}\n" +
             "A local-first RAG (Retrieval-Augmented Generation) application.\n\n" +
+            networkLine +
             "All data stays on your machine.\nNo cloud, no tracking, no external dependencies.",
-            "About RecallHub",
+            $"About {Branding.AppName}",
             MessageBoxButtons.OK,
             MessageBoxIcon.Information
         );
@@ -584,12 +770,13 @@ public class TrayApplicationContext : ApplicationContext
 
     private void OnExitClick(object? sender, EventArgs e)
     {
+        TrayLog.Info("Menu: exit requested");
         var result = MessageBox.Show(
-            "Do you want to stop RecallHub services before exiting?\n\n" +
+            $"Do you want to stop {Branding.AppName} services before exiting?\n\n" +
             "Yes - Stop services and exit\n" +
             "No - Exit but keep services running\n" +
             "Cancel - Don't exit",
-            "Exit RecallHub",
+            $"Exit {Branding.AppName}",
             MessageBoxButtons.YesNoCancel,
             MessageBoxIcon.Question
         );
@@ -606,6 +793,7 @@ public class TrayApplicationContext : ApplicationContext
 
         // Clean up and exit
         _statusTimer.Stop();
+        _lanAdvertiser?.Dispose();
         _trayIcon.Visible = false;
         _mainWindow?.ForceClose();
         Application.Exit();
@@ -616,7 +804,12 @@ public class TrayApplicationContext : ApplicationContext
         MessageBox.Show(message, title, MessageBoxButtons.OK, MessageBoxIcon.Error);
     }
 
-    private static AppConfig LoadConfig()
+    /// <summary>
+    /// Read config.json (next to the exe, else %LocalAppData%\RecallHub). Also
+    /// used by Program.Main before the context exists, for the branded
+    /// "already running" message.
+    /// </summary>
+    public static AppConfig LoadConfig()
     {
         // Try multiple config locations
         var candidates = new[]
@@ -646,6 +839,7 @@ public class TrayApplicationContext : ApplicationContext
         if (disposing)
         {
             _statusTimer.Dispose();
+            _lanAdvertiser?.Dispose();
             _trayIcon.Dispose();
             _contextMenu.Dispose();
             _mainWindow?.Dispose();

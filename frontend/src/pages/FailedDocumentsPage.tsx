@@ -1,3 +1,4 @@
+import { getAuthHeaders } from '../api/client'
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
@@ -64,8 +65,8 @@ export default function FailedDocumentsPage() {
       if (filterResolved !== null) params.set('resolved', String(filterResolved))
       
       const [docsRes, summaryRes] = await Promise.all([
-        fetch(`/api/v1/ingestion/failed-documents?${params}`),
-        fetch('/api/v1/ingestion/failed-documents/summary')
+        fetch(`/api/v1/ingestion/failed-documents?${params}`, { headers: getAuthHeaders() }),
+        fetch('/api/v1/ingestion/failed-documents/summary', { headers: getAuthHeaders() })
       ])
       
       if (!docsRes.ok) throw new Error('Failed to fetch documents')
@@ -100,7 +101,8 @@ export default function FailedDocumentsPage() {
   const handleResolve = async (docId: string) => {
     try {
       const res = await fetch(`/api/v1/ingestion/failed-documents/${docId}/resolve`, {
-        method: 'POST'
+        method: 'POST',
+        headers: getAuthHeaders(),
       })
       if (!res.ok) throw new Error('Failed to resolve')
       fetchData()
@@ -112,7 +114,8 @@ export default function FailedDocumentsPage() {
   const handleDelete = async (docId: string) => {
     try {
       const res = await fetch(`/api/v1/ingestion/failed-documents/${docId}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: getAuthHeaders(),
       })
       if (!res.ok) throw new Error('Failed to delete')
       fetchData()
@@ -125,7 +128,8 @@ export default function FailedDocumentsPage() {
     if (!confirm('Clear all resolved records?')) return
     try {
       const res = await fetch('/api/v1/ingestion/failed-documents?resolved_only=true', {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: getAuthHeaders(),
       })
       if (!res.ok) throw new Error('Failed to clear')
       fetchData()

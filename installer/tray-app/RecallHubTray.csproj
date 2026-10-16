@@ -29,6 +29,10 @@
     <Content Include="..\assets\icon.ico" Link="icon.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!-- Tenant icon picked by Branding.LoadIcon() when config.json says tenant=quellex -->
+    <Content Include="..\assets\quellex.ico" Link="quellex.ico" Condition="Exists('..\assets\quellex.ico')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
 </Project>

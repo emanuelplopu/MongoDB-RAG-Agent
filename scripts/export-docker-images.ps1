@@ -68,7 +68,9 @@ if (-not (Test-Path $OutputPath)) {
 $sharedImages = @(
     @{ Image = "recallhub-backend:latest";          File = "backend.tar" },
     @{ Image = "recallhub-ingestion-worker:latest"; File = "ingestion-worker.tar" },
-    @{ Image = "mongodb/mongodb-atlas-local:8.0";   File = "mongodb-atlas-local.tar" }
+    @{ Image = "mongodb/mongodb-atlas-local:8.0";   File = "mongodb-atlas-local.tar" },
+    # LAN gateway (TLS edge, gateway / gateway-quellex services)
+    @{ Image = "caddy:2.10-alpine";                 File = "caddy.tar" }
 )
 
 # Tenant-specific images

@@ -65,6 +65,19 @@ export interface TenantFeatures {
   showApiDocs: boolean
   showWebSearch: boolean
   landingPageVariant: 'default' | 'minimal' | 'professional' | 'quellex'
+  /**
+   * What the root URL shows. 'landing' renders the marketing landing page;
+   * 'login' sends guests to the login page and signed-in users straight to
+   * the dashboard (same behaviour in the desktop app and over the network).
+   */
+  startPage: 'landing' | 'login'
+  /**
+   * When true every application route requires a signed-in user with a valid
+   * session: guests are redirected to /login and the "continue as guest"
+   * options disappear. The backend enforces the same rule with REQUIRE_AUTH;
+   * the runtime tenant config can only switch this on, never off.
+   */
+  requireAuth: boolean
 }
 
 export interface TenantContent {

@@ -52,7 +52,8 @@ public class MainWindow : Form
 
     private void InitializeForm()
     {
-        Text = "RecallHub";
+        // Tenant name from config.json ("Quellex" for Quellex installs)
+        Text = Branding.AppName;
         Size = new Size(DefaultWidth, DefaultHeight);
         MinimumSize = new Size(MinWidth, MinHeight);
         StartPosition = FormStartPosition.CenterScreen;
@@ -62,11 +63,7 @@ public class MainWindow : Form
         // Load icon
         try
         {
-            var iconPath = Path.Combine(AppContext.BaseDirectory, "icon.ico");
-            if (File.Exists(iconPath))
-            {
-                Icon = new Icon(iconPath);
-            }
+            Icon = Branding.LoadIcon();
         }
         catch
         {
@@ -209,8 +206,8 @@ public class MainWindow : Form
 
         var result = MessageBox.Show(
             "Microsoft Edge WebView2 Runtime is not installed.\n\n" +
-            "RecallHub requires WebView2 to display the application.\n" +
-            "Would you like to open RecallHub in your default browser instead?",
+            $"{Branding.AppName} requires WebView2 to display the application.\n" +
+            $"Would you like to open {Branding.AppName} in your default browser instead?",
             "WebView2 Runtime Not Found",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning
@@ -230,7 +227,7 @@ public class MainWindow : Form
         var result = MessageBox.Show(
             $"Failed to initialize the embedded browser.\n\n" +
             $"Error: {ex.Message}\n\n" +
-            "Would you like to open RecallHub in your default browser instead?",
+            $"Would you like to open {Branding.AppName} in your default browser instead?",
             "Browser Initialization Error",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning
@@ -266,22 +263,27 @@ public class MainWindow : Form
     }
 
     /// <summary>
-    /// Open a URL in the system default browser.
+    /// Open a URL in the system default browser. ShellExecute can take seconds
+    /// while a browser starts up, so it runs off the UI thread: the tray menu
+    /// and the WebView2 window must never stop pumping messages.
     /// </summary>
     public static void OpenInBrowser(string url)
     {
-        try
+        _ = Task.Run(() =>
         {
-            Process.Start(new ProcessStartInfo
+            try
             {
-                FileName = url,
-                UseShellExecute = true
-            });
-        }
-        catch
-        {
-            // Ignore
-        }
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = url,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                TrayLog.Warn($"Could not open {url} in the browser: {ex.Message}");
+            }
+        });
     }
 
     private void OnFormClosing(object? sender, FormClosingEventArgs e)

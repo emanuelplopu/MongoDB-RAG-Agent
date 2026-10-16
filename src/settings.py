@@ -122,6 +122,24 @@ class Settings(BaseSettings):
         default=0.3, description="Default text weight for hybrid search (0-1)"
     )
 
+    # OCR Configuration (Docling, scanned PDFs and image files; src/ingestion/ingest.py)
+    # Must stay identical to backend/core/config.py (both settings surfaces are read).
+    ocr_engine: str = Field(
+        default="tesseract",
+        description=(
+            "Docling OCR engine for scanned pages: auto (Docling picks, RapidOCR today), "
+            "rapidocr, tesseract (CLI, needs tesseract-ocr + language packs) or easyocr"
+        ),
+    )
+
+    ocr_languages: str = Field(
+        default="deu,eng",
+        description=(
+            "Comma-separated OCR languages as ISO 639-2 codes (deu, eng, fra, ...); "
+            "mapped to the engine's own codes, ignored by auto/rapidocr"
+        ),
+    )
+
     def apply_profile(self, profile: "ProfileConfig") -> "Settings":
         """
         Apply profile-specific settings overrides.
@@ -169,6 +187,8 @@ class Settings(BaseSettings):
             'default_text_weight': self.default_text_weight,
             'active_profile': self.active_profile,
             'profiles_path': self.profiles_path,
+            'ocr_engine': self.ocr_engine,
+            'ocr_languages': self.ocr_languages,
         }
         
         return Settings(**current_data)

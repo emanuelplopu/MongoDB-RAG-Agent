@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import LoginPage from './LoginPage'
 
 const translations: Record<string, string> = {
@@ -49,6 +49,13 @@ vi.mock('react-router-dom', async () => {
 
 vi.mock('../components/LocalizedLink', () => ({
   useLocalizedNavigate: () => mockNavigate,
+  useLocalizedPath: () => (path: string) => path,
+}))
+
+// Mutable tenant state: tests flip requireAuth to check the guest-only controls
+let tenantState: { tenant: { features: { requireAuth: boolean; startPage: 'landing' | 'login' } } }
+vi.mock('../contexts/TenantContext', () => ({
+  useTenant: () => tenantState,
 }))
 
 vi.mock('../components/TenantLogo', () => ({
@@ -67,10 +74,13 @@ vi.mock('../components/LanguageSwitcher', () => ({
 const mockLogin = vi.fn()
 const mockRegister = vi.fn()
 
+// Mutable auth state: tests set an existing session or an expired one
+let authState: { isAuthenticated: boolean; isLoading: boolean; sessionExpired: boolean }
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({
     login: mockLogin,
     register: mockRegister,
+    ...authState,
   }),
 }))
 
@@ -97,6 +107,8 @@ const renderLoginPage = () => {
 describe('LoginPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    authState = { isAuthenticated: false, isLoading: false, sessionExpired: false }
+    tenantState = { tenant: { features: { requireAuth: false, startPage: 'landing' } } }
   })
 
   afterEach(() => {
@@ -180,7 +192,45 @@ describe('LoginPage', () => {
       
       await waitFor(() => {
         expect(mockLogin).toHaveBeenCalledWith('test@example.com', 'password123')
-        expect(mockNavigate).toHaveBeenCalledWith('/dashboard')
+        expect(mockNavigate).toHaveBeenCalledWith('/dashboard', { replace: true })
+      })
+    })
+
+    it('returns the user to the page that required the login', async () => {
+      const user = userEvent.setup()
+      mockLogin.mockResolvedValue(undefined)
+
+      render(
+        <MemoryRouter initialEntries={[{ pathname: '/en/login', state: { from: '/en/chat?tab=1' } }]}>
+          <LoginPage />
+        </MemoryRouter>
+      )
+
+      await user.type(screen.getByPlaceholderText('you@example.com'), 'test@example.com')
+      await user.type(screen.getByPlaceholderText('••••••••'), 'password123')
+      await user.click(screen.getByRole('button', { name: 'Sign in' }))
+
+      await waitFor(() => {
+        expect(mockNavigate).toHaveBeenCalledWith('/en/chat?tab=1', { replace: true })
+      })
+    })
+
+    it('ignores unsafe or self-referencing redirect targets', async () => {
+      const user = userEvent.setup()
+      mockLogin.mockResolvedValue(undefined)
+
+      render(
+        <MemoryRouter initialEntries={[{ pathname: '/en/login', state: { from: '//evil.example' } }]}>
+          <LoginPage />
+        </MemoryRouter>
+      )
+
+      await user.type(screen.getByPlaceholderText('you@example.com'), 'test@example.com')
+      await user.type(screen.getByPlaceholderText('••••••••'), 'password123')
+      await user.click(screen.getByRole('button', { name: 'Sign in' }))
+
+      await waitFor(() => {
+        expect(mockNavigate).toHaveBeenCalledWith('/dashboard', { replace: true })
       })
     })
 
@@ -230,7 +280,7 @@ describe('LoginPage', () => {
       
       await waitFor(() => {
         expect(mockRegister).toHaveBeenCalledWith('test@example.com', 'Test User', 'password123', undefined, undefined)
-        expect(mockNavigate).toHaveBeenCalledWith('/dashboard')
+        expect(mockNavigate).toHaveBeenCalledWith('/dashboard', { replace: true })
       })
     })
 
@@ -274,12 +324,66 @@ describe('LoginPage', () => {
   describe('Skip login', () => {
     it('should navigate to home when skipping login', async () => {
       const user = userEvent.setup()
-      
+
       renderLoginPage()
-      
+
       await user.click(screen.getByText('Continue without account'))
-      
+
       expect(mockNavigate).toHaveBeenCalledWith('/')
+    })
+
+    it('offers no guest access when the tenant requires a login', () => {
+      tenantState.tenant.features.requireAuth = true
+
+      renderLoginPage()
+
+      expect(screen.queryByText('Continue without account')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument()
+    })
+  })
+
+  describe('Existing session', () => {
+    const renderWithRoutes = (initialEntry: string | { pathname: string; state?: unknown }) =>
+      render(
+        <MemoryRouter initialEntries={[initialEntry]}>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/en/login" element={<LoginPage />} />
+            <Route path="/dashboard" element={<div>dashboard-page</div>} />
+            <Route path="/en/chat" element={<div>chat-page</div>} />
+          </Routes>
+        </MemoryRouter>
+      )
+
+    it('sends a signed-in user straight to the dashboard', () => {
+      authState = { isAuthenticated: true, isLoading: false, sessionExpired: false }
+
+      renderWithRoutes('/login')
+
+      expect(screen.getByText('dashboard-page')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument()
+    })
+
+    it('sends a signed-in user back to the page they came from', () => {
+      authState = { isAuthenticated: true, isLoading: false, sessionExpired: false }
+
+      renderWithRoutes({ pathname: '/en/login', state: { from: '/en/chat' } })
+
+      expect(screen.getByText('chat-page')).toBeInTheDocument()
+    })
+
+    it('keeps showing the form while the stored session is still being validated', () => {
+      authState = { isAuthenticated: true, isLoading: true, sessionExpired: false }
+
+      renderWithRoutes('/login')
+
+      expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument()
+    })
+
+    it('explains why the user landed here after a session expiry', () => {
+      renderWithRoutes({ pathname: '/en/login', state: { from: '/en/chat', sessionExpired: true } })
+
+      expect(screen.getByRole('status')).toHaveTextContent('errors.sessionExpired.message')
     })
   })
 

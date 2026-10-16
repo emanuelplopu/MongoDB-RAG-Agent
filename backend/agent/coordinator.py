@@ -816,8 +816,8 @@ class FederatedAgent:
             'tokens': analyze_tokens
         })
         
-        # Get available sources
-        available_sources = self.federated_search.get_accessible_sources(
+        # Get accessible sources whose database exists (no phantom cloud/personal sources)
+        available_sources = await self.federated_search.get_available_sources(
             user_id=user_id,
             user_email=user_email,
             active_profile_key=active_profile_key,

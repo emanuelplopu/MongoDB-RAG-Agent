@@ -14,7 +14,16 @@ class BackendSettings(BaseSettings):
     api_workers: int = Field(default=4, description="Number of API workers")
     debug: bool = Field(default=False, description="Debug mode")
     tenant_id: str = Field(default="recallhub", description="Tenant identifier for branding")
-    
+    require_auth: bool = Field(
+        default=False,
+        description=(
+            "Reject every API request without a valid session or API key, except "
+            "health, tenant config, login and register (backend/core/auth_middleware.py). "
+            "docker-compose.yml turns this on for the Quellex tenant; the frontend "
+            "mirrors it through GET /api/v1/tenant/config."
+        ),
+    )
+
     # CORS Settings
     cors_origins: List[str] = Field(
         default=["http://localhost:3000", "http://localhost:8080", "http://127.0.0.1:3000"],
@@ -258,10 +267,37 @@ class BackendSettings(BaseSettings):
         ge=0.5, le=10.0,
         description="Interval in seconds for worker to poll for new jobs"
     )
-    
+
+    # OCR Settings (Docling, scanned PDFs and image files; applied in
+    # src/ingestion/ingest.py). Must stay identical to src/settings.py.
+    ocr_engine: str = Field(
+        default="tesseract",
+        description=(
+            "Docling OCR engine for scanned pages: auto (Docling picks, RapidOCR today), "
+            "rapidocr, tesseract (CLI, needs tesseract-ocr + language packs) or easyocr"
+        ),
+    )
+    ocr_languages: str = Field(
+        default="deu,eng",
+        description=(
+            "Comma-separated OCR languages as ISO 639-2 codes (deu, eng, fra, ...); "
+            "mapped to the engine's own codes, ignored by auto/rapidocr"
+        ),
+    )
+
     # Profile Settings
     profiles_path: str = Field(default="profiles.yaml")
-    
+    document_roots: str = Field(
+        default="/app/mounts,/app/documents",
+        description=(
+            "Comma-separated directories (as seen inside the API and worker "
+            "containers) under which organisation admins may pick profile "
+            "document folders. Local folders live in ./mounts, network shares "
+            "are attached below /app/mounts by docker-compose.shares.yml "
+            "(docs/22-DOCUMENT_FOLDERS_AND_SHARES.md)."
+        ),
+    )
+
     # Airbyte Integration Settings
     airbyte_enabled: bool = Field(
         default=False, 
@@ -428,6 +464,21 @@ class BackendSettings(BaseSettings):
         """Alias for brave_search_api_key for compatibility."""
         return self.brave_search_api_key
     
+    def get_document_roots(self) -> List[str]:
+        """Parse ``document_roots`` into a de-duplicated list of directory paths.
+
+        Returns:
+            Root directories, in configured order, with blanks dropped. An empty
+            list disables the root check for superadmins only; organisation
+            admins can then not add any folder at all.
+        """
+        roots: List[str] = []
+        for raw in (self.document_roots or "").split(","):
+            root = raw.strip()
+            if root and root not in roots:
+                roots.append(root)
+        return roots
+
     def get_disabled_tools(self) -> Set[str]:
         """Parse tenant_disabled_tools into a set of disabled tool names.
         
@@ -531,6 +582,8 @@ def get_settings() -> BackendSettings:
             max_match_count=main_settings.max_match_count,
             default_text_weight=main_settings.default_text_weight,
             profiles_path=main_settings.profiles_path,
+            ocr_engine=main_settings.ocr_engine,
+            ocr_languages=main_settings.ocr_languages,
         )
     except Exception:
         # Fallback to environment variables only

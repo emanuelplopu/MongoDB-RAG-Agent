@@ -197,6 +197,17 @@ export const getAuthToken = (): string | null => {
   return localStorage.getItem(AUTH_TOKEN_KEY)
 }
 
+/**
+ * Authorization header for requests made with raw fetch instead of the axios
+ * instance. The axios interceptor adds the token per request, so
+ * api.defaults.headers.common never contains it; raw fetch calls must add it
+ * themselves or the backend's login enforcement rejects them.
+ */
+export const getAuthHeaders = (): Record<string, string> => {
+  const token = getAuthToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
 // Types
 export interface ChatMessage {
   role: 'user' | 'assistant'
@@ -253,6 +264,26 @@ export interface Profile {
 export interface ProfileListResponse {
   profiles: Record<string, Profile>
   active_profile: string
+}
+
+/** One directory offered by the profile folder picker. */
+export interface FolderEntry {
+  name: string
+  /** Absolute container path, the value stored in `Profile.documents_folders`. */
+  path: string
+  /** False for a configured document root that is not mounted on the server. */
+  exists: boolean
+}
+
+/** Listing returned by `GET /profiles/folders/browse`. */
+export interface FolderBrowseResponse {
+  roots: string[]
+  /** Directory that was listed; null for the root listing. */
+  path: string | null
+  /** Parent directory; null at a root. */
+  parent: string | null
+  entries: FolderEntry[]
+  truncated: boolean
 }
 
 export interface Document {
@@ -739,6 +770,49 @@ export interface PendingFilesResponse {
   error?: string
 }
 
+export interface IngestEstimateByType {
+  extension: string
+  file_count: number
+  total_bytes: number
+  estimated_chunks: number
+  estimated_tokens: number
+  avg_processing_time_ms?: number | null
+}
+
+export interface IngestEstimate {
+  profile_key: string
+  folders: string[]
+  missing_folders: string[]
+  incremental: boolean
+  scanned_files: number
+  skipped_existing: number
+  file_count: number
+  total_bytes: number
+  total_size_gb: number
+  estimated_chunks: number
+  estimated_tokens: number
+  estimated_tokens_low: number
+  estimated_tokens_high: number
+  token_method: string
+  estimated_time_seconds: number
+  estimated_time_low_seconds: number
+  estimated_time_high_seconds: number
+  estimated_time_human: string
+  estimated_embedding_seconds?: number | null
+  concurrency: number
+  time_method: string
+  estimated_cost_usd: number
+  estimated_cost_low_usd: number
+  estimated_cost_high_usd: number
+  embedding_model: string
+  cost_per_million_tokens?: number | null
+  embedding_throughput_tokens_per_sec?: number | null
+  benchmark_date?: string | null
+  is_rough: boolean
+  assumptions: string[]
+  by_extension: IngestEstimateByType[]
+}
+
 export interface MetadataRebuildStatus {
   status: 'starting' | 'running' | 'completed' | 'failed' | 'cancelled'
   started_at: string
@@ -1086,6 +1160,15 @@ export const profilesApi = {
     const response = await api.put(`/profiles/${profileKey}`, data)
     return response.data
   },
+
+  /**
+   * List the server's document roots (no path) or the sub-folders of one
+   * directory below a root. Superadmins and organisation admins only.
+   */
+  browseFolders: async (path?: string | null): Promise<FolderBrowseResponse> => {
+    const response = await api.get('/profiles/folders/browse', { params: path ? { path } : {} })
+    return response.data
+  },
 }
 
 export interface FolderInfo {
@@ -1246,6 +1329,15 @@ export const ingestionApi = {
 
   getPendingFiles: async (limit: number = 500): Promise<PendingFilesResponse> => {
     const response = await api.get('/ingestion/pending-files', { params: { limit } })
+    return response.data
+  },
+
+  // Pre-ingestion estimate for a profile's document folders (rough forecast).
+  estimate: async (profileKey: string, incremental: boolean = true): Promise<IngestEstimate> => {
+    const response = await api.get(
+      `/profiles/${encodeURIComponent(profileKey)}/ingest/estimate`,
+      { params: { incremental } }
+    )
     return response.data
   },
 
@@ -1522,7 +1614,9 @@ export const sessionsApi = {
         task_id: string
         task_type: string
         tool: string
-        input: Record<string, unknown>
+        /** The query the worker ran, truncated by the backend. */
+        input: string
+        /** Every document found; `documents` below is a three-entry preview. */
         documents_count: number
         links_count: number
         duration_ms: number
@@ -1564,6 +1658,7 @@ export const sessionsApi = {
           headers: {
             'Content-Type': 'application/json',
             ...api.defaults.headers.common as Record<string, string>,
+            ...getAuthHeaders(),
           },
           body: JSON.stringify({
             content,
@@ -1758,6 +1853,7 @@ export interface User {
   created_at: string
   is_active: boolean
   is_admin: boolean
+  is_org_admin?: boolean
   preferences?: UserPreferencesSync | null
 }
 
@@ -1792,6 +1888,7 @@ export interface UserListItem {
   title_suffix?: string | null
   is_active: boolean
   is_admin: boolean
+  is_org_admin?: boolean
   created_at: string
 }
 
@@ -1815,6 +1912,7 @@ export interface CreateUserRequest {
   title_suffix?: string
   password: string
   is_admin?: boolean
+  is_org_admin?: boolean
 }
 
 export interface UpdateUserRequest {
@@ -1823,6 +1921,7 @@ export interface UpdateUserRequest {
   title_prefix?: string
   title_suffix?: string
   is_admin?: boolean
+  is_org_admin?: boolean
   new_password?: string
 }
 

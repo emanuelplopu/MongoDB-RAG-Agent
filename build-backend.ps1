@@ -57,8 +57,9 @@ RecallHub Backend Build Helper
 This script manages a two-tier Docker build system for fast development:
 
   BASE IMAGE (${BaseImageName}:latest)
-    - Contains: PyTorch, Transformers, Whisper, Docling, Playwright + Chromium
-    - Size: ~10GB
+    - Contains: PyTorch, Transformers, Whisper, Docling (+ its models), Playwright + Chromium
+    - Size: ~13GB
+    - Needs internet (PyPI, huggingface.co) to build
     - Build time: ~15 minutes
     - Rebuild when: Dependencies change (rare)
 
@@ -83,7 +84,7 @@ Workflow:
 
 function Build-BaseImage {
     Write-Header "Building Base Image (this takes ~15 minutes)"
-    Write-Info "This image contains all ML dependencies and Playwright"
+    Write-Info "This image contains all ML dependencies, the Docling models and Playwright"
     Write-Info "You only need to rebuild this when dependencies change"
     Write-Host ""
     

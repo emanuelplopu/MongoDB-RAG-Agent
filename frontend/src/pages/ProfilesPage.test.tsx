@@ -11,9 +11,10 @@ const createProfileMock = vi.fn()
 const updateProfileMock = vi.fn()
 const getAccessMatrixMock = vi.fn()
 const setProfileAccessMock = vi.fn()
+const browseFoldersMock = vi.fn()
 
 let authState: {
-  user: { id: string; name: string; email: string; is_admin: boolean } | null
+  user: { id: string; name: string; email: string; is_admin: boolean; is_org_admin?: boolean } | null
   isLoading: boolean
 }
 
@@ -32,7 +33,26 @@ const translations: Record<string, string> = {
   'profiles.switchFailed': 'Failed to switch profile.',
   'profiles.deleteFailed': 'Failed to delete profile.',
   'profiles.createFailed': 'Failed to create profile.',
+  'profiles.updateFailed': 'Failed to update profile.',
+  'profiles.managerAccess': 'Admin or organisation admin access only',
+  'profiles.orgAdminNote': 'You can choose the document folders of your profiles.',
+  'profiles.documentsFolders': 'Documents Folders',
+  'profiles.addFolder': 'Add folder',
+  'profiles.browseFolders': 'Browse server folders',
+  'profiles.removeFolder': 'Remove folder',
+  'profiles.noFolders': 'No folders yet',
+  'profiles.folderPathPlaceholder': '/app/mounts/<share>/<folder>',
+  'profiles.folderPickerTitle': 'Choose a document folder',
+  'profiles.folderPickerHint': 'Only folders below the document roots.',
+  'profiles.folderRoots': 'Document roots',
+  'profiles.folderUp': 'Up',
+  'profiles.folderNotMounted': 'not mounted',
+  'profiles.noSubfolders': 'No sub-folders',
+  'profiles.selectFolder': 'Use this folder',
+  'profiles.browseFailed': 'Could not list the folder',
   'common.refresh': 'Refresh',
+  'common.cancel': 'Cancel',
+  'common.close': 'Close',
 }
 
 vi.mock('react-router-dom', async () => {
@@ -65,6 +85,7 @@ vi.mock('../api/client', () => ({
     delete: (...args: unknown[]) => deleteProfileMock(...args),
     create: (...args: unknown[]) => createProfileMock(...args),
     update: (...args: unknown[]) => updateProfileMock(...args),
+    browseFolders: (...args: unknown[]) => browseFoldersMock(...args),
   },
   authApi: {
     getAccessMatrix: (...args: unknown[]) => getAccessMatrixMock(...args),
@@ -122,6 +143,34 @@ describe('ProfilesPage', () => {
     updateProfileMock.mockResolvedValue({ success: true })
     getAccessMatrixMock.mockResolvedValue(accessMatrixResponse)
     setProfileAccessMock.mockResolvedValue({ success: true })
+    browseFoldersMock.mockReset()
+    browseFoldersMock.mockImplementation(async (path?: string | null) => {
+      if (!path) {
+        return {
+          roots: ['/app/mounts'],
+          path: null,
+          parent: null,
+          entries: [{ name: '/app/mounts', path: '/app/mounts', exists: true }],
+          truncated: false,
+        }
+      }
+      if (path === '/app/mounts') {
+        return {
+          roots: ['/app/mounts'],
+          path: '/app/mounts',
+          parent: null,
+          entries: [{ name: 'kanzlei', path: '/app/mounts/kanzlei', exists: true }],
+          truncated: false,
+        }
+      }
+      return {
+        roots: ['/app/mounts'],
+        path,
+        parent: '/app/mounts',
+        entries: [{ name: 'Akten', path: `${path}/Akten`, exists: true }],
+        truncated: false,
+      }
+    })
     vi.stubGlobal('confirm', vi.fn(() => true))
     vi.stubGlobal('alert', vi.fn())
   })
@@ -200,6 +249,97 @@ describe('ProfilesPage', () => {
     render(<ProfilesPage />)
 
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/dashboard'))
-    expect(await screen.findByText('Admin access only')).toBeInTheDocument()
+    expect(await screen.findByText('Admin or organisation admin access only')).toBeInTheDocument()
+  })
+
+  describe('organisation admins', () => {
+    beforeEach(() => {
+      authState = {
+        user: { id: 'org-1', name: 'Office', email: 'office@example.com', is_admin: false, is_org_admin: true },
+        isLoading: false,
+      }
+      listProfilesMock.mockResolvedValue({
+        profiles: { research: profilesResponse.profiles.research },
+        active_profile: 'research',
+      })
+    })
+
+    it('stays on the page, can edit folders, but gets no create, delete or access matrix', async () => {
+      render(<ProfilesPage />)
+
+      expect(await screen.findByText('Research')).toBeInTheDocument()
+      expect(navigateMock).not.toHaveBeenCalled()
+      expect(screen.getByText('You can choose the document folders of your profiles.')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'New profile' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Access rights' })).not.toBeInTheDocument()
+      expect(screen.queryByTitle('Delete profile')).not.toBeInTheDocument()
+      expect(screen.getByTitle('Edit profile')).toBeInTheDocument()
+    })
+
+    it('adds a typed folder, removes one, and saves without touching the database', async () => {
+      const user = userEvent.setup()
+      render(<ProfilesPage />)
+
+      await user.click(await screen.findByTitle('Edit profile'))
+      expect(screen.queryByDisplayValue('research_db')).not.toBeInTheDocument()
+      expect(screen.getByText('./research')).toBeInTheDocument()
+
+      await user.click(screen.getByLabelText('Remove folder: ./reports'))
+      await user.type(screen.getByPlaceholderText('/app/mounts/<share>/<folder>'), '/app/mounts/kanzlei/Akten{enter}')
+      expect(screen.getByText('/app/mounts/kanzlei/Akten')).toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: 'Save' }))
+
+      expect(updateProfileMock).toHaveBeenCalledWith('research', {
+        name: 'Research',
+        description: 'Research profile',
+        documents_folders: ['./research', '/app/mounts/kanzlei/Akten'],
+      })
+    })
+
+    it('picks a folder from the server picker', async () => {
+      const user = userEvent.setup()
+      render(<ProfilesPage />)
+
+      await user.click(await screen.findByTitle('Edit profile'))
+      await user.click(screen.getByLabelText('Browse server folders'))
+
+      // Opens at the profile's first folder; walk up to the roots and down into kanzlei/Akten
+      expect(await screen.findByRole('dialog')).toBeInTheDocument()
+      await waitFor(() => expect(browseFoldersMock).toHaveBeenCalledWith('./research'))
+      await user.click(screen.getByRole('button', { name: 'Document roots' }))
+      await user.click(await screen.findByText('/app/mounts'))
+      await user.click(await screen.findByText('kanzlei'))
+      await user.click(await screen.findByText('Akten'))
+      await waitFor(() => expect(browseFoldersMock).toHaveBeenCalledWith('/app/mounts/kanzlei/Akten'))
+      await user.click(screen.getByRole('button', { name: 'Use this folder' }))
+
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(screen.getByText('/app/mounts/kanzlei/Akten')).toBeInTheDocument()
+    })
+
+    it('shows the server explanation when a folder is refused', async () => {
+      const user = userEvent.setup()
+      updateProfileMock.mockRejectedValueOnce(new Error("Folder '/x' is outside the document roots (/app/mounts)"))
+      render(<ProfilesPage />)
+
+      await user.click(await screen.findByTitle('Edit profile'))
+      await user.click(screen.getByRole('button', { name: 'Save' }))
+
+      expect(await screen.findByText("Folder '/x' is outside the document roots (/app/mounts)")).toBeInTheDocument()
+    })
+
+    it('refuses to save a profile without folders', async () => {
+      const user = userEvent.setup()
+      render(<ProfilesPage />)
+
+      await user.click(await screen.findByTitle('Edit profile'))
+      await user.click(screen.getByLabelText('Remove folder: ./research'))
+      await user.click(screen.getByLabelText('Remove folder: ./reports'))
+      await user.click(screen.getByRole('button', { name: 'Save' }))
+
+      expect(updateProfileMock).not.toHaveBeenCalled()
+      expect(screen.getAllByText('No folders yet').length).toBeGreaterThan(0)
+    })
   })
 })

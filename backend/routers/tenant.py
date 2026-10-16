@@ -169,5 +169,7 @@ async def get_tenant_config():
     config = TENANT_CONFIGS.get(tenant_id, TENANT_CONFIGS["recallhub"])
     return {
         "tenant_id": tenant_id,
+        # Mirrors REQUIRE_AUTH so the frontend guards its routes exactly like the API.
+        "require_auth": settings.require_auth,
         "config": config,
     }

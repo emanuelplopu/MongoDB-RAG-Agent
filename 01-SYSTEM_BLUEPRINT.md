@@ -43,7 +43,8 @@
 **Purpose:** Secure user identity verification, session management, and programmatic access control.
 
 **Data Model:**
-- `User`: `{id: UUID, email: string (unique, lowercase), name: string, password_hash: string (bcrypt, 12 rounds), created_at: datetime, updated_at: datetime, is_active: bool, is_admin: bool}`
+- `User`: `{id: UUID, email: string (unique, lowercase), name: string, password_hash: string (bcrypt, 12 rounds), created_at: datetime, updated_at: datetime, is_active: bool, is_admin: bool, is_org_admin: bool}`
+- Roles: `is_admin` is the superadmin (every system setting: prompts, models, ingestion, backups, profiles). `is_org_admin` is the organisation admin: manages the organisation's user accounts and their profile access, renames the profiles she has access to and picks their document folders (below `DOCUMENT_ROOTS`, see `docs/22-DOCUMENT_FOLDERS_AND_SHARES.md`), cannot see or edit superadmin accounts, cannot grant superadmin rights, cannot create/delete profiles or change their database, and has no access to system configuration.
 - `APIKey`: `{id: UUID, user_id: string, name: string, key_hash: SHA256, key_prefix: string (first 8 chars), created_at: datetime, last_used_at: datetime|null, expires_at: datetime|null, is_active: bool, scopes: list["read","write"]}`
 - `ProfileAccess`: `{user_id: string, profile_key: string, granted_at: datetime, granted_by: string}`
 
@@ -86,7 +87,8 @@
 **Integration Points:**
 - `get_current_user(request)` — dependency injector, returns `UserResponse | None`
 - `require_auth(request)` — dependency, raises 401 if not authenticated
-- `require_admin(request)` — dependency, raises 403 if not admin
+- `require_admin(request)` — dependency, raises 403 if not superadmin; guards all system configuration
+- `require_org_admin(request)` — dependency, raises 403 unless superadmin or organisation admin; used only by user management, profile access, the team API-key listing, `PUT /api/v1/profiles/{key}` (own profiles, name/description/folders) and `GET /api/v1/profiles/folders/browse`
 - `user_has_profile_access(request, user_id, profile_key)` — checks access rights
 - `get_user_accessible_profiles(request, user_id)` — returns list of profile keys
 
@@ -113,8 +115,10 @@
 | GET | `/api/v1/profiles/` | User | List all profiles + active |
 | POST | `/api/v1/profiles/` | Admin | Create new profile |
 | GET | `/api/v1/profiles/{key}` | User | Get profile details |
-| PUT | `/api/v1/profiles/{key}` | Admin | Update profile |
+| PUT | `/api/v1/profiles/{key}` | Admin / Org admin | Update profile (org admins: own profiles, name/description/folders only; folders must exist below `DOCUMENT_ROOTS`) |
 | DELETE | `/api/v1/profiles/{key}` | Admin | Delete profile |
+| GET | `/api/v1/profiles/folders/browse?path=` | Admin / Org admin | List the document roots or the sub-folders of one directory (folder picker) |
+| GET | `/api/v1/profiles/{key}/ingest/estimate?incremental=&sample=` | User (profile access) | Pre-ingestion estimate for the profile's folders: files, bytes, ~tokens, ~chunks, ~time, ~cost (rough; see [docs/22](docs/22-DOCUMENT_FOLDERS_AND_SHARES.md)) |
 | POST | `/api/v1/profiles/switch` | User | Switch active profile |
 
 **Integration Points:**
@@ -198,6 +202,7 @@
 - Profile sources only if user has active profile access
 - Personal/cloud-private restricted to owner only (matched by user_id)
 - Cloud-shared available to all users with profile access
+- `get_available_sources(...)` (async) keeps only the accessible sources whose database exists on the server (`existing_databases()`, a `listDatabases` result cached for 60 s); the profile source is always kept. The coordinator hands this list to the planner and `search()` uses it, so a user without a synced cloud drive or ingested mailbox is never offered `search_cloud` / `search_personal`. If the server cannot be asked (no privilege, connection error) all candidates are kept.
 
 **Search Method:**
 - `search(query, user_id, user_email, sources, ..., match_count, search_type, strategy) -> Tuple[List[DocumentReference], metadata_dict]`
@@ -309,7 +314,7 @@
 
 **Ingestion Job Model:**
 ```
-{job_id: string, status: "pending"|"running"|"paused"|"completed"|"failed"|"cancelled"|"stopped"|"INTERRUPTED", resume_paused: bool (INTERRUPTED only), started_at: datetime, completed_at: datetime|null, total_files: int, processed_files: int, current_file: string, chunks_created: int, progress_percent: float, document_count: int, image_count: int, audio_count: int, video_count: int, failed_files: int, duplicates_skipped: int, error: string|null}
+{job_id: string, status: "pending"|"running"|"paused"|"completed"|"failed"|"cancelled"|"stopped"|"INTERRUPTED", runner: "api"|"worker" (absent on old jobs = "api"), config: object (the request as submitted, kept across resumes), resume_paused: bool (INTERRUPTED only), files_started_at: string|null (set at the run's first file), resumed_at: string|null, started_at: datetime, completed_at: datetime|null, total_files: int, processed_files: int, current_file: string, chunks_created: int, progress_percent: float, document_count: int, image_count: int, audio_count: int, video_count: int, failed_files: int, duplicates_skipped: int, error: string|null}
 ```
 
 **Storage:** MongoDB collection `ingestion_jobs` with `_id = job_id`.
@@ -326,6 +331,8 @@
 - A user stop (`POST /stop`, `POST /cancel/{job_id}`) ends the job `stopped` (`cancelled`): no new file starts, files in progress finish, stats of processed files are saved. Final in sequential and concurrent (`max_concurrent_files > 1`) runs; never auto-resumed.
 - Shutdown (SIGTERM/SIGINT, lifespan shutdown) sets `_shutdown_requested`, checked at the same per-file points; the job is saved as `INTERRUPTED` (reported as `interrupted`) and `check_and_resume_interrupted_jobs()` resumes it on the next API start. Jobs a crash left `running` or `paused` are marked `INTERRUPTED` at startup.
 - Restart while paused: a job paused (or pausing) at shutdown is saved `INTERRUPTED` with `resume_paused: true`. The next start resumes it held before any work (no pipeline setup, cleaning or discovery), reporting `paused` until the user resumes or stops it.
+- A resume continues the run (`resume_config()` in `backend/core/ingestion_jobs.py`). Once the interrupted run had reached its files (`files_started_at` is set at its first file, after the pipeline's cleaning), the resumed run uses `clean_before_ingest: false` and `incremental: true`: no second clean, and files already ingested are skipped. A run interrupted before its first file had ingested nothing and starts over with its own flags, so a requested clean still happens. All other settings, selective-retry filters included, are kept. The job's `config` stays the request as submitted (history, and the base of every later resume); `resumed_at` records the resume. Jobs from before `files_started_at` existed are continued. Trade-off: a resumed non-incremental run without cleaning (re-ingest in place) skips files that existed before it started and that it had not reached yet.
+- Ownership: the API and the ingestion worker share `ingestion_jobs`, and each resumes only its own jobs, so a job is never resumed twice. Jobs run by the API (`/start`, the ingestion queue, resumes) carry `runner: "api"`; the worker tags the jobs it claims `runner: "worker"`. The API's startup check marks and resumes only `runner` `"api"` or missing (every job created before the tag was an API job); the worker re-queues only `runner: "worker"` jobs, never claims an API job, resumes them with the same `resume_config()`, and holds a `resume_paused` job `PAUSED` before any work until a `RESUME` or `STOP` control command. A worker shutdown while the job is held ends it `INTERRUPTED` (resumable, still paused); `STOP` ends it `STOPPED`.
 
 **File Classification (FileClassification enum):**
 - `NORMAL` — successfully processed with chunks

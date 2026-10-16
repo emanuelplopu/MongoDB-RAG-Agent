@@ -209,7 +209,8 @@ User accounts and authentication.
   "name": String,
   "password_hash": String,      // bcrypt hash
   "is_active": Boolean,
-  "is_admin": Boolean,
+  "is_admin": Boolean,          // superadmin: all system configuration
+  "is_org_admin": Boolean,      // organisation admin: manages the org's users only
   "created_at": ISODate,
   "updated_at": ISODate
 }

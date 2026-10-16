@@ -133,30 +133,40 @@ def get_profile_manager():
 
 def validate_profile_folder(profile) -> tuple[str, bool, str]:
     """
-    Validate that the profile's documents folder exists and is accessible.
-    Returns: (folder_path, is_accessible, error_message)
+    Validate that every documents folder of the profile exists and is a directory.
+
+    A profile may list several folders (local mounts and network shares); a
+    queued job scans all of them, so a single missing one is reported instead
+    of silently ingesting a subset.
+
+    Returns: (primary_folder_path, is_accessible, error_message)
     """
     folders = profile.documents_folders
     if not folders:
         return "", False, "No documents folders configured"
-    
-    primary_folder = folders[0]  # Use first folder as primary
-    folder_path = Path(primary_folder)
-    
-    if not folder_path.exists():
-        return primary_folder, False, f"Folder does not exist: {primary_folder}"
-    
-    if not folder_path.is_dir():
-        return primary_folder, False, f"Path is not a directory: {primary_folder}"
-    
-    # Check if readable
-    try:
-        list(folder_path.iterdir())
-        return primary_folder, True, ""
-    except PermissionError:
-        return primary_folder, False, f"Permission denied: {primary_folder}"
-    except Exception as e:
-        return primary_folder, False, f"Error accessing folder: {str(e)}"
+
+    primary_folder = folders[0]  # Reported in the job for display purposes
+    problems: list[str] = []
+    for folder in folders:
+        folder_path = Path(folder)
+        if not folder_path.exists():
+            problems.append(f"Folder does not exist: {folder}")
+        elif not folder_path.is_dir():
+            problems.append(f"Path is not a directory: {folder}")
+    if problems:
+        return primary_folder, False, "; ".join(problems)
+
+    # Check that each folder is readable
+    for folder in folders:
+        try:
+            next(iter(Path(folder).iterdir()), None)
+        except PermissionError:
+            problems.append(f"Permission denied: {folder}")
+        except Exception as e:
+            problems.append(f"Error accessing folder {folder}: {str(e)}")
+    if problems:
+        return primary_folder, False, "; ".join(problems)
+    return primary_folder, True, ""
 
 
 # Track if queue processor is running
@@ -448,6 +458,7 @@ async def _run_ingestion_job(job: Dict[str, Any], db) -> None:
     """
     from src.ingestion.ingest import DocumentIngestionPipeline, IngestionConfig
     from src.profile import get_profile_manager
+    from backend.core.ingestion_jobs import RUNNER_API
     from backend.routers.ingestion import (
         save_job_to_db, _ingestion_logs, _log_handler,
         IngestionStatus
@@ -467,6 +478,7 @@ async def _run_ingestion_job(job: Dict[str, Any], db) -> None:
     job_state = {
         "job_id": job_id,
         "status": IngestionStatus.RUNNING,
+        "runner": RUNNER_API,  # Runs in the API process; the API resumes it after a shutdown
         "started_at": datetime.now().isoformat(),
         "completed_at": None,
         "total_files": 0,

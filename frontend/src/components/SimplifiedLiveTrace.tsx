@@ -18,19 +18,29 @@ import {
   MagnifyingGlassIcon,
 } from '@heroicons/react/24/outline'
 
+interface PlannedTask {
+  id: string
+  type: string
+  query: string
+}
+
 interface OrchestratorStep {
   phase: string
   reasoning: string
   output: string
   duration_ms: number
   tokens: number
-  tasks?: Array<{ id: string; type: string; query: string }>
+  tasks?: PlannedTask[]
 }
 
 interface WorkerStep {
   task_id: string
   task_type: string
   tool: string
+  /** The query the worker ran, as sent by the backend (truncated). */
+  input?: string
+  /** Every document the search returned; `documents` is only a short preview. */
+  documents_count?: number
   duration_ms: number
   success: boolean
   documents: Array<{ title: string; score: number; excerpt: string }>
@@ -51,10 +61,18 @@ interface SimplifiedLiveTraceProps {
 /** Internal task types never shown to normal users. */
 const INTERNAL_TASK_TYPES = new Set(['refine_query', 'summarize'])
 
+/** The planner always adds this task: the user's question, searched word for word across all sources. */
+const ANCHOR_TASK_ID = 'anchor_user_question'
+
 /** Truncate long reasoning text for display. */
 function truncate(text: string, max = 120): string {
   if (!text || text.length <= max) return text
   return text.slice(0, max).trimEnd() + '…'
+}
+
+/** Documents a search found: the backend sends the full count next to a three-document preview. */
+function documentsFound(step: WorkerStep): number {
+  return step.documents_count ?? step.documents?.length ?? 0
 }
 
 export default function SimplifiedLiveTrace({ liveTrace, elapsedTime, onStop }: SimplifiedLiveTraceProps) {
@@ -68,14 +86,20 @@ export default function SimplifiedLiveTrace({ liveTrace, elapsedTime, onStop }: 
   const plannedTasks = (planStep?.tasks ?? []).filter((task) => !INTERNAL_TASK_TYPES.has(task.type))
   const visibleWorkerSteps = liveTrace.worker_steps.filter((step) => !INTERNAL_TASK_TYPES.has(step.task_type))
 
-  // Track which planned tasks have completed by matching task_type
-  const completedTypes = new Set(visibleWorkerSteps.map((s) => s.task_type))
+  // Planned tasks and worker steps share task ids; several tasks may have the same type
+  const plannedById = new Map(plannedTasks.map((task) => [task.id, task]))
+  const completedIds = new Set(visibleWorkerSteps.map((s) => s.task_id))
+
+  /** "Your documents: "query"" — the type alone cannot tell two all-source searches apart. */
+  const describe = (id: string | undefined, type: string, query: string | undefined): string => {
+    if (id === ANCHOR_TASK_ID) return t('userView.liveTrace.anchorQuestion')
+    const label = t(`userView.searchType.${type}`, { defaultValue: type })
+    const text = (query ?? '').trim()
+    return text ? `${label}: "${truncate(text, 70)}"` : label
+  }
 
   // Total documents found across all worker steps
-  const totalDocsFound = visibleWorkerSteps.reduce(
-    (sum, step) => sum + (step.documents?.length ?? 0),
-    0
-  )
+  const totalDocsFound = visibleWorkerSteps.reduce((sum, step) => sum + documentsFound(step), 0)
 
   const currentPhase = liveTrace.currentPhase
   const isExecuting = currentPhase === 'executing'
@@ -117,27 +141,29 @@ export default function SimplifiedLiveTrace({ liveTrace, elapsedTime, onStop }: 
           </div>
         )}
 
-        {/* Plan step - planned searches */}
+        {/* Plan step - planned searches, one line each */}
         {plannedTasks.length > 0 && (
           <div className="flex items-start gap-2 text-xs">
             <CheckCircleIcon className="h-3.5 w-3.5 text-green-500 flex-shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
               <span className="text-secondary dark:text-gray-400 font-medium">
                 {t('userView.liveTrace.willSearch')}:
-              </span>{' '}
-              <span className="text-primary-800 dark:text-gray-300">
-                {plannedTasks
-                  .map((task) => t(`userView.searchType.${task.type}`, { defaultValue: task.type }))
-                  .join(', ')}
               </span>
+              <ul className="mt-0.5 space-y-0.5 text-primary-800 dark:text-gray-300">
+                {plannedTasks.map((task, idx) => (
+                  <li key={`planned-${task.id}-${idx}`} className="truncate">
+                    {describe(task.id, task.type, task.query)}
+                  </li>
+                ))}
+              </ul>
             </div>
           </div>
         )}
 
         {/* Worker step results - one line per completed search */}
         {visibleWorkerSteps.map((step, idx) => {
-          const docCount = step.documents?.length ?? 0
-          const label = t(`userView.searchType.${step.task_type}`, { defaultValue: step.task_type })
+          const planned = plannedById.get(step.task_id)
+          const label = describe(step.task_id, step.task_type, planned?.query ?? step.input)
           return (
             <div key={`worker-${idx}`} className="flex items-start gap-2 text-xs">
               <CheckCircleIcon className="h-3.5 w-3.5 text-green-500 flex-shrink-0 mt-0.5" />
@@ -145,7 +171,7 @@ export default function SimplifiedLiveTrace({ liveTrace, elapsedTime, onStop }: 
                 <span className="text-primary-800 dark:text-gray-300 font-medium">{label}</span>
                 <span className="text-secondary dark:text-gray-400">
                   {' — '}
-                  {t('userView.foundResults', { count: docCount })}
+                  {t('userView.foundResults', { count: documentsFound(step) })}
                 </span>
               </div>
             </div>
@@ -155,9 +181,9 @@ export default function SimplifiedLiveTrace({ liveTrace, elapsedTime, onStop }: 
         {/* In-progress placeholders for planned tasks still pending */}
         {isExecuting &&
           plannedTasks
-            .filter((task) => !completedTypes.has(task.type))
+            .filter((task) => !completedIds.has(task.id))
             .map((task, idx) => {
-              const label = t(`userView.searchType.${task.type}`, { defaultValue: task.type })
+              const label = describe(task.id, task.type, task.query)
               return (
                 <div key={`pending-${idx}`} className="flex items-start gap-2 text-xs">
                   <div className="relative h-3.5 w-3.5 flex-shrink-0 mt-0.5">

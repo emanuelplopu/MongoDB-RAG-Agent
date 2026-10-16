@@ -78,6 +78,39 @@ The ingestion pipeline scans configured document folders and classifies files by
 - Maintains document hierarchy and formatting
 - Outputs normalized Markdown format
 - Handles OCR for scanned documents when needed
+- Loads its models (layout analysis, TableFormer, RapidOCR) from
+  `DOCLING_ARTIFACTS_PATH`, which the backend/worker base image fills at build
+  time (`backend/Dockerfile.base`), so conversion never downloads from
+  huggingface.co at runtime and works on offline installs; see
+  `docs/15-DOCKER_BUILD_GUIDE.md` → "Docling models in the base image"
+
+**OCR engine for scanned pages** (`OCR_ENGINE`, `OCR_LANGUAGES`; applied by
+`create_document_converter()` for PDFs and `create_image_converter()` for
+image files in `src/ingestion/ingest.py`, read from both `src/settings.py`
+and `backend/core/config.py`):
+
+| `OCR_ENGINE` | Docling options | Notes |
+|---|---|---|
+| `tesseract` (default) | `TesseractCliOcrOptions(lang=[...])` | Tesseract 5 binary + `tesseract-ocr-deu`/`-eng` packs are baked into `backend/Dockerfile.base`. 0.99 word recall on the synthetic law-firm scans. |
+| `rapidocr` | `RapidOcrOptions()` | Docling's bundled ONNX engine; no language hint possible. What `auto` picked before: 0.84 word recall, whole legible lines turned into letter soup, tokens glued (`1110Wien`). |
+| `easyocr` | `EasyOcrOptions(lang=[...])` | Needs the `easyocr` package (not installed). Language codes are derived from the ISO 639-2 setting (`deu` → `de`). |
+| `auto` | Docling default (`OcrAutoOptions`) | Lets Docling choose; languages are ignored. |
+
+`OCR_LANGUAGES` is a comma-separated list of ISO 639-2 codes (`deu,eng` by
+default; `de`/`ger` style aliases are normalised). Tesseract needs the matching
+`tesseract-ocr-<lang>` package in the image. The resolved engine is logged once
+per worker process (`Docling OCR engine: tesseract lang=deu+eng`). Changing the
+engine only affects documents ingested afterwards: the stored `content` of a
+scan *is* its OCR text, so already ingested scans must be re-ingested.
+
+After conversion, `src/ingestion/ocr_repair.py` restores the section sign
+of statute references that Tesseract misreads (`$ 94 ÄrzteG`, `$$ RAO`,
+`5 10 AVG`, `8 65 Zi 1 lit c StPO` → `§ …`), on the converted content and
+on the Docling document items the chunker reads; only text followed by a
+section number and a statute marker (`Abs`/`Z`/`lit`/`ff`, a known law
+abbreviation, `…gesetz`/`…ordnung`) is touched, amounts never are. Like the
+engine, it reaches only documents ingested after it shipped.
+Evidence and the measurement harness: `docs/24-OCR_SCAN_QUALITY_CHECK.md`.
 
 **Audio Processing** uses Whisper:
 - Transcribes audio content to text
@@ -284,6 +317,11 @@ Notes:
 - Image embedding works through `/v1/embeddings` with
   `{"input": {"prompt_string": "<media_marker>", "multimodal_data": ["<base64>"]}}`;
   the flat `multimodal_data` form is silently ignored by the server.
+- Measured 2026-10-15: embedding scanned pages directly as images retrieves
+  *worse* than their OCR text in a mixed text+image index (a text query sits
+  ~0.06 closer to text than to an image of the same page, so image vectors sink
+  below clean-text noise) and costs ~11× per page; keep OCR as the scan
+  representation. See `docs/23-SCAN_IMAGE_EMBEDDING_SPIKE.md`.
 - Ollama's `embeddinggemma-2` tags are MLX-only (Apple Silicon) as of
   2026-10-10 and fail on Windows/Linux with "requires MLX support".
 
@@ -596,6 +634,10 @@ Creates an execution plan with targeted search tasks.
 - `web_search`: Search the web
 - `browse_url`: Fetch specific URL content
 - `summarize`: Summarize results
+
+`search_cloud` and `search_personal` are only offered to the planner when a cloud or personal database exists for the user (`FederatedSearch.get_available_sources`); the prompt says so, and planned or follow-up tasks of those types are dropped anyway (`plan_unavailable_task_type` / `evaluate_unavailable_task_type` in the trace's degradations). A `source_priority` of `cloud` or `personal` without such a database falls back to `search_all`.
+
+The orchestrator also appends `anchor_user_question`, a `search_all` task with the user's verbatim question (`AGENT_ANCHOR_RAW_QUERY`), next to the planner's rewritten queries. The live trace labels planned searches by type plus query and shows this task as "Your question as typed, all sources", so two all-source searches stay distinguishable. The `worker_step` stream event carries `documents_count` (all documents found) next to a three-document `documents` preview; the UI shows the count.
 
 **Plan Structure:**
 - Intent summary

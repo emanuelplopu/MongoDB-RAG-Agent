@@ -50,6 +50,7 @@ import { useChatSidebar } from '../contexts/ChatSidebarContext'
 import { useAuth } from '../contexts/AuthContext'
 import { useTenant } from '../contexts/TenantContext'
 import { ChatSession, indexesApi, profilesApi, ProfileListResponse } from '../api/client'
+import { canManageProfiles, canManageUsers } from '../api/roles'
 import SidebarWarningToast, { SidebarWarning } from './SidebarWarningToast'
 import SupportRequestButton from './SupportRequestButton'
 
@@ -259,9 +260,11 @@ export default function Layout() {
     return item ? t(item.nameKey) : t('nav.chat')
   }
 
-  // Filter menu items based on user admin status and tenant features
+  // Filter menu items based on user roles and tenant features. Profiles are the
+  // one admin page organisation admins also get (they pick their document folders).
   const userMenuItems = baseMenuItems.filter(item => {
-    if (item.adminOnly && !user?.is_admin) return false
+    if (item.href === '/profiles' && !canManageProfiles(user)) return false
+    if (item.adminOnly && item.href !== '/profiles' && !user?.is_admin) return false
     if (item.href === '/cloud-sources' && !tenant.features.showCloudSources) return false
     if (item.href === '/email-cloud-config' && !tenant.features.showEmailConfig) return false
     if (item.href === '/profiles' && !tenant.features.showProfiles) return false
@@ -271,6 +274,8 @@ export default function Layout() {
 
   // Filter system menu items based on tenant features
   const filteredSystemItems = systemMenuItems.filter(item => {
+    // Organisation admins only get user management; everything else is superadmin configuration
+    if (!user?.is_admin && item.href !== '/system/users') return false
     if (item.href === '/system/strategies' && !tenant.features.showStrategies) return false
     if (item.href === '/system/benchmark' && !tenant.features.showEmbeddingBenchmark) return false
     if (item.href === '/system/backups' && !tenant.features.showBackups) return false
@@ -775,8 +780,8 @@ export default function Layout() {
                 )
               })}
               
-              {/* System Menu with Submenu (admin only) */}
-              {user?.is_admin && (
+              {/* System Menu with Submenu (superadmins and organisation admins) */}
+              {canManageUsers(user) && (
                 <>
                   <button
                     onClick={() => setSystemMenuOpen(!systemMenuOpen)}
@@ -836,7 +841,7 @@ export default function Layout() {
             {/* Connection Status */}
             <div className="px-4 py-2 border-t border-surface-variant dark:border-gray-700 flex items-center justify-between">
               <span className="text-sm text-secondary dark:text-gray-400">API Status</span>
-              <ConnectionStatus healthCheckUrl="/api/health" showText size="sm" />
+              <ConnectionStatus healthCheckUrl="/api/v1/system/health" showText size="sm" />
             </div>
             
             {/* Auth Actions */}

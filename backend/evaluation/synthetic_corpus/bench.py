@@ -31,12 +31,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Callable, Optional
 
 import httpx
 
 from . import telemetry as tm
 from .models import CaseManifest, GoldCase
+from .resources import ResourceSampler
 from .text_utils import normalize_for_match
 
 logger = logging.getLogger(__name__)
@@ -56,17 +57,28 @@ class BenchContext:
 
     run_dir: Path
     bench_name: str
-    base_url: str = "http://localhost:11001"
+    # 127.0.0.1, not localhost: on Windows a new connection to ``localhost`` tries ::1 first and waits about
+    # two seconds before falling back when the service only binds IPv4 (the stack and Ollama both do).
+    base_url: str = "http://127.0.0.1:11001"
     profile: str = "synthetic-kanzlei"
     mongo_uri: str = "mongodb://localhost:11017/?directConnection=true"
     database: str = "rag_synth_kanzlei_v1"
-    containers: tuple[str, ...] = ("rag-backend-quellex", "rag-ingestion-worker", "rag-mongodb")
+    containers: tuple[str, ...] = ("rag-backend-quellex", "rag-ingestion-worker", "rag-mongodb", "rag-embedder-gpu", "rag-embedder")
     timeout_s: float = 3600.0
     backend_container: str = "rag-backend-quellex"
-    ollama_url: str = "http://localhost:11434"
+    ollama_url: str = "http://127.0.0.1:11434"
     ollama_log: Optional[Path] = None
     health_wait_s: float = 600.0
     max_consecutive_errors: int = 5
+    sample_interval_s: float = 5.0
+    # API key of a user of the stack (``X-API-Key``); required when the backend runs with
+    # REQUIRE_AUTH=true (the Quellex tenant). Taken from RECALLHUB_API_KEY by the CLI, never from a config file.
+    api_key: Optional[str] = None
+
+    @property
+    def http_headers(self) -> dict[str, str]:
+        """Headers every request to the stack carries (the API key when one is set)."""
+        return {"X-API-Key": self.api_key} if self.api_key else {}
 
     @property
     def out_dir(self) -> Path:
@@ -142,113 +154,17 @@ def load_manifests(run_dir: Path) -> dict[str, CaseManifest]:
     return out
 
 
-class ResourceSampler:
-    """Samples ``docker stats``, ``nvidia-smi`` and Ollama's loaded models in a background thread.
+def _write_telemetry(ctx: BenchContext, run_name: str) -> Optional[Path]:
+    """Render the one-page HTML telemetry report of a sampled run; a failure is logged, never fatal."""
+    from .telemetry_html import write_telemetry_html
 
-    With ``out_path`` every sample is appended to a JSONL time series as it is taken.
-    """
-
-    def __init__(self, containers: Iterable[str], interval_s: float = 5.0, out_path: Optional[Path] = None,
-                 ollama_url: Optional[str] = None, health_url: Optional[str] = None):  # noqa: D107
-        self.containers = list(containers)
-        self.interval_s = interval_s
-        self.out_path = out_path
-        self.ollama_url = ollama_url
-        # Timing /health while questions run shows a blocked event loop in the backend.
-        self.health_url = health_url
-        self.samples: list[dict[str, Any]] = []
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._t0 = time.monotonic()
-
-    def _sample(self) -> dict[str, Any]:
-        row: dict[str, Any] = {"t": round(time.monotonic() - self._t0, 1), "ts": _now()}
-        try:
-            out = subprocess.run(
-                ["docker", "stats", "--no-stream", "--format", "{{.Name}};{{.CPUPerc}};{{.MemUsage}}", *self.containers],
-                capture_output=True, text=True, timeout=30,
-            ).stdout
-            for line in out.strip().splitlines():
-                name, cpu, mem = line.split(";")
-                used = mem.split("/")[0].strip()
-                factor = {"GiB": 1024, "MiB": 1, "KiB": 1 / 1024, "GB": 1000, "MB": 1, "kB": 1 / 1000}
-                unit = re.sub(r"[\d.]", "", used)
-                row[name] = {"cpu_pct": float(cpu.rstrip("%") or 0), "mem_mb": round(float(re.sub(r"[^\d.]", "", used) or 0) * factor.get(unit, 1), 1)}
-        except (subprocess.SubprocessError, ValueError, OSError) as exc:
-            row["docker_error"] = str(exc)[:200]
-        try:
-            gpu = subprocess.run(
-                ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,power.draw,temperature.gpu,clocks.sm,clocks_event_reasons.active",
-                 "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=15,
-            ).stdout.strip().split(",")
-            row["gpu"] = {"util_pct": float(gpu[0]), "mem_mb": float(gpu[1]), "power_w": float(gpu[2]),
-                          "temp_c": float(gpu[3]), "sm_mhz": float(gpu[4]), "clock_reasons": gpu[5].strip()}
-        except (subprocess.SubprocessError, ValueError, OSError, IndexError):
-            pass
-        if self.ollama_url:
-            row["ollama"] = tm.ollama_ps(self.ollama_url)
-        if self.health_url:
-            t = time.monotonic()
-            try:
-                ok = httpx.get(self.health_url, timeout=10).status_code == 200
-            except httpx.HTTPError:
-                ok = False
-            row["health"] = {"ms": round((time.monotonic() - t) * 1000, 1), "ok": ok}
-        return row
-
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            sample = self._sample()
-            self.samples.append(sample)
-            if self.out_path:
-                tm.jsonl_append(self.out_path, sample)
-            self._stop.wait(self.interval_s)
-
-    def __enter__(self) -> "ResourceSampler":
-        self._thread.start()
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self._stop.set()
-        self._thread.join(timeout=60)
-
-    def summary(self) -> dict[str, Any]:
-        """Aggregates plus drift (last third vs first third) and GPU throttling and Ollama offload counts."""
-        out: dict[str, Any] = {"samples": len(self.samples)}
-
-        def drift(values: list[float]) -> Optional[float]:
-            if len(values) < 6:
-                return None
-            third = len(values) // 3
-            return round(statistics.fmean(values[-third:]) - statistics.fmean(values[:third]), 1)
-
-        for name in self.containers:
-            cpu = [s[name]["cpu_pct"] for s in self.samples if name in s]
-            mem = [s[name]["mem_mb"] for s in self.samples if name in s]
-            out[name] = {"cpu_pct": _summary(cpu), "mem_mb": _summary(mem), "mem_drift_mb": drift(mem)}
-        gpu = [s["gpu"] for s in self.samples if "gpu" in s]
-        if gpu:
-            # Bit 0x1 is "GPU idle"; anything else means the clock was held down (power cap, thermal, ...).
-            throttled = [g for g in gpu if g.get("clock_reasons") and int(g["clock_reasons"], 16) & ~0x1]
-            out["gpu"] = {"util_pct": _summary([g["util_pct"] for g in gpu]), "mem_mb": _summary([g["mem_mb"] for g in gpu]),
-                          "power_w": _summary([g["power_w"] for g in gpu]),
-                          "temp_c": _summary([g["temp_c"] for g in gpu if "temp_c" in g]),
-                          "sm_mhz": _summary([g["sm_mhz"] for g in gpu if "sm_mhz" in g]),
-                          "throttled_samples": len(throttled),
-                          "clock_reasons": dict(collections.Counter(g["clock_reasons"] for g in throttled))}
-        ollama = [s["ollama"] for s in self.samples if "ollama" in s]
-        if ollama:
-            out["ollama"] = {
-                "samples_with_offload": sum(1 for models in ollama if any(m["offloaded"] for m in models)),
-                "models_seen": sorted({m["name"] for models in ollama for m in models}),
-                "max_models_loaded": max(len(models) for models in ollama),
-                "context_lengths": sorted({m["context_length"] for models in ollama for m in models if m.get("context_length")}),
-            }
-        health = [s["health"] for s in self.samples if "health" in s]
-        if health:
-            out["health"] = {"ms": _summary([h["ms"] for h in health]), "failures": sum(1 for h in health if not h["ok"])}
-        return out
+    try:
+        path = write_telemetry_html(ctx.out_dir, run_name)
+    except Exception as exc:  # noqa: BLE001 - the measurements are on disk already
+        logger.warning("Telemetry page for %s not written: %s", run_name, exc)
+        return None
+    logger.info("Telemetry page: %s", path)
+    return path
 
 
 # ─── ingestion ───────────────────────────────────────────────────────────────
@@ -325,7 +241,9 @@ def bench_ingest(ctx: BenchContext, *, clean: bool = True, dimensions: int = 307
         raise RuntimeError(f"refusing a clean ingestion into {ctx.database!r}: only dedicated rag_synth* databases may be wiped")
     expected_files = sum(len(m.files) for m in load_manifests(ctx.run_dir).values())
     timeline: list[dict[str, Any]] = []
-    with httpx.Client(timeout=60) as http, ResourceSampler(ctx.containers) as sampler:
+    sampler = ResourceSampler(ctx.containers, ctx.sample_interval_s, out_path=ctx.out_dir / "resources_ingest.jsonl",
+                              ollama_url=ctx.ollama_url, health_url=ctx.base_url.rstrip("/") + "/health")
+    with httpx.Client(timeout=60, headers=ctx.http_headers) as http, sampler:
         t0 = time.monotonic()
         r = http.post(ctx.api("/ingestion/start"), json={"profile": ctx.profile, "clean_before_ingest": clean, "incremental": not clean})
         r.raise_for_status()
@@ -384,6 +302,8 @@ def bench_ingest(ctx: BenchContext, *, clean: bool = True, dimensions: int = 307
     result["timeline"] = timeline
     result["resource_samples"] = sampler.samples
     (ctx.out_dir / "ingest.json").write_text(json.dumps(result, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+    page = _write_telemetry(ctx, "ingest")
+    result["telemetry_html"] = str(page) if page else None
     return result
 
 
@@ -504,7 +424,7 @@ def bench_retrieval(ctx: BenchContext, gold: list[GoldCase], modes: tuple[str, .
                     k: int = 10) -> dict[str, Any]:
     """Send each answerable question to the search API and score the ranking."""
     rows = []
-    with httpx.Client(timeout=120) as http:
+    with httpx.Client(timeout=120, headers=ctx.http_headers) as http:
         for g in gold:
             if g.unanswerable:
                 continue
@@ -569,7 +489,7 @@ def bench_query_rewrite(ctx: BenchContext, gold: list[GoldCase], chat_file: str 
     retrieval = json.loads((ctx.out_dir / "retrieval.json").read_text(encoding="utf-8"))
     raw = {r["id"]: r for r in retrieval["rows"] if r.get("mode") == "hybrid" and "error" not in r}
     out_rows = []
-    with httpx.Client(timeout=120) as http:
+    with httpx.Client(timeout=120, headers=ctx.http_headers) as http:
         for r in rows:
             g = by_id.get(r["id"])
             queries = [str(q) for q in (r.get("queries") or []) if _usable_query(q)]
@@ -1044,11 +964,11 @@ def bench_chat(ctx: BenchContext, gold: list[GoldCase], mode: str, *, limit: Opt
         logger.info("[%d/%d] %s %s: %.0fs, stage=%s, degradations=%s, error=%s", n, len(todo), rec["id"], mode,
                     rec.get("seconds") or 0, rec.get("failure_stage"), rec.get("degradations"), rec.get("error"))
 
-    with ResourceSampler(ctx.containers, 10, out_path=ctx.out_dir / f"resources_{name}.jsonl", ollama_url=ctx.ollama_url,
+    with ResourceSampler(ctx.containers, ctx.sample_interval_s, out_path=ctx.out_dir / f"resources_{name}.jsonl", ollama_url=ctx.ollama_url,
                          health_url=ctx.base_url.rstrip("/") + "/health") as sampler, \
             tm.MongoProfiler(db, slow_ms=100) as profiler:
         if concurrency <= 1:
-            with httpx.Client(timeout=timeout) as http:
+            with httpx.Client(timeout=timeout, headers=ctx.http_headers) as http:
                 for n, g in enumerate(todo, start=1):
                     rec = _run_question(ctx, http, g, mode, chunk_text, keep_sessions=keep_sessions, slice_logs=True,
                                         ollama_tail=ollama_tail, blobs=blobs)
@@ -1060,7 +980,7 @@ def bench_chat(ctx: BenchContext, gold: list[GoldCase], mode: str, *, limit: Opt
                         break
         else:
             def worker(g: GoldCase) -> dict[str, Any]:
-                with httpx.Client(timeout=timeout) as http:
+                with httpx.Client(timeout=timeout, headers=ctx.http_headers) as http:
                     return _run_question(ctx, http, g, mode, chunk_text, keep_sessions=keep_sessions, slice_logs=False,
                                          ollama_tail=ollama_tail, blobs=blobs)
 
@@ -1087,6 +1007,8 @@ def bench_chat(ctx: BenchContext, gold: list[GoldCase], mode: str, *, limit: Opt
         logger.warning("Could not read the backend log for agent statistics: %s", exc)
     summary["anomalies"] = find_anomalies(summary, rows)
     (ctx.out_dir / f"{name}.summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+    page = _write_telemetry(ctx, name)
+    summary["telemetry_html"] = str(page) if page else None
     return summary
 
 
@@ -1261,6 +1183,19 @@ def find_anomalies(summary: dict[str, Any], rows: list[dict[str, Any]]) -> list[
     g = res.get("gpu") or {}
     if g.get("throttled_samples"):
         a.append(f"GPU clock held down in {g['throttled_samples']} samples, reasons {g.get('clock_reasons')}; max temp {(g.get('temp_c') or {}).get('max')} C")
+    if g.get("thermal_s"):
+        a.append(f"GPU thermal slowdown for {g['thermal_s']} s (clock limits by reason: {g.get('reasons_s')})")
+    if g.get("tlimit_min_c") is not None and g["tlimit_min_c"] <= 3:
+        a.append(f"GPU came within {g['tlimit_min_c']} C of its thermal slowdown limit")
+    host = res.get("host") or {}
+    if ((host.get("ram_pct") or {}).get("max") or 0) > 90:
+        a.append(f"Host RAM reached {host['ram_pct']['max']} % (peak {(host.get('ram_used_gb') or {}).get('max')} GB)")
+    if ((host.get("swap_used_gb") or {}).get("max") or 0) > 0.5:
+        a.append(f"Host swap in use: up to {host['swap_used_gb']['max']} GB")
+    if ((host.get("cpu_temp_c") or {}).get("max") or 0) > 90:
+        a.append(f"Board thermal zone reached {host['cpu_temp_c']['max']} C")
+    if res.get("probe_errors"):
+        a.append(f"Telemetry probes failed: {res['probe_errors']}")
     hl = res.get("health") or {}
     if hl.get("failures"):
         a.append(f"Backend /health failed {hl['failures']} times while questions ran")

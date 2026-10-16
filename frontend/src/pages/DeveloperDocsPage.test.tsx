@@ -105,7 +105,7 @@ describe('DeveloperDocsPage', () => {
     render(<DeveloperDocsPage />)
 
     expect(await screen.findByText('Developer API Documentation')).toBeInTheDocument()
-    expect(fetchMock).toHaveBeenCalledWith('/openapi.json')
+    expect(fetchMock).toHaveBeenCalledWith('/openapi.json', expect.objectContaining({ headers: expect.any(Object) }))
     expect(screen.getByText('4 endpoints')).toBeInTheDocument()
 
     expect(screen.getByRole('button', { name: 'Auth (1)' })).toBeInTheDocument()

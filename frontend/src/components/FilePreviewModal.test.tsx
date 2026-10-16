@@ -8,6 +8,7 @@ const convertToHtmlMock = vi.fn()
 const xlsxReadMock = vi.fn()
 const sheetToHtmlMock = vi.fn()
 const windowOpenMock = vi.fn()
+const anchorClickMock = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
 
 vi.mock('mammoth', () => ({
   default: {
@@ -43,6 +44,9 @@ describe('FilePreviewModal', () => {
       writable: true,
       value: windowOpenMock,
     })
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, writable: true, value: vi.fn(() => 'blob:preview') })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, writable: true, value: vi.fn() })
+    anchorClickMock.mockReset()
   })
 
   afterEach(() => {
@@ -66,6 +70,7 @@ describe('FilePreviewModal', () => {
     fetchMock.mockResolvedValue({
       ok: true,
       text: async () => 'Plain text content',
+      blob: async () => new Blob(['Plain text content']),
     })
     const onClose = vi.fn()
     const user = userEvent.setup()
@@ -81,13 +86,17 @@ describe('FilePreviewModal', () => {
 
     expect(document.body.style.overflow).toBe('hidden')
     expect(await screen.findByText('Plain text content')).toBeInTheDocument()
-    expect(fetchMock).toHaveBeenCalledWith('/api/files/2?inline=true')
+    expect(fetchMock).toHaveBeenCalledWith('/api/files/2?inline=true', expect.objectContaining({ headers: expect.any(Object) }))
 
+    // Open and download go through an authenticated fetch and a blob URL, never the raw API URL
     await user.click(screen.getByRole('button', { name: 'Open in new tab' }))
-    expect(windowOpenMock).toHaveBeenCalledWith('/api/files/2?inline=true', '_blank')
+    await waitFor(() => expect(windowOpenMock).toHaveBeenCalledWith('blob:preview', '_blank'))
+    expect(windowOpenMock).not.toHaveBeenCalledWith('/api/files/2?inline=true', '_blank')
 
     await user.click(screen.getByRole('button', { name: 'Download' }))
-    expect(windowOpenMock).toHaveBeenCalledWith('/api/files/2', '_blank')
+    await waitFor(() => expect(anchorClickMock).toHaveBeenCalled())
+    expect(fetchMock).toHaveBeenCalledWith('/api/files/2', expect.objectContaining({ headers: expect.any(Object) }))
+    expect(windowOpenMock).not.toHaveBeenCalledWith('/api/files/2', '_blank')
 
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledTimes(1)
@@ -161,11 +170,14 @@ describe('FilePreviewModal', () => {
       />
     )
 
+    fetchMock.mockResolvedValue({ ok: true, blob: async () => new Blob(['bin']) })
     await user.click(await screen.findByRole('button', { name: 'Download File' }))
-    expect(windowOpenMock).toHaveBeenCalledWith('/api/files/6', '_blank')
+    await waitFor(() => expect(anchorClickMock).toHaveBeenCalled())
+    expect(fetchMock).toHaveBeenCalledWith('/api/files/6', expect.objectContaining({ headers: expect.any(Object) }))
   })
 
-  it('renders direct media previews for pdf, image, audio, and video files', async () => {
+  it('renders media previews for pdf, image, audio, and video files from an authenticated blob', async () => {
+    fetchMock.mockResolvedValue({ ok: true, blob: async () => new Blob(['media']) })
     const { rerender, container } = render(
       <FilePreviewModal
         isOpen
@@ -175,7 +187,8 @@ describe('FilePreviewModal', () => {
       />
     )
 
-    expect(container.querySelector('iframe')).toHaveAttribute('src', '/api/files/7?inline=true')
+    await waitFor(() => expect(container.querySelector('iframe')).toHaveAttribute('src', 'blob:preview'))
+    expect(fetchMock).toHaveBeenCalledWith('/api/files/7?inline=true', expect.objectContaining({ headers: expect.any(Object) }))
 
     rerender(
       <FilePreviewModal
@@ -185,8 +198,8 @@ describe('FilePreviewModal', () => {
         filename="photo.png"
       />
     )
-    const image = screen.getByAltText('photo.png')
-    expect(image).toHaveAttribute('src', '/api/files/8?inline=true')
+    const image = await screen.findByAltText('photo.png')
+    expect(image).toHaveAttribute('src', 'blob:preview')
     fireEvent.error(image)
     expect(await screen.findByText('Failed to load image')).toBeInTheDocument()
 
@@ -198,7 +211,7 @@ describe('FilePreviewModal', () => {
         filename="voice.mp3"
       />
     )
-    expect(container.querySelector('audio source')).toHaveAttribute('src', '/api/files/9?inline=true')
+    await waitFor(() => expect(container.querySelector('audio source')).toHaveAttribute('src', 'blob:preview'))
 
     rerender(
       <FilePreviewModal
@@ -208,7 +221,7 @@ describe('FilePreviewModal', () => {
         filename="clip.mp4"
       />
     )
-    expect(container.querySelector('video source')).toHaveAttribute('src', '/api/files/10?inline=true')
+    await waitFor(() => expect(container.querySelector('video source')).toHaveAttribute('src', 'blob:preview'))
   })
 
   it('converts DOCX files with mammoth and shows fallback text when conversion fails', async () => {
