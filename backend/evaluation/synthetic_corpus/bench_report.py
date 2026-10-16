@@ -81,7 +81,7 @@ def _ingest_section(ing: dict[str, Any]) -> list[str]:
     if res:
         rows = []
         for name, v in res.items():
-            if name in ("samples", "gpu"):
+            if name in ("samples", "gpu") or not isinstance(v, dict) or "cpu_pct" not in v or "mem_mb" not in v:
                 continue
             rows.append([name, _fmt(v["cpu_pct"].get("mean")), _fmt(v["cpu_pct"].get("max")), _fmt(v["mem_mb"].get("max"))])
         lines += ["", "### Resources during ingestion", "", _table(["Container", "CPU % mean", "CPU % max", "Memory MB max"], rows)]
@@ -291,7 +291,7 @@ def _telemetry_section(summary: dict[str, Any]) -> list[str]:
     res = summary.get("resources_last_batch") or {}
     if res:
         rows = [[name, _fmt(v["cpu_pct"].get("mean")), _fmt(v["cpu_pct"].get("max")), _fmt(v["mem_mb"].get("max")), _fmt(v.get("mem_drift_mb"))]
-                for name, v in res.items() if isinstance(v, dict) and "cpu_pct" in v]
+                for name, v in res.items() if isinstance(v, dict) and "cpu_pct" in v and "mem_mb" in v]
         lines += ["", "### Resources", "", _table(["Container", "CPU % mean", "CPU % max", "Memory MB max", "Memory drift MB"], rows)]
         g = res.get("gpu") or {}
         if g:
