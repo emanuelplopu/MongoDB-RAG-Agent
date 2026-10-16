@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -48,6 +49,12 @@ WORD_RE = re.compile(r"[A-Za-zÄÖÜäöüß]{4,}")
 UMLAUT_RE = re.compile(r"[ÄÖÜäöüß]")
 GARBAGE_RE = re.compile(r"[^\w\s.,;:!?()\[\]§€%/\-–—'\"„“”‚‘’+*&@#°\\|]")
 VOWEL_RE = re.compile(r"[aeiouyäöüAEIOUYÄÖÜ]")
+# Short German/English words and abbreviations that are not letter soup
+SHORT_WORDS = frozenset(
+    "ab am an ad au da du er es et im in ja je ob so um wo zu zb bz dr mag ing dipl dkfm mr ms "
+    "of to is it at by on or as an if no we he be me my up us do go ag kg og eu ug eh nr tel fax "
+    "bg lg og vwgh ogh ovg bgh hg ra rae ri".split()
+)
 # "HandelGmbH", "Stufe3", "Eintrittsdatum:01.05.2019", "1110Wien" - tokens glued together
 MERGED_RE = re.compile(r"\b[a-zäöüß]{3,}[A-ZÄÖÜ][a-zäöüß]{2,}\b|\b[A-Za-zäöüß]{3,}\d{1,}\b|\b\d{3,}[A-Za-zäöüß]{3,}\b|[A-Za-zäöüß]{3,}:\d")
 
@@ -78,6 +85,7 @@ class PageMeta:
     garbled_examples: List[str] = field(default_factory=list)
     merged_tokens: int = 0
     merged_examples: List[str] = field(default_factory=list)
+    ocr_score: Optional[float] = None  # Docling's per-page OCR confidence (mean cell confidence)
 
 
 @dataclass
@@ -92,6 +100,72 @@ class FileMeta:
     markdown_chars: int = 0
     page_meta: List[PageMeta] = field(default_factory=list)
     gold: Optional[Dict[str, Any]] = None
+    ocr_scale: Optional[float] = None  # ocr_options.scale the converter used for this file
+    osd: Dict[str, Any] = field(default_factory=dict)  # orientation-detection events of this file
+    image_noise: Optional[bool] = None  # production's image noise gate verdict (image files only)
+    wordlike_ratio: Optional[float] = None
+
+
+# --------------------------------------------------------------------------------------
+# OSD diagnostics: what Tesseract's orientation detection said per OCR rectangle
+# --------------------------------------------------------------------------------------
+
+class _OsdRecorder(logging.Handler):
+    """Counts Docling's 'OSD failed' / 'tesseract OCR failed' log lines per file."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.ERROR)
+        self.osd_failed = 0
+        self.ocr_failed = 0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        msg = record.getMessage()
+        if msg.startswith("OSD failed"):
+            self.osd_failed += 1
+        elif msg.startswith("tesseract OCR failed"):
+            self.ocr_failed += 1
+
+    def reset(self) -> Dict[str, int]:
+        out = {"osd_failed": self.osd_failed, "ocr_failed": self.ocr_failed}
+        self.osd_failed = self.ocr_failed = 0
+        return out
+
+
+_OSD_EVENTS: List[Tuple[int, float]] = []  # (orientation degrees, confidence) per OSD call
+
+
+def _install_osd_probe() -> None:
+    """Wrap Docling's Tesseract CLI model so each OSD result (angle, confidence) is recorded."""
+    try:
+        from docling.models.stages.ocr import tesseract_ocr_cli_model as mod
+    except Exception as exc:  # noqa: BLE001
+        log.warning("OSD probe not installed: %s", exc)
+        return
+    original = mod.TesseractOcrCliModel._perform_osd
+
+    def probed(self, ifilename):  # type: ignore[no-untyped-def]
+        df = original(self, ifilename)
+        try:
+            keys = df["key"].to_numpy()
+            angle = int(float(str(df["value"].to_numpy()[keys == "Orientation in degrees"][0]).strip()))
+            conf = float(str(df["value"].to_numpy()[keys == "Orientation confidence"][0]).strip())
+            _OSD_EVENTS.append((angle, conf))
+        except Exception:  # noqa: BLE001
+            pass
+        return df
+
+    mod.TesseractOcrCliModel._perform_osd = probed  # type: ignore[method-assign]
+
+
+def _osd_summary(events: List[Tuple[int, float]], extra: Dict[str, int]) -> Dict[str, Any]:
+    rotated = [(a, c) for a, c in events if a != 0]
+    return {
+        "calls": len(events),
+        "rotations": len(rotated),
+        "rotation_confidences": [round(c, 2) for _, c in rotated][:40],
+        "rotation_angles": sorted({a for a, _ in rotated}),
+        **extra,
+    }
 
 
 # --------------------------------------------------------------------------------------
@@ -146,18 +220,48 @@ def _pdf_converter(variant: Variant) -> Any:
     return converter
 
 
-def _image_converter(variant: Variant) -> Any:
-    """The converter ``process_file`` builds for image files (``create_image_converter``)."""
+def _image_converter(variant: Variant, image_path: Optional[Path] = None) -> Any:
+    """The converter ``process_file`` builds for image files (``create_image_converter``).
+
+    Production chooses the OCR scale per image when ``OCR_IMAGE_TARGET_PX`` is set, so the
+    converter is requested per file exactly like ``process_file`` does (cached in production).
+    """
     sys.path.insert(0, "/app")
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from src.ingestion.ingest import create_image_converter  # type: ignore
 
-    converter = create_image_converter()
+    try:
+        converter = create_image_converter(image_path=str(image_path) if image_path else None)
+    except TypeError:  # older ingest.py without the image_path parameter
+        converter = create_image_converter()
     if not variant.is_production():
         from docling.datamodel.base_models import InputFormat
 
         _apply_variant(converter.format_to_options[InputFormat.IMAGE].pipeline_options, variant)
     return converter
+
+
+_MODEL_COUNTERS = ("osd_guarded", "retries_rotated", "retries_kept", "empty_page_fallbacks")
+
+
+def _model_counters(converter: Any) -> Dict[str, int]:
+    """Diagnostic counters of RecallHub's Tesseract model (zeros for the stock model)."""
+    totals: Dict[str, int] = {k: 0 for k in _MODEL_COUNTERS}
+    for pipeline in getattr(converter, "initialized_pipelines", {}).values():
+        model = getattr(pipeline, "ocr_model", None)
+        for k in _MODEL_COUNTERS:
+            totals[k] += int(getattr(model, k, 0) or 0)
+    return totals
+
+
+def _converter_scale(converter: Any, kind: str) -> Optional[float]:
+    try:
+        from docling.datamodel.base_models import InputFormat
+
+        fmt = InputFormat.PDF if kind == "pdf" else InputFormat.IMAGE
+        return float(converter.format_to_options[fmt].pipeline_options.ocr_options.scale)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _upscaled_copy(path: Path, factor: float, work_dir: Path) -> Path:
@@ -211,7 +315,9 @@ def _pdf_page_facts(path: Path) -> List[PageMeta]:
                     pm.dpi, pm.dpi_source = round(float(dpi), 1), "pdf-image-metadata"
                 else:
                     # image pixel width over the placed width on the page
-                    left, bottom, right, top = obj.get_pos()
+                    # (pypdfium2 >= 5 renamed get_pos to get_bounds)
+                    getter = getattr(obj, "get_bounds", None) or getattr(obj, "get_pos")
+                    left, bottom, right, top = getter()
                     placed_in = max((right - left) / 72.0, 0.1)
                     pm.dpi, pm.dpi_source = round(px_w / placed_in, 1), "pixels/placed-width"
             if pm.width_px is None:
@@ -268,11 +374,18 @@ def _copy_image_page(path: Path, out_dir: Path) -> None:
 # --------------------------------------------------------------------------------------
 
 def _page_texts(doc: Any) -> Dict[int, List[str]]:
-    """Group the document's items by page (provenance) in reading order."""
+    """Group the document's items by page (provenance) in reading order (production content layers)."""
     from docling_core.types.doc import TableItem, TextItem
 
+    layers = None
+    try:
+        from src.ingestion.ingest import document_content_layers  # type: ignore
+
+        layers = document_content_layers()
+    except Exception:  # noqa: BLE001 - older ingest.py: Docling default (body only)
+        pass
     pages: Dict[int, List[str]] = defaultdict(list)
-    for item, _level in doc.iterate_items():
+    for item, _level in doc.iterate_items(included_content_layers=layers):
         prov = getattr(item, "prov", None) or []
         page_no = prov[0].page_no if prov else 0
         if isinstance(item, TableItem):
@@ -309,8 +422,8 @@ def _analyse(text: str, pm: PageMeta) -> None:
             toks = [t for t in re.findall(r"[A-Za-zÄÖÜäöüß]+", run)]
             if len(toks) < 4:
                 continue
-            bad = sum(1 for t in toks if len(t) <= 2 or not VOWEL_RE.search(t))
-            if bad / len(toks) >= 0.5:
+            bad = sum(1 for t in toks if (len(t) <= 2 and t.lower() not in SHORT_WORDS) or not VOWEL_RE.search(t))
+            if bad / len(toks) >= 0.5 and bad >= 3:
                 pm.garbled_lines += 1
                 if len(pm.garbled_examples) < 5:
                     pm.garbled_examples.append(run.strip()[:80])
@@ -357,10 +470,21 @@ def _gold_report(gold_text: str, ocr_text: str) -> Dict[str, Any]:
 # Main loop
 # --------------------------------------------------------------------------------------
 
-def _iter_inputs(in_dir: Path) -> Iterable[Path]:
-    for p in sorted(in_dir.rglob("*")):
+def _iter_inputs(in_dir: Path, shard: Tuple[int, int] = (0, 1)) -> Iterable[Path]:
+    k, n = shard
+    for i, p in enumerate(sorted(in_dir.rglob("*"))):
         if p.is_file() and p.suffix.lower() in PDF_EXT | IMAGE_EXT and not p.name.endswith(".gold.txt"):
-            yield p
+            if i % n == k:
+                yield p
+
+
+def _gold_path(path: Path) -> Optional[Path]:
+    """``<stem>.gold.txt`` (synthetic corpus) or ``<stem>.ref.txt`` (scanner text layer / rendered page)."""
+    for suffix in (".gold.txt", ".ref.txt"):
+        candidate = path.with_name(path.stem + suffix)
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def _safe_name(path: Path, in_dir: Path) -> str:
@@ -368,12 +492,16 @@ def _safe_name(path: Path, in_dir: Path) -> str:
     return re.sub(r"[^\w\-.]+", "_", str(rel))[:120]
 
 
-def process(in_dir: Path, out_dir: Path, render_dpi: int, limit: Optional[int], variant: Variant) -> List[FileMeta]:
+def process(in_dir: Path, out_dir: Path, render_dpi: int, limit: Optional[int], variant: Variant,
+            shard: Tuple[int, int] = (0, 1), render_pages: bool = True) -> List[FileMeta]:
     import docling
 
     results: List[FileMeta] = []
-    pdf_conv = img_conv = None
-    for idx, path in enumerate(_iter_inputs(in_dir)):
+    pdf_conv = None
+    osd_counts = _OsdRecorder()
+    logging.getLogger("docling.models.stages.ocr.tesseract_ocr_cli_model").addHandler(osd_counts)
+    _install_osd_probe()
+    for idx, path in enumerate(_iter_inputs(in_dir, shard)):
         if limit and idx >= limit:
             break
         kind = "pdf" if path.suffix.lower() in PDF_EXT else "image"
@@ -383,26 +511,40 @@ def process(in_dir: Path, out_dir: Path, render_dpi: int, limit: Optional[int], 
         log.info("[%d] %s (%s, %.0f KB)", idx + 1, fm.file, kind, fm.bytes / 1024)
         try:
             fm.page_meta = _pdf_page_facts(path) if kind == "pdf" else _image_page_facts(path)
-            if kind == "pdf":
-                _render_pdf_pages(path, target, render_dpi)
-            else:
-                _copy_image_page(path, target)
+            if render_pages:
+                if kind == "pdf":
+                    _render_pdf_pages(path, target, render_dpi)
+                else:
+                    _copy_image_page(path, target)
         except Exception as exc:  # noqa: BLE001 - keep going, record it
             log.warning("page facts/render failed for %s: %s", fm.file, exc)
+        _OSD_EVENTS.clear()
+        osd_counts.reset()
         try:
             if kind == "pdf":
                 pdf_conv = pdf_conv or _pdf_converter(variant)
                 conv = pdf_conv
             else:
-                img_conv = img_conv or _image_converter(variant)
-                conv = img_conv
+                conv = _image_converter(variant, path)
+            fm.ocr_scale = _converter_scale(conv, kind)
             convert_path = path
             if variant.upscale and kind == "image":
                 convert_path = _upscaled_copy(path, variant.upscale, out_dir / "_upscaled")
+            before = _model_counters(conv)
             t0 = time.perf_counter()
             result = conv.convert(str(convert_path))
             fm.convert_seconds = round(time.perf_counter() - t0, 2)
+            fm.osd = _osd_summary(list(_OSD_EVENTS), osd_counts.reset())
+            after = _model_counters(conv)
+            fm.osd.update({k: after[k] - before[k] for k in _MODEL_COUNTERS})
             doc = result.document
+            page_scores: Dict[int, float] = {}
+            try:
+                for page_no, score in result.confidence.pages.items():
+                    if score.ocr_score == score.ocr_score:  # not NaN
+                        page_scores[int(page_no)] = round(float(score.ocr_score), 4)
+            except Exception:  # noqa: BLE001
+                pass
             if REPAIR_OCR_TEXT:
                 # production applies the post-OCR § repair to the Docling document and the content
                 from src.ingestion.ocr_repair import repair_docling_document  # type: ignore
@@ -410,9 +552,22 @@ def process(in_dir: Path, out_dir: Path, render_dpi: int, limit: Optional[int], 
                 repaired = repair_docling_document(doc)
                 if repaired:
                     log.info("OCR repair changed %d items in %s", repaired, fm.file)
-            markdown = doc.export_to_markdown()
+            try:
+                from src.ingestion.ingest import export_document_markdown  # type: ignore
+
+                markdown = export_document_markdown(doc)  # what production stores as `content`
+            except ImportError:
+                markdown = doc.export_to_markdown()
             fm.markdown_chars = len(markdown)
             (target / "document.md").write_text(markdown, encoding="utf-8")
+            if kind == "image":
+                try:
+                    from src.ingestion.ingest import conversion_ocr_score, image_text_is_noise, image_text_quality  # type: ignore
+
+                    fm.image_noise = image_text_is_noise(markdown, conversion_ocr_score(result))
+                    fm.wordlike_ratio = round(image_text_quality(markdown)[1], 3)
+                except ImportError:
+                    pass
             texts = _page_texts(doc)
             fm.pages = max(len(fm.page_meta), max(texts.keys(), default=0))
             by_no = {pm.page_no: pm for pm in fm.page_meta}
@@ -421,11 +576,12 @@ def process(in_dir: Path, out_dir: Path, render_dpi: int, limit: Optional[int], 
                 (target / f"page_{page_no:02d}.txt").write_text(page_text, encoding="utf-8")
                 pm = by_no.setdefault(page_no, PageMeta(page_no=page_no))
                 _analyse(page_text, pm)
+                pm.ocr_score = page_scores.get(page_no)
             if 0 in texts:
                 (target / "page_00_unplaced.txt").write_text("\n".join(texts[0]), encoding="utf-8")
             fm.page_meta = [by_no[k] for k in sorted(by_no)]
-            gold_path = path.with_name(path.stem + ".gold.txt")
-            if gold_path.exists():
+            gold_path = _gold_path(path)
+            if gold_path is not None:
                 fm.gold = _gold_report(gold_path.read_text(encoding="utf-8", errors="replace"), markdown)
                 (target / "gold.txt").write_text(gold_path.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
         except Exception as exc:  # noqa: BLE001 - record the failure per file
@@ -433,12 +589,15 @@ def process(in_dir: Path, out_dir: Path, render_dpi: int, limit: Optional[int], 
             fm.status, fm.error = "error", f"{type(exc).__name__}: {exc}"
         (target / "meta.json").write_text(json.dumps(asdict(fm), ensure_ascii=False, indent=2), encoding="utf-8")
         results.append(fm)
-    (out_dir / "summary.json").write_text(
+    suffix = "" if shard == (0, 1) else f"_{shard[0]}_of_{shard[1]}"
+    ocr_env = {k: v for k, v in os.environ.items() if k.startswith("OCR_")}
+    (out_dir / f"summary{suffix}.json").write_text(
         json.dumps({"docling_version": docling.__version__ if hasattr(docling, "__version__") else _pkg_version("docling"),
-                    "variant": asdict(variant), "files": [asdict(r) for r in results]}, ensure_ascii=False, indent=2),
+                    "variant": asdict(variant), "ocr_env": ocr_env, "files": [asdict(r) for r in results]},
+                   ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    (out_dir / "summary.md").write_text(_summary_md(results), encoding="utf-8")
+    (out_dir / f"summary{suffix}.md").write_text(_summary_md(results), encoding="utf-8")
     return results
 
 
@@ -475,6 +634,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("out_dir", type=Path)
     ap.add_argument("--render-dpi", type=int, default=110, help="DPI of the page PNGs written for spot-checks")
     ap.add_argument("--limit", type=int, default=None, help="stop after N input files")
+    ap.add_argument("--shard", default="0/1", help="K/N: process every N-th input starting at K (parallel containers)")
+    ap.add_argument("--no-render", action="store_true", help="skip writing page_NN.png spot-check images")
     ap.add_argument("-v", "--verbose", action="store_true")
     exp = ap.add_argument_group("what-if experiments (leave unset for the production configuration)")
     exp.add_argument("--ocr-scale", type=float, default=None, help="docling ocr_options.scale (production 3.0)")
@@ -494,10 +655,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     variant = Variant(ocr_scale=args.ocr_scale, force_full_page_ocr=args.force_full_page_ocr,
                       lang=args.lang.split(",") if args.lang else None, engine=args.engine, upscale=args.upscale)
     log.info("configuration: %s", "production" if variant.is_production() else asdict(variant))
-    results = process(args.in_dir, args.out_dir, args.render_dpi, args.limit, variant)
+    k, n = (int(x) for x in args.shard.split("/"))
+    results = process(args.in_dir, args.out_dir, args.render_dpi, args.limit, variant, shard=(k, n),
+                      render_pages=not args.no_render)
     ok = sum(1 for r in results if r.status == "ok")
-    log.info("done: %d files, %d ok, %d pages, outputs in %s", len(results), ok, sum(r.pages for r in results), args.out_dir)
-    print((args.out_dir / "summary.md").read_text(encoding="utf-8"))
+    log.info("done: %d files, %d ok, %d pages, %.0f s conversion, outputs in %s", len(results), ok,
+             sum(r.pages for r in results), sum(r.convert_seconds for r in results), args.out_dir)
     return 0 if ok == len(results) else 1
 
 

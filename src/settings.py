@@ -140,6 +140,56 @@ class Settings(BaseSettings):
         ),
     )
 
+    ocr_scan_dpi: int = Field(
+        default=216,
+        description=(
+            "Resolution (dpi) at which PDF pages are rasterised for the OCR engine; "
+            "216 is Docling's default (scale 3.0)"
+        ),
+    )
+
+    ocr_image_target_px: int = Field(
+        default=0,
+        description=(
+            "Long-side pixel size of the OCR bitmap for image files (JPG/PNG/TIF); "
+            "0 keeps Docling's 3x-the-page-size behaviour"
+        ),
+    )
+
+    ocr_psm: str = Field(
+        default="",
+        description="Tesseract page segmentation mode per OCR rectangle (0-13); empty = Tesseract default",
+    )
+
+    ocr_tessdata_path: str = Field(
+        default="",
+        description="Directory with alternative Tesseract traineddata files (e.g. tessdata_best); empty = system packs",
+    )
+
+    ocr_osd_min_confidence: float = Field(
+        default=0.0,
+        description=(
+            "Minimum Tesseract orientation-detection confidence before an OCR rectangle "
+            "is rotated; 0 applies every detected rotation (Docling's behaviour)"
+        ),
+    )
+
+    ocr_image_noise_gate: bool = Field(
+        default=True,
+        description=(
+            "Store no text for image files whose OCR output is letter soup (photos of "
+            "objects); photographed documents and screenshots still pass"
+        ),
+    )
+
+    ingest_page_furniture: bool = Field(
+        default=True,
+        description=(
+            "Keep page headers and footers (Docling's furniture layer: Geschäftszahl headers, "
+            "ERV stamps, bank-detail footers) in the stored content and the chunks"
+        ),
+    )
+
     def apply_profile(self, profile: "ProfileConfig") -> "Settings":
         """
         Apply profile-specific settings overrides.
@@ -189,6 +239,13 @@ class Settings(BaseSettings):
             'profiles_path': self.profiles_path,
             'ocr_engine': self.ocr_engine,
             'ocr_languages': self.ocr_languages,
+            'ocr_scan_dpi': self.ocr_scan_dpi,
+            'ocr_image_target_px': self.ocr_image_target_px,
+            'ocr_psm': self.ocr_psm,
+            'ocr_tessdata_path': self.ocr_tessdata_path,
+            'ocr_osd_min_confidence': self.ocr_osd_min_confidence,
+            'ingest_page_furniture': self.ingest_page_furniture,
+            'ocr_image_noise_gate': self.ocr_image_noise_gate,
         }
         
         return Settings(**current_data)
