@@ -422,15 +422,19 @@ DEFAULT_OCR_LANGUAGES = "deu,eng"
 # Resolution (dots per inch) at which PDF pages are rasterised for the OCR engine.
 # Docling's own default is ``scale=3.0`` = 216 dpi; Tesseract is trained on ~300 dpi text.
 DEFAULT_OCR_SCAN_DPI = 216
-# Long-side pixel size of the OCR bitmap for image files (JPG/PNG/TIF). ``0`` keeps
-# Docling's behaviour (3x the page size in points: a phone photo without a DPI tag is
-# OCRed at 3x its pixel size, ~140 Mpx for a 12 Mpx photo).
-DEFAULT_OCR_IMAGE_TARGET_PX = 0
+# Megapixel budget of the OCR bitmap for image files (JPG/PNG/TIF). Docling renders
+# images at 3x their size in points, i.e. a phone photo without a DPI tag at 3x its
+# pixel size (~140 Mpx for a 12 Mpx photo, 20-60 s of Tesseract time). ``0`` = no cap.
+DEFAULT_OCR_IMAGE_MAX_MPX = 20
+_DOCLING_DEFAULT_OCR_SCALE = 3.0
 # Tesseract page segmentation mode per OCR rectangle; ``None`` = Tesseract's default (3).
 DEFAULT_OCR_PSM: Optional[int] = None
 # Minimum Tesseract OSD "Orientation confidence" before a detected rotation is applied
-# to an OCR rectangle; ``0`` = apply any (Docling's behaviour).
-DEFAULT_OCR_OSD_MIN_CONFIDENCE = 0.0
+# to an OCR rectangle outright; below it the rotation is verified by OCRing both ways
+# (src/ingestion/ocr_tesseract.py). ``0`` = apply any (Docling's behaviour). On the
+# 2026-10-16 scale sample every rotation proposed below 1 on upright pages was wrong, an
+# upright Courier page was flipped at 3.99, genuine rotations score >= 10.
+DEFAULT_OCR_OSD_MIN_CONFIDENCE = 10.0
 _OCR_SCALE_MIN, _OCR_SCALE_MAX = 0.25, 8.0
 _DOCLING_POINTS_PER_INCH = 72.0
 # Image files whose OCR output is noise (a photo of a car, a building site) are stored
@@ -578,7 +582,7 @@ class OcrConfig:
     engine: str = DEFAULT_OCR_ENGINE
     languages: Tuple[str, ...] = ("deu", "eng")
     scan_dpi: int = DEFAULT_OCR_SCAN_DPI
-    image_target_px: int = DEFAULT_OCR_IMAGE_TARGET_PX
+    image_max_mpx: int = DEFAULT_OCR_IMAGE_MAX_MPX
     psm: Optional[int] = DEFAULT_OCR_PSM
     tessdata_path: Optional[str] = None
     osd_min_confidence: float = DEFAULT_OCR_OSD_MIN_CONFIDENCE
@@ -590,13 +594,13 @@ class OcrConfig:
         extras: List[str] = []
         if self.scan_dpi != DEFAULT_OCR_SCAN_DPI:
             extras.append(f"scan_dpi={self.scan_dpi}")
-        if self.image_target_px != DEFAULT_OCR_IMAGE_TARGET_PX:
-            extras.append(f"image_target_px={self.image_target_px}")
+        if self.image_max_mpx != DEFAULT_OCR_IMAGE_MAX_MPX:
+            extras.append(f"image_max_mpx={self.image_max_mpx}")
         if self.psm is not None:
             extras.append(f"psm={self.psm}")
         if self.tessdata_path:
             extras.append(f"tessdata={self.tessdata_path}")
-        if self.osd_min_confidence > 0:
+        if self.osd_min_confidence != DEFAULT_OCR_OSD_MIN_CONFIDENCE:
             extras.append(f"osd_min_conf={self.osd_min_confidence:g}")
         suffix = (" " + " ".join(extras)) if extras else ""
         if self.engine == "rapidocr":
@@ -611,10 +615,12 @@ class OcrConfig:
         """Docling ``ocr_options.scale`` for an image file, or ``None`` to keep Docling's default.
 
         Docling sizes an image page in points from its DPI tag (72 dpi when the tag is
-        missing) and renders the OCR bitmap at ``scale`` pixels per point. The scale
-        returned here makes the bitmap's long side ``image_target_px`` pixels, so a
-        12 Mpx phone photo is OCRed at ~3,500 px instead of 3x its pixel size, and a
-        300-dpi A4 scan image at its native resolution instead of 216 dpi.
+        missing) and renders the OCR bitmap at ``scale`` (3.0) pixels per point, so a
+        12 Mpx phone photo without a DPI tag becomes a ~140 Mpx bitmap and costs 20-60 s
+        of Tesseract time. The scale returned here keeps Docling's 3.0 unless the bitmap
+        would exceed ``image_max_mpx`` megapixels, in which case it is reduced so the
+        bitmap lands on that budget. A 300-dpi A4 scan image (4.5 Mpx at scale 3) is not
+        affected; scan images are measurably worse at other scales.
 
         Args:
             width_px: Image width in pixels.
@@ -622,13 +628,15 @@ class OcrConfig:
             dpi: DPI tag of the image, if any.
 
         Returns:
-            Scale factor, or ``None`` when ``image_target_px`` is 0.
+            Scale factor, or ``None`` when ``image_max_mpx`` is 0 (no cap).
         """
-        if self.image_target_px <= 0:
+        if self.image_max_mpx <= 0:
             return None
         effective_dpi = dpi if dpi and dpi > 1 else _DOCLING_POINTS_PER_INCH
-        long_side_pt = max(width_px, height_px, 1) * _DOCLING_POINTS_PER_INCH / effective_dpi
-        return _clamp_scale(self.image_target_px / long_side_pt)
+        width_pt = max(width_px, 1) * _DOCLING_POINTS_PER_INCH / effective_dpi
+        height_pt = max(height_px, 1) * _DOCLING_POINTS_PER_INCH / effective_dpi
+        budget_scale = (self.image_max_mpx * 1_000_000 / (width_pt * height_pt)) ** 0.5
+        return _clamp_scale(min(_DOCLING_DEFAULT_OCR_SCALE, budget_scale))
 
 
 def _clamp_scale(scale: float) -> float:
@@ -716,7 +724,7 @@ def resolve_ocr_config(
     """
     env = os.environ
     scan_dpi_raw = env.get("OCR_SCAN_DPI")
-    image_px_raw = env.get("OCR_IMAGE_TARGET_PX")
+    image_px_raw = env.get("OCR_IMAGE_MAX_MPX")
     psm_raw = env.get("OCR_PSM")
     tessdata_raw = env.get("OCR_TESSDATA_PATH")
     osd_raw = env.get("OCR_OSD_MIN_CONFIDENCE")
@@ -726,7 +734,7 @@ def resolve_ocr_config(
             engine = settings.ocr_engine if engine is None else engine
             languages = settings.ocr_languages if languages is None else languages
             scan_dpi_raw = str(settings.ocr_scan_dpi) if scan_dpi_raw is None else scan_dpi_raw
-            image_px_raw = str(settings.ocr_image_target_px) if image_px_raw is None else image_px_raw
+            image_px_raw = str(settings.ocr_image_max_mpx) if image_px_raw is None else image_px_raw
             psm_raw = settings.ocr_psm if psm_raw is None else psm_raw
             tessdata_raw = settings.ocr_tessdata_path if tessdata_raw is None else tessdata_raw
             osd_raw = str(settings.ocr_osd_min_confidence) if osd_raw is None else osd_raw
@@ -747,8 +755,8 @@ def resolve_ocr_config(
         if scan_dpi is not None:
             logger.error(f"OCR_SCAN_DPI={scan_dpi} is below 72; using {DEFAULT_OCR_SCAN_DPI}")
         scan_dpi = DEFAULT_OCR_SCAN_DPI
-    image_px = _parse_optional_int(image_px_raw, "OCR_IMAGE_TARGET_PX")
-    image_px = DEFAULT_OCR_IMAGE_TARGET_PX if image_px is None or image_px < 0 else image_px
+    image_px = _parse_optional_int(image_px_raw, "OCR_IMAGE_MAX_MPX")
+    image_px = DEFAULT_OCR_IMAGE_MAX_MPX if image_px is None or image_px < 0 else image_px
     psm = _parse_optional_int(psm_raw, "OCR_PSM")
     if psm is not None and not 0 <= psm <= 13:
         logger.error(f"OCR_PSM={psm} is not a Tesseract page segmentation mode (0-13); ignoring it")
@@ -759,7 +767,7 @@ def resolve_ocr_config(
         engine=engine_name,
         languages=parse_ocr_languages(languages),
         scan_dpi=scan_dpi,
-        image_target_px=image_px,
+        image_max_mpx=image_px,
         psm=psm,
         tessdata_path=tessdata,
         osd_min_confidence=osd_min_conf,
@@ -795,12 +803,19 @@ def build_ocr_options(config: OcrConfig, scale: Optional[float] = None):
             kwargs["psm"] = config.psm
         if config.tessdata_path:
             kwargs["path"] = config.tessdata_path
+        options = None
         if config.osd_min_confidence > 0:
-            from src.ingestion.ocr_tesseract import RecallHubTesseractCliOcrOptions, register_tesseract_model
+            try:
+                from src.ingestion.ocr_tesseract import RecallHubTesseractCliOcrOptions, register_tesseract_model
 
-            register_tesseract_model()
-            options = RecallHubTesseractCliOcrOptions(osd_min_confidence=config.osd_min_confidence, **kwargs)
-        else:
+                register_tesseract_model()
+                options = RecallHubTesseractCliOcrOptions(osd_min_confidence=config.osd_min_confidence, **kwargs)
+            except ImportError as exc:  # older Docling without docling.models.stages: stock model
+                _warn_once(
+                    "orientation-guard",
+                    f"Docling's Tesseract model cannot be extended here ({exc}); orientation guard off",
+                )
+        if options is None:
             options = po.TesseractCliOcrOptions(**kwargs)
     elif config.engine == "easyocr":
         options = po.EasyOcrOptions(lang=[_OCR_LANGUAGE_CODES.get(code, code) for code in config.languages])
@@ -812,6 +827,13 @@ def build_ocr_options(config: OcrConfig, scale: Optional[float] = None):
 
 
 _ocr_engine_logged: bool = False
+_warned: Set[str] = set()
+
+
+def _warn_once(key: str, message: str) -> None:
+    if key not in _warned:
+        _warned.add(key)
+        logger.warning(message)
 
 
 def apply_ocr_options(pipeline_options, config: Optional[OcrConfig] = None, scale: Optional[float] = None) -> OcrConfig:
@@ -988,7 +1010,7 @@ def create_image_converter(ocr_config: Optional[OcrConfig] = None, image_path: O
 
     Images go through Docling's PDF pipeline with OCR forced on; the OCR engine
     and languages come from ``OCR_ENGINE`` / ``OCR_LANGUAGES`` exactly as for
-    scanned PDFs (:func:`create_document_converter`). With ``OCR_IMAGE_TARGET_PX``
+    scanned PDFs (:func:`create_document_converter`). With ``OCR_IMAGE_MAX_MPX``
     set and an ``image_path`` given, the OCR bitmap scale is chosen per image so
     its long side lands on that many pixels (see :meth:`OcrConfig.image_scale`);
     converters are cached per thread, configuration and (rounded) scale.
@@ -1005,15 +1027,58 @@ def create_image_converter(ocr_config: Optional[OcrConfig] = None, image_path: O
     """
     ocr_config = ocr_config or resolve_ocr_config()
     scale: Optional[float] = None
-    if image_path and ocr_config.image_target_px > 0:
+    if image_path and ocr_config.image_max_mpx > 0:
         dims = read_image_dimensions(image_path)
         if dims is not None:
             scale = ocr_config.image_scale(*dims)
-            # Quantise so a handful of converters covers every photo size
-            scale = round(scale * 4) / 4 if scale >= 1 else round(scale * 20) / 20
-            scale = _clamp_scale(scale)
-    key = ("image", ocr_config, scale, get_effective_device())
-    return _cached_converter(key, lambda: _build_image_converter(ocr_config, scale))
+    key = ("image", ocr_config, get_effective_device())
+    converter = _cached_converter(key, lambda: _build_image_converter(ocr_config, None))
+    if scale is not None:
+        set_image_ocr_scale(converter, scale)
+    return converter
+
+
+def set_image_ocr_scale(converter: Any, scale: float) -> bool:
+    """Set the OCR bitmap scale on a converter's live image pipeline.
+
+    Docling fixes ``scale`` on the OCR model when the pipeline is created and keys its
+    pipeline cache on the options, so changing ``ocr_options.scale`` per image would
+    rebuild the pipeline (layout model included) for every distinct photo size. The
+    model only reads ``self.scale`` per call, so it is set on the initialised model
+    instead; the converter is per thread, so no concurrent conversion sees the change.
+
+    Args:
+        converter: A ``DocumentConverter`` built by :func:`create_image_converter`.
+        scale: OCR pixels per page point.
+
+    Returns:
+        ``True`` if the scale was applied, ``False`` if the pipeline exposes no OCR model.
+    """
+    try:
+        from docling.datamodel.base_models import InputFormat
+
+        pipeline = converter._get_pipeline(InputFormat.IMAGE)  # initialises it on first use
+        model = getattr(pipeline, "ocr_model", None)
+        if model is None or not hasattr(model, "scale"):
+            return False
+        model.scale = float(scale)
+        return True
+    except Exception as exc:  # noqa: BLE001 - keep Docling's default scale rather than failing the file
+        logger.warning(f"Could not set the per-image OCR scale ({exc}); using the pipeline default")
+        return False
+
+
+def image_ocr_scale(converter: Any) -> Optional[float]:
+    """The OCR scale the converter's image pipeline currently uses (diagnostics)."""
+    try:
+        from docling.datamodel.base_models import InputFormat
+
+        pipeline = converter.initialized_pipelines.get(
+            next(k for k in converter.initialized_pipelines if k[0] is converter.format_to_options[InputFormat.IMAGE].pipeline_cls)
+        )
+        return float(getattr(pipeline.ocr_model, "scale"))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _build_image_converter(ocr_config: OcrConfig, scale: Optional[float]):

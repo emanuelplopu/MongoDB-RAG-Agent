@@ -7,7 +7,7 @@
 #   BENCH   bench folder holding sample/<set> (default C:/RecallHub-Verify/bench/ocr-scale-2026-10-16)
 #   REPO    checkout whose src/ and scripts/ are mounted into the image (default: this script's repo)
 #   IMAGE   worker image (default recallhub-ingestion-worker:ocrscale)
-#   OCR_*   any OCR_* variable is passed into the containers (OCR_SCAN_DPI, OCR_IMAGE_TARGET_PX, ...)
+#   OCR_*   any OCR_* variable is passed into the containers (OCR_SCAN_DPI, OCR_IMAGE_MAX_MPX, ...)
 #
 # Outputs land in $BENCH/runs/<label>/<set>/ (one folder per file + summary_K_of_N.json).
 # Containers are named ocr-<label>-<set>-<k>; `docker logs -f` follows one, `docker ps` lists them.

@@ -223,7 +223,7 @@ def _pdf_converter(variant: Variant) -> Any:
 def _image_converter(variant: Variant, image_path: Optional[Path] = None) -> Any:
     """The converter ``process_file`` builds for image files (``create_image_converter``).
 
-    Production chooses the OCR scale per image when ``OCR_IMAGE_TARGET_PX`` is set, so the
+    Production chooses the OCR scale per image when ``OCR_IMAGE_MAX_MPX`` is set, so the
     converter is requested per file exactly like ``process_file`` does (cached in production).
     """
     sys.path.insert(0, "/app")
@@ -258,6 +258,15 @@ def _converter_scale(converter: Any, kind: str) -> Optional[float]:
     try:
         from docling.datamodel.base_models import InputFormat
 
+        if kind == "image":
+            try:
+                from src.ingestion.ingest import image_ocr_scale  # type: ignore
+
+                live = image_ocr_scale(converter)  # the per-image scale set on the live model
+                if live is not None:
+                    return live
+            except ImportError:
+                pass
         fmt = InputFormat.PDF if kind == "pdf" else InputFormat.IMAGE
         return float(converter.format_to_options[fmt].pipeline_options.ocr_options.scale)
     except Exception:  # noqa: BLE001

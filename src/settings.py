@@ -148,11 +148,11 @@ class Settings(BaseSettings):
         ),
     )
 
-    ocr_image_target_px: int = Field(
-        default=0,
+    ocr_image_max_mpx: int = Field(
+        default=20,
         description=(
-            "Long-side pixel size of the OCR bitmap for image files (JPG/PNG/TIF); "
-            "0 keeps Docling's 3x-the-page-size behaviour"
+            "Megapixel budget of the OCR bitmap for image files (JPG/PNG/TIF): Docling's 3x scale "
+            "is kept unless the bitmap would exceed it (a 12 Mpx photo is ~140 Mpx at 3x); 0 = no cap"
         ),
     )
 
@@ -167,10 +167,11 @@ class Settings(BaseSettings):
     )
 
     ocr_osd_min_confidence: float = Field(
-        default=0.0,
+        default=10.0,
         description=(
             "Minimum Tesseract orientation-detection confidence before an OCR rectangle "
-            "is rotated; 0 applies every detected rotation (Docling's behaviour)"
+            "is rotated outright (below it the rotation is verified by OCRing both ways); "
+            "0 applies every detected rotation (Docling's behaviour)"
         ),
     )
 
@@ -240,7 +241,7 @@ class Settings(BaseSettings):
             'ocr_engine': self.ocr_engine,
             'ocr_languages': self.ocr_languages,
             'ocr_scan_dpi': self.ocr_scan_dpi,
-            'ocr_image_target_px': self.ocr_image_target_px,
+            'ocr_image_max_mpx': self.ocr_image_max_mpx,
             'ocr_psm': self.ocr_psm,
             'ocr_tessdata_path': self.ocr_tessdata_path,
             'ocr_osd_min_confidence': self.ocr_osd_min_confidence,

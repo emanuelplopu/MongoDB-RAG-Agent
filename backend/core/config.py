@@ -291,11 +291,11 @@ class BackendSettings(BaseSettings):
             "216 is Docling's default (scale 3.0)"
         ),
     )
-    ocr_image_target_px: int = Field(
-        default=0,
+    ocr_image_max_mpx: int = Field(
+        default=20,
         description=(
-            "Long-side pixel size of the OCR bitmap for image files (JPG/PNG/TIF); "
-            "0 keeps Docling's 3x-the-page-size behaviour"
+            "Megapixel budget of the OCR bitmap for image files (JPG/PNG/TIF): Docling's 3x scale "
+            "is kept unless the bitmap would exceed it (a 12 Mpx photo is ~140 Mpx at 3x); 0 = no cap"
         ),
     )
     ocr_psm: str = Field(
@@ -307,10 +307,11 @@ class BackendSettings(BaseSettings):
         description="Directory with alternative Tesseract traineddata files (e.g. tessdata_best); empty = system packs",
     )
     ocr_osd_min_confidence: float = Field(
-        default=0.0,
+        default=10.0,
         description=(
             "Minimum Tesseract orientation-detection confidence before an OCR rectangle "
-            "is rotated; 0 applies every detected rotation (Docling's behaviour)"
+            "is rotated outright (below it the rotation is verified by OCRing both ways); "
+            "0 applies every detected rotation (Docling's behaviour)"
         ),
     )
     ingest_page_furniture: bool = Field(
@@ -628,7 +629,7 @@ def get_settings() -> BackendSettings:
             ocr_engine=main_settings.ocr_engine,
             ocr_languages=main_settings.ocr_languages,
             ocr_scan_dpi=main_settings.ocr_scan_dpi,
-            ocr_image_target_px=main_settings.ocr_image_target_px,
+            ocr_image_max_mpx=main_settings.ocr_image_max_mpx,
             ocr_psm=main_settings.ocr_psm,
             ocr_tessdata_path=main_settings.ocr_tessdata_path,
             ocr_osd_min_confidence=main_settings.ocr_osd_min_confidence,

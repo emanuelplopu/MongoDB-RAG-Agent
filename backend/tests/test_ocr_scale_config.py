@@ -1,6 +1,6 @@
 """Tests for the OCR resolution / orientation settings added for the scale test.
 
-Covers the pure parts of ``src/ingestion/ingest.py`` (OCR_SCAN_DPI, OCR_IMAGE_TARGET_PX,
+Covers the pure parts of ``src/ingestion/ingest.py`` (OCR_SCAN_DPI, OCR_IMAGE_MAX_MPX,
 OCR_PSM, OCR_TESSDATA_PATH, OCR_OSD_MIN_CONFIDENCE), the converter cache and the
 orientation-confidence guard of ``src/ingestion/ocr_tesseract.py``. No Docling model is
 loaded: converters are only built, never run.
@@ -17,12 +17,12 @@ ingest = pytest.importorskip("src.ingestion.ingest")
 # Scale rules
 # ---------------------------------------------------------------------------
 
-def test_default_config_reproduces_docling_scale() -> None:
+def test_default_config_reproduces_docling_scale_for_pages() -> None:
     config = ingest.OcrConfig()
     assert config.scan_dpi == 216
     assert config.pdf_scale() == pytest.approx(3.0)
-    assert config.image_target_px == 0
-    assert config.image_scale(3408, 4624, None) is None  # 0 = Docling's own behaviour
+    assert config.image_max_mpx == 20
+    assert ingest.OcrConfig(image_max_mpx=0).image_scale(3408, 4624, None) is None  # 0 = no cap
 
 
 def test_pdf_scale_follows_scan_dpi() -> None:
@@ -33,20 +33,20 @@ def test_pdf_scale_follows_scan_dpi() -> None:
 @pytest.mark.parametrize(
     ("width", "height", "dpi", "expected"),
     [
-        (3408, 4624, None, 3500 / 4624),  # 12 Mpx phone photo, no DPI tag: downscale to 3,500 px
-        (2480, 3508, 300.0, 3500 / (3508 * 72 / 300)),  # 300-dpi A4 scan image: ~native resolution
-        (1654, 2339, 200.0, 3500 / (2339 * 72 / 200)),  # 200-dpi scan: upsampled 1.5x
-        (800, 600, None, 3500 / 800),  # small image: upsampled
+        (3408, 4624, None, (20e6 / (3408 * 4624)) ** 0.5),  # 12 Mpx phone photo, no DPI tag: 142 Mpx at 3x -> capped to 20 Mpx
+        (2480, 3508, 300.0, 3.0),  # 300-dpi A4 scan image: 4.5 Mpx at 3x, untouched
+        (1654, 2339, 200.0, 3.0),  # 200-dpi scan: untouched
+        (800, 600, None, 3.0),  # small image: untouched
     ],
 )
-def test_image_scale_targets_long_side(width: int, height: int, dpi, expected: float) -> None:
-    config = ingest.OcrConfig(image_target_px=3500)
+def test_image_scale_caps_the_bitmap_budget(width: int, height: int, dpi, expected: float) -> None:
+    config = ingest.OcrConfig(image_max_mpx=20)
     assert config.image_scale(width, height, dpi) == pytest.approx(expected, abs=1e-3)
 
 
 def test_image_scale_is_clamped() -> None:
-    config = ingest.OcrConfig(image_target_px=3500)
-    assert config.image_scale(100, 100, None) == ingest._OCR_SCALE_MAX
+    config = ingest.OcrConfig(image_max_mpx=20)
+    assert config.image_scale(100, 100, None) == 3.0
     assert config.image_scale(100000, 100000, None) == ingest._OCR_SCALE_MIN
 
 
@@ -56,12 +56,12 @@ def test_image_scale_is_clamped() -> None:
 
 def test_environment_sets_resolution_knobs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OCR_SCAN_DPI", "300")
-    monkeypatch.setenv("OCR_IMAGE_TARGET_PX", "3500")
+    monkeypatch.setenv("OCR_IMAGE_MAX_MPX", "40")
     monkeypatch.setenv("OCR_PSM", "6")
     monkeypatch.setenv("OCR_TESSDATA_PATH", "/data/tessdata")
     monkeypatch.setenv("OCR_OSD_MIN_CONFIDENCE", "1.5")
     config = ingest.resolve_ocr_config(engine="tesseract", languages="deu,eng")
-    assert (config.scan_dpi, config.image_target_px, config.psm) == (300, 3500, 6)
+    assert (config.scan_dpi, config.image_max_mpx, config.psm) == (300, 40, 6)
     assert config.tessdata_path == "/data/tessdata"
     assert config.osd_min_confidence == 1.5
     assert "scan_dpi=300" in config.describe() and "osd_min_conf=1.5" in config.describe()
@@ -69,13 +69,13 @@ def test_environment_sets_resolution_knobs(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_invalid_resolution_values_fall_back(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     monkeypatch.setenv("OCR_SCAN_DPI", "lots")
-    monkeypatch.setenv("OCR_IMAGE_TARGET_PX", "-5")
+    monkeypatch.setenv("OCR_IMAGE_MAX_MPX", "-5")
     monkeypatch.setenv("OCR_PSM", "42")
     monkeypatch.setenv("OCR_OSD_MIN_CONFIDENCE", "x")
     with caplog.at_level("ERROR", logger=ingest.logger.name):
         config = ingest.resolve_ocr_config(engine="tesseract", languages="deu")
     assert config.scan_dpi == ingest.DEFAULT_OCR_SCAN_DPI
-    assert config.image_target_px == ingest.DEFAULT_OCR_IMAGE_TARGET_PX
+    assert config.image_max_mpx == ingest.DEFAULT_OCR_IMAGE_MAX_MPX
     assert config.psm is None
     assert config.osd_min_confidence == ingest.DEFAULT_OCR_OSD_MIN_CONFIDENCE
     assert "OCR_SCAN_DPI" in caplog.text and "OCR_PSM" in caplog.text
@@ -87,7 +87,7 @@ def test_settings_surfaces_agree_on_new_defaults() -> None:
 
     for cls in (Settings, BackendSettings):
         assert cls.model_fields["ocr_scan_dpi"].default == ingest.DEFAULT_OCR_SCAN_DPI
-        assert cls.model_fields["ocr_image_target_px"].default == ingest.DEFAULT_OCR_IMAGE_TARGET_PX
+        assert cls.model_fields["ocr_image_max_mpx"].default == ingest.DEFAULT_OCR_IMAGE_MAX_MPX
         assert cls.model_fields["ocr_osd_min_confidence"].default == ingest.DEFAULT_OCR_OSD_MIN_CONFIDENCE
         assert cls.model_fields["ocr_psm"].default == ""
         assert cls.model_fields["ocr_tessdata_path"].default == ""
@@ -107,11 +107,14 @@ def _require_scalable_tesseract_options():
 
 def test_build_ocr_options_applies_scale_psm_and_tessdata() -> None:
     po = _require_scalable_tesseract_options()
-    config = ingest.OcrConfig(engine="tesseract", languages=("deu",), psm=6, tessdata_path="/data/tessdata")
+    config = ingest.OcrConfig(engine="tesseract", languages=("deu",), psm=6, tessdata_path="/data/tessdata",
+                              osd_min_confidence=0.0)
     options = ingest.build_ocr_options(config, scale=4.0)
     assert isinstance(options, po.TesseractCliOcrOptions)
-    assert options.kind == "tesseract"
+    assert options.kind == "tesseract"  # guard off: Docling's stock model
     assert (options.scale, options.psm, options.path) == (4.0, 6, "/data/tessdata")
+    default_options = ingest.build_ocr_options(ingest.OcrConfig(engine="tesseract"))
+    assert default_options.kind == "tesseract_recallhub"  # guard on by default
 
 
 def test_osd_guard_selects_recallhub_model() -> None:
@@ -163,21 +166,20 @@ def test_converters_are_cached_per_configuration_and_scale(tmp_path, monkeypatch
     from PIL import Image
 
     ingest.clear_converter_cache()
-    config = ingest.OcrConfig(engine="tesseract", languages=("eng",), image_target_px=3500)
+    config = ingest.OcrConfig(engine="tesseract", languages=("eng",), image_max_mpx=20)
     photo = tmp_path / "photo.jpg"
     Image.new("RGB", (3408, 4624), "white").save(photo)
     scan = tmp_path / "scan.png"
     Image.new("L", (2480, 3508), "white").save(scan, dpi=(300, 300))
 
     a = ingest.create_image_converter(config, image_path=str(photo))
-    b = ingest.create_image_converter(config, image_path=str(photo))
-    c = ingest.create_image_converter(config, image_path=str(scan))
-    assert a is b
-    assert a is not c
+    assert ingest.image_ocr_scale(a) == pytest.approx((20e6 / (3408 * 4624)) ** 0.5, abs=1e-3)  # capped photo
+    b = ingest.create_image_converter(config, image_path=str(scan))
+    assert a is b  # one converter (one pipeline, one layout model) per thread and configuration
+    assert ingest.image_ocr_scale(b) == pytest.approx(3.0)  # the scale is set on the live OCR model per image
     from docling.datamodel.base_models import InputFormat
 
-    assert a.format_to_options[InputFormat.IMAGE].pipeline_options.ocr_options.scale == pytest.approx(0.75)
-    assert c.format_to_options[InputFormat.IMAGE].pipeline_options.ocr_options.scale == pytest.approx(4.25)
+    assert a.format_to_options[InputFormat.IMAGE].pipeline_options.ocr_options.scale == pytest.approx(3.0)  # options untouched
 
     pdf_a = ingest.create_document_converter(config)
     pdf_b = ingest.create_document_converter(config)
