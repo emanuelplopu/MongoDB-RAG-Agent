@@ -789,6 +789,45 @@ async def _calculate_job_extended_metrics(db, job_id: str) -> dict:
         return {}
 
 
+def claim_ingestion_run(job_id: str) -> bool:
+    """Make ``job_id`` this process's live ingestion run unless another run is live.
+
+    The API process runs one ingestion at a time: ``_current_job_id`` is set from a run's
+    start until it has ended (running, paused, or stopped but still finishing its in-flight
+    files), and ``/status``, ``/pause`` and ``/stop`` act on that run. Entry points other
+    than :func:`run_ingestion` (the ingestion queue) claim the run here before they start a
+    pipeline and give it back with :func:`release_ingestion_run`. Check and set happen
+    without an await in between, so no other coroutine can claim the run in between.
+
+    Args:
+        job_id: Job about to run.
+
+    Returns:
+        True if ``job_id`` now owns the live run, False if another run is live.
+    """
+    global _current_job_id
+
+    if _current_job_id is not None:
+        return False
+    _current_job_id = job_id
+    return True
+
+
+def release_ingestion_run(job_id: str) -> None:
+    """End ``job_id``'s claim on the live run, leaving a run it does not own alone.
+
+    Args:
+        job_id: Job that claimed the run with :func:`claim_ingestion_run`.
+    """
+    global _current_job_id, _current_job_state
+
+    if _current_job_id != job_id:
+        logger.warning(f"Job {job_id} does not own the live ingestion run ({_current_job_id}); left as is")
+        return
+    _current_job_id = None
+    _current_job_state = None
+
+
 async def run_ingestion(job_id: str, config: dict, db, start_paused: bool = False):
     """Run ingestion in background with DB persistence.
 
@@ -801,8 +840,30 @@ async def run_ingestion(job_id: str, config: dict, db, start_paused: bool = Fals
 
     A user stop (``/stop``, ``/cancel``) ends the job with that final status; a shutdown
     or any other cancellation ends it as ``INTERRUPTED`` so the next API start resumes it.
+    If another run is already live (an ingestion-queue job claimed the run after
+    ``/start`` checked it), the job is not run and ends ``failed``.
     """
     global _current_job_id, _shutdown_requested, _pause_requested, _stop_requested, _stop_status, _is_paused, _current_job_state, _pending_files_queue
+
+    if _current_job_id is not None:
+        # /start checks the run before its DB awaits and this run begins only after the response,
+        # so a queue job (or a second /start) can claim it in between. Running anyway would reset
+        # the live run's pause/stop flags and both runs would process files.
+        message = f"Not started: ingestion job {_current_job_id} was already running"
+        logger.warning(f"Ingestion job {job_id}: {message}")
+        collection = await get_jobs_collection(db)
+        await collection.update_one(
+            {"_id": job_id, "status": IngestionStatus.PENDING},  # never touch a job that has run
+            {"$set": {
+                "status": IngestionStatus.FAILED,
+                "completed_at": datetime.now().isoformat(),
+                "errors": [message],
+                "phase": "failed",
+                "phase_message": message,
+            }}
+        )
+        return
+
     _current_job_id = job_id
     _shutdown_requested = False
     _pause_requested = start_paused
