@@ -117,8 +117,19 @@ The script asks for the password, then:
 5. runs `docker compose up -d`, which recreates the backend and worker
    containers with the new volume.
 
-Repeat per share. `-Remove` detaches a share (profiles that still list it
-show it as not reachable). `-NoRestart` only writes the configuration.
+Repeat per share. Further shares on the same server with the same service
+account take their credentials from a share that is already configured:
+
+```powershell
+.\scripts\Add-NetworkShare.ps1 -Name akten -UncPath \\nas.diejuristin\Akten -CredentialsFrom kanzlei -NoRestart
+```
+
+copies user name, password, SMB version, domain and tenant from the
+`SHARE_KANZLEI_*` entries, asks for nothing, and still test-mounts the new
+share (so a file server that exposes one share per department needs the
+password typed once). `-Remove` detaches a share (profiles that still list
+it show it as not reachable). `-NoRestart` only writes the configuration;
+after several additions one `docker compose up -d` applies them together.
 
 Manual alternative: copy `docker-compose.shares.example.yml` to
 `docker-compose.shares.yml`, edit it, create the empty folder

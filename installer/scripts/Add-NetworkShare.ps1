@@ -44,6 +44,14 @@
 .PARAMETER Tenant
     Which backend gets the share besides the ingestion worker:
     quellex, recallhub or both (default).
+.PARAMETER CredentialsFrom
+    Name of a share already configured in .env whose account the new share uses
+    (same file server, same service account): user name, password, SMB version
+    and domain are copied from its SHARE_<FROM>_* entries, so the password is
+    not asked for again and never has to be typed into a console a second time.
+    -Username, -Password, -SmbVersion and -Domain still override the copied
+    values; -Tenant is inherited too when it is not given. The copied account is
+    still test-mounted against the new share unless -SkipTest.
 .PARAMETER Remove
     Detach the share: delete its .env entries and its volume, regenerate the
     compose file and restart. Profiles that still list the folder keep the
@@ -54,6 +62,9 @@
     Only write the configuration; do not run "docker compose up -d".
 .EXAMPLE
     .\Add-NetworkShare.ps1 -Name kanzlei -UncPath \\nas.diejuristin\Kanzlei -Username svc-recallhub -Tenant quellex
+.EXAMPLE
+    # Second share on the same NAS with the same account: no password prompt
+    .\Add-NetworkShare.ps1 -Name akten -UncPath \\nas.diejuristin\Akten -CredentialsFrom kanzlei -NoRestart
 .EXAMPLE
     .\Add-NetworkShare.ps1 -Name kanzlei -Remove
 #>
@@ -71,6 +82,8 @@ param(
     [ValidateSet("quellex", "recallhub", "both")]
     [string]$Tenant = "both",
     [string]$InstallPath = "",
+    [ValidatePattern('^$|^[a-z0-9][a-z0-9-]{0,39}$')]
+    [string]$CredentialsFrom = "",
     [switch]$Remove,
     [switch]$SkipTest,
     [switch]$NoRestart
@@ -305,6 +318,30 @@ if ($Remove) {
         $lines = Remove-EnvKey -Lines $lines -Key "SHARE_${keyName}_${suffix}"
     }
 } else {
+    if ($CredentialsFrom) {
+        # Same NAS, same service account as an existing share: copy its entries
+        # instead of asking for the password again. The plain text only moves
+        # between .env entries inside this process.
+        $fromKey = ConvertTo-EnvKeyName $CredentialsFrom
+        if (-not (Get-EnvValue -Lines $lines -Key "SHARE_${fromKey}_UNC")) {
+            throw "No share named '$CredentialsFrom' in .env to take the credentials from"
+        }
+        if (-not $Username) { $Username = Get-EnvValue -Lines $lines -Key "SHARE_${fromKey}_USER" }
+        if ($null -eq $Password) {
+            $fromPlain = Get-EnvValue -Lines $lines -Key "SHARE_${fromKey}_PASSWORD"
+            if ($fromPlain) { $Password = ConvertTo-SecureString $fromPlain -AsPlainText -Force }
+        }
+        $fromOptions = Get-EnvValue -Lines $lines -Key "SHARE_${fromKey}_OPTIONS"
+        if ($fromOptions) {
+            if (-not $PSBoundParameters.ContainsKey("SmbVersion") -and $fromOptions -match '(?:^|,)vers=([^,]+)') { $SmbVersion = $Matches[1] }
+            if (-not $Domain -and $fromOptions -match '(?:^|,)domain=([^,]+)') { $Domain = $Matches[1] }
+        }
+        if (-not $PSBoundParameters.ContainsKey("Tenant")) {
+            $fromTenant = Get-EnvValue -Lines $lines -Key "SHARE_${fromKey}_TENANT"
+            if ($fromTenant) { $Tenant = $fromTenant }
+        }
+        Write-Host "  Using the account of share '$CredentialsFrom' ($Username, vers=$SmbVersion, tenant=$Tenant)" -ForegroundColor Gray
+    }
     if (-not $UncPath) { throw "-UncPath is required (\\server\share)" }
     if (-not $Username) { throw "-Username is required" }
     $device = ConvertTo-CifsDevice $UncPath
