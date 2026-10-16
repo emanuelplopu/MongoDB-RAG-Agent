@@ -33,6 +33,7 @@ except ImportError:
 
 from src.ingestion.chunker import ChunkingConfig, create_chunker, DocumentChunk
 from src.ingestion.embedder import create_embedder
+from src.ingestion.ocr_repair import repair_docling_document, repair_ocr_text
 from src.settings import load_settings
 from src.profile import get_profile_manager
 
@@ -1910,7 +1911,18 @@ class DocumentIngestionPipeline:
             self._read_document,
             file_path
         )
-        
+
+        # Post-OCR repair of statute references ("$ 94 ÄrzteG" -> "§ 94 ÄrzteG"); the Docling
+        # document is repaired too because the chunker builds chunk text from its items.
+        repaired_items = repair_docling_document(docling_doc)
+        repaired_content = repair_ocr_text(document_content)
+        if repaired_items or repaired_content != document_content:
+            logger.info(
+                f"OCR repair: restored § references in {os.path.basename(file_path)} "
+                f"({repaired_items} document items)"
+            )
+            document_content = repaired_content
+
         # Yield control after heavy operation
         await asyncio.sleep(0)
         

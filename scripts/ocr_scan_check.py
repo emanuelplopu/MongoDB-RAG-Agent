@@ -52,6 +52,7 @@ VOWEL_RE = re.compile(r"[aeiouyäöüAEIOUYÄÖÜ]")
 MERGED_RE = re.compile(r"\b[a-zäöüß]{3,}[A-ZÄÖÜ][a-zäöüß]{2,}\b|\b[A-Za-zäöüß]{3,}\d{1,}\b|\b\d{3,}[A-Za-zäöüß]{3,}\b|[A-Za-zäöüß]{3,}:\d")
 
 log = logging.getLogger("ocr_scan_check")
+REPAIR_OCR_TEXT = True  # production behaviour; --no-repair turns it off for before/after comparisons
 
 
 @dataclass
@@ -402,6 +403,13 @@ def process(in_dir: Path, out_dir: Path, render_dpi: int, limit: Optional[int], 
             result = conv.convert(str(convert_path))
             fm.convert_seconds = round(time.perf_counter() - t0, 2)
             doc = result.document
+            if REPAIR_OCR_TEXT:
+                # production applies the post-OCR § repair to the Docling document and the content
+                from src.ingestion.ocr_repair import repair_docling_document  # type: ignore
+
+                repaired = repair_docling_document(doc)
+                if repaired:
+                    log.info("OCR repair changed %d items in %s", repaired, fm.file)
             markdown = doc.export_to_markdown()
             fm.markdown_chars = len(markdown)
             (target / "document.md").write_text(markdown, encoding="utf-8")
@@ -474,7 +482,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     exp.add_argument("--lang", default=None, help="comma-separated OCR languages, e.g. german,english")
     exp.add_argument("--engine", default=None, help="OCR engine kind registered in docling (rapidocr, easyocr, tesseract, ...)")
     exp.add_argument("--upscale", type=float, default=None, help="resample image inputs by this factor before OCR")
+    exp.add_argument("--no-repair", action="store_true", help="skip the production post-OCR § repair (src/ingestion/ocr_repair.py)")
     args = ap.parse_args(argv)
+    global REPAIR_OCR_TEXT
+    REPAIR_OCR_TEXT = not args.no_repair
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("docling").setLevel(logging.INFO)
