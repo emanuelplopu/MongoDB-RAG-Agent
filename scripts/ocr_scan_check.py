@@ -502,7 +502,7 @@ def _safe_name(path: Path, in_dir: Path) -> str:
 
 
 def process(in_dir: Path, out_dir: Path, render_dpi: int, limit: Optional[int], variant: Variant,
-            shard: Tuple[int, int] = (0, 1), render_pages: bool = True) -> List[FileMeta]:
+            shard: Tuple[int, int] = (0, 1), render_pages: bool = True, skip_done: bool = False) -> List[FileMeta]:
     import docling
 
     results: List[FileMeta] = []
@@ -516,6 +516,14 @@ def process(in_dir: Path, out_dir: Path, render_dpi: int, limit: Optional[int], 
         kind = "pdf" if path.suffix.lower() in PDF_EXT else "image"
         fm = FileMeta(file=str(path.relative_to(in_dir)), kind=kind, bytes=path.stat().st_size)
         target = out_dir / _safe_name(path, in_dir)
+        if skip_done and (target / "meta.json").exists():
+            try:
+                results.append(FileMeta(**{k: v for k, v in json.loads((target / "meta.json").read_text(encoding="utf-8")).items()
+                                           if k in FileMeta.__dataclass_fields__ and k != "page_meta"}))
+            except Exception:  # noqa: BLE001 - a broken meta.json is simply redone
+                pass
+            else:
+                continue
         target.mkdir(parents=True, exist_ok=True)
         log.info("[%d] %s (%s, %.0f KB)", idx + 1, fm.file, kind, fm.bytes / 1024)
         try:
@@ -530,19 +538,29 @@ def process(in_dir: Path, out_dir: Path, render_dpi: int, limit: Optional[int], 
         _OSD_EVENTS.clear()
         osd_counts.reset()
         try:
+            convert_path = path
+            temp_copy: Optional[str] = None
             if kind == "pdf":
                 pdf_conv = pdf_conv or _pdf_converter(variant)
                 conv = pdf_conv
             else:
-                conv = _image_converter(variant, path)
+                try:  # production re-saves images Docling cannot load (MPO, (0,0) DPI tag)
+                    from src.ingestion.ingest import prepare_image_for_docling  # type: ignore
+
+                    prepared, temp_copy = prepare_image_for_docling(str(path))
+                    convert_path = Path(prepared)
+                except ImportError:
+                    pass
+                conv = _image_converter(variant, convert_path)
             fm.ocr_scale = _converter_scale(conv, kind)
-            convert_path = path
             if variant.upscale and kind == "image":
                 convert_path = _upscaled_copy(path, variant.upscale, out_dir / "_upscaled")
             before = _model_counters(conv)
             t0 = time.perf_counter()
             result = conv.convert(str(convert_path))
             fm.convert_seconds = round(time.perf_counter() - t0, 2)
+            if temp_copy and os.path.exists(temp_copy):
+                os.remove(temp_copy)
             fm.osd = _osd_summary(list(_OSD_EVENTS), osd_counts.reset())
             after = _model_counters(conv)
             fm.osd.update({k: after[k] - before[k] for k in _MODEL_COUNTERS})
@@ -645,6 +663,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--limit", type=int, default=None, help="stop after N input files")
     ap.add_argument("--shard", default="0/1", help="K/N: process every N-th input starting at K (parallel containers)")
     ap.add_argument("--no-render", action="store_true", help="skip writing page_NN.png spot-check images")
+    ap.add_argument("--skip-done", action="store_true", help="skip inputs that already have a meta.json in the output folder (resume)")
     ap.add_argument("-v", "--verbose", action="store_true")
     exp = ap.add_argument_group("what-if experiments (leave unset for the production configuration)")
     exp.add_argument("--ocr-scale", type=float, default=None, help="docling ocr_options.scale (production 3.0)")
@@ -666,7 +685,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     log.info("configuration: %s", "production" if variant.is_production() else asdict(variant))
     k, n = (int(x) for x in args.shard.split("/"))
     results = process(args.in_dir, args.out_dir, args.render_dpi, args.limit, variant, shard=(k, n),
-                      render_pages=not args.no_render)
+                      render_pages=not args.no_render, skip_done=args.skip_done)
     ok = sum(1 for r in results if r.status == "ok")
     log.info("done: %d files, %d ok, %d pages, %.0f s conversion, outputs in %s", len(results), ok,
              sum(r.pages for r in results), sum(r.convert_seconds for r in results), args.out_dir)

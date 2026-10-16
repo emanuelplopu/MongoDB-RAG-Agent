@@ -112,6 +112,24 @@ abbreviation, `…gesetz`/`…ordnung`) is touched, amounts never are. Like the
 engine, it reaches only documents ingested after it shipped.
 Evidence and the measurement harness: `docs/24-OCR_SCAN_QUALITY_CHECK.md`.
 
+**OCR resolution, orientation and content layers** (all read from both
+settings surfaces, passed through by `docker-compose.yml`; evidence in
+`docs/25-OCR_SCALE_TEST.md`):
+
+| setting | default | what it does |
+|---|---|---|
+| `OCR_OSD_MIN_CONFIDENCE` | `10` | Tesseract's per-rectangle orientation detection is applied outright only at this confidence or above; below it the rectangle is OCRed both ways and the better reading kept (`src/ingestion/ocr_tesseract.py`, Docling kind `tesseract_recallhub`). `0` restores Docling's behaviour, which flipped upright Courier pages and tables by 180°. The same model OCRs a whole page when the layout model finds no text region on it. |
+| `OCR_SCAN_DPI` | `216` | Raster resolution of PDF pages for OCR (Docling's `scale=3.0`). 300 dpi measured worse and slower. |
+| `OCR_IMAGE_MAX_MPX` | `20` | Megapixel budget of the OCR bitmap for image files. Docling OCRs images at 3× their size in points, i.e. a phone photo without a DPI tag at 3× its pixel size (~140 Mpx, 20-60 s); the scale is reduced per image to stay within the budget, A4 scan images (4.5 Mpx at 3×) are untouched. `0` = no cap. |
+| `OCR_PSM`, `OCR_TESSDATA_PATH` | empty | Tesseract page segmentation mode and an alternative traineddata directory (e.g. `tessdata_best`). Both were measured and not adopted; available for experiments. |
+| `INGEST_PAGE_FURNITURE` | `true` | Keep Docling's furniture layer (page headers/footers: Geschäftszahl headers, `Hinterlegt am …` ERV stamps, IBAN/UID footers) in the stored Markdown **and** in the HybridChunker's chunks. Docling drops it by default for every format; it never reached the index before. |
+| `OCR_IMAGE_NOISE_GATE` | `true` | Store `[Image: … - no readable text]` instead of letter soup for image files whose OCR output has a word-like token ratio < 0.45 and OCR confidence < 0.65 (or ratio < 0.25); photographed letters, forms and screenshots pass. |
+
+Converters are cached per worker thread and configuration
+(`create_document_converter()` / `create_image_converter()`); Docling keeps
+its initialised pipeline per converter instance, so the former per-file
+construction reloaded the layout model for every scanned file.
+
 **Audio Processing** uses Whisper:
 - Transcribes audio content to text
 - Preserves speaker identification when available

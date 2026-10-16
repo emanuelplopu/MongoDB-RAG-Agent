@@ -314,6 +314,20 @@ class BackendSettings(BaseSettings):
             "0 applies every detected rotation (Docling's behaviour)"
         ),
     )
+    ocr_rect_dilation: int = Field(
+        default=20,
+        description=(
+            "Dilation (page points) of the layout clusters before neighbouring ones are merged "
+            "into one OCR rectangle; Docling's 20 merges stacked tables into one crop"
+        ),
+    )
+    ingest_table_structure: bool = Field(
+        default=True,
+        description=(
+            "Run Docling's table-structure stage (TableFormer). Off keeps table text as plain "
+            "lines; on produces Markdown tables but drops OCR cells it cannot place"
+        ),
+    )
     ingest_page_furniture: bool = Field(
         default=True,
         description=(
@@ -634,6 +648,8 @@ def get_settings() -> BackendSettings:
             ocr_tessdata_path=main_settings.ocr_tessdata_path,
             ocr_osd_min_confidence=main_settings.ocr_osd_min_confidence,
             ingest_page_furniture=main_settings.ingest_page_furniture,
+            ingest_table_structure=main_settings.ingest_table_structure,
+            ocr_rect_dilation=main_settings.ocr_rect_dilation,
             ocr_image_noise_gate=main_settings.ocr_image_noise_gate,
         )
     except Exception:

@@ -435,6 +435,10 @@ DEFAULT_OCR_PSM: Optional[int] = None
 # 2026-10-16 scale sample every rotation proposed below 1 on upright pages was wrong, an
 # upright Courier page was flipped at 3.99, genuine rotations score >= 10.
 DEFAULT_OCR_OSD_MIN_CONFIDENCE = 10.0
+# Dilation (page points) Docling applies to the layout clusters before merging the ones that
+# touch into one OCR rectangle. Docling's 20 merges stacked tables (gaps of ~24 pt) into one
+# crop, on which Tesseract's segmentation drops whole columns of dates and amounts.
+DEFAULT_OCR_RECT_DILATION = 20
 _OCR_SCALE_MIN, _OCR_SCALE_MAX = 0.25, 8.0
 _DOCLING_POINTS_PER_INCH = 72.0
 # Image files whose OCR output is noise (a photo of a car, a building site) are stored
@@ -508,6 +512,26 @@ def conversion_ocr_score(result: Any) -> Optional[float]:
         return sum(scores) / len(scores) if scores else None
     except Exception:  # noqa: BLE001
         return None
+
+
+# Docling's table-structure stage (TableFormer) turns detected tables into Markdown tables
+# but consumes the OCR cells inside the table region and drops whatever it cannot place in
+# a cell; on OCRed Honorarnote / Grundbuch tables that loses dates and amounts. With the
+# stage off, table text is kept as plain text lines (row by row), nothing is dropped.
+DEFAULT_INGEST_TABLE_STRUCTURE = True
+
+
+def table_structure_enabled() -> bool:
+    """Whether Docling's table-structure stage runs (``INGEST_TABLE_STRUCTURE``)."""
+    raw = os.environ.get("INGEST_TABLE_STRUCTURE")
+    if raw is None:
+        try:
+            raw = str(load_settings(use_profile=False).ingest_table_structure)
+        except Exception:  # settings need MONGODB_URI etc.; the harness has none
+            raw = None
+    if raw is None:
+        return DEFAULT_INGEST_TABLE_STRUCTURE
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
 # Keep page headers and footers (Docling's "furniture" content layer) in the stored content
@@ -586,6 +610,7 @@ class OcrConfig:
     psm: Optional[int] = DEFAULT_OCR_PSM
     tessdata_path: Optional[str] = None
     osd_min_confidence: float = DEFAULT_OCR_OSD_MIN_CONFIDENCE
+    rect_dilation: int = DEFAULT_OCR_RECT_DILATION
 
     def describe(self) -> str:
         """Short human-readable form for logs."""
@@ -602,6 +627,8 @@ class OcrConfig:
             extras.append(f"tessdata={self.tessdata_path}")
         if self.osd_min_confidence != DEFAULT_OCR_OSD_MIN_CONFIDENCE:
             extras.append(f"osd_min_conf={self.osd_min_confidence:g}")
+        if self.rect_dilation != DEFAULT_OCR_RECT_DILATION:
+            extras.append(f"rect_dilation={self.rect_dilation}")
         suffix = (" " + " ".join(extras)) if extras else ""
         if self.engine == "rapidocr":
             return f"rapidocr (languages not configurable){suffix}"
@@ -641,6 +668,48 @@ class OcrConfig:
 
 def _clamp_scale(scale: float) -> float:
     return round(min(max(scale, _OCR_SCALE_MIN), _OCR_SCALE_MAX), 4)
+
+
+def prepare_image_for_docling(image_path: str) -> Tuple[str, Optional[str]]:
+    """Return a path Docling's image backend can load, re-saving the file when it cannot.
+
+    Docling rejects two kinds of files that phones and cameras produce routinely: JPEGs
+    whose DPI tag is ``(0, 0)`` (screenshots, some Apple exports; ``_validate_dpi`` raises)
+    and MPO multi-picture containers (Canon). Both are re-saved as a plain PNG without a DPI
+    tag in a temporary file; everything else is passed through untouched.
+
+    Args:
+        image_path: The image file about to be converted.
+
+    Returns:
+        ``(path_to_convert, temp_path)``; ``temp_path`` is ``None`` when the original is used
+        and must otherwise be removed by the caller after the conversion.
+    """
+    try:
+        from PIL import Image
+
+        with Image.open(image_path) as img:
+            dpi = img.info.get("dpi")
+            bad_dpi = dpi is not None and (
+                not isinstance(dpi, tuple) or len(dpi) != 2
+                or any((not isinstance(v, (int, float))) or v <= 0 or v != v for v in dpi)
+            )
+            if img.format != "MPO" and not bad_dpi:
+                return image_path, None
+            import tempfile
+
+            fd, tmp = tempfile.mkstemp(suffix=".png", prefix="recallhub-img-")
+            os.close(fd)
+            frame = img.convert("RGB") if img.mode not in ("L", "RGB") else img.copy()
+            frame.save(tmp, "PNG")
+            logger.info(
+                f"Re-saved {os.path.basename(image_path)} for OCR ({img.format}, dpi tag {dpi}): "
+                "Docling cannot load it as is"
+            )
+            return tmp, tmp
+    except Exception as exc:  # noqa: BLE001 - let Docling report the real problem
+        logger.debug(f"Image pre-check failed for {image_path}: {exc}")
+        return image_path, None
 
 
 def read_image_dimensions(image_path: str) -> Optional[Tuple[int, int, Optional[float]]]:
@@ -728,6 +797,7 @@ def resolve_ocr_config(
     psm_raw = env.get("OCR_PSM")
     tessdata_raw = env.get("OCR_TESSDATA_PATH")
     osd_raw = env.get("OCR_OSD_MIN_CONFIDENCE")
+    dilation_raw = env.get("OCR_RECT_DILATION")
     if engine is None or languages is None:
         try:
             settings = load_settings(use_profile=False)
@@ -738,6 +808,7 @@ def resolve_ocr_config(
             psm_raw = settings.ocr_psm if psm_raw is None else psm_raw
             tessdata_raw = settings.ocr_tessdata_path if tessdata_raw is None else tessdata_raw
             osd_raw = str(settings.ocr_osd_min_confidence) if osd_raw is None else osd_raw
+            dilation_raw = str(settings.ocr_rect_dilation) if dilation_raw is None else dilation_raw
         except Exception as exc:  # settings need MONGODB_URI etc.; the harness has none
             logger.debug(f"OCR settings not available via src.settings ({exc}); using environment")
             engine = env.get("OCR_ENGINE", DEFAULT_OCR_ENGINE) if engine is None else engine
@@ -763,6 +834,8 @@ def resolve_ocr_config(
         psm = None
     tessdata = (tessdata_raw or "").strip() or None
     osd_min_conf = max(_parse_float(osd_raw, "OCR_OSD_MIN_CONFIDENCE", DEFAULT_OCR_OSD_MIN_CONFIDENCE), 0.0)
+    dilation = _parse_optional_int(dilation_raw, "OCR_RECT_DILATION")
+    dilation = DEFAULT_OCR_RECT_DILATION if dilation is None or dilation < 0 else dilation
     return OcrConfig(
         engine=engine_name,
         languages=parse_ocr_languages(languages),
@@ -771,6 +844,7 @@ def resolve_ocr_config(
         psm=psm,
         tessdata_path=tessdata,
         osd_min_confidence=osd_min_conf,
+        rect_dilation=dilation,
     )
 
 
@@ -809,7 +883,9 @@ def build_ocr_options(config: OcrConfig, scale: Optional[float] = None):
                 from src.ingestion.ocr_tesseract import RecallHubTesseractCliOcrOptions, register_tesseract_model
 
                 register_tesseract_model()
-                options = RecallHubTesseractCliOcrOptions(osd_min_confidence=config.osd_min_confidence, **kwargs)
+                options = RecallHubTesseractCliOcrOptions(
+                    osd_min_confidence=config.osd_min_confidence, rect_dilation=config.rect_dilation, **kwargs
+                )
             except ImportError as exc:  # older Docling without docling.models.stages: stock model
                 _warn_once(
                     "orientation-guard",
@@ -977,7 +1053,7 @@ def _build_document_converter(ocr_config: OcrConfig):
         # Enable OCR with acceleration if configured
         if cfg.enable_ocr_acceleration:
             pipeline_options.do_ocr = True
-            pipeline_options.do_table_structure = True
+        pipeline_options.do_table_structure = table_structure_enabled()
 
         # Select the OCR engine (tesseract deu+eng by default; auto keeps Docling's choice)
         # and the OCR raster resolution for PDF pages (OCR_SCAN_DPI).
@@ -1089,6 +1165,7 @@ def _build_image_converter(ocr_config: OcrConfig, scale: Optional[float]):
     # Configure OCR pipeline for images
     pipeline_options = PdfPipelineOptions()
     pipeline_options.do_ocr = True
+    pipeline_options.do_table_structure = table_structure_enabled()
 
     # Get effective device for acceleration
     device = get_effective_device()
@@ -1430,8 +1507,13 @@ class DocumentIngestionPipeline:
                     f"{os.path.basename(file_path)}"
                 )
                 
-                converter = create_image_converter(image_path=file_path)
-                result = converter.convert(file_path)
+                convert_path, temp_copy = prepare_image_for_docling(file_path)
+                try:
+                    converter = create_image_converter(image_path=convert_path)
+                    result = converter.convert(convert_path)
+                finally:
+                    if temp_copy and os.path.exists(temp_copy):
+                        os.remove(temp_copy)
 
                 markdown_content = export_document_markdown(result.document)
 

@@ -331,3 +331,56 @@ def test_osd_guard_stores_docling_orientation_convention(monkeypatch: pytest.Mon
     model._perform_osd("rect.png")
     # the retry must rotate exactly like Docling would have for the unsuppressed rotation
     assert model._suppressed["rect.png"] == parse_tesseract_orientation("270") == 90
+
+
+def test_table_structure_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.core.config import BackendSettings
+    from src.settings import Settings
+
+    for cls in (Settings, BackendSettings):
+        assert cls.model_fields["ingest_table_structure"].default == ingest.DEFAULT_INGEST_TABLE_STRUCTURE
+    monkeypatch.setenv("INGEST_TABLE_STRUCTURE", "false")
+    assert ingest.table_structure_enabled() is False
+    monkeypatch.setenv("INGEST_TABLE_STRUCTURE", "true")
+    assert ingest.table_structure_enabled() is True
+
+
+def test_converters_follow_table_structure_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("docling.document_converter")
+    from docling.datamodel.base_models import InputFormat
+
+    monkeypatch.setenv("INGEST_TABLE_STRUCTURE", "false")
+    ingest.clear_converter_cache()
+    config = ingest.OcrConfig(engine="tesseract", languages=("eng",), osd_min_confidence=0.0)
+    pdf = ingest.create_document_converter(config)
+    img = ingest.create_image_converter(config)
+    assert pdf.format_to_options[InputFormat.PDF].pipeline_options.do_table_structure is False
+    assert img.format_to_options[InputFormat.IMAGE].pipeline_options.do_table_structure is False
+    ingest.clear_converter_cache()
+
+
+def test_prepare_image_for_docling_resaves_zero_dpi_and_mpo(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+    from PIL import Image
+
+    plain = tmp_path / "plain.jpg"
+    Image.new("RGB", (40, 30), "white").save(plain, dpi=(300, 300))
+    assert ingest.prepare_image_for_docling(str(plain)) == (str(plain), None)
+
+    # Pillow does not round-trip a (0, 0) density tag, so inject what a real screenshot reports
+    zero = tmp_path / "zero.jpg"
+    Image.new("RGB", (40, 30), "white").save(zero)
+    real_open = Image.open
+
+    def open_with_zero_dpi(path, *args, **kwargs):
+        img = real_open(path, *args, **kwargs)
+        if str(path) == str(zero):
+            img.info["dpi"] = (0, 0)
+        return img
+
+    monkeypatch.setattr(Image, "open", open_with_zero_dpi)
+    path, temp = ingest.prepare_image_for_docling(str(zero))
+    assert temp is not None and path == temp and path.endswith(".png")
+    with real_open(path) as img:
+        assert img.format == "PNG" and "dpi" not in img.info
+    os.remove(temp)

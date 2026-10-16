@@ -76,6 +76,14 @@ class RecallHubTesseractCliOcrOptions(TesseractCliOcrOptions):
             "that has no text layer (sparse pages, footers, stamps)."
         ),
     )
+    rect_dilation: int = Field(
+        default=20,
+        description=(
+            "Dilation (page points) applied to the layout clusters before neighbouring ones "
+            "are merged into one OCR rectangle; Docling's 20 merges stacked tables into one "
+            "crop on which Tesseract drops columns, a small value keeps them separate."
+        ),
+    )
 
 
 class RecallHubTesseractCliOcrModel(TesseractOcrCliModel):
@@ -158,7 +166,14 @@ class RecallHubTesseractCliOcrModel(TesseractOcrCliModel):
                     os.remove(tmp_name)
         return map_rotated_boxes(df_rot, angle, width, height)
 
-    # -- sparse pages -------------------------------------------------------------------
+    # -- OCR rectangles -----------------------------------------------------------------
+
+    def _deduplicate_rects(self, size, rects, dilation_size=0):  # type: ignore[override]
+        """Merge overlapping cluster rectangles with the configured dilation instead of Docling's 20."""
+        configured = getattr(self.options, "rect_dilation", None)
+        if configured is not None and dilation_size:
+            dilation_size = max(int(configured), 0)
+        return super()._deduplicate_rects(size, rects, dilation_size=dilation_size)
 
     def get_ocr_rects(self, page: Page) -> List[BoundingBox]:
         rects = super().get_ocr_rects(page)
