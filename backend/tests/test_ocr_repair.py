@@ -31,6 +31,7 @@ from src.ingestion.ocr_repair import repair_docling_document, repair_ocr_text
         ("insbesondere nach $ 1096 Abs. 1 ABGB, bleiben unberührt", "insbesondere nach § 1096 Abs. 1 ABGB, bleiben unberührt"),
         ("$1096 ABGB", "§ 1096 ABGB"),
         ("5 65 Zi 1 lit c StPO", "§ 65 Zi 1 lit c StPO"),
+        ("Opfer gemäß 8 65 Zi 1 lit c StPO", "Opfer gemäß § 65 Zi 1 lit c StPO"),  # tessdata_best reads § as 8
         # several in one text
         ("$ 94 ÄrzteG und $ 10 AVG", "§ 94 ÄrzteG und § 10 AVG"),
     ],
@@ -48,6 +49,8 @@ def test_repairs_section_sign(ocr: str, expected: str) -> None:
         "Art 82 DSGVO zur Geschäftszahl 44 Cg 200/25b",
         "§ 10 AVG bleibt",  # already right
         "Stufe 5 10 Prozent",  # "5 10" without a statute
+        "um 8 15 Uhr",
+        "Material der Güte $235 und $355",  # steel grades S235/S355, not statutes (seen in the fresh sample)
         "Top 5 ist frei",
         "",
     ],

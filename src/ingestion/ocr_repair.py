@@ -2,8 +2,8 @@
 
 Tesseract (the production OCR engine since ``OCR_ENGINE=tesseract``) reads the
 section sign ``§`` of a statute reference as ``$`` (and ``§§`` as ``$$``), and
-occasionally as the digit ``5``: ``$ 94 ÄrzteG``, ``$$ RAO``, ``5 10 AVG``,
-``$ 5 Abs 2 KSchG``. For a legal corpus that is the one systematic OCR error
+occasionally as the digit ``5`` (or ``8`` with the ``tessdata_best`` models):
+``$ 94 ÄrzteG``, ``$$ RAO``, ``5 10 AVG``, ``$ 5 Abs 2 KSchG``, ``8 65 Zi 1 lit c StPO``. For a legal corpus that is the one systematic OCR error
 that breaks exact-value and BM25 matching of the facts people search for, so
 it is repaired at ingestion time, on the converted text and on the Docling
 document the chunker works from.
@@ -48,9 +48,10 @@ _DOLLAR_RE = re.compile(
 _DOLLAR_ABS_RE = re.compile(r"(?<![\w€])(?P<sign>\$\$?)\s?(?P<num>\d{1,4}[a-z]?)\s?(?=(?:Abs\.?|Zi(?:ff)?\.?|Z\.?|lit\.?)\s?\d)")
 # "$$ RAO" (no number: "gemäß §§ RAO")
 _DOLLAR_LAW_RE = re.compile(rf"(?<![\w€])\$\$\s?(?=(?:{_LAW})\b)")
-# "5 10 AVG": a lone "5", a space, the section number, then Abs/Z/lit or a statute. Never "52 Abs" (no space).
+# "5 10 AVG", "8 65 Zi 1 lit c StPO" (the tessdata_best models read § as 8): a lone "5"/"8", a space,
+# the section number, then Abs/Z/lit or a statute. Never "52 Abs" (no space).
 _FIVE_RE = re.compile(
-    rf"(?<![\w,.\-/§$])5\s(?P<num>\d{{1,4}}[a-z]?)(?P<tail>{_TAIL})(?P<sep>\s?)(?=(?:Abs\.?|Zi(?:ff)?\.?|Z\.?|lit\.?)\s?\d|(?:{_STATUTE}))"
+    rf"(?<![\w,.\-/§$])[58]\s(?P<num>\d{{1,4}}[a-z]?)(?P<tail>{_TAIL})(?P<sep>\s?)(?=(?:Abs\.?|Zi(?:ff)?\.?|Z\.?|lit\.?)\s?\d|(?:{_STATUTE}))"
 )
 
 
@@ -78,7 +79,7 @@ def repair_ocr_text(text: str) -> str:
         The text with ``$``/``$$``/``5`` restored to ``§``/``§§`` where a statute
         reference follows; unchanged otherwise.
     """
-    if not text or ("$" not in text and "5 " not in text):
+    if not text or ("$" not in text and "5 " not in text and "8 " not in text):
         return text
     out = _DOLLAR_RE.sub(_dollar_sub, text)
     out = _DOLLAR_ABS_RE.sub(_dollar_abs_sub, out)

@@ -498,3 +498,155 @@ letter-soup lines until they are re-ingested (delete the documents of the
 profile or run a full re-ingestion). The same applies to the synthetic
 profile: the 0.667 in the live index stays until `bench-ingest --clean` runs
 against the redeployed worker.
+
+## Round 2 (2026-10-16): § repair, two OCR experiments, re-test on three samples
+
+Scope of the round: fix Tesseract's one systematic loss class on the real
+scans (`§` → `$`/`5`), try the two engine-side levers for the remaining
+classes (rotated text / OSD noise; uppercase umlauts) and keep only what
+measures better at similar speed, then re-test on the same 20 firm files, a
+fresh second NAS sample and the synthetic corpus. Everything ran in a
+side-tagged image (`recallhub-ingestion-worker:ocr-round2`, this branch);
+the live worker was **not** redeployed in this round.
+
+### 1. `§` repair (kept)
+
+`src/ingestion/ocr_repair.py` turns `$`, `$$` or a lone `5` into `§`/`§§`
+when a section number and a statute marker follow: `Abs`/`Z`/`Zi`/`lit`/`ff`,
+one of ~60 Austrian law abbreviations (`ZPO`, `StPO`, `AVG`, `BAO`, `RAO`,
+`GBG`, `ABGB`, `KSchG`, `ÄrzteG`, …) or a spelled-out `…gesetz`/`…ordnung`
+(also after `des österreichischen …`). Amounts (`$ 5.000,00`), `US$ 10 Mio`
+and numbers that merely start with 5 (`52 Abs. 1 ZPO`) stay untouched
+(`backend/tests/test_ocr_repair.py`). It runs in the ingestion pipeline on
+the converted content **and on the Docling document items**, because the
+HybridChunker builds chunk text from the items, not from the Markdown; the
+harness applies it too (`--no-repair` switches it off). Being a text repair
+it only reaches documents ingested after it shipped.
+
+Before/after on the same 20 firm files (42 pages), same image, same engine
+(Tesseract `deu+eng`), `firm_out_tess` → `firm_out_round2`:
+
+| | before | after |
+|---|---|---|
+| `$`/`5`-misread statute references (`$ 94 ÄrzteG`, `$$ RAO`, `5 10 AVG`, `$ 5 Abs 2 KSchG`, `$ 7 Abs.3 des … Patentgesetzes`, `$ 26 Abs.1 Gerichtsgebührengesetz`) | 5 pages, 6 lines | **0** |
+| `§` characters in the stored text | 12 | 19 |
+| garbled runs / glued tokens / words | 22 / 6 / 5,392 | 22 / 6 / 5,392 (identical: the engine output is deterministic, only the six lines changed) |
+| pages with material loss (doc table above) | 5 of 42 | **3 of 42** (digits under handwritten ticks on 01 and 02, bleed-through on 09 p4) |
+| wall time, 42 pages | 179 s (incl. first-run model load) | 119 s |
+
+Synthetic corpus (27 scan pages, 117 planned facts, same harness and
+metric as `bench5_tesseract`): **0.949 → 0.957** (112 of 117); the
+recovered fact is `§ 1096 Abs. 1 ABGB`. The remaining five are the ones
+listed under "Result on all 27 synthetic scan pages" minus that one (`m²`,
+a stray space in a date, one capital letter, one umlaut, one missing line).
+
+### 2. Rotated text / OSD noise: `force_full_page_ocr` (not kept)
+
+Docling's Tesseract CLI model runs `tesseract --psm 0 -l osd` per OCR
+rectangle; on the small rotated letterhead blocks that OSD fails (the 80
+`OSD failed` lines per run) and the block comes back as soup. With
+`force_full_page_ocr=True` the page is OCRed as one image: OSD noise drops
+to 2 lines and the run is faster (119 → 87 s for 42 pages, one Tesseract
+call per page) and the rotated letterhead of file 01 is read correctly
+(`An die Beteiligten im Schlichtungsverfahren zu dem Aktenzeichen …`,
+`MA 25, 1200 Wien, Maria-Restituta-Platz 1`). But it costs more than it
+gains elsewhere: garbled runs 22 → 24, glued tokens 6 → 14 (file 09: 2 →
+10), words 5,392 → 5,281, and the Energieausweis table of file 02 loses
+figures (`3431 Kd` → `A Kd`, `58356` → `32356`, `138117` → `+58117`), i.e.
+table cells are no longer OCRed per cell. Rotated letterheads carry no
+facts a lawyer searches for; table figures do. **Not kept.** A per-region
+OSD fallback (rotate a rectangle whose OSD failed by 90° and retry) would
+be the right fix, but it needs a Docling model change, out of scope here.
+
+### 3. Uppercase umlauts: `tessdata_best` models
+
+The Debian packs (`tesseract-ocr-deu`/`-eng`) are the *fast* integer
+models (`deu.traineddata` 1.5 MB, `eng` 4.1 MB). Docling exposes no `psm`
+setting for the CLI engine, so the lever is the model: the float
+`tessdata_best` files (`deu` 8.6 MB, `eng` 15.4 MB, `osd` 10.6 MB, from
+github.com/tesseract-ocr/tessdata_best) were overlaid onto
+`/usr/share/tesseract-ocr/5/tessdata` and the 20 firm files re-run.
+(First attempt with `TESSDATA_PREFIX` pointing at a bare folder failed:
+Tesseract then cannot find its `tsv` config and Docling's TSV parser dies
+with `KeyError: 'text'` — the config dir must stay.)
+
+| 20 files, 42 pages | fast models (Debian packs, production) | `tessdata_best` |
+|---|---|---|
+| wall time | 119 s | **164 s (+38 %)** |
+| garbled runs / glued tokens / words | 22 / 6 / 5,392 | 18 / 10 / 5,375 |
+| class 2, digits under ticks / grey cells (01 `15:07`, 02 `3683.3`, `3431 Kd`) | wrong | **all three right** (`15:00`, `5683.3`, `3491 Kd`) |
+| class 4, uppercase umlauts (`KONIGREICH`, `GEBOHRENBEFREIT`, `STRARENVERKEHR`, `EROFFNUNG`) | 4 wrong | 3 wrong (`KÖNIGREICH` right, the others still `GEBUHRENBEFREIT`, `STRARENVERKEHR`, `EROFFNUNG`) |
+| `§` references | 19 | 18: file 20 `§ 65 Zi 1 lit c StPO` became **`8 65 Zi …`** — a new misread variant |
+| `$`/`5`/`8` misreads left after repair | 0 | 0 (the repair now also covers the `8` form) |
+
+The best models buy the digit class and one umlaut heading at +38 % OCR
+time, more glued tokens (6 → 10, file 09) and a new `§` variant. That is
+not "better at similar speed", so the fast packs stay the default. **Not
+kept**; the `8` form was added to the repair pattern so a later switch (the
+float models would need ~35 MB more in the base image and an
+`OCR_TESSDATA` setting) does not reopen the § class. The uppercase-umlaut
+class is a recognition limit of both model sets; it affects headings only
+and did not cost a fact in any sample.
+
+### 4. Fresh second sample (20 files from other case folders)
+
+Second sample, chosen without looking at the files: 300 random `ADVOKAT
+Akten` case folders (the 17 already sampled excluded) plus 100 random
+`jurXpert/documents` folders were walked read-only from inside a container
+(`docker run --rm -v recallhub_share_daten:/data/nas:ro …`); 3,652 PDF/JPG/
+TIF candidates, 1,985 of them scans (no text layer on page 1) or images.
+From those, one file per case folder with quotas per kind: 4 Honorarnoten /
+Kostenvoranschläge, 5 court documents (Bescheide, Klage, Zahlungsbefehl,
+Pflegeprotokoll), 3 contracts (1989, 2003 and 2021 among them), 4 "scan"
+images and 4 others — 20 files, 45 pages, years 1989-2021, `firm_in2` with
+its own `SAMPLE_MANIFEST.json` (client data, stays on the server). Both
+engines ran in the round-2 image: RapidOCR (`--engine rapidocr
+--no-repair`, the pre-PR production path) and Tesseract `deu+eng` with the
+§ repair (the new production path), outputs `firm2_out_rapidocr` /
+`firm2_out_round2`.
+
+| 20 files, 45 pages | RapidOCR (old) | Tesseract + § repair (new) |
+|---|---|---|
+| garbled runs (letter-soup heuristic) | 28 | **12** |
+| glued tokens | 36 | **16** |
+| words recognised | 3,534 | **3,749** |
+| `$`/`5` misread statute references left | — | 0 (`$235`/`$355` in file 12 are steel grades `S235`/`S355`, correctly left alone) |
+| wall time | 186 s | 229 s (see the photo note) |
+
+Where the difference comes from, by file (page texts in the output
+folders):
+
+- **Body sentences soup → read.** RapidOCR again loses the sentences that
+  carry the facts: the opening line of both Honorarnoten (`ei s n rn n n b
+  g n ie wir gemäß dem nachfolgenden L…`, 09 and 10), the Einspruch sentence
+  of the Klage (05: `wea en nn n n nn nn e hen Einspruch zu erheben`, 10
+  garbled runs on 5 pages), a clause of the 2003 Gesellschaftsvertrag (01:
+  `Darp g g n g ng g tse`), the Treuhandvereinbarung (03), the PVA Bescheid
+  (04: `Bernt i t t t t r u n`), the 1989 Baupolizei Bescheid (06, 3 runs)
+  and the Kostenschätzung (12). Tesseract reads all of these; its remaining
+  "garbled" hits are reference lines the heuristic trips on (`007 39 Cg
+  64/13z`, `F-UniqaVers/RB / F`), one dotted line (01) and one word (06:
+  `Straßenwässer und Sch ä i a`).
+- **Glued tokens** halve (36 → 16); the remaining ones are in the
+  Kostenschätzung tables (12: 6) and the PVA Bescheid (04: 5).
+- **Handwriting** (07, a handwritten Pflegeprotokoll): RapidOCR emits 37
+  word-like fragments of noise (`Pat. lal Vw belomnmen moile`), Tesseract
+  emits 2 characters. Neither is usable; Tesseract's silence is the
+  smaller index-noise problem.
+- **Photos (new finding, cost).** Files 14, 18, 19 are phone photos
+  (3,408 × 4,624 and 2,448 × 3,264 px, `Bauschäden`, a parking situation)
+  with little or no text. RapidOCR spends 2-4 s on them; Tesseract **23-67
+  s** each: Docling's `ocr_options.scale=3.0` hands Tesseract a ~140-Mpx
+  bitmap and the single full-image OCR call crawls. That is irrelevant for
+  A4 scans (~6 s at 300 DPI as before) but matters for the ~15,700 JPGs on
+  the NAS, most of which are photos: at ~30 s each that is ~5 days of
+  worker time for files that yield no text. Mitigation measured below
+  ("OCR scale on images"); the cheaper fix remains skipping photo folders
+  (`Fotos`, `Bilder`, `Attachments` with `IMG_*`) or images under ~1,000 px
+  at ingestion time.
+
+OCR scale on images: SCALE_PLACEHOLDER
+
+### Verdict
+
+VERDICT_PLACEHOLDER
