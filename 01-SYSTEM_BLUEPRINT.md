@@ -118,6 +118,7 @@
 | PUT | `/api/v1/profiles/{key}` | Admin / Org admin | Update profile (org admins: own profiles, name/description/folders only; folders must exist below `DOCUMENT_ROOTS`) |
 | DELETE | `/api/v1/profiles/{key}` | Admin | Delete profile |
 | GET | `/api/v1/profiles/folders/browse?path=` | Admin / Org admin | List the document roots or the sub-folders of one directory (folder picker) |
+| GET | `/api/v1/profiles/{key}/ingest/estimate?incremental=&sample=` | User (profile access) | Pre-ingestion estimate for the profile's folders: files, bytes, ~tokens, ~chunks, ~time, ~cost (rough; see [docs/22](docs/22-DOCUMENT_FOLDERS_AND_SHARES.md)) |
 | POST | `/api/v1/profiles/switch` | User | Switch active profile |
 
 **Integration Points:**
@@ -344,7 +345,7 @@
 **API Endpoints:**
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/ingestion/start` | Start ingestion job. `409` while a run is live in the API process (running, paused, or stopped but still finishing its in-flight files) or a job is `running` in the DB |
+| POST | `/api/v1/ingestion/start` | Start ingestion job. `409` while a run is live in the API process (an API run that is running, paused, or stopped but still finishing its in-flight files, or an ingestion-queue job) or a job is `running` in the DB. If a queue job claims the run between this check and the background start, the new job is not run and ends `failed` (reason in `errors`) |
 | GET | `/api/v1/ingestion/status` | Current job status |
 | GET | `/api/v1/ingestion/status/{job_id}` | Specific job status |
 | POST | `/api/v1/ingestion/stop` | Stop current job: files in progress finish, then it ends `stopped` (final, never auto-resumed) |
@@ -381,17 +382,26 @@
 - `retry_no_chunks: bool` — retry files that produced zero chunks
 - `skip_image_only_pdfs: bool` — skip known image-only PDFs
 
+**Processing and the API run:**
+- One queue processor (in the API process) runs jobs one at a time in priority order. Each job is tracked in `ingestion_jobs` and through `/api/v1/ingestion/status` like an API-started run.
+- The API process runs one ingestion at a time, shared with `POST /api/v1/ingestion/start` (`ingestion.claim_ingestion_run` / `release_ingestion_run`). While an API-started run is live (running, paused, or stopped but still finishing its in-flight files), the next queue job stays `queued` (still removable and reorderable) and starts once that run has ended (checked every second). `/status`, `/pause` and `/stop` keep acting on the API run meanwhile.
+- The job claims the run in the same step as that check and releases only its own claim, so it never clears the state of another run.
+
 **API Endpoints:**
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/ingestion-queue/queue` | Add job to queue |
-| GET | `/api/v1/ingestion-queue/queue` | List queued jobs |
-| DELETE | `/api/v1/ingestion-queue/queue/{id}` | Cancel queued job |
-| POST | `/api/v1/ingestion-queue/schedule` | Create scheduled job |
+| GET | `/api/v1/ingestion-queue/queue` | Queue status: queued jobs, running job |
+| POST | `/api/v1/ingestion-queue/queue/add` | Add job to queue (waits while an API-started run is live) |
+| POST | `/api/v1/ingestion-queue/queue/add-multiple` | Add several jobs |
+| DELETE | `/api/v1/ingestion-queue/queue/{id}` | Remove a queued job (`400` while it runs) |
+| DELETE | `/api/v1/ingestion-queue/queue` | Remove all queued jobs |
+| POST | `/api/v1/ingestion-queue/queue/reorder` | Reorder queued jobs |
+| POST | `/api/v1/ingestion-queue/schedules` | Create scheduled job |
 | GET | `/api/v1/ingestion-queue/schedules` | List scheduled jobs |
-| PUT | `/api/v1/ingestion-queue/schedule/{id}` | Update schedule |
-| DELETE | `/api/v1/ingestion-queue/schedule/{id}` | Delete schedule |
-| POST | `/api/v1/ingestion-queue/schedule/{id}/toggle` | Enable/disable |
+| PUT | `/api/v1/ingestion-queue/schedules/{id}` | Update schedule |
+| DELETE | `/api/v1/ingestion-queue/schedules/{id}` | Delete schedule |
+| POST | `/api/v1/ingestion-queue/schedules/{id}/toggle` | Enable/disable |
+| POST | `/api/v1/ingestion-queue/schedules/{id}/run-now` | Queue the schedule's job now (priority 5) |
 
 ---
 

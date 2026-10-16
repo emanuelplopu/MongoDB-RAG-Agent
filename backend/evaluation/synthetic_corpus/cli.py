@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -277,8 +278,11 @@ def _bench_ctx(config: Optional[list[Path]], sets: Optional[list[str]], run_name
     from .bench import BenchContext
 
     cfg = _cfg(config, sets, run_name, output_root)
+    # With REQUIRE_AUTH=true on the stack (Quellex) every API call needs a user's API key; it is read
+    # from the environment only, so it never lands in a config file or a results JSON.
+    api_key = os.environ.get("RECALLHUB_API_KEY") or None
     return BenchContext(run_dir=cfg.run.run_dir, bench_name=bench_name, base_url=base_url, profile=profile,
-                        database=database, mongo_uri=mongo_uri, sample_interval_s=sample_interval)
+                        database=database, mongo_uri=mongo_uri, sample_interval_s=sample_interval, api_key=api_key)
 
 
 @app.command("bench-ingest")

@@ -162,10 +162,60 @@ skips files that are already indexed.
 | `SHARE_<NAME>_TENANT` | `both` | `quellex`, `recallhub` or `both`: which backend gets the volume. The worker always does. |
 | `SHARE_<NAME>_NAME` | – | Mount name (`/app/mounts/<name>`) as given to the script. |
 
+## Estimating a full ingest before you run it
+
+Before attaching a large share (e.g. an 11,000-file law-firm NAS) you usually
+want to know up front roughly how long the first ingest will take and how many
+tokens / how much it will cost. The **pre-ingestion estimator** answers that
+without running anything.
+
+- **Service:** `backend/services/ingestion_estimator.py`. It walks the profile's
+  document folders with the same file filter the real run uses
+  (`SUPPORTED_INGESTION_EXTENSIONS` in `src/ingestion/ingest.py`), so the file
+  count matches. In incremental mode it skips files already in the profile's
+  documents collection (same path rule as the pipeline). The directory walk and
+  tokenizer sampling run off the event loop.
+- **API:** `GET /api/v1/profiles/{key}/ingest/estimate?incremental=true&sample=16`.
+  Any logged-in user with access to the profile may call it (organisation admins
+  for their own profiles; superadmins for all) — guarded like the other profile
+  reads. Returns an `IngestEstimate` (see `backend/models/schemas.py`).
+- **CLI:** `quellexctl ingest estimate --profile <key>` (add `--full` for a
+  non-incremental estimate, `--format json` for the raw model). Run it where the
+  folders are mounted — the paths are container paths — e.g.
+  `docker compose run --rm cli quellexctl ingest estimate --profile diejuristin`.
+- **UI:** the Ingestion Management page shows an *Estimated: ~N files · G GB · ~T
+  · ~$C* line under *Add to Queue* once you select profile(s).
+
+**How the numbers are derived (and why they are rough):**
+
+- **Tokens** prefer, in order: past-run history (chunks × measured tokens/chunk),
+  a real tokenizer over a sample of text files, then the repo's `chars / 4`
+  fallback. The method used is reported (`token_method`). PDFs/scans cannot be
+  tokenised cheaply before Docling conversion, so coarse per-type byte ratios are
+  used for them and the whole estimate is flagged `is_rough`.
+- **Time** is dominated by **Docling conversion** (PDF OCR, image OCR, audio
+  transcription), *not* embedding throughput. It comes from measured per-type
+  processing times in `ingestion_stats` where available, from per-type defaults
+  otherwise, divided by the worker's `max_concurrent_files`. Embedding time is a
+  small, separately-reported component.
+- **Cost / embedding throughput** come from the latest `quellexctl bench
+  embeddings` result for the active model (`EMBEDDING_COSTS` for the per-token
+  price; see [04 – Embedding and Query System](04-EMBEDDING_AND_QUERY_SYSTEM.md)).
+  With no benchmark, a conservative default rate is used and the estimate says so.
+
+**To sharpen an estimate:** run `quellexctl bench embeddings` (refreshes the
+throughput/cost basis) and ingest a small sample of the corpus once (gives the
+estimator real per-type conversion times and tokens/chunk for the rest). The
+`assumptions` list on every estimate states which inputs were measured and which
+were assumed.
+
 ## Verification
 
 - `docker compose config --quiet` (with `COMPOSE_FILE` set, or `-f` for
   each file) parses the files.
+- `quellexctl ingest estimate --profile <key>` (or
+  `GET /api/v1/profiles/{key}/ingest/estimate`) prints a files / GB / tokens /
+  time / cost table with its assumptions.
 - `docker exec rag-backend-quellex ls /app/mounts/<name>` and
   `docker exec rag-ingestion-worker ls /app/mounts/<name>` list the same
   folders.

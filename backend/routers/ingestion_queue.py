@@ -172,6 +172,9 @@ def validate_profile_folder(profile) -> tuple[str, bool, str]:
 # Track if queue processor is running
 _queue_processor_running = False
 
+# Seconds between checks while the next queue job waits for a live API-started run to end
+_RUN_SLOT_POLL_SECONDS: float = 1.0
+
 
 @router.get("/queue", response_model=QueueStatus)
 async def get_ingestion_queue(
@@ -367,58 +370,92 @@ async def reorder_queue(
     return {"success": True, "new_order": [j["id"] for j in _ingestion_queue]}
 
 
-async def _process_queue(db):
-    """Process the ingestion queue."""
+async def _process_queue(db) -> None:
+    """Run queued jobs one at a time, never alongside another ingestion run.
+
+    The API process runs one ingestion at a time, shared with POST /ingestion/start
+    (see ``ingestion.claim_ingestion_run``). While a run started there is live - running,
+    paused, or stopped but still finishing its in-flight files - the next job stays
+    ``queued`` (it can still be removed or reordered) and starts once that run has ended.
+
+    Args:
+        db: Database manager.
+    """
     global _queue_processor_running
-    
+    import backend.routers.ingestion as ingestion_router
+
     if _queue_processor_running:
         return
-    
+
     _queue_processor_running = True
     logger.info("Queue processor started")
-    
+    waiting_for: Optional[str] = None  # Live run the queue last logged it waits for
+
     try:
         while True:
-            # Get next job
             next_job = None
-            
+
             async with _queue_lock:
-                for job in _ingestion_queue:
-                    if job["status"] == "queued":
-                        job["status"] = "running"
-                        job["started_at"] = datetime.now().isoformat()
-                        next_job = job
-                        break
-            
-            if not next_job:
+                queued = next((job for job in _ingestion_queue if job["status"] == "queued"), None)
+                # Claim the run in the same step as picking the job: no other entry point can start
+                # a run in between, and the job reads "running" only once it really runs
+                if queued is not None and ingestion_router.claim_ingestion_run(queued["id"]):
+                    queued["status"] = "running"
+                    queued["started_at"] = datetime.now().isoformat()
+                    next_job = queued
+
+            if queued is None:
                 break
-            
+
+            if next_job is None:
+                live_job_id = ingestion_router._current_job_id
+                if live_job_id != waiting_for:
+                    logger.info(f"Queue job {queued['id']} waits for ingestion job {live_job_id} to end")
+                    waiting_for = live_job_id
+                await asyncio.sleep(_RUN_SLOT_POLL_SECONDS)
+                continue
+            waiting_for = None
+
             logger.info(f"Processing queue job: {next_job['id']} for profile {next_job['profile_key']}")
-            
+
             try:
                 await _run_ingestion_job(next_job, db)
-                
-                async with _queue_lock:
-                    next_job["status"] = "completed"
-                    next_job["completed_at"] = datetime.now().isoformat()
-                    
             except Exception as e:
                 logger.error(f"Queue job {next_job['id']} failed: {e}")
-                async with _queue_lock:
-                    next_job["status"] = "failed"
-                    next_job["error"] = str(e)
-                    next_job["completed_at"] = datetime.now().isoformat()
-            
+                status, error = "failed", str(e)
+            else:
+                status, error = "completed", None
+            finally:
+                # Only this job's claim: the state of a run it does not own is left alone
+                ingestion_router.release_ingestion_run(next_job["id"])
+
+            async with _queue_lock:
+                next_job["status"] = status
+                if error is not None:
+                    next_job["error"] = error
+                next_job["completed_at"] = datetime.now().isoformat()
+
             # Small delay between jobs
             await asyncio.sleep(1)
-    
+
     finally:
         _queue_processor_running = False
         logger.info("Queue processor stopped")
 
 
-async def _run_ingestion_job(job: Dict[str, Any], db):
-    """Run a single ingestion job with proper tracking."""
+async def _run_ingestion_job(job: Dict[str, Any], db) -> None:
+    """Run a single queue job, tracked like an API-started run for /status and the logs.
+
+    The caller has claimed the process's ingestion run for ``job["id"]``
+    (``ingestion.claim_ingestion_run``) and releases it afterwards.
+
+    Args:
+        job: Queue job to run.
+        db: Database manager.
+
+    Raises:
+        RuntimeError: The job does not own the ingestion run.
+    """
     from src.ingestion.ingest import DocumentIngestionPipeline, IngestionConfig
     from src.profile import get_profile_manager
     from backend.core.ingestion_jobs import RUNNER_API
@@ -427,12 +464,17 @@ async def _run_ingestion_job(job: Dict[str, Any], db):
         IngestionStatus
     )
     import backend.routers.ingestion as ingestion_router
-    
+
+    job_id = job["id"]
+    if ingestion_router._current_job_id != job_id:
+        raise RuntimeError(
+            f"Queue job {job_id} does not own the ingestion run ({ingestion_router._current_job_id} does)"
+        )
+
     pm = get_profile_manager()
     pm.switch_profile(job["profile_key"])
-    
+
     # Create a tracked job in the database
-    job_id = job["id"]
     job_state = {
         "job_id": job_id,
         "status": IngestionStatus.RUNNING,
@@ -479,11 +521,10 @@ async def _run_ingestion_job(job: Dict[str, Any], db):
         "processing_rate": 0.0,
     }
     
-    # Save to DB and set global state for real-time status
-    await save_job_to_db(db, job_state)
-    ingestion_router._current_job_id = job_id
+    # Real-time status for this run (it owns the run; the caller clears both), then persist
     ingestion_router._current_job_state = job_state
-    
+    await save_job_to_db(db, job_state)
+
     # Clear logs and add handler
     _ingestion_logs.clear()
     root_logger = logging.getLogger()
@@ -606,9 +647,7 @@ async def _run_ingestion_job(job: Dict[str, Any], db):
         raise
         
     finally:
-        # Clean up global state
-        ingestion_router._current_job_id = None
-        ingestion_router._current_job_state = None
+        # The run state is released by the caller, and only while this job still owns it
         root_logger.removeHandler(_log_handler)
 
 

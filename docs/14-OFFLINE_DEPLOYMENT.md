@@ -8,6 +8,7 @@ RecallHub deploys as a fully self-contained offline package. Backups are **per-t
 - Ollama running natively on the Windows host with pre-loaded AI models
 - Tenant-specific Docker images (backend + frontend)
 - Shared service images (ingestion worker, MongoDB)
+- Docling document-conversion models (layout analysis, TableFormer, RapidOCR) baked into the backend and worker images, so scanned PDFs and images convert without internet access
 - Tenant-scoped MongoDB database dump
 - Complete source code and configuration
 
@@ -331,6 +332,8 @@ curl.exe -k --resolve quellex.local:443:127.0.0.1 -I https://quellex.local/     
 curl.exe -k --resolve quellex.local:443:127.0.0.1 https://quellex.local/api/v1/ingestion/documents   # 401
 Get-NetFirewallRule -DisplayName "Quellex LAN*" | Select-Object DisplayName, Enabled
 Resolve-DnsName quellex.local   # from another computer on the LAN
+# 7. Docling models are in the images (scanned documents must not need huggingface.co)
+docker exec rag-ingestion-worker sh -c 'ls $DOCLING_ARTIFACTS_PATH'   # docling-project--docling-layout-heron, ds4sd--docling-models, RapidOcr, ...
 ```
 
 ## Troubleshooting
@@ -411,6 +414,23 @@ Ensure the tar files weren't corrupted during transfer. Re-export from source ma
 .\scripts\export-docker-images.ps1 -OutputPath "path\to\images"
 ```
 
+### Scanned PDFs or images fail to convert, log mentions huggingface.co
+
+The backend and worker images built before 2026-10-15 contained no Docling
+models: the first scanned page after every container recreate downloaded
+~0.5 GB from huggingface.co and failed on an offline machine. Current images
+ship the models under `DOCLING_ARTIFACTS_PATH` (`/opt/docling-models`, set in
+`backend/Dockerfile.base`). Check with:
+
+```powershell
+docker exec rag-ingestion-worker sh -c 'ls $DOCLING_ARTIFACTS_PATH'
+```
+
+If the variable is empty or the folder is missing, the package was exported
+from an old base image. Rebuild it on a machine with internet access
+(`.\build-backend.ps1 -Base`, then `-Fast` and `-Worker`) and re-export the
+images (`docs/15-DOCKER_BUILD_GUIDE.md`, "Docling models in the base image").
+
 ### "Antivirus blocking scripts"
 
 Some antivirus solutions flag PowerShell automation. Temporarily disable real-time protection or add an exclusion for the backup folder path.
@@ -437,3 +457,4 @@ Some antivirus solutions flag PowerShell automation. Temporarily disable real-ti
 | v0.8.8 | 2026-05-13 | Initial offline deployment package |
 | v0.8.8 | 2026-10-10 | Pinned Compose project/image names, tenant-aware tray config, start scripts no longer abort on Docker stderr, install verified by health check, package completeness check |
 | v0.8.8 | 2026-10-10 | Optional llama.cpp embedder in the package (`-IncludeEmbedder`): server image export, `embedder_models` volume export/import, `-Embedder` restore switch, hardened installer `embedder` config |
+| v0.8.8 | 2026-10-15 | Docling models (layout, TableFormer, RapidOCR) baked into the backend/worker base image (`DOCLING_ARTIFACTS_PATH`); scanned documents no longer need huggingface.co at runtime |
