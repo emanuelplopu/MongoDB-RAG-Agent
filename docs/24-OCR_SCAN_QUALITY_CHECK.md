@@ -689,3 +689,12 @@ text). Still open, in order of value: skip photos / cap the OCR bitmap for
 large images before the NAS ingestion (cost, not quality), and a per-region
 OSD retry in Docling's Tesseract model for rotated letterheads (quality,
 small).
+
+## Round 3 (2026-10-16): the scale test
+
+The same day a 1,000-scan-page / 1,000-photo sample was run through the
+production path; the results, the four loss classes that the 42-page samples
+did not show (orientation flips, the un-indexed page furniture, Tesseract's
+page segmentation dropping faint blocks, photo noise) and the changes that
+followed are in `docs/25-OCR_SCALE_TEST.md`. Both "still open" items above
+are addressed there (image OCR budget, verified per-rectangle orientation).
