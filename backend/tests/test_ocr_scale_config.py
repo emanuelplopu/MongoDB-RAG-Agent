@@ -21,7 +21,7 @@ def test_default_config_reproduces_docling_scale_for_pages() -> None:
     config = ingest.OcrConfig()
     assert config.scan_dpi == 216
     assert config.pdf_scale() == pytest.approx(3.0)
-    assert config.image_max_mpx == 20
+    assert config.image_max_mpx == 8
     assert ingest.OcrConfig(image_max_mpx=0).image_scale(3408, 4624, None) is None  # 0 = no cap
 
 

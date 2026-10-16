@@ -425,7 +425,7 @@ DEFAULT_OCR_SCAN_DPI = 216
 # Megapixel budget of the OCR bitmap for image files (JPG/PNG/TIF). Docling renders
 # images at 3x their size in points, i.e. a phone photo without a DPI tag at 3x its
 # pixel size (~140 Mpx for a 12 Mpx photo, 20-60 s of Tesseract time). ``0`` = no cap.
-DEFAULT_OCR_IMAGE_MAX_MPX = 20
+DEFAULT_OCR_IMAGE_MAX_MPX = 8
 _DOCLING_DEFAULT_OCR_SCALE = 3.0
 # Tesseract page segmentation mode per OCR rectangle; ``None`` = Tesseract's default (3).
 DEFAULT_OCR_PSM: Optional[int] = None

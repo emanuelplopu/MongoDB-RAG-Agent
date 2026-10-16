@@ -292,7 +292,7 @@ class BackendSettings(BaseSettings):
         ),
     )
     ocr_image_max_mpx: int = Field(
-        default=20,
+        default=8,
         description=(
             "Megapixel budget of the OCR bitmap for image files (JPG/PNG/TIF): Docling's 3x scale "
             "is kept unless the bitmap would exceed it (a 12 Mpx photo is ~140 Mpx at 3x); 0 = no cap"

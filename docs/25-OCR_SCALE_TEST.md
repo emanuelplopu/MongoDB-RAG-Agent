@@ -35,13 +35,22 @@ recognition errors. The four classes, in order of damage:
 
 The branch `feature/ocr-scale-test` adds (all configurable, defaults chosen
 by the measurements below): a Tesseract model with an orientation-confidence
-guard and verify-by-retry (`OCR_OSD_MIN_CONFIDENCE`), a full-page fallback for
-pages where the layout model finds no text, page furniture in content and
-chunks (`INGEST_PAGE_FURNITURE`), an image noise gate
-(`OCR_IMAGE_NOISE_GATE`), a per-file OCR resolution (`OCR_SCAN_DPI`,
-`OCR_IMAGE_TARGET_PX`), `OCR_PSM`, `OCR_TESSDATA_PATH`, and a converter cache
-(Docling re-initialised its pipeline for every file). Results in
-"Before / after".
+guard and verify-by-retry (`OCR_OSD_MIN_CONFIDENCE`, default 10), a
+full-page fallback for pages where the layout model finds no text, page
+furniture in content and chunks (`INGEST_PAGE_FURNITURE`), an image noise
+gate (`OCR_IMAGE_NOISE_GATE`), an OCR bitmap budget for image files
+(`OCR_IMAGE_MAX_MPX`, default 8), a pre-normalisation of images Docling
+cannot load, and a converter cache (Docling re-initialised its pipeline for
+every file). `OCR_SCAN_DPI`, `OCR_PSM`, `OCR_TESSDATA_PATH`,
+`INGEST_TABLE_STRUCTURE` and `OCR_RECT_DILATION` exist for the experiments
+that did not pay off. Results in "Before / after".
+
+**Headline.** Clean renders: word recall 0.867 → 0.946, lost sentences
+28 → 8 of 613. Scanner-text-layer pages: lost sentences 169 → 101, lost
+values 89 → 47. Real scans (1,045 pages, proxy, like for like): flagged
+pages 202 → 164, 38 fixed / 0 regressed; hand audit ~12 % → ~2 % of pages
+with material loss. Photos: 9 s → 4 s each at the 8 Mpx budget, 58 % gated
+as noise instead of indexed as letter soup.
 
 ## The sample
 
@@ -142,6 +151,9 @@ containers shared the 23 cores; use them only relative to each other.
 | `psm11` (sparse text) | 0.790 / 115 / 82 / 70 | 0.881 / 24 / 191 / 58 | no |
 | `best` (tessdata_best float models) | 0.786 / 137 / 63 / 67 | 0.886 / 22 / 176 / 52 | no: lower recall on both sets, more letter soup, +42 % time |
 | `guard10_px` (OCR bitmap long side 3,500 px for images, 105 scan images) | flagged pages 19 → 24, low-score pages 8 → 13, 4 fixed / 9 regressed, same speed | – | no: replaced by the megapixel budget, which leaves A4 scan images at Docling's scale |
+| `notable` (`INGEST_TABLE_STRUCTURE=false`, on top of `final`) | 0.811 / 101 / 55 / 57, +1,100 words, **−32 % time** | 0.949 / 8 / 137 / 30, +600 words, **−44 % time** | not as default: TableFormer is ~40 % of the conversion time and consumes OCR cells it cannot place, but the value "losses" without it are the `EUR` label and the number landing on separate lines (digits present); Markdown tables of born-digital PDFs would change for every format - a product decision, left as the switch |
+| `rects` (`OCR_RECT_DILATION=2`, on top of `final`) | 0.805 / 102 / 74 / 66 | 0.911 / 10 / 159 / 45 | no: 3 fixed / 31 regressed; smaller rectangles double the OSD failures and lose context |
+| `mpx8` (`OCR_IMAGE_MAX_MPX=8`, 100 photos paired with `final`) | – | – | **yes**: 7.5 → 4.0 s per photo, same text on the 31 photographed documents |
 
 On the 1,045 `scans` pages (no reference) the guard alone moved the proxy
 metrics as follows: flagged pages 202 → 170, letter-soup runs 260 → 225,
@@ -158,6 +170,18 @@ Tesseract cannot read by design: rotated letterhead side blocks, file-path
 footers, table header lines reflowed into Markdown cells, and strike-through
 text. The rate is a strict upper bound; the sentence and value counts and
 the manual audit are the numbers to compare.
+
+**Residual class, not solved here: stacked tables.** On a Honorarnote
+`Leistungsaufstellung` (three tables with dates and amounts, a clean
+render) Docling's OCR stage hands Tesseract *one* rectangle for all three
+tables - it dilates the layout clusters by 20 points and merges the ones
+that then touch - and Tesseract's page segmentation on that merged crop
+drops the date and amount columns (25 words read where the three table
+crops OCRed one by one yield 13 dates and 15 amounts in every psm mode).
+53 of the 135 values still lost on the rendered set are dates in such
+tables. Reducing the dilation (`rects`) keeps the tables apart but hurts
+everything else; the real fix is to OCR table clusters individually, which
+needs the layout labels inside Docling's OCR model - a follow-up.
 
 ## Before / after
 
@@ -223,9 +247,46 @@ down from ~12 % on the same sample population with the morning's path, and
 below the 7 % the 42-page sample had suggested. Small samples: the honest
 statement is "under 5 %", with the reference sets as the exact companions.
 
-## Photo throughput recommendation
+## Photos: what is in them, what it costs
 
-TBD
+All 1,000 sampled photos went through the final configuration (run
+`final/photos`, four containers sharing the CPU with the scan runs, so the
+seconds are pessimistic):
+
+| | value |
+|---|---|
+| photos converted | 1,000 (9 failed to load before the pre-normalisation: 2 MPO containers, 7 JPEGs with a `(0, 0)` DPI tag - re-saved as PNG now, all 9 convert, two of them are photographed documents with 168 and 196 words) |
+| OCR bitmap capped (20 Mpx budget hit) | 584 of 1,000 |
+| noise-gated (stored without text) | 580 |
+| kept with text | 411 (median 48 words, median word-like ratio 0.82: photographed letters, forms, Bescheide, screenshots, passports, invoices) |
+| seconds per photo | median 8.4, mean 9.4, p90 16, max 84 (a 9,248-px panorama) |
+| photos ≥ 8 Mpx / < 8 Mpx | 445 at median 10.4 s / 555 at median 7.0 s |
+
+With Docling's unbounded 3× scale (baseline, first 150 photos) the median
+was 10.1 s and the maximum 58 s; the 2026-10-16 round-2 note measured
+23-67 s per 12-Mpx photo on an idle machine. The time is Tesseract's (one
+process per rectangle, single-threaded); the layout model is ~1 s per
+image. `small` images (60 logos/signatures/mail images under 1,000 px):
+median 2.6 s, 31 gated as noise, 29 kept with 7-33 characters of logo text.
+
+**Recommendation for the ~15,700 NAS JPGs.** At the measured ~9 s per photo
+one worker thread needs ~40 hours of CPU for all of them; the ingestion
+worker runs two conversion threads, so ~20 hours wall time on top of the
+scanned-PDF ingestion (memory was not measured here; a 20 Mpx RGB bitmap is
+60 MB, Tesseract's working set a few times that). The budget is the knob. A paired probe of 100 photos at an **8 Mpx** budget
+(`mpx8/photos`, same photos as in `final`): median 7.5 → **4.0 s** per
+photo (capped photos 9.5 → 4.1 s), the 31 photographed documents among them
+yielded the same text (2,264 vs 2,299 words), 3 of 100 noise-gate verdicts
+changed. 8 Mpx is a 3:4 photo at ~2,450 × 3,270 px, i.e. an A4 page at
+300 dpi - Tesseract's sweet spot - so nothing is gained above it; **the
+branch default is therefore 8 Mpx**. At ~4 s per photo the 15,700 JPGs are
+~17 h of CPU, ~9 h wall time on the two worker threads, and the
+photographed documents (41 % of the photos carried readable text) stay in.
+Skipping folders named `Fotos`/`Bilder` or `IMG_*`/`DSC*` files without a
+DPI tag would avoid most of the 58 % that are gated anyway, but a blanket
+skip also drops the photographed Bescheide and invoices - prefer the budget
+over the skip. Keep `OCR_IMAGE_NOISE_GATE` on: without it 580 photos would
+each add 10-280 noise tokens to the index.
 
 ## What changed in the code
 
@@ -263,6 +324,14 @@ the entries (the hand-maintained live one) gets them too.
   (`OCR_IMAGE_NOISE_GATE`): an image whose OCR output is letter soup is stored
   with a `[Image: … - no readable text]` placeholder, like an image without
   text today.
+- `src/ingestion/ingest.py`, also: `prepare_image_for_docling()` re-saves
+  MPO containers and JPEGs with a `(0, 0)` DPI tag as PNG (Docling's image
+  backend refuses both; 9 of the 1,000 photos, two of them photographed
+  documents); `INGEST_TABLE_STRUCTURE` (Docling's TableFormer stage as a
+  setting, default on) and `OCR_RECT_DILATION` (the cluster dilation before
+  OCR rectangles are merged, default Docling's 20) exist for the two
+  measured-but-not-adopted experiments above; the image OCR budget defaults
+  to 8 Mpx.
 - `src/ingestion/chunker.py`: the HybridChunker gets a serializer provider
   whose `MarkdownParams.layers` include the furniture layer, because the
   chunker only visits the content layers its serializer declares (body only
