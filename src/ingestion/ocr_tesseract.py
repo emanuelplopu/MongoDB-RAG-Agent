@@ -1,0 +1,275 @@
+"""RecallHub's Tesseract CLI OCR model for Docling.
+
+Docling's ``TesseractOcrCliModel`` runs orientation detection (``tesseract --psm 0
+-l osd``) on every OCR rectangle and rotates the rectangle by whatever angle comes
+back, without looking at the reported *orientation confidence*. On small or
+sparse rectangles (a centred bold line, a Courier court extract, a stamp) that
+guess is frequently wrong and the block - or the whole page - is then read
+upside down as letter soup (``*qaynze6yoanp`` for ``durchgeführt.``). On the
+2026-10-16 scale sample every rotation Tesseract proposed with a confidence
+below 1 on clean upright pages was wrong, while genuinely rotated scans come
+back with confidences of 10-20; the band in between holds both.
+
+This subclass therefore
+
+1. applies a detected rotation outright only when its confidence reaches
+   ``osd_min_confidence``;
+2. for a suppressed rotation OCRs the rectangle both ways (``rotation_retry``)
+   and keeps the reading with the higher character-weighted confidence, mapping
+   the boxes of a rotated reading back into the unrotated rectangle;
+3. OCRs the whole page when the layout model found no text region on a page
+   without a text layer (``empty_page_full_ocr``) - sparse pages such as an ERV
+   footer sheet otherwise yield nothing.
+
+The model is registered with Docling's OCR factory under its own options kind
+(``tesseract_recallhub``) so a pipeline that carries
+:class:`RecallHubTesseractCliOcrOptions` picks it up; nothing changes for the
+stock ``tesseract`` kind.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import tempfile
+from typing import ClassVar, Dict, List, Literal, Optional, Type
+
+import pandas as pd
+from docling.datamodel.base_models import Page
+from docling.datamodel.pipeline_options import OcrOptions, TesseractCliOcrOptions
+from docling.models.stages.ocr.tesseract_ocr_cli_model import TesseractOcrCliModel
+from docling_core.types.doc import BoundingBox, CoordOrigin
+from pydantic import Field
+
+_log = logging.getLogger(__name__)
+
+_OSD_ORIENTATION_KEY = "Orientation in degrees"
+_OSD_ROTATE_KEY = "Rotate"
+_OSD_CONFIDENCE_KEY = "Orientation confidence"
+# A rotated reading replaces the unrotated one only when it is this much better.
+_RETRY_MARGIN = 1.25
+
+
+class RecallHubTesseractCliOcrOptions(TesseractCliOcrOptions):
+    """``TesseractCliOcrOptions`` plus the orientation guard and the empty-page fallback."""
+
+    kind: ClassVar[Literal["tesseract_recallhub"]] = "tesseract_recallhub"  # type: ignore[assignment]
+    osd_min_confidence: float = Field(
+        default=0.0,
+        description=(
+            "Apply the rotation Tesseract's orientation detection reports for an OCR "
+            "rectangle outright only when its 'Orientation confidence' is at least this "
+            "value; 0 applies every detected rotation (Docling's behaviour)."
+        ),
+    )
+    rotation_retry: bool = Field(
+        default=True,
+        description=(
+            "For a rotation suppressed by osd_min_confidence, OCR the rectangle both ways "
+            "and keep the reading with the higher character-weighted confidence."
+        ),
+    )
+    empty_page_full_ocr: bool = Field(
+        default=True,
+        description=(
+            "OCR the whole page when the layout model found no text region on a page "
+            "that has no text layer (sparse pages, footers, stamps)."
+        ),
+    )
+    rect_dilation: int = Field(
+        default=20,
+        description=(
+            "Dilation (page points) applied to the layout clusters before neighbouring ones "
+            "are merged into one OCR rectangle; Docling's 20 merges stacked tables into one "
+            "crop on which Tesseract drops columns, a small value keeps them separate."
+        ),
+    )
+
+
+class RecallHubTesseractCliOcrModel(TesseractOcrCliModel):
+    """Tesseract CLI model with verified orientation and a sparse-page fallback."""
+
+    def __init__(self, *args, **kwargs) -> None:  # noqa: D107 - same signature as the base class
+        super().__init__(*args, **kwargs)
+        self.options: RecallHubTesseractCliOcrOptions
+        self._suppressed: Dict[str, int] = {}  # image file -> suppressed OSD angle
+        # Diagnostics (read by the harness)
+        self.osd_guarded = 0
+        self.retries_rotated = 0
+        self.retries_kept = 0
+        self.empty_page_fallbacks = 0
+
+    # -- orientation guard ------------------------------------------------------------
+
+    def _perform_osd(self, ifilename: str) -> pd.DataFrame:
+        df_osd = super()._perform_osd(ifilename)
+        threshold = float(getattr(self.options, "osd_min_confidence", 0.0) or 0.0)
+        if threshold <= 0:
+            return df_osd
+        confidence = _osd_value(df_osd, _OSD_CONFIDENCE_KEY)
+        orientation = _osd_value(df_osd, _OSD_ORIENTATION_KEY)
+        if orientation and confidence is not None and confidence < threshold:
+            self.osd_guarded += 1
+            # Docling's convention: Tesseract reports clockwise degrees, the pipeline rotates
+            # with `image.rotate(-parsed)` where parsed = (-reported) % 360 (tesseract_utils).
+            self._suppressed[ifilename] = (-int(orientation)) % 360
+            _log.debug(
+                "OSD rotation %s suppressed (confidence %.2f < %.2f)", int(orientation), confidence, threshold
+            )
+            keys = df_osd["key"].to_numpy()
+            df_osd.loc[keys == _OSD_ORIENTATION_KEY, "value"] = " 0"
+            df_osd.loc[keys == _OSD_ROTATE_KEY, "value"] = " 0"
+        return df_osd
+
+    def _run_tesseract(self, ifilename: str, osd: Optional[pd.DataFrame]):
+        df_plain = super()._run_tesseract(ifilename, osd)
+        angle = self._suppressed.pop(ifilename, None)
+        if not angle or not getattr(self.options, "rotation_retry", False):
+            return df_plain
+        try:
+            df_rot = self._rotated_reading(ifilename, angle, osd)
+        except Exception as exc:  # noqa: BLE001 - the unrotated reading is always available
+            _log.warning("rotated OCR retry failed (%s); keeping the unrotated reading", exc)
+            return df_plain
+        self.retries_rotated += 1
+        plain_score, rot_score = _reading_score(df_plain), _reading_score(df_rot)
+        keep = rot_score > plain_score * _RETRY_MARGIN
+        _log.debug(
+            "rotation retry (%d deg): rotated score %.0f %s unrotated %.0f; rotated: %s | unrotated: %s",
+            angle, rot_score, "KEPT over" if keep else "rejected against", plain_score,
+            " ".join(df_rot["text"].astype(str).tolist()[:8]), " ".join(df_plain["text"].astype(str).tolist()[:8]),
+        )
+        if keep:
+            self.retries_kept += 1
+            return df_rot
+        return df_plain
+
+    def _rotated_reading(self, ifilename: str, angle: int, osd: Optional[pd.DataFrame]) -> pd.DataFrame:
+        """OCR ``ifilename`` rotated like Docling would have, boxes mapped back to the unrotated image.
+
+        ``angle`` is Docling's parsed orientation (``(-tesseract_degrees) % 360``); the image is
+        rotated with ``rotate(-angle, expand=True)`` exactly as ``TesseractOcrCliModel.__call__`` does.
+        """
+        from PIL import Image
+
+        with Image.open(ifilename) as image:
+            width, height = image.size
+            rotated = image.rotate(-angle, expand=True)
+            fd, tmp_name = tempfile.mkstemp(suffix=".png")
+            os.close(fd)
+            try:
+                rotated.save(tmp_name)
+                _log.debug("rotation retry: %s %s -> %s %s", ifilename, image.size, tmp_name, rotated.size)
+                df_rot = super()._run_tesseract(tmp_name, osd)
+            finally:
+                if os.path.exists(tmp_name):
+                    os.remove(tmp_name)
+        return map_rotated_boxes(df_rot, angle, width, height)
+
+    # -- OCR rectangles -----------------------------------------------------------------
+
+    def _deduplicate_rects(self, size, rects, dilation_size=0):  # type: ignore[override]
+        """Merge overlapping cluster rectangles with the configured dilation instead of Docling's 20."""
+        configured = getattr(self.options, "rect_dilation", None)
+        if configured is not None and dilation_size:
+            dilation_size = max(int(configured), 0)
+        return super()._deduplicate_rects(size, rects, dilation_size=dilation_size)
+
+    def get_ocr_rects(self, page: Page) -> List[BoundingBox]:
+        rects = super().get_ocr_rects(page)
+        if rects or not getattr(self.options, "empty_page_full_ocr", False):
+            return rects
+        if page.size is None or page._backend is None:
+            return rects
+        try:
+            has_text_layer = any(True for _ in page._backend.get_text_cells())
+        except Exception:  # noqa: BLE001
+            has_text_layer = False
+        if has_text_layer:
+            return rects
+        self.empty_page_fallbacks += 1
+        _log.debug("no OCR region on page %s without text layer; OCRing the full page", page.page_no)
+        return [BoundingBox(l=0, t=0, r=page.size.width, b=page.size.height, coord_origin=CoordOrigin.TOPLEFT)]
+
+    @classmethod
+    def get_options_type(cls) -> Type[OcrOptions]:
+        return RecallHubTesseractCliOcrOptions
+
+
+# --------------------------------------------------------------------------------------
+# Helpers (pure; unit-tested)
+# --------------------------------------------------------------------------------------
+
+def _osd_value(df_osd: pd.DataFrame, key: str) -> Optional[float]:
+    rows = df_osd.loc[df_osd["key"] == key, "value"]
+    if rows.empty:
+        return None
+    try:
+        return float(str(rows.iloc[0]).strip())
+    except ValueError:
+        return None
+
+
+def _reading_score(df: pd.DataFrame) -> float:
+    """Character-weighted confidence of a Tesseract TSV reading (0 for an empty reading)."""
+    if df is None or len(df) == 0:
+        return 0.0
+    conf = pd.to_numeric(df["conf"], errors="coerce").fillna(0.0).clip(lower=0.0)
+    chars = df["text"].astype(str).str.strip().str.len()
+    return float((conf * chars).sum())
+
+
+def map_rotated_boxes(df: pd.DataFrame, angle: int, width: int, height: int) -> pd.DataFrame:
+    """Map TSV boxes read on an image rotated clockwise by ``angle`` back to the unrotated image.
+
+    Docling rotates with ``image.rotate(-angle, expand=True)`` (clockwise by ``angle``).
+    ``width``/``height`` are the unrotated image size.
+
+    Args:
+        df: Tesseract TSV rows with ``left``, ``top``, ``width``, ``height`` columns.
+        angle: 90, 180 or 270.
+        width: Unrotated image width in pixels.
+        height: Unrotated image height in pixels.
+
+    Returns:
+        A copy of ``df`` with the box columns in unrotated-image coordinates.
+    """
+    out = df.copy()
+    left = pd.to_numeric(out["left"], errors="coerce").fillna(0.0)
+    top = pd.to_numeric(out["top"], errors="coerce").fillna(0.0)
+    w = pd.to_numeric(out["width"], errors="coerce").fillna(0.0)
+    h = pd.to_numeric(out["height"], errors="coerce").fillna(0.0)
+    angle = angle % 360
+    if angle == 180:
+        new_left, new_top, new_w, new_h = width - left - w, height - top - h, w, h
+    elif angle == 90:
+        # clockwise 90: rotated (x', y') = (H - y, x)  ->  x = y', y = H - x'
+        new_left, new_top, new_w, new_h = top, height - left - w, h, w
+    elif angle == 270:
+        # counter-clockwise 90: rotated (x', y') = (y, W - x)  ->  x = W - y', y = x'
+        new_left, new_top, new_w, new_h = width - top - h, left, h, w
+    else:
+        return out
+    out["left"], out["top"], out["width"], out["height"] = new_left, new_top, new_w, new_h
+    return out
+
+
+_registered = False
+
+
+def register_tesseract_model() -> None:
+    """Register the model with Docling's OCR factory (idempotent).
+
+    The factory is an ``lru_cache`` keyed on the keyword call the pipeline makes,
+    so the registration has to use the same call form.
+    """
+    global _registered
+    if _registered:
+        return
+    from docling.models.factories import get_ocr_factory
+
+    for allow_external in (False, True):
+        factory = get_ocr_factory(allow_external_plugins=allow_external)
+        if RecallHubTesseractCliOcrOptions not in factory.classes:
+            factory.register(RecallHubTesseractCliOcrModel, "recallhub", __name__)
+    _registered = True

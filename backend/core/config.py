@@ -284,6 +284,64 @@ class BackendSettings(BaseSettings):
             "mapped to the engine's own codes, ignored by auto/rapidocr"
         ),
     )
+    ocr_scan_dpi: int = Field(
+        default=216,
+        description=(
+            "Resolution (dpi) at which PDF pages are rasterised for the OCR engine; "
+            "216 is Docling's default (scale 3.0)"
+        ),
+    )
+    ocr_image_max_mpx: int = Field(
+        default=8,
+        description=(
+            "Megapixel budget of the OCR bitmap for image files (JPG/PNG/TIF): Docling's 3x scale "
+            "is kept unless the bitmap would exceed it (a 12 Mpx photo is ~140 Mpx at 3x); 0 = no cap"
+        ),
+    )
+    ocr_psm: str = Field(
+        default="",
+        description="Tesseract page segmentation mode per OCR rectangle (0-13); empty = Tesseract default",
+    )
+    ocr_tessdata_path: str = Field(
+        default="",
+        description="Directory with alternative Tesseract traineddata files (e.g. tessdata_best); empty = system packs",
+    )
+    ocr_osd_min_confidence: float = Field(
+        default=10.0,
+        description=(
+            "Minimum Tesseract orientation-detection confidence before an OCR rectangle "
+            "is rotated outright (below it the rotation is verified by OCRing both ways); "
+            "0 applies every detected rotation (Docling's behaviour)"
+        ),
+    )
+    ocr_rect_dilation: int = Field(
+        default=20,
+        description=(
+            "Dilation (page points) of the layout clusters before neighbouring ones are merged "
+            "into one OCR rectangle; Docling's 20 merges stacked tables into one crop"
+        ),
+    )
+    ingest_table_structure: bool = Field(
+        default=True,
+        description=(
+            "Run Docling's table-structure stage (TableFormer). Off keeps table text as plain "
+            "lines; on produces Markdown tables but drops OCR cells it cannot place"
+        ),
+    )
+    ingest_page_furniture: bool = Field(
+        default=False,
+        description=(
+            "Keep page headers and footers (Docling's furniture layer: Geschäftszahl headers, "
+            "ERV stamps, bank-detail footers) in the stored content and the chunks"
+        ),
+    )
+    ocr_image_noise_gate: bool = Field(
+        default=False,
+        description=(
+            "Store no text for image files whose OCR output is letter soup (photos of "
+            "objects); photographed documents and screenshots still pass"
+        ),
+    )
 
     # Profile Settings
     profiles_path: str = Field(default="profiles.yaml")
@@ -584,6 +642,15 @@ def get_settings() -> BackendSettings:
             profiles_path=main_settings.profiles_path,
             ocr_engine=main_settings.ocr_engine,
             ocr_languages=main_settings.ocr_languages,
+            ocr_scan_dpi=main_settings.ocr_scan_dpi,
+            ocr_image_max_mpx=main_settings.ocr_image_max_mpx,
+            ocr_psm=main_settings.ocr_psm,
+            ocr_tessdata_path=main_settings.ocr_tessdata_path,
+            ocr_osd_min_confidence=main_settings.ocr_osd_min_confidence,
+            ingest_page_furniture=main_settings.ingest_page_furniture,
+            ingest_table_structure=main_settings.ingest_table_structure,
+            ocr_rect_dilation=main_settings.ocr_rect_dilation,
+            ocr_image_noise_gate=main_settings.ocr_image_noise_gate,
         )
     except Exception:
         # Fallback to environment variables only

@@ -16,8 +16,8 @@ openai-whisper>=20240930
 transformers>=4.47.0
 
 # Docling for document parsing (pulls many deps)
-docling>=2.14.0
-docling-core>=2.4.0
+docling>=2.137.0,<3
+docling-core>=2.101.0,<3
 
 # ONNX Runtime for RapidOCR (CPU inference)
 onnxruntime>=1.18.0

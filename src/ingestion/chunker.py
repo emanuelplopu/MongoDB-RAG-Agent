@@ -30,6 +30,36 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
+def _furniture_serializer_provider() -> Optional[Any]:
+    """A chunking serializer provider that also visits page headers/footers, or ``None``.
+
+    Returns ``None`` when ``INGEST_PAGE_FURNITURE`` is off or the installed docling-core
+    predates the serializer API, in which case the HybridChunker keeps its default
+    (body layer only).
+    """
+    try:
+        from src.ingestion.ingest import document_content_layers
+
+        layers = document_content_layers()
+        if layers is None:
+            return None
+        from docling_core.transforms.chunker.hierarchical_chunker import (
+            ChunkingDocSerializer,
+            ChunkingSerializerProvider,
+        )
+        from docling_core.transforms.serializer.markdown import MarkdownParams
+    except Exception as exc:  # noqa: BLE001 - keep the stock chunker on older docling-core
+        logger.warning(f"Page furniture chunking not available ({exc}); chunking the body layer only")
+        return None
+
+    class _FurnitureSerializerProvider(ChunkingSerializerProvider):
+        def get_serializer(self, doc: DoclingDocument) -> ChunkingDocSerializer:
+            # ChunkingDocSerializer is a Markdown serializer; its params carry the content layers
+            return ChunkingDocSerializer(doc=doc, params=MarkdownParams(layers=layers))
+
+    return _FurnitureSerializerProvider()
+
+
 @dataclass
 class ChunkingConfig:
     """Configuration for DoclingHybridChunker."""
@@ -90,11 +120,18 @@ class DoclingHybridChunker:
         logger.info(f"Initializing tokenizer: {model_id}")
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-        # Create HybridChunker
+        # Create HybridChunker. Page headers/footers (Docling's furniture layer) are chunked
+        # too when INGEST_PAGE_FURNITURE is on: the chunker only visits the content layers
+        # its serializer declares, and the default is the body alone.
+        chunker_kwargs: Dict[str, Any] = {}
+        serializer_provider = _furniture_serializer_provider()
+        if serializer_provider is not None:
+            chunker_kwargs["serializer_provider"] = serializer_provider
         self.chunker = HybridChunker(
             tokenizer=self.tokenizer,
             max_tokens=config.max_tokens,
-            merge_peers=True  # Merge small adjacent chunks
+            merge_peers=True,  # Merge small adjacent chunks
+            **chunker_kwargs,
         )
 
         logger.info(f"HybridChunker initialized (max_tokens={config.max_tokens})")
