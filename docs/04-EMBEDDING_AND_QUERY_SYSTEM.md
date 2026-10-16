@@ -102,6 +102,14 @@ default; `de`/`ger` style aliases are normalised). Tesseract needs the matching
 per worker process (`Docling OCR engine: tesseract lang=deu+eng`). Changing the
 engine only affects documents ingested afterwards: the stored `content` of a
 scan *is* its OCR text, so already ingested scans must be re-ingested.
+
+After conversion, `src/ingestion/ocr_repair.py` restores the section sign
+of statute references that Tesseract misreads (`$ 94 ÄrzteG`, `$$ RAO`,
+`5 10 AVG`, `8 65 Zi 1 lit c StPO` → `§ …`), on the converted content and
+on the Docling document items the chunker reads; only text followed by a
+section number and a statute marker (`Abs`/`Z`/`lit`/`ff`, a known law
+abbreviation, `…gesetz`/`…ordnung`) is touched, amounts never are. Like the
+engine, it reaches only documents ingested after it shipped.
 Evidence and the measurement harness: `docs/24-OCR_SCAN_QUALITY_CHECK.md`.
 
 **Audio Processing** uses Whisper:

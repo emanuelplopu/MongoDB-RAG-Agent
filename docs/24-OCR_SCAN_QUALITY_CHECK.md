@@ -645,8 +645,47 @@ folders):
   (`Fotos`, `Bilder`, `Attachments` with `IMG_*`) or images under ~1,000 px
   at ingestion time.
 
-OCR scale on images: SCALE_PLACEHOLDER
+OCR scale on images (`--ocr-scale 2` instead of Docling's 3.0, the 13
+image files of both samples, outputs `firm_img_out_scale2` /
+`firm2_img_out_scale2`): the three photos drop from 67 / 29 / 23 s to
+34 / 16 / 12 s, the five firm scan images are unchanged or marginally
+better (garbled runs 6 → 4, words 395 → 414, 16 → 14 s), but one 300-DPI
+towing-company form (file 16 of the fresh sample) comes back **upside
+down** at scale 2 (`Bunddejyosqy` for `Abschleppung`): Tesseract's
+orientation detection flipped on the smaller bitmap. A global scale change
+is therefore not safe; **not changed.** The photo cost is better handled
+by not OCRing photos at all (folder / pixel heuristics at ingestion time)
+or by a pixel-capped scale per image (scale = min(3, √(80 Mpx / w·h)),
+which keeps A4 scans at 3) — a follow-up in `create_image_converter()`,
+not done here.
+
+### Before / after by loss class (Tesseract path)
+
+| class | before this round | after | how |
+|---|---|---|---|
+| 1 `§` → `$`/`5` (and `8`) | 5 of 42 firm pages, 1 synthetic fact | **0** on all three samples (62 firm pages, 27 synthetic pages); steel grades `$235`/`$355` correctly untouched | `ocr_repair.py`, kept |
+| 2 digits under ticks / grey cells | 2 firm pages (`15:07`, `3683.3`, `3431`) | unchanged with the fast models; fixed by `tessdata_best` at +38 % time | not kept (speed); option documented |
+| 3 rotated letterhead / bleed-through, OSD noise | 1 page material (09 p4), 80 `OSD failed` lines | unchanged; `force_full_page_ocr` fixes the letterhead but breaks table cells | not kept |
+| 4 uppercase umlauts in headings | 4 tokens | 4 tokens (3 with `tessdata_best`) | not fixable with either model set; no fact affected |
+| (RapidOCR class 1: body sentences → soup) | 16 of 42 firm pages; 9 of 20 fresh files | gone on both samples with Tesseract | engine switch (PR #2) |
+
+Pages with material loss on the firm sample: RapidOCR 16 of 42 →
+Tesseract 5 of 42 → Tesseract + § repair **3 of 42** (digits under ticks on
+01/02, bleed-through on 09 p4). Synthetic fact retention 0.667 → 0.949 →
+**0.957**. No ensemble needed: the remaining classes cost well under 5 % of
+pages.
 
 ### Verdict
 
-VERDICT_PLACEHOLDER
+**PR #2 is merge-ready** (engine switch + § repair; 1,201 backend tests
+pass, 3 known `fpdf` failures unrelated), and **PR #3 should land with it**:
+this branch already contains PR #3's commits (merged to build one base
+image), the live images were built from the merged tree, and without the
+baked models the first scan after every worker recreate costs minutes and
+needs internet. Merging PR #2 therefore closes PR #3 as well. After the
+merge: rebuild the `:latest` images from `main`, recreate the worker, and
+re-ingest the profiles that hold scans (the stored content is the OCR
+text). Still open, in order of value: skip photos / cap the OCR bitmap for
+large images before the NAS ingestion (cost, not quality), and a per-region
+OSD retry in Docling's Tesseract model for rotated letterheads (quality,
+small).
