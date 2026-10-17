@@ -388,6 +388,48 @@ export interface SystemStats {
   }
 }
 
+/**
+ * Provenance of each metric in {@link HostStats}: `"container"` (psutil inside
+ * the Linux container — the Docker Desktop VM on Windows), `"gpu"` (nvidia-smi
+ * via GPU passthrough) or `"host"` (requires the Windows host, so unavailable
+ * from the container and reported as null).
+ */
+export interface HostStatsSources {
+  cpu: string
+  ram: string
+  disk: string
+  cpu_temp: string
+  gpu_temp: string
+  cpu_power: string
+  gpu_power: string
+  uptime: string
+  note: string
+}
+
+/** Live host/GPU/container machine stats (GET /system/host-stats, superadmin). */
+export interface HostStats {
+  sampled_at: string
+  cached: boolean
+  cpu_percent: number | null
+  ram_used_bytes: number | null
+  ram_total_bytes: number | null
+  ram_percent: number | null
+  disk_path: string | null
+  disk_used_bytes: number | null
+  disk_total_bytes: number | null
+  disk_percent: number | null
+  cpu_temp_c: number | null
+  gpu_temp_c: number | null
+  gpu_power_watts: number | null
+  cpu_power_watts: number | null
+  uptime_seconds: number | null
+  gpu_name: string | null
+  gpu_percent: number | null
+  vram_used_bytes: number | null
+  vram_total_bytes: number | null
+  sources: HostStatsSources
+}
+
 export interface LLMModel {
   id: string
   owned_by: string
@@ -1374,6 +1416,12 @@ export const systemApi = {
 
   stats: async (): Promise<SystemStats> => {
     const response = await api.get('/system/stats')
+    return response.data
+  },
+
+  /** Live host/GPU/container machine stats for the superadmin stats widget. */
+  hostStats: async (): Promise<HostStats> => {
+    const response = await api.get('/system/host-stats')
     return response.data
   },
 

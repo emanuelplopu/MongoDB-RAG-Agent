@@ -50,9 +50,10 @@ import { useChatSidebar } from '../contexts/ChatSidebarContext'
 import { useAuth } from '../contexts/AuthContext'
 import { useTenant } from '../contexts/TenantContext'
 import { ChatSession, indexesApi, profilesApi, ProfileListResponse } from '../api/client'
-import { canManageProfiles, canManageUsers } from '../api/roles'
+import { canManageProfiles, canManageUsers, isSuperAdmin } from '../api/roles'
 import SidebarWarningToast, { SidebarWarning } from './SidebarWarningToast'
 import SupportRequestButton from './SupportRequestButton'
+import HostStatsWidget from './HostStatsWidget'
 
 // User menu items (shown in dropdown like OpenAI's user menu)
 const baseMenuItems = [
@@ -1103,6 +1104,9 @@ export default function Layout() {
         {/* Support request button for non-admin users */}
         <SupportRequestButton sessionId={currentSession?.id} />
       </div>
+
+      {/* Floating live machine-stats widget (superadmins only) */}
+      {isSuperAdmin(user) && <HostStatsWidget />}
 
       {/* Context Menu */}
       {contextMenu && (

@@ -355,6 +355,16 @@ class BackendSettings(BaseSettings):
             "(docs/22-DOCUMENT_FOLDERS_AND_SHARES.md)."
         ),
     )
+    host_stats_disk_path: str = Field(
+        default="",
+        description=(
+            "Path whose filesystem usage the superadmin host-stats widget "
+            "reports (GET /api/v1/system/host-stats). Empty means auto-detect: "
+            "the first existing document_roots entry, else the container root. "
+            "As seen inside the API container, so disk figures reflect that "
+            "mount (docs/12-TELEMETRY_SYSTEM.md)."
+        ),
+    )
 
     # Airbyte Integration Settings
     airbyte_enabled: bool = Field(

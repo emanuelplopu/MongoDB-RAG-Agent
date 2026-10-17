@@ -9,10 +9,11 @@ from fastapi import APIRouter, Depends, Request, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.models.schemas import (
-    HealthResponse, SystemStatsResponse, ConfigResponse
+    HealthResponse, SystemStatsResponse, ConfigResponse, HostStatsResponse
 )
 from backend.core.config import settings
 from backend.routers.auth import require_admin, UserResponse
+from backend.services import host_stats
 
 logger = logging.getLogger(__name__)
 
@@ -604,6 +605,21 @@ async def get_stats(request: Request):
         indexes=index_status,
         config=config
     )
+
+
+@router.get("/host-stats", response_model=HostStatsResponse)
+async def get_host_stats(admin: UserResponse = Depends(require_admin)) -> HostStatsResponse:
+    """Live host/GPU/container machine stats for the superadmin stats widget.
+
+    Superadmin only (``require_admin``). Returns CPU, RAM, disk, temperature,
+    power and uptime. The API runs in a Linux container, so CPU/RAM/disk/uptime
+    are the container (Docker Desktop VM on Windows) view, GPU temperature/power/
+    VRAM come from ``nvidia-smi`` via passthrough, and CPU package temperature/
+    power are host-only and returned as ``null``. See the ``sources`` field for
+    the provenance of each metric. Sampling is cached (~3s TTL) and runs off the
+    request path, so polling stays cheap.
+    """
+    return await host_stats.collect_host_stats()
 
 
 @router.get("/config", response_model=ConfigResponse)
