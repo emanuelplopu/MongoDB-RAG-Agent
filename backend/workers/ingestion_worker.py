@@ -26,6 +26,10 @@ from dotenv import load_dotenv
 from backend.core.ingestion_jobs import (
     FILES_STARTED_FIELD, RUNNER_WORKER, WORKER_OWNED, reached_files, resume_config
 )
+from backend.services.activity_events import (
+    ActivityEventRecorder, get_activity_recorder, set_activity_recorder
+)
+from src.ingestion import telemetry_hooks
 
 # Import backup service for post-ingestion backups
 try:
@@ -95,6 +99,9 @@ class IngestionWorker:
         # Log buffer for batch writes
         self._log_buffer: deque = deque(maxlen=100)
         self._last_log_flush = datetime.now()
+
+        # Telemetry history (activity events); None when disabled or unavailable
+        self._telemetry_store = None
     
     async def initialize(self):
         """Initialize MongoDB connection using active profile."""
@@ -129,13 +136,51 @@ class IngestionWorker:
             
             # Load configuration
             await self._load_config()
-            
+
         except (ConnectionFailure, ServerSelectionTimeoutError) as e:
             logger.error(f"Failed to connect to MongoDB: {e}")
             raise
-    
+
+        await self._start_telemetry()
+
+    async def _start_telemetry(self) -> None:
+        """Record job phases and per-file step timings into the telemetry history (non-fatal)."""
+        try:
+            from backend.core.config import settings
+            if not settings.telemetry_history_enabled:
+                return
+            from backend.services.telemetry_store import TelemetryStore
+
+            self._telemetry_store = TelemetryStore.from_settings(settings)
+            await self._telemetry_store.ensure_collections()
+            recorder = ActivityEventRecorder(
+                self._telemetry_store, tenant=os.getenv("TENANT_ID", settings.tenant_id), source="worker"
+            )
+            await recorder.start()
+            set_activity_recorder(recorder)
+            logger.info(f"Telemetry history enabled ({recorder.key})")
+        except Exception as e:
+            logger.warning(f"Telemetry history unavailable (non-fatal): {e}")
+
+    def _emit_job(self, job_id: str, *, status: Optional[str] = None, phase: Optional[str] = None, **fields: Any) -> None:
+        """Record a job transition in the telemetry history (no-op when it is disabled)."""
+        recorder = get_activity_recorder()
+        if recorder is None:
+            return
+        if status is not None:
+            recorder.job_status(job_id, status, **fields)
+        if phase is not None:
+            recorder.job_phase(job_id, phase, **fields)
+
     async def close(self):
         """Close MongoDB connection."""
+        recorder = get_activity_recorder()
+        if recorder is not None:
+            await recorder.stop()
+            set_activity_recorder(None)
+        if self._telemetry_store is not None:
+            await self._telemetry_store.close()
+            self._telemetry_store = None
         if self.mongo_client:
             await self.mongo_client.close()
             self.mongo_client = None
@@ -350,7 +395,12 @@ class IngestionWorker:
             if files_started_at
             else f"Restarting interrupted ingestion job {job_id} from the beginning (it stopped before its first file)"
         )
-        
+
+        # Per-file pipeline events of this job carry its id (inherited by the pipeline's tasks)
+        telemetry_token = telemetry_hooks.bind_job(job_id)
+        self._emit_job(job_id, status="running", resumed=bool(job.get("resumed_at")), profile=config.get("profile"))
+        self._emit_job(job_id, phase="initializing")
+
         try:
             if job.get("resume_paused"):
                 # Paused when the worker went down: hold before pipeline setup, cleaning or discovery
@@ -405,6 +455,7 @@ class IngestionWorker:
             # Update phase: discovering
             job_state["phase"] = "discovering"
             job_state["phase_message"] = "Scanning folders for documents..."
+            self._emit_job(job_id, phase="discovering")
             folders = pipeline.documents_folders
             job_state["discovery_progress"]["total_folders"] = len(folders)
             await self._update_job_progress(job_id, job_state)
@@ -430,7 +481,12 @@ class IngestionWorker:
                     job_state["phase_message"] = f"Processing files (0/{total})..."
                     job_state["first_file_time"] = datetime.now().isoformat()
                     job_state["discovery_progress"]["files_to_process"] = total
-                
+                    self._emit_job(job_id, phase="processing", files=total)
+
+                recorder = get_activity_recorder()
+                if recorder is not None:
+                    recorder.job_progress(job_id, current, total)
+
                 # Update state
                 job_state["processed_files"] = current
                 job_state["total_files"] = total
@@ -488,6 +544,7 @@ class IngestionWorker:
             # Update phase: finalizing
             job_state["phase"] = "finalizing"
             job_state["phase_message"] = "Computing final statistics..."
+            self._emit_job(job_id, phase="finalizing")
             await self._update_job_progress(job_id, job_state)
             
             # Calculate final stats
@@ -518,7 +575,10 @@ class IngestionWorker:
                 {"_id": job_id},
                 {"$set": final_state}
             )
-            
+            self._emit_job(job_id, phase="completed")
+            self._emit_job(job_id, status="completed", files=len(results), failed=actual_failures,
+                           duplicates=duplicates_skipped, chunks=final_state["progress.chunks_created"])
+
             await self._write_log(
                 "INFO",
                 f"Ingestion completed. Files: {len(results)}, Chunks: {final_state['progress.chunks_created']}"
@@ -558,6 +618,7 @@ class IngestionWorker:
                 # Worker shutdown: the next worker start resumes the job (held, if it was paused)
                 logger.warning(f"Job {job_id} was interrupted by worker shutdown")
                 await self._mark_job_interrupted(job_id, paused=self._paused)
+                self._emit_job(job_id, status="interrupted", reason="shutdown", paused=self._paused)
                 await self._write_log(
                     "WARNING",
                     "Ingestion interrupted by worker shutdown (will resume on restart"
@@ -575,7 +636,8 @@ class IngestionWorker:
                     }
                 )
                 await self._write_log("WARNING", "Ingestion stopped by user request")
-            
+                self._emit_job(job_id, status="stopped", reason="user")
+
         except Exception as e:
             logger.error(f"Job {job_id} failed: {e}", exc_info=True)
             await jobs_collection.update_one(
@@ -589,9 +651,11 @@ class IngestionWorker:
                 }
             )
             await self._write_log("ERROR", f"Ingestion failed: {str(e)}")
-            
+            self._emit_job(job_id, status="failed", error_type=type(e).__name__, error=str(e)[:300])
+
         finally:
             self.current_job_id = None
+            telemetry_hooks.reset_job(telemetry_token)
             await self._flush_logs()
     
     async def _check_control_command(self, job_id: str) -> Optional[str]:
@@ -626,6 +690,7 @@ class IngestionWorker:
             {"$set": {"status": IngestionStatus.PAUSED}}
         )
         self._paused = True
+        self._emit_job(job_id, status="paused")
         await self._write_log("INFO", "Ingestion paused")
         
         # Wait for resume or stop
@@ -650,6 +715,7 @@ class IngestionWorker:
                     {"$set": {"status": IngestionStatus.RUNNING}}
                 )
                 self._paused = False
+                self._emit_job(job_id, status="running", reason="resumed")
                 await self._write_log("INFO", "Ingestion resumed")
                 break
             

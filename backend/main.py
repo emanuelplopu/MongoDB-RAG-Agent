@@ -304,10 +304,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         try:
             from backend.services.telemetry_store import TelemetryStore
 
+            from backend.services.activity_events import ActivityEventRecorder, set_activity_recorder
+
             telemetry_store = TelemetryStore.from_settings(settings)
             await telemetry_store.ensure_collections()
             app.state.telemetry_store = telemetry_store
-            logger.info("Telemetry history store ready (database=%s)", telemetry_store.database_name)
+            activity_recorder = ActivityEventRecorder(telemetry_store, tenant=settings.tenant_id, source="api")
+            await activity_recorder.start()
+            set_activity_recorder(activity_recorder)
+            app.state.activity_recorder = activity_recorder
+            logger.info("Telemetry history ready (database=%s, recorder=%s)",
+                        telemetry_store.database_name, activity_recorder.key)
         except Exception as e:
             logger.warning("Telemetry history store init failed (non-fatal): %s", e)
 
@@ -573,6 +580,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     except Exception as e:
         logger.warning(f"Error persisting final scheduler state: {e}")
 
+    activity_recorder = getattr(app.state, "activity_recorder", None)
+    if activity_recorder is not None:
+        from backend.services.activity_events import set_activity_recorder
+
+        await activity_recorder.stop()
+        set_activity_recorder(None)
     telemetry_store = getattr(app.state, "telemetry_store", None)
     if telemetry_store is not None:
         await telemetry_store.close()

@@ -7,7 +7,7 @@ import os
 import signal
 from collections import deque
 from datetime import datetime
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from bson import ObjectId
@@ -23,6 +23,7 @@ from backend.core.ingestion_jobs import (
 )
 from backend.routers.auth import require_admin, UserResponse
 from backend.routers.backup import trigger_post_ingestion_backup
+from backend.services.activity_events import get_activity_recorder
 from backend.services.file_registry import FileRegistryService
 from fastapi import Depends
 
@@ -76,6 +77,24 @@ class IngestionLogHandler(logging.Handler):
 _log_handler = IngestionLogHandler()
 _log_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 _log_handler.setLevel(logging.DEBUG)
+
+
+def _emit_job(job_id: Optional[str], *, status: Optional[Any] = None, phase: Optional[str] = None, **fields: Any) -> None:
+    """Record an ingestion job transition in the telemetry history (no-op when it is disabled).
+
+    Args:
+        job_id: The job.
+        status: New status (an ``IngestionStatus`` or its string value), if it changed.
+        phase: New phase, if it changed.
+        **fields: Extra event fields (e.g. ``reason``, ``files``).
+    """
+    recorder = get_activity_recorder()
+    if recorder is None or not job_id:
+        return
+    if status is not None:
+        recorder.job_status(job_id, getattr(status, "value", status), **fields)
+    if phase is not None:
+        recorder.job_phase(job_id, phase, **fields)
 
 
 # ============== Database-backed Job Storage ==============
@@ -396,6 +415,7 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
             job_state["phase"] = "discovering"
             job_state["phase_message"] = "Scanning folders for files..."
             update_discovery(total_folders=len(pipeline.documents_folders))
+            _emit_job(job_state.get("job_id"), phase="discovering")
         
         _ingestion_logs.append({
             "timestamp": datetime.now().isoformat(),
@@ -441,6 +461,7 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
         if job_state is not None:
             job_state["phase"] = "filtering"
             job_state["phase_message"] = f"Filtering {len(all_files)} files..."
+            _emit_job(job_state.get("job_id"), phase="filtering", files_found=len(all_files))
         
         # Get existing sources if incremental
         existing_sources = set()
@@ -659,6 +680,7 @@ async def _hold_while_paused(job_state: dict, db) -> None:
         if job_state["status"] != IngestionStatus.PAUSED:
             job_state["status"] = IngestionStatus.PAUSED
             job_state["phase_message"] = "Paused - no new file starts until resumed"
+            _emit_job(job_state.get("job_id"), status=IngestionStatus.PAUSED)
             _ingestion_logs.append({
                 "timestamp": datetime.now().isoformat(),
                 "level": "INFO",
@@ -677,6 +699,7 @@ async def _hold_while_paused(job_state: dict, db) -> None:
 
     if job_state["status"] == IngestionStatus.PAUSED:
         job_state["status"] = IngestionStatus.RUNNING
+        _emit_job(job_state.get("job_id"), status=IngestionStatus.RUNNING, reason="resumed")
         _ingestion_logs.append({
             "timestamp": datetime.now().isoformat(),
             "level": "INFO",
@@ -868,6 +891,7 @@ async def run_ingestion(
                 "phase_message": message,
             }}
         )
+        _emit_job(job_id, status=IngestionStatus.FAILED, reason="already_running")
         return
 
     # The rest of the run reads `config`; the job stores the request as submitted
@@ -952,7 +976,10 @@ async def run_ingestion(
     
     try:
         await update_job_state()
-        
+        _emit_job(job_id, status=IngestionStatus.RUNNING, resumed=resumed_job is not None,
+                  profile=config.get("profile"))
+        _emit_job(job_id, phase="initializing")
+
         _ingestion_logs.append({
             "timestamp": datetime.now().isoformat(),
             "level": "INFO",
@@ -1043,6 +1070,7 @@ async def run_ingestion(
         if config.get("clean_before_ingest", False):
             job_state["phase"] = "cleaning"
             job_state["phase_message"] = "Removing existing data..."
+            _emit_job(job_id, phase="cleaning")
             await save_job_to_db(db, job_state)
             _ingestion_logs.append({
                 "timestamp": datetime.now().isoformat(),
@@ -1058,20 +1086,25 @@ async def run_ingestion(
         job_state["phase"] = "processing"
         total_to_process = job_state["discovery_progress"].get("files_to_process", 0)
         job_state["phase_message"] = f"Processing {total_to_process} files..."
-        
+        _emit_job(job_id, phase="processing", files=total_to_process)
+
         # Track progress - save to DB periodically
         last_db_update = datetime.now()
-        
+
         async def progress_callback_async(current: int, total: int, current_file: str = None, chunks_in_file: int = 0):
             nonlocal last_db_update
-            
+
             # Check for stop request
             if _stop_requested:
                 raise asyncio.CancelledError("Stop requested by user")
-            
+
             # Check for shutdown
             if _shutdown_requested:
                 raise asyncio.CancelledError("Shutdown requested")
+
+            recorder = get_activity_recorder()
+            if recorder is not None:
+                recorder.job_progress(job_id, current, total)
             
             # Pause is not handled here: this runs as a fire-and-forget task and cannot hold
             # the pipeline. The pipeline awaits _hold_while_paused before each file instead.
@@ -1168,7 +1201,8 @@ async def run_ingestion(
         # Update phase to finalizing
         job_state["phase"] = "finalizing"
         job_state["phase_message"] = "Calculating metrics..."
-        
+        _emit_job(job_id, phase="finalizing")
+
         # Calculate stats - distinguish between real errors and duplicates
         duplicates_skipped = sum(
             1 for r in results 
@@ -1212,7 +1246,10 @@ async def run_ingestion(
             files_per_hour=files_per_hour,
             success_rate=success_rate
         )
-        
+        _emit_job(job_id, phase="completed")
+        _emit_job(job_id, status=IngestionStatus.COMPLETED, files=len(results), failed=actual_failures,
+                  duplicates=duplicates_skipped, chunks=job_state.get("chunks_created", 0))
+
         _ingestion_logs.append({
             "timestamp": datetime.now().isoformat(),
             "level": "INFO",
@@ -1250,6 +1287,8 @@ async def run_ingestion(
                 phase="stopped",
                 phase_message="Ingestion stopped by user"
             )
+            _emit_job(job_id, phase="stopped")
+            _emit_job(job_id, status=_stop_status, reason="user")
             _ingestion_logs.append({
                 "timestamp": datetime.now().isoformat(),
                 "level": "WARNING",
@@ -1264,6 +1303,8 @@ async def run_ingestion(
                 phase="stopped",
                 phase_message="Ingestion interrupted"
             )
+            _emit_job(job_id, phase="stopped")
+            _emit_job(job_id, status=INTERRUPTED_STATUS, reason="shutdown", paused=_pause_requested)
             _ingestion_logs.append({
                 "timestamp": datetime.now().isoformat(),
                 "level": "WARNING",
@@ -1281,6 +1322,8 @@ async def run_ingestion(
             phase="failed",
             phase_message=f"Error: {str(e)[:100]}"
         )
+        _emit_job(job_id, phase="failed")
+        _emit_job(job_id, status=IngestionStatus.FAILED, error_type=type(e).__name__, error=str(e)[:300])
         _ingestion_logs.append({
             "timestamp": datetime.now().isoformat(),
             "level": "ERROR",

@@ -49,6 +49,7 @@ from backend.agent.tool_gate import ToolGate
 from backend.agent.ollama_options import apply_ollama_options, think_budget
 from backend.core.config import settings
 from backend.services.activity_logger import ActivityLogger, NullActivityLogger
+from backend.services.activity_events import get_activity_recorder
 from backend.models.telemetry import LLMCall, SearchOperation, ToolExecution, PhaseMetrics
 try:
     from backend.routers.prompts import get_agent_prompt_sync
@@ -408,31 +409,39 @@ class FederatedAgent:
         
         # Determine execution mode
         use_thinking = self.config.should_use_thinking(user_message)
-        
-        if use_thinking:
-            response = await self._process_with_orchestrator(
-                user_message=user_message,
-                user_id=user_id,
-                user_email=user_email,
-                conversation_history=conversation_history or [],
-                active_profile_key=active_profile_key,
-                active_profile_database=active_profile_database,
-                accessible_profile_keys=accessible_profile_keys,
-                on_event=on_event,
-                language=language
-            )
-        else:
-            response = await self._process_fast(
-                user_message=user_message,
-                user_id=user_id,
-                user_email=user_email,
-                active_profile_key=active_profile_key,
-                active_profile_database=active_profile_database,
-                accessible_profile_keys=accessible_profile_keys,
-                on_event=on_event,
-                language=language
-            )
-        
+        activity_started = time.perf_counter()
+        recorder = get_activity_recorder()
+        if recorder is not None:
+            recorder.mark_chat()
+
+        try:
+            if use_thinking:
+                response = await self._process_with_orchestrator(
+                    user_message=user_message,
+                    user_id=user_id,
+                    user_email=user_email,
+                    conversation_history=conversation_history or [],
+                    active_profile_key=active_profile_key,
+                    active_profile_database=active_profile_database,
+                    accessible_profile_keys=accessible_profile_keys,
+                    on_event=on_event,
+                    language=language
+                )
+            else:
+                response = await self._process_fast(
+                    user_message=user_message,
+                    user_id=user_id,
+                    user_email=user_email,
+                    active_profile_key=active_profile_key,
+                    active_profile_database=active_profile_database,
+                    accessible_profile_keys=accessible_profile_keys,
+                    on_event=on_event,
+                    language=language
+                )
+        except BaseException as exc:
+            self._record_chat_activity(session_id, use_thinking, activity_started, error=exc)
+            raise
+
         # Finalize trace - use add methods to properly accumulate timing and token stats
         for step in self.orchestrator.steps:
             self.trace.add_orchestrator_step(step)
@@ -441,7 +450,8 @@ class FederatedAgent:
         self.trace.degradations.extend(getattr(self.orchestrator, "degradations", []))
         self.trace.degradations.extend(getattr(self.worker_pool, "degradations", []))
         self.trace.finalize()
-        
+        self._record_chat_activity(session_id, use_thinking, activity_started)
+
         # Fire-and-forget telemetry recording (non-blocking)
         self._emit_telemetry(
             session_id=session_id or "",
@@ -454,6 +464,48 @@ class FederatedAgent:
         
         return response, self.trace
     
+    def _record_chat_activity(
+        self,
+        session_id: Optional[str],
+        use_thinking: bool,
+        started: float,
+        error: Optional[BaseException] = None,
+    ) -> None:
+        """Record one chat request in the telemetry history (ids and timings only, no message text).
+
+        Lets the history line chat load up against host samples and ingestion phases. A no-op
+        when telemetry history is disabled; never raises.
+        """
+        recorder = get_activity_recorder()
+        if recorder is None:
+            return
+        try:
+            trace = self.trace
+            fields: Dict[str, Any] = {
+                "session_id": session_id,
+                "trace_id": getattr(trace, "id", None),
+                "mode": "thinking" if use_thinking else "fast",
+                "strategy": self.strategy.metadata.id if self.strategy else None,
+                "model": self.config.orchestrator_model,
+                "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+            }
+            if error is None and trace is not None:
+                fields["outcome"] = "ok"
+                fields["orchestrator_ms"] = round(trace.orchestrator_duration_ms or 0, 1)
+                fields["worker_ms"] = round(trace.worker_duration_ms or 0, 1)
+                fields["phases"] = [
+                    {"phase": s.phase if isinstance(s.phase, str) else s.phase.value, "ms": round(s.duration_ms or 0, 1)}
+                    for s in trace.orchestrator_steps
+                ]
+                fields["degradations"] = len(trace.degradations)
+            else:
+                cancelled = isinstance(error, asyncio.CancelledError)
+                fields["outcome"] = "cancelled" if cancelled else "error"
+                fields["error_type"] = type(error).__name__ if error is not None else None
+            recorder.emit("chat.request", fields)
+        except Exception as exc:  # noqa: BLE001 - telemetry must never break chat
+            logger.debug("chat activity not recorded: %s", exc)
+
     def _emit_telemetry(
         self,
         session_id: str,

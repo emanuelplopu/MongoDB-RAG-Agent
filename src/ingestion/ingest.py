@@ -35,6 +35,7 @@ except ImportError:
 from src.ingestion.chunker import ChunkingConfig, create_chunker, DocumentChunk
 from src.ingestion.embedder import create_embedder
 from src.ingestion.ocr_repair import repair_docling_document, repair_ocr_text
+from src.ingestion import telemetry_hooks
 from src.settings import load_settings
 from src.profile import get_profile_manager
 
@@ -2362,6 +2363,9 @@ class DocumentIngestionPipeline:
         """
         Ingest a single document.
 
+        Emits ``file.start`` / ``file.end`` telemetry (with per-step timings) through
+        :mod:`src.ingestion.telemetry_hooks`; a no-op unless a host process registered a sink.
+
         Args:
             file_path: Path to the document file
             content_hash: Pre-computed SHA256 hash of the file (for deduplication)
@@ -2369,30 +2373,51 @@ class DocumentIngestionPipeline:
         Returns:
             Ingestion result
         """
+        with telemetry_hooks.file_scope(file_path) as trace:
+            result = await self._ingest_single_document_impl(file_path, content_hash)
+            if result.errors:
+                trace.outcome = "empty" if result.errors == ["No chunks created"] else "error"
+            telemetry_hooks.note(chunks=result.chunks_created)
+            return result
+
+    async def _ingest_single_document_impl(
+        self,
+        file_path: str,
+        content_hash: Optional[str] = None
+    ) -> IngestionResult:
+        """Body of :meth:`_ingest_single_document`, with each step timed for telemetry."""
         start_time = datetime.now()
-        
+
         # Compute hash if not provided
         if content_hash is None:
             loop = asyncio.get_running_loop()
-            content_hash = await loop.run_in_executor(
-                self.get_executor(),
-                compute_file_hash,
-                file_path
-            )
+            with telemetry_hooks.step("hash"):
+                content_hash = await loop.run_in_executor(
+                    self.get_executor(),
+                    compute_file_hash,
+                    file_path
+                )
 
         # Run CPU-intensive document reading in thread pool to avoid blocking event loop
         # This allows API requests (login, status checks) to be processed during ingestion
         loop = asyncio.get_running_loop()
-        document_content, docling_doc = await loop.run_in_executor(
-            self.get_executor(),
-            self._read_document,
-            file_path
+        with telemetry_hooks.step("convert"):
+            document_content, docling_doc = await loop.run_in_executor(
+                self.get_executor(),
+                self._read_document,
+                file_path
+            )
+        pages = getattr(docling_doc, "pages", None)
+        telemetry_hooks.note(
+            pages=len(pages) if isinstance(pages, (dict, list)) else None,
+            chars=len(document_content) if document_content else 0,
         )
 
         # Post-OCR repair of statute references ("$ 94 ÄrzteG" -> "§ 94 ÄrzteG"); the Docling
         # document is repaired too because the chunker builds chunk text from its items.
-        repaired_items = repair_docling_document(docling_doc)
-        repaired_content = repair_ocr_text(document_content)
+        with telemetry_hooks.step("ocr_repair"):
+            repaired_items = repair_docling_document(docling_doc)
+            repaired_content = repair_ocr_text(document_content)
         if repaired_items or repaired_content != document_content:
             logger.info(
                 f"OCR repair: restored § references in {os.path.basename(file_path)} "
@@ -2421,13 +2446,14 @@ class DocumentIngestionPipeline:
         logger.info(f"Processing document: {document_title}")
 
         # Chunk the document - pass DoclingDocument for HybridChunker
-        chunks = await self.chunker.chunk_document(
-            content=document_content,
-            title=document_title,
-            source=document_source,
-            metadata=document_metadata,
-            docling_doc=docling_doc  # Pass DoclingDocument for HybridChunker
-        )
+        with telemetry_hooks.step("chunk"):
+            chunks = await self.chunker.chunk_document(
+                content=document_content,
+                title=document_title,
+                source=document_source,
+                metadata=document_metadata,
+                docling_doc=docling_doc  # Pass DoclingDocument for HybridChunker
+            )
 
         if not chunks:
             logger.warning(f"No chunks created for {document_title}")
@@ -2447,18 +2473,20 @@ class DocumentIngestionPipeline:
         await asyncio.sleep(0)
 
         # Generate embeddings
-        embedded_chunks = await self.embedder.embed_chunks(chunks)
+        with telemetry_hooks.step("embed"):
+            embedded_chunks = await self.embedder.embed_chunks(chunks)
         logger.info(f"Generated embeddings for {len(embedded_chunks)} chunks")
 
         # Save to MongoDB
-        document_id = await self._save_to_mongodb(
-            document_title,
-            document_source,
-            document_content,
-            embedded_chunks,
-            document_metadata,
-            content_hash
-        )
+        with telemetry_hooks.step("save"):
+            document_id = await self._save_to_mongodb(
+                document_title,
+                document_source,
+                document_content,
+                embedded_chunks,
+                document_metadata,
+                content_hash
+            )
 
         logger.info(f"Saved document to MongoDB with ID: {document_id}")
 
@@ -2522,6 +2550,32 @@ class DocumentIngestionPipeline:
         return existing
 
     async def ingest_documents(
+        self,
+        progress_callback: Optional[callable] = None,
+        incremental: bool = True,
+        max_concurrent_files: int = 1,
+        job_id: Optional[str] = None,
+        pause_checkpoint: Optional[Callable[[], Awaitable[None]]] = None
+    ) -> List[IngestionResult]:
+        """Ingest all documents; see :meth:`_ingest_documents_impl` for the arguments.
+
+        Binds ``job_id`` for :mod:`src.ingestion.telemetry_hooks`, so every per-file event of
+        this run (including concurrent file tasks) carries it.
+        """
+        token = telemetry_hooks.bind_job(job_id) if job_id is not None else None
+        try:
+            return await self._ingest_documents_impl(
+                progress_callback=progress_callback,
+                incremental=incremental,
+                max_concurrent_files=max_concurrent_files,
+                job_id=job_id,
+                pause_checkpoint=pause_checkpoint,
+            )
+        finally:
+            if token is not None:
+                telemetry_hooks.reset_job(token)
+
+    async def _ingest_documents_impl(
         self,
         progress_callback: Optional[callable] = None,
         incremental: bool = True,
