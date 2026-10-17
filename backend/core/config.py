@@ -342,6 +342,21 @@ class BackendSettings(BaseSettings):
             "objects); photographed documents and screenshots still pass"
         ),
     )
+    msg_extract_attachments: bool = Field(
+        default=False,
+        description=(
+            "Extract text from email (.msg/.eml) attachments (PDF/doc/docx/images via OCR) and "
+            "append it to the stored email content. Off lists attachment filenames only."
+        ),
+    )
+    msg_attachment_max_mb: int = Field(
+        default=25,
+        description="Skip email attachments larger than this many MB when extracting their text",
+    )
+    msg_attachment_max_count: int = Field(
+        default=20,
+        description="Extract text from at most this many attachments per email (0 = no limit)",
+    )
 
     # Profile Settings
     profiles_path: str = Field(default="profiles.yaml")
@@ -661,6 +676,9 @@ def get_settings() -> BackendSettings:
             ingest_table_structure=main_settings.ingest_table_structure,
             ocr_rect_dilation=main_settings.ocr_rect_dilation,
             ocr_image_noise_gate=main_settings.ocr_image_noise_gate,
+            msg_extract_attachments=main_settings.msg_extract_attachments,
+            msg_attachment_max_mb=main_settings.msg_attachment_max_mb,
+            msg_attachment_max_count=main_settings.msg_attachment_max_count,
         )
     except Exception:
         # Fallback to environment variables only

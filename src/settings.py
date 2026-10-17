@@ -207,6 +207,25 @@ class Settings(BaseSettings):
         ),
     )
 
+    msg_extract_attachments: bool = Field(
+        default=False,
+        description=(
+            "Extract text from email (.msg/.eml) attachments (PDF/doc/docx/images via OCR) and "
+            "append it to the stored email content. Off keeps the legacy behaviour of listing "
+            "attachment filenames only. Adds OCR/conversion cost per email."
+        ),
+    )
+
+    msg_attachment_max_mb: int = Field(
+        default=25,
+        description="Skip email attachments larger than this many MB when extracting their text",
+    )
+
+    msg_attachment_max_count: int = Field(
+        default=20,
+        description="Extract text from at most this many attachments per email (0 = no limit)",
+    )
+
     def apply_profile(self, profile: "ProfileConfig") -> "Settings":
         """
         Apply profile-specific settings overrides.
@@ -265,8 +284,11 @@ class Settings(BaseSettings):
             'ingest_table_structure': self.ingest_table_structure,
             'ocr_rect_dilation': self.ocr_rect_dilation,
             'ocr_image_noise_gate': self.ocr_image_noise_gate,
+            'msg_extract_attachments': self.msg_extract_attachments,
+            'msg_attachment_max_mb': self.msg_attachment_max_mb,
+            'msg_attachment_max_count': self.msg_attachment_max_count,
         }
-        
+
         return Settings(**current_data)
 
 
