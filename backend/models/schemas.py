@@ -504,6 +504,72 @@ class ConfigResponse(BaseModel):
     database: str
 
 
+class HostStatsSources(BaseModel):
+    """Where each metric in :class:`HostStatsResponse` actually comes from.
+
+    The API runs inside a Linux container, so the provenance of each figure
+    matters for interpretation. Values are one of ``"container"`` (read by
+    psutil inside the container — on Docker Desktop these reflect the Docker
+    Desktop/WSL2 VM, the closest-to-host numbers the container can see),
+    ``"gpu"`` (read from ``nvidia-smi`` via GPU passthrough — true GPU figures),
+    or ``"host"`` (requires the Windows host and is therefore unavailable from
+    inside the container — reported as ``null``).
+    """
+    cpu: str = Field(description="Provenance of cpu_percent.")
+    ram: str = Field(description="Provenance of the ram_* fields.")
+    disk: str = Field(description="Provenance of the disk_* fields.")
+    cpu_temp: str = Field(description="Provenance of cpu_temp_c.")
+    gpu_temp: str = Field(description="Provenance of gpu_temp_c.")
+    cpu_power: str = Field(description="Provenance of cpu_power_watts.")
+    gpu_power: str = Field(description="Provenance of gpu_power_watts.")
+    uptime: str = Field(description="Provenance of uptime_seconds.")
+    note: str = Field(description="Human-readable caveat about host vs container metrics.")
+
+
+class HostStatsResponse(BaseModel):
+    """Live host/GPU/container machine stats for the superadmin stats widget.
+
+    Served by ``GET /api/v1/system/host-stats`` (superadmin only). Every numeric
+    field is ``None`` when its source is unavailable so the UI can hide or mark
+    the metric. See :class:`HostStatsSources` for the provenance of each figure.
+    """
+    sampled_at: datetime = Field(description="When these metrics were sampled (UTC).")
+    cached: bool = Field(description="True when served from the short-TTL cache rather than freshly sampled.")
+
+    # CPU — container/VM view (psutil)
+    cpu_percent: Optional[float] = Field(default=None, description="System-wide CPU utilisation (0-100), container/VM view.")
+
+    # RAM — container/VM view (psutil), in bytes
+    ram_used_bytes: Optional[int] = Field(default=None, description="Used RAM in bytes (container/VM view).")
+    ram_total_bytes: Optional[int] = Field(default=None, description="Total RAM in bytes (container/VM view).")
+    ram_percent: Optional[float] = Field(default=None, description="RAM utilisation (0-100).")
+
+    # Disk — the data volume as seen inside the container (psutil.disk_usage), in bytes
+    disk_path: Optional[str] = Field(default=None, description="Path whose filesystem usage is reported (as seen in the container).")
+    disk_used_bytes: Optional[int] = Field(default=None, description="Used disk space in bytes for disk_path.")
+    disk_total_bytes: Optional[int] = Field(default=None, description="Total disk space in bytes for disk_path.")
+    disk_percent: Optional[float] = Field(default=None, description="Disk utilisation (0-100) for disk_path.")
+
+    # Temperature (degrees Celsius)
+    cpu_temp_c: Optional[float] = Field(default=None, description="CPU package temperature; host-only, null inside the container on Windows.")
+    gpu_temp_c: Optional[float] = Field(default=None, description="GPU temperature via nvidia-smi (GPU passthrough).")
+
+    # Power (watts)
+    gpu_power_watts: Optional[float] = Field(default=None, description="GPU power draw via nvidia-smi.")
+    cpu_power_watts: Optional[float] = Field(default=None, description="CPU package power; host-only, null inside the container on Windows.")
+
+    # Uptime (seconds) — host/VM kernel uptime via psutil.boot_time
+    uptime_seconds: Optional[float] = Field(default=None, description="Kernel uptime in seconds (the Docker Desktop VM on Windows).")
+
+    # GPU context (available via passthrough)
+    gpu_name: Optional[str] = Field(default=None, description="GPU model name from nvidia-smi.")
+    gpu_percent: Optional[float] = Field(default=None, description="GPU utilisation (0-100) via nvidia-smi.")
+    vram_used_bytes: Optional[int] = Field(default=None, description="VRAM in use, in bytes, via nvidia-smi.")
+    vram_total_bytes: Optional[int] = Field(default=None, description="Total VRAM, in bytes, via nvidia-smi.")
+
+    sources: HostStatsSources = Field(description="Provenance of each metric (host / gpu / container).")
+
+
 # ============== Prompt Template Models ==============
 
 class ToolParameterSchema(BaseModel):

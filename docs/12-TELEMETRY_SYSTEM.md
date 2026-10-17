@@ -214,3 +214,52 @@ The `_emit_telemetry()` method fires after each agent interaction completes:
 - Both `data/telemetry/*.jsonl` and `data/telemetry/raw/*.jsonl` are cleaned
 - Rotation runs at service startup via `rotate_old_files()`
 - Files are identified by their `YYYY-MM-DD` stem — non-date filenames are skipped
+
+## Live Host-Stats Widget (superadmin)
+
+A floating, superadmin-only widget shows live machine stats in the bottom-right
+corner of the app (raised ~88px above the bottom edge). It polls a lightweight
+endpoint every ~4s and renders CPU, RAM, disk, GPU, temperature, power and
+uptime. It is collapsible to a chip (persisted in `localStorage`) and
+dismissible for the session.
+
+- **Endpoint**: `GET /api/v1/system/host-stats` — guarded by `require_admin`
+  (superadmin `is_admin` only), returns a `HostStatsResponse`
+  (`backend/models/schemas.py`).
+- **Service**: `backend/services/host_stats.py` (`HostStatsSampler`). It
+  **reuses the benchmark probes** `GpuProbe` and `HostProbe` from
+  `backend/evaluation/synthetic_corpus/resources.py` rather than writing new
+  collectors, and adds standard `psutil` reads for disk usage and uptime.
+  Sampling runs in a worker thread (`asyncio.to_thread`) and is cached for a
+  short TTL (`DEFAULT_TTL_SECONDS`, 3s) so rapid polling never spawns an
+  `nvidia-smi` process per request — it stays off the heavy path.
+- **Frontend**: `frontend/src/components/HostStatsWidget.tsx`, rendered from
+  `Layout.tsx` when `isSuperAdmin(user)`; client call `systemApi.hostStats()`
+  in `frontend/src/api/client.ts` (typed `HostStats`). i18n under the
+  `hostStats.*` keys in `en.json` / `de.json`.
+
+### Which figures are host, GPU or container
+
+The API runs inside a **Linux container**, which bounds what each figure can
+mean. The response's `sources` object labels every metric group so the UI can
+mark it; the `sources.note` string carries the same caveat as a tooltip.
+
+| Metric | Source | How it is obtained | Caveat |
+|--------|--------|--------------------|--------|
+| `cpu_percent` | container | `HostProbe.sample()` (`psutil.cpu_percent`, primed) | Reflects the Docker Desktop / WSL2 VM on Windows, not the Windows host directly. First reading after startup can read ~0 until the poll interval establishes a delta. |
+| `ram_*` | container | `psutil.virtual_memory()` (exact bytes) | VM view, as above. |
+| `disk_*` | container | `psutil.disk_usage()` on the resolved data path | Path from `host_stats_disk_path`, else the first existing `document_roots` entry, else the container root. Reflects that mount as seen in the container. |
+| `uptime_seconds` | container | `time.time() - psutil.boot_time()` | Kernel uptime — the Docker Desktop VM on Windows, not the Windows host. |
+| `gpu_temp_c`, `gpu_power_watts`, `gpu_percent`, `vram_*`, `gpu_name` | gpu | `GpuProbe.read()` → `nvidia-smi` | **True GPU figures**, available because the GPU is passed through to the container. `None` when `nvidia-smi` is absent. |
+| `cpu_temp_c` | host | best-effort `psutil.sensors_temperatures()` | CPU **package** temperature needs the Windows host (the benchmark sampler reads it with `ThermalProbe`/Windows `typeperf`, which cannot run in the Linux container). Populated only on bare-Linux hosts that expose hwmon sensors; otherwise `null`. |
+| `cpu_power_watts` | host | — | CPU package power needs host RAPL / vendor tooling; not reachable from the container, always `null`. A host-side collector could later populate it. |
+
+Every numeric field is nullable; the widget renders `—` and marks host-only
+metrics so missing figures are explicit rather than misleading.
+
+### Configuration
+
+- `HOST_STATS_DISK_PATH` (setting `host_stats_disk_path`, default empty):
+  path whose filesystem usage is reported, as seen inside the API container.
+  Empty = auto-detect (first existing `document_roots` entry, else container
+  root). A typo'd path degrades to the next candidate instead of erroring.

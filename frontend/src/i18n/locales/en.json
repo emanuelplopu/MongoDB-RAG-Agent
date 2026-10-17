@@ -1881,6 +1881,25 @@
     "error": "Failed to submit support request",
     "loading": "Loading diagnostics..."
   },
+  "hostStats": {
+    "title": "Machine stats",
+    "cpu": "CPU",
+    "ram": "RAM",
+    "disk": "Disk",
+    "gpu": "GPU",
+    "temp": "Temp",
+    "power": "Power",
+    "uptime": "Uptime",
+    "loading": "Loading…",
+    "error": "Stats unavailable",
+    "stale": "Showing last reading",
+    "collapse": "Minimize",
+    "expand": "Show machine stats",
+    "dismiss": "Hide",
+    "tempTooltip": "GPU temperature (nvidia-smi). CPU package temperature needs the host and is unavailable in the container.",
+    "powerTooltip": "GPU power draw (nvidia-smi). CPU package power needs the host and is unavailable in the container.",
+    "caveat": "CPU/RAM/disk/uptime: container view. GPU: via passthrough. CPU temp/power: host-only."
+  },
   "quellexLanding": {
     "watermark": "MUSTER",
     "headerTitle": "Quellex — Aktensuche",

@@ -1881,6 +1881,25 @@
     "error": "Support-Anfrage konnte nicht gesendet werden",
     "loading": "Diagnose wird geladen..."
   },
+  "hostStats": {
+    "title": "Maschinenstatus",
+    "cpu": "CPU",
+    "ram": "RAM",
+    "disk": "Datenträger",
+    "gpu": "GPU",
+    "temp": "Temp.",
+    "power": "Leistung",
+    "uptime": "Laufzeit",
+    "loading": "Wird geladen…",
+    "error": "Status nicht verfügbar",
+    "stale": "Letzte Messung",
+    "collapse": "Minimieren",
+    "expand": "Maschinenstatus anzeigen",
+    "dismiss": "Ausblenden",
+    "tempTooltip": "GPU-Temperatur (nvidia-smi). Die CPU-Package-Temperatur benötigt den Host und ist im Container nicht verfügbar.",
+    "powerTooltip": "GPU-Leistungsaufnahme (nvidia-smi). Die CPU-Package-Leistung benötigt den Host und ist im Container nicht verfügbar.",
+    "caveat": "CPU/RAM/Datenträger/Laufzeit: Container-Sicht. GPU: per Passthrough. CPU-Temp/-Leistung: nur am Host."
+  },
   "quellexLanding": {
     "watermark": "MUSTER",
     "headerTitle": "Quellex \u2014 Aktensuche",
