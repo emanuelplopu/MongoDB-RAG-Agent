@@ -297,6 +297,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         if not hasattr(app.state, "resource_snapshot_collector"):
             app.state.resource_snapshot_collector = None
 
+    # Host + activity telemetry history (host_samples written by the Windows
+    # host agent; activity_events written here and by the ingestion worker).
+    app.state.telemetry_store = None
+    if settings.telemetry_history_enabled:
+        try:
+            from backend.services.telemetry_store import TelemetryStore
+
+            telemetry_store = TelemetryStore.from_settings(settings)
+            await telemetry_store.ensure_collections()
+            app.state.telemetry_store = telemetry_store
+            logger.info("Telemetry history store ready (database=%s)", telemetry_store.database_name)
+        except Exception as e:
+            logger.warning("Telemetry history store init failed (non-fatal): %s", e)
+
     # Strategy OS initialization (Phase 0)
     if settings.strategy_os_enabled:
         try:
@@ -558,7 +572,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
             )
     except Exception as e:
         logger.warning(f"Error persisting final scheduler state: {e}")
-    
+
+    telemetry_store = getattr(app.state, "telemetry_store", None)
+    if telemetry_store is not None:
+        await telemetry_store.close()
+
     await db_manager.disconnect()
     logger.info("Database connection closed")
 

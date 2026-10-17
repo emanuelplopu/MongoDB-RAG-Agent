@@ -7,12 +7,16 @@ import {
   CircleStackIcon,
   ServerStackIcon,
   FireIcon,
-  BoltIcon,
   ClockIcon,
+  CubeIcon,
+  ArrowPathIcon,
+  ChatBubbleLeftRightIcon,
+  ChartBarIcon,
 } from '@heroicons/react/24/outline'
 import { useAuth } from '../contexts/AuthContext'
 import { isSuperAdmin } from '../api/roles'
-import { systemApi, HostStats } from '../api/client'
+import { systemApi, HostStats, HostActivityState } from '../api/client'
+import { LocalizedLink } from './LocalizedLink'
 
 /** How often the widget re-polls the host-stats endpoint (ms). */
 const POLL_INTERVAL_MS = 4000
@@ -21,7 +25,7 @@ const POLL_INTERVAL_MS = 4000
 const COLLAPSED_KEY = 'recallhub_hoststats_collapsed'
 
 /** Format a byte count as a compact human string (base 1024). */
-function formatBytes(bytes: number | null | undefined): string {
+export function formatBytes(bytes: number | null | undefined): string {
   if (bytes == null || !Number.isFinite(bytes)) return '—'
   if (bytes <= 0) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
@@ -46,7 +50,7 @@ function formatWatts(watts: number | null | undefined): string {
 }
 
 /** Humanise an uptime in seconds, e.g. "2d 11h" or "36m". */
-function formatUptime(seconds: number | null | undefined): string {
+export function formatUptime(seconds: number | null | undefined): string {
   if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '—'
   const total = Math.floor(seconds)
   const days = Math.floor(total / 86400)
@@ -56,6 +60,17 @@ function formatUptime(seconds: number | null | undefined): string {
   if (hours > 0) return `${hours}h ${minutes}m`
   if (minutes > 0) return `${minutes}m`
   return `${total}s`
+}
+
+/** "rag-backend-quellex" -> "backend-quellex" (the compose prefix is noise in a tiny card). */
+function shortContainerName(name: string): string {
+  return name.replace(/^rag-/, '')
+}
+
+/** Join the parts that have a value: ["18%", null, "36 W"] -> "18% · 36 W". */
+function joinParts(parts: Array<string | null>): string {
+  const present = parts.filter((p): p is string => p !== null && p !== '—')
+  return present.length > 0 ? present.join(' · ') : '—'
 }
 
 interface MetricRowProps {
@@ -72,21 +87,28 @@ function MetricRow({ icon: Icon, label, value, title }: MetricRowProps) {
         <Icon className="h-3.5 w-3.5" />
         {label}
       </span>
-      <span className="font-mono text-gray-800 dark:text-gray-200 tabular-nums">{value}</span>
+      <span className="font-mono text-gray-800 dark:text-gray-200 tabular-nums truncate">{value}</span>
     </div>
   )
+}
+
+function activityLabel(a: HostActivityState, t: (key: string) => string): string | null {
+  if (a.job_id) {
+    const progress = a.total_files ? ` ${a.processed_files ?? 0}/${a.total_files}` : ''
+    const stage = a.step || a.phase
+    return `${t('hostStats.ingesting')}${progress}${stage ? ` · ${stage}` : ''}`
+  }
+  return a.chat_active ? t('hostStats.chatActive') : null
 }
 
 /**
  * Floating, superadmin-only live machine-stats widget.
  *
- * Polls `GET /api/v1/system/host-stats` every few seconds and shows CPU, RAM,
- * disk, temperature, power and uptime. The API runs in a Linux container, so
- * CPU/RAM/disk/uptime are the container (Docker Desktop VM on Windows) view,
- * GPU figures come from nvidia-smi via passthrough, and CPU package
- * temperature/power are host-only and show as "—" (the `sources` note explains
- * this in a tooltip). Self-gates on {@link isSuperAdmin}; collapsible to a chip
- * (persisted) and dismissible for the session.
+ * Polls `GET /api/v1/system/host-stats` every few seconds. With the Windows host agent running
+ * (`source === 'host-agent'`) it shows true host CPU, RAM, disk, CPU/GPU temperature and power,
+ * uptime, what is running and the busiest containers. While the agent is offline the API falls
+ * back to its container view (the Docker Desktop VM); the badge and a note say so. Self-gates on
+ * {@link isSuperAdmin}; collapsible to a chip (persisted) and dismissible for the session.
  */
 export default function HostStatsWidget() {
   const { t } = useTranslation()
@@ -140,8 +162,6 @@ export default function HostStatsWidget() {
 
   if (!isSuper || dismissed) return null
 
-  const note = stats?.sources?.note
-
   // Collapsed: a small unobtrusive chip that restores the full card on click.
   if (collapsed) {
     return (
@@ -158,19 +178,38 @@ export default function HostStatsWidget() {
     )
   }
 
+  const fromHost = stats?.source === 'host-agent'
+  const cpuTempMissing = fromHost && stats?.cpu_temp_c == null
+  const activity = (stats?.activity ?? [])
+    .map(a => ({ a, label: activityLabel(a, t) }))
+    .filter((x): x is { a: HostActivityState; label: string } => x.label !== null)
+  const busiest = (stats?.containers ?? []).filter(c => (c.cpu_cores ?? 0) > 0).slice(0, 3)
+
   return (
     <div
-      className="fixed bottom-[88px] right-4 z-30 w-56 select-none rounded-xl border border-gray-200 bg-white/95 p-3 text-xs shadow-lg backdrop-blur dark:border-gray-700 dark:bg-gray-800/95"
+      className="fixed bottom-[88px] right-4 z-30 w-64 select-none rounded-xl border border-gray-200 bg-white/95 p-3 text-xs shadow-lg backdrop-blur dark:border-gray-700 dark:bg-gray-800/95"
       role="region"
       aria-label={t('hostStats.title')}
     >
       {/* Header */}
-      <div className="mb-2 flex items-center justify-between">
-        <span className="flex items-center gap-1.5 font-semibold text-gray-700 dark:text-gray-200">
-          <CpuChipIcon className="h-4 w-4" />
-          {t('hostStats.title')}
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="flex min-w-0 items-center gap-1.5 font-semibold text-gray-700 dark:text-gray-200">
+          <CpuChipIcon className="h-4 w-4 flex-shrink-0" />
+          <span className="truncate">{t('hostStats.title')}</span>
         </span>
-        <div className="flex items-center gap-0.5">
+        <div className="flex flex-shrink-0 items-center gap-1">
+          {stats && (
+            <span
+              className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                fromHost
+                  ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                  : 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+              }`}
+              title={fromHost ? t('hostStats.sourceHostTooltip') : t('hostStats.agentOffline')}
+            >
+              {fromHost ? t('hostStats.sourceHost') : t('hostStats.sourceContainer')}
+            </span>
+          )}
           <button
             type="button"
             onClick={() => setCollapsed(true)}
@@ -199,12 +238,17 @@ export default function HostStatsWidget() {
         <div className="py-3 text-center text-amber-600 dark:text-amber-400">{t('hostStats.error')}</div>
       ) : stats ? (
         <div className="space-y-0.5">
-          <MetricRow icon={CpuChipIcon} label={t('hostStats.cpu')} value={formatPercent(stats.cpu_percent)} />
+          <MetricRow
+            icon={CpuChipIcon}
+            label={t('hostStats.cpu')}
+            value={joinParts([formatPercent(stats.cpu_percent), stats.cpu_power_watts != null ? formatWatts(stats.cpu_power_watts) : null])}
+            title={t('hostStats.cpuTooltip')}
+          />
           <MetricRow
             icon={ServerStackIcon}
             label={t('hostStats.ram')}
             value={`${formatBytes(stats.ram_used_bytes)} / ${formatBytes(stats.ram_total_bytes)}`}
-            title={`${formatPercent(stats.ram_percent)}`}
+            title={formatPercent(stats.ram_percent)}
           />
           <MetricRow
             icon={CircleStackIcon}
@@ -216,32 +260,66 @@ export default function HostStatsWidget() {
             <MetricRow
               icon={CpuChipIcon}
               label={t('hostStats.gpu')}
-              value={`${formatPercent(stats.gpu_percent)} · ${formatBytes(stats.vram_used_bytes)}`}
+              value={joinParts([
+                formatPercent(stats.gpu_percent),
+                formatBytes(stats.vram_used_bytes),
+                stats.gpu_power_watts != null ? formatWatts(stats.gpu_power_watts) : null,
+              ])}
               title={stats.gpu_name}
             />
           )}
           <MetricRow
             icon={FireIcon}
             label={t('hostStats.temp')}
-            value={formatTemp(stats.gpu_temp_c ?? stats.cpu_temp_c)}
-            title={t('hostStats.tempTooltip')}
-          />
-          <MetricRow
-            icon={BoltIcon}
-            label={t('hostStats.power')}
-            value={formatWatts(stats.gpu_power_watts ?? stats.cpu_power_watts)}
-            title={t('hostStats.powerTooltip')}
+            value={joinParts([
+              stats.cpu_temp_c != null ? `CPU ${formatTemp(stats.cpu_temp_c)}` : null,
+              stats.gpu_temp_c != null ? `GPU ${formatTemp(stats.gpu_temp_c)}` : null,
+            ])}
+            title={cpuTempMissing ? t('hostStats.cpuTempMissing') : t('hostStats.tempTooltip')}
           />
           <MetricRow icon={ClockIcon} label={t('hostStats.uptime')} value={formatUptime(stats.uptime_seconds)} />
+
+          {activity.map(({ a, label }) => (
+            <MetricRow
+              key={`${a.tenant}:${a.source}`}
+              icon={a.job_id ? ArrowPathIcon : ChatBubbleLeftRightIcon}
+              label={a.tenant ?? t('hostStats.activity')}
+              value={label}
+              title={a.current_file ?? undefined}
+            />
+          ))}
+
+          {busiest.length > 0 && (
+            <div className="mt-1 border-t border-gray-100 pt-1 dark:border-gray-700">
+              {busiest.map(c => (
+                <MetricRow
+                  key={c.name}
+                  icon={CubeIcon}
+                  label={shortContainerName(c.name)}
+                  value={`${(c.cpu_cores ?? 0).toFixed(2)} ${t('hostStats.cores')} · ${formatBytes(c.mem_bytes)}`}
+                  title={c.name}
+                />
+              ))}
+            </div>
+          )}
 
           {error && (
             <div className="pt-1 text-[10px] text-amber-600 dark:text-amber-400">{t('hostStats.stale')}</div>
           )}
-          {note && (
+          {!fromHost && (
             <div className="mt-1.5 border-t border-gray-100 pt-1.5 text-[10px] leading-tight text-gray-400 dark:border-gray-700 dark:text-gray-500">
-              {t('hostStats.caveat')}
+              {t('hostStats.caveatContainer')}
             </div>
           )}
+          <div className="mt-1.5 flex justify-end">
+            <LocalizedLink
+              to="/system/telemetry"
+              className="flex items-center gap-1 text-[11px] font-medium text-primary-600 hover:underline dark:text-primary-400"
+            >
+              <ChartBarIcon className="h-3.5 w-3.5" />
+              {t('hostStats.history')}
+            </LocalizedLink>
+          </div>
         </div>
       ) : null}
     </div>

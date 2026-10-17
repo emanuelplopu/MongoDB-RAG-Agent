@@ -389,10 +389,10 @@ export interface SystemStats {
 }
 
 /**
- * Provenance of each metric in {@link HostStats}: `"container"` (psutil inside
- * the Linux container — the Docker Desktop VM on Windows), `"gpu"` (nvidia-smi
- * via GPU passthrough) or `"host"` (requires the Windows host, so unavailable
- * from the container and reported as null).
+ * Provenance of each metric in {@link HostStats}: `"host"` (Windows host agent),
+ * `"gpu"` (nvidia-smi on the host, via the agent), `"container"` (the API
+ * container's own view — the Docker Desktop VM — used while the agent is
+ * offline) or `"unavailable"` (value is null).
  */
 export interface HostStatsSources {
   cpu: string
@@ -406,10 +406,39 @@ export interface HostStatsSources {
   note: string
 }
 
+/** One container's resource use, from the host agent. */
+export interface HostContainerStat {
+  name: string
+  /** CPU in use, in cores (1.0 = one full core). */
+  cpu_cores: number | null
+  mem_bytes: number | null
+  mem_limit_bytes: number | null
+}
+
+/** What a backend reported as running when the host sample was taken. */
+export interface HostActivityState {
+  tenant: string | null
+  source: string | null
+  job_id: string | null
+  job_status: string | null
+  phase: string | null
+  step: string | null
+  current_file: string | null
+  processed_files: number | null
+  total_files: number | null
+  chat_active: boolean
+}
+
 /** Live host/GPU/container machine stats (GET /system/host-stats, superadmin). */
 export interface HostStats {
   sampled_at: string
   cached: boolean
+  /** 'host-agent' (true host figures) or 'container' (fallback view while the agent is offline). */
+  source: 'host-agent' | 'container'
+  agent_online: boolean
+  agent_sample_age_seconds: number | null
+  /** Host agent sensor driver state: ok, driver_missing, disabled or error. */
+  sensors_status: string | null
   cpu_percent: number | null
   ram_used_bytes: number | null
   ram_total_bytes: number | null
@@ -427,6 +456,8 @@ export interface HostStats {
   gpu_percent: number | null
   vram_used_bytes: number | null
   vram_total_bytes: number | null
+  containers: HostContainerStat[]
+  activity: HostActivityState[]
   sources: HostStatsSources
 }
 
