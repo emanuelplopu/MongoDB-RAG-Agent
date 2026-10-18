@@ -24,6 +24,8 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.1" />
     <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="8.0.1" />
     <PackageReference Include="MongoDB.Driver" Version="3.1.0" />
+    <!-- 0.9.5+ uses the signed PawnIO driver (installed separately) instead of the Defender-flagged WinRing0. -->
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
   </ItemGroup>
 
   <ItemGroup>

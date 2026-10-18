@@ -437,6 +437,32 @@ function Build-TrayApp {
     }
 }
 
+function Build-HostAgent {
+    # The telemetry host agent (installer/host-agent, docs/12-TELEMETRY_SYSTEM.md): a self-contained
+    # single-file exe published to output\host-agent; scripts\Install-HostAgent.ps1 registers it.
+    Write-Step "Building host agent..."
+    $agentDir = Join-Path $SCRIPT_DIR "host-agent"
+    $agentOut = Join-Path $OUTPUT_DIR "host-agent"
+    Push-Location $agentDir
+    try {
+        dotnet publish -c Release -r win-x64 --self-contained true 2>&1 | ForEach-Object { if ($Debug) { Write-Host "    $_" -ForegroundColor Gray } }
+        if ($LASTEXITCODE -ne 0) { throw "Host agent publish failed" }
+        $publishDir = Join-Path $agentDir "bin\Release\net8.0-windows\win-x64\publish"
+        if (-not (Test-Path $publishDir)) { throw "Publish output directory not found: $publishDir" }
+        New-Item -ItemType Directory -Force -Path $agentOut | Out-Null
+        Copy-Item "$publishDir\*" -Destination $agentOut -Recurse -Force
+        Test-BuildArtifact -Path (Join-Path $agentOut "RecallHubHostAgent.exe") -Name "Host Agent" -MinimumSize 5MB | Out-Null
+        Write-Success "Built host agent"
+    }
+    catch {
+        Write-BuildWarning "Host agent build failed: $_"
+        Write-InstallLog "The installer will be created without the telemetry host agent" -Level WARN -Source "Build"
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 function Download-Models {
     Write-Step "Downloading Ollama models (via Docker)..."
     
@@ -726,6 +752,12 @@ function Main {
         Build-TrayApp
         Complete-InstallSection -Name "Tray Application" -Status Success
         
+        # --- Host Agent (telemetry) ---
+        Start-InstallSection -Name "Host Agent"
+        $currentSection = "Host Agent"
+        Build-HostAgent
+        Complete-InstallSection -Name "Host Agent" -Status Success
+
         # --- Model Downloads ---
         Start-InstallSection -Name "Model Downloads"
         $currentSection = "Model Downloads"

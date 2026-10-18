@@ -1907,7 +1907,7 @@
     "agentOffline": "Host agent offline: showing the API container's own view (the Docker Desktop VM).",
     "cpuTooltip": "Host CPU utilisation and CPU package power (Windows RAPL counters).",
     "tempTooltip": "CPU package temperature (host agent sensor driver) and GPU temperature (nvidia-smi on the host).",
-    "cpuTempMissing": "CPU temperature needs the PawnIO sensor driver on the host agent (HardwareSensors).",
+    "cpuTempMissing": "CPU temperature needs the host agent's hardware sensors: the PawnIO driver installed and the agent running as its Windows service (Install-HostAgent.ps1 -EnableHardwareSensors -InstallPawnIO).",
     "caveatContainer": "Host agent offline: CPU, RAM and uptime are the Docker VM's; GPU and CPU temperature/power are unavailable."
   },
   "telemetry": {

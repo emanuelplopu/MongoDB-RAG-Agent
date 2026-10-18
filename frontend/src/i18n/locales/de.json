@@ -1907,7 +1907,7 @@
     "agentOffline": "Host-Agent offline: Anzeige aus Sicht des API-Containers (Docker-Desktop-VM).",
     "cpuTooltip": "CPU-Auslastung des Hosts und CPU-Package-Leistung (Windows-RAPL-Zähler).",
     "tempTooltip": "CPU-Package-Temperatur (Sensortreiber des Host-Agents) und GPU-Temperatur (nvidia-smi am Host).",
-    "cpuTempMissing": "Die CPU-Temperatur benötigt den PawnIO-Sensortreiber im Host-Agent (HardwareSensors).",
+    "cpuTempMissing": "Die CPU-Temperatur braucht die Hardware-Sensoren des Host-Agents: installierten PawnIO-Treiber und den Agent als Windows-Dienst (Install-HostAgent.ps1 -EnableHardwareSensors -InstallPawnIO).",
     "caveatContainer": "Host-Agent offline: CPU, RAM und Laufzeit sind die der Docker-VM; GPU sowie CPU-Temperatur/-Leistung sind nicht verfügbar."
   },
   "telemetry": {

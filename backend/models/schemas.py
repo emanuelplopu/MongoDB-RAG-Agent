@@ -563,7 +563,10 @@ class HostStatsResponse(BaseModel):
     agent_sample_age_seconds: Optional[float] = Field(default=None, description="Age of the host-agent sample in seconds.")
     sensors_status: Optional[str] = Field(
         default=None,
-        description="Host agent hardware-sensor state: ok, driver_missing, disabled or error (CPU temperature needs ok).",
+        description=(
+            "Host agent hardware-sensor state: ok, driver_missing (PawnIO not installed), not_elevated "
+            "(agent not running as the service/administrator), disabled or error. CPU temperature needs ok."
+        ),
     )
 
     # CPU — container/VM view (psutil)
