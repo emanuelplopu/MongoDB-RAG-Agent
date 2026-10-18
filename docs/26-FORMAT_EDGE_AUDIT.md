@@ -61,7 +61,7 @@ Supported-extension files: **390,192**; unsupported: **26,171** (mostly noise �
 | **.doc / .wbk** | 137,716 | **works** | antiword (`-w 0`) is good: 98% umlaut-correct, § preserved, tables kept as space-aligned text (avg 7.6 table-like lines/doc). ~3% (2/72) are sparse Word **templates** yielding a skeleton — the files genuinely hold little text, not a converter failure. No RTF-renamed-as-.doc, no password-protected, no zip-renamed in the sample. No LibreOffice/soffice in the image (antiword is the only converter). |
 | **.docx** | 32,827 | **works** | Docling clean (avg 20k chars). 1/18 invalid file fell back to raw text; embedded DrawingML diagrams are not rasterised (no LibreOffice) — text is unaffected. |
 | **.pdf (text layer)** | ~70% of PDFs | **works** | Docling + Tesseract OCR; § and umlauts preserved. |
-| **.pdf (image-only / pure scan)** | **~30% (~30k)** | **BROKEN under default worker** | See "Critical finding" below — silently skipped, no OCR, no content. |
+| **.pdf (image-only / pure scan)** | **~30% (~30k)** | **was BROKEN under the default worker — fixed** | Silently skipped before OCR (no content). The concurrent loop now OCRs them; the skip is opt-in via `INGEST_SKIP_IMAGE_ONLY_PDF`. See "Critical finding" below. |
 | **.xls (legacy)** | 830 | **BROKEN** | Docling cannot read legacy `.xls`; the raw-text fallback fails on the binary → stored content is `"[Error: Could not read file …]"`. 6/6 placeholders. |
 | **.xlsx** | 1,036 | **works** | Docling clean. |
 | **.rtf** | 7,652 | **NOT INGESTED** | `.rtf` is absent from `SUPPORTED_INGESTION_EXTENSIONS` → never walked. If it were, the current code has no `.rtf` branch, so the generic text-read path would store **raw RTF markup** (`{\rtf1\ansi…}` control words), not text. These are real legal letter/`Muster` templates. |
@@ -99,15 +99,37 @@ text** — 6,983 chars (a Vienna administrative penal order, with § recovered),
 enforcement/`Exekution` case), 1,383 chars (a medical `Befund`) — and 2 were genuinely blank.
 
 So on the imminent full ingest, with defaults, roughly **30,000 scanned PDFs (~a third of the
-102k) will be silently dropped** — exactly the material the OCR scale test was built to handle.
-This is the single highest-impact finding.
+102k) would have been silently dropped** — exactly the material the OCR scale test was built to
+handle. This was the single highest-impact finding.
+
+**Status: fixed (2026-10-18).** `_ingest_documents_concurrent` no longer pre-checks PDFs by default:
+every PDF goes through Docling + OCR, the same as in the sequential path, and the per-file
+timeout, timeout retry and stats rows are unchanged. What changes in the results:
+
+- A scan whose OCR recovers text becomes a normal document (classification `normal`).
+- A genuinely blank scan is not pre-skipped any more; it ends up as `no_chunks` (stats row with
+  `success=False`, so it also appears in `failed_documents`) instead of `image_only_pdf`.
+- The hot loop stops opening every PDF with pdfium on the event loop for the pre-check.
+
+`INGEST_SKIP_IMAGE_ONLY_PDF=true` (setting `ingest_skip_image_only_pdf`; `.env.example`, passed
+through `docker-compose.yml`) restores the old skip for text-only profiles; those PDFs are then
+recorded as `image_only_pdf` without content. The setting only governs the concurrent loop — the
+sequential loop never had the pre-check and is untouched. Cost to plan for: each scan now runs
+OCR; the OCR scale test measured ~4 s per scanned page (`docs/25-OCR_SCALE_TEST.md`), so ~30k
+multi-page scans are days of CPU time on top of the text PDFs.
+
+Files an earlier run already classified `image_only_pdf` keep that classification in the file
+registry until they are reprocessed; select them with the `retry_image_only_pdfs` ingestion
+filter (Ingestion Management page) instead of re-ingesting everything. Nothing needs to be
+re-run on the live `rag_diejuristin` database, which holds 0 documents.
+Tests: `backend/tests/test_image_only_pdf_ocr.py`.
 
 ## Prioritised fixes
 
-1. **Stop skipping image-only PDFs when OCR is on (highest impact).** In
-   `_ingest_documents_concurrent`, gate the `is_image_only_pdf` skip on OCR being disabled (or
-   remove it — the sequential path already OCRs these). Low-risk, few lines, in the hot loop.
-   Recommend a setting so the skip can be kept for a text-only profile.
+1. **Stop skipping image-only PDFs (highest impact) — DONE.** `_ingest_documents_concurrent` now
+   OCRs them like the sequential path; the `is_image_only_pdf` pre-check is opt-in through
+   `INGEST_SKIP_IMAGE_ONLY_PDF` (default `false`) for text-only profiles. See the status note in
+   the critical finding above.
 2. **`.msg` / `.eml` attachment extraction (implemented in the PR, off by default).** Open each
    substantive attachment and append its extracted text (PDF→OCR, doc→antiword, docx→Docling),
    skipping inline logos / `smime.p7s` / `winmail.dat`, with size/count caps. Enable it for the

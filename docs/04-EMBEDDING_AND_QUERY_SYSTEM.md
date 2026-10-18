@@ -126,6 +126,7 @@ settings surfaces, passed through by `docker-compose.yml`; evidence in
 | `OCR_RECT_DILATION` | `20` | Dilation of the layout clusters before touching ones are merged into one OCR rectangle (Docling's value). Smaller values keep stacked tables apart but measured worse overall. |
 | `INGEST_PAGE_FURNITURE` | `false` | Keep Docling's furniture layer (page headers/footers: Geschäftszahl headers, `Hinterlegt am …` ERV stamps, IBAN/UID footers) in the stored Markdown **and** in the HybridChunker's chunks. Docling drops it by default for every format; it never reached the index before. |
 | `OCR_IMAGE_NOISE_GATE` | `false` | Store `[Image: … - no readable text]` instead of letter soup for image files whose OCR output has a word-like token ratio < 0.45 and OCR confidence < 0.65 (or ratio < 0.25); photographed letters, forms and screenshots pass. |
+| `INGEST_SKIP_IMAGE_ONLY_PDF` | `false` | Image-only PDFs (pure scans without a text layer, ~30 % of the PDFs of a law-firm NAS) are OCRed like every other PDF, in the concurrent worker loop (`max_concurrent_files > 1`, the default of 2) as in the sequential one. `true` restores the old pre-check that skips them before OCR and records them as `image_only_pdf` without content — only for text-only profiles. A blank scan that is OCRed ends as `no_chunks`. See `docs/26-FORMAT_EDGE_AUDIT.md`. |
 
 Converters are cached per worker thread and configuration
 (`create_document_converter()` / `create_image_converter()`); Docling keeps

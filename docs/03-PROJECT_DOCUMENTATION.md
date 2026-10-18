@@ -1030,7 +1030,7 @@ The File Registry tracks file processing status for selective re-ingestion.
 | `completed` | Successfully processed |
 | `failed` | Processing failed with error |
 | `timeout` | Processing timed out |
-| `image_only_pdf` | PDF with only images (OCR needed) |
+| `image_only_pdf` | PDF with only images, skipped before OCR (only when `INGEST_SKIP_IMAGE_ONLY_PDF=true`; by default scans are OCRed and a blank one ends as `no_chunks`) |
 | `no_chunks` | Processed but no chunks created |
 | `excluded` | Explicitly excluded from processing |
 

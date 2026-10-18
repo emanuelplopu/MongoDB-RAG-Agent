@@ -342,6 +342,13 @@ class BackendSettings(BaseSettings):
             "objects); photographed documents and screenshots still pass"
         ),
     )
+    ingest_skip_image_only_pdf: bool = Field(
+        default=False,
+        description=(
+            "Skip image-only PDFs (pure scans, no text layer) before OCR in the concurrent "
+            "ingestion loop. Off OCRs them like any other PDF; on is for text-only profiles"
+        ),
+    )
     msg_extract_attachments: bool = Field(
         default=False,
         description=(
@@ -674,6 +681,7 @@ def get_settings() -> BackendSettings:
             ocr_osd_min_confidence=main_settings.ocr_osd_min_confidence,
             ingest_page_furniture=main_settings.ingest_page_furniture,
             ingest_table_structure=main_settings.ingest_table_structure,
+            ingest_skip_image_only_pdf=main_settings.ingest_skip_image_only_pdf,
             ocr_rect_dilation=main_settings.ocr_rect_dilation,
             ocr_image_noise_gate=main_settings.ocr_image_noise_gate,
             msg_extract_attachments=main_settings.msg_extract_attachments,

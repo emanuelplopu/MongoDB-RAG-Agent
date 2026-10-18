@@ -207,6 +207,14 @@ class Settings(BaseSettings):
         ),
     )
 
+    ingest_skip_image_only_pdf: bool = Field(
+        default=False,
+        description=(
+            "Skip image-only PDFs (pure scans, no text layer) before OCR in the concurrent "
+            "ingestion loop. Off OCRs them like any other PDF; on is for text-only profiles"
+        ),
+    )
+
     msg_extract_attachments: bool = Field(
         default=False,
         description=(
@@ -282,6 +290,7 @@ class Settings(BaseSettings):
             'ocr_osd_min_confidence': self.ocr_osd_min_confidence,
             'ingest_page_furniture': self.ingest_page_furniture,
             'ingest_table_structure': self.ingest_table_structure,
+            'ingest_skip_image_only_pdf': self.ingest_skip_image_only_pdf,
             'ocr_rect_dilation': self.ocr_rect_dilation,
             'ocr_image_noise_gate': self.ocr_image_noise_gate,
             'msg_extract_attachments': self.msg_extract_attachments,

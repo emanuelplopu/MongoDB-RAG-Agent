@@ -534,6 +534,26 @@ def table_structure_enabled() -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+# Image-only PDFs (pure scans, no text layer) are OCRed like every other PDF. The skip is the
+# legacy pre-check of the concurrent loop: it dropped ~30% of the diejuristin PDFs before OCR
+# ran (docs/26-FORMAT_EDGE_AUDIT.md). It stays available for text-only profiles, where a scan
+# can only cost OCR time.
+DEFAULT_INGEST_SKIP_IMAGE_ONLY_PDF = False
+
+
+def skip_image_only_pdf_enabled() -> bool:
+    """Whether the concurrent loop skips image-only PDFs before OCR (``INGEST_SKIP_IMAGE_ONLY_PDF``)."""
+    raw = os.environ.get("INGEST_SKIP_IMAGE_ONLY_PDF")
+    if raw is None:
+        try:
+            raw = str(load_settings(use_profile=False).ingest_skip_image_only_pdf)
+        except Exception:  # settings need MONGODB_URI etc.; the harness has none
+            raw = None
+    if raw is None:
+        return DEFAULT_INGEST_SKIP_IMAGE_ONLY_PDF
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 # Keep page headers and footers (Docling's "furniture" content layer) in the stored content
 # and in the chunks. Docling drops them by default, which loses the Geschäftszahl header of
 # court documents, ERV delivery stamps and the bank details in letter footers.
@@ -2952,7 +2972,9 @@ class DocumentIngestionPipeline:
         total_files = len(document_files)
         profile_key = os.getenv("PROFILE", "default")
         timeout_cfg = get_timeout_config()
-        
+        # Resolved once per run; scans are OCRed unless INGEST_SKIP_IMAGE_ONLY_PDF is set
+        skip_image_only_pdfs = skip_image_only_pdf_enabled()
+
         # Track timeout failures for potential retry
         timed_out_files: List[Tuple[int, str, Optional[str]]] = []  # (index, file_path, content_hash or None)
         
@@ -3045,8 +3067,10 @@ class DocumentIngestionPipeline:
                                 progress_callback(processed_count, total_files, file_path, 0)
                             return
                     
-                    # Pre-check: Skip image-only PDFs to save processing time
-                    if file_path.lower().endswith('.pdf'):
+                    # Pre-check (INGEST_SKIP_IMAGE_ONLY_PDF, off by default): skip image-only
+                    # PDFs for text-only profiles. Otherwise they go through Docling + OCR below,
+                    # exactly like the sequential path; a blank scan ends up as no_chunks.
+                    if skip_image_only_pdfs and file_path.lower().endswith('.pdf'):
                         is_image_only, check_reason = is_image_only_pdf(file_path)
                         if is_image_only:
                             logger.info(f"Skipping image-only PDF: {file_path} ({check_reason})")
