@@ -111,8 +111,10 @@ This is the single highest-impact finding.
 2. **`.msg` / `.eml` attachment extraction (implemented in the PR, off by default).** Open each
    substantive attachment and append its extracted text (PDF→OCR, doc→antiword, docx→Docling),
    skipping inline logos / `smime.p7s` / `winmail.dat`, with size/count caps. Enable it for the
-   diejuristin ingest. ~30% of 85,800 emails carry real document payloads today reduced to a
-   filename.
+   diejuristin ingest with `MSG_EXTRACT_ATTACHMENTS=true` in `.env` — the variable (and
+   `MSG_ATTACHMENT_MAX_MB` / `MSG_ATTACHMENT_MAX_COUNT`) is forwarded to every ingest/OCR service
+   through `docker-compose.yml`. ~30% of 85,800 emails carry real document payloads today reduced
+   to a filename.
 3. **`.xls` support.** Add a legacy-`.xls` reader (e.g. `xlrd`/`pandas`) or convert via a
    headless LibreOffice; today all 830 store an error string.
 4. **Audio: bake the Whisper model into the image and fix the language.** Pre-download the ASR
