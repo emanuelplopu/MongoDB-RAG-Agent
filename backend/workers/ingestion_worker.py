@@ -56,6 +56,21 @@ INGESTION_CONFIG_COLLECTION = "ingestion_config"
 # How often a paused job re-checks for RESUME/STOP commands and shutdown
 _PAUSE_POLL_SECONDS: float = 1.0
 
+# The one ingestion-worker container serves the jobs of every tenant on the host, so its
+# telemetry is not attributed to a tenant unless the deployment sets TENANT_ID on the worker.
+SHARED_WORKER_TENANT: str = "shared"
+
+
+def worker_telemetry_tenant() -> str:
+    """Tenant label of the worker's activity events.
+
+    Returns:
+        ``TENANT_ID`` when the worker's environment sets it (single-tenant deployments),
+        otherwise ``"shared"``. The settings default (``recallhub``) is deliberately not used:
+        it mislabelled Quellex jobs on Quellex-only hosts.
+    """
+    return os.getenv("TENANT_ID", "").strip() or SHARED_WORKER_TENANT
+
 # Status constants (matching backend schemas)
 class IngestionStatus:
     PENDING = "PENDING"
@@ -154,7 +169,7 @@ class IngestionWorker:
             self._telemetry_store = TelemetryStore.from_settings(settings)
             await self._telemetry_store.ensure_collections()
             recorder = ActivityEventRecorder(
-                self._telemetry_store, tenant=os.getenv("TENANT_ID", settings.tenant_id), source="worker"
+                self._telemetry_store, tenant=worker_telemetry_tenant(), source="worker"
             )
             await recorder.start()
             set_activity_recorder(recorder)
