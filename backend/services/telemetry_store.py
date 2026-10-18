@@ -298,6 +298,26 @@ class TelemetryStore:
         row.pop("_id", None)
         return row
 
+    async def container_summary(self, start: datetime, end: datetime) -> dict[str, dict[str, Any]]:
+        """Per container over ``[start, end)``: average/peak CPU cores and peak memory."""
+        pipeline: list[dict[str, Any]] = [
+            {"$match": {"ts": {"$gte": start, "$lt": end}}},
+            {"$project": {"containers": 1}},
+            {"$unwind": "$containers"},
+            {"$group": {
+                "_id": "$containers.name",
+                "cpu_cores": {"$avg": "$containers.cpu_cores"},
+                "cpu_cores_max": {"$max": "$containers.cpu_cores"},
+                "mem_bytes_max": {"$max": "$containers.mem_bytes"},
+            }},
+        ]
+        rows = await (await self.db[HOST_SAMPLES].aggregate(pipeline)).to_list(length=None)
+        return {row.pop("_id"): row for row in rows if row.get("_id")}
+
+    async def count_host_samples(self, start: datetime, end: datetime) -> int:
+        """Number of host-agent samples in ``[start, end)``."""
+        return await self.db[HOST_SAMPLES].count_documents({"ts": {"$gte": start, "$lt": end}})
+
     # ── activity events ──────────────────────────────────────────────────
 
     async def insert_events(self, docs: Sequence[dict[str, Any]]) -> int:

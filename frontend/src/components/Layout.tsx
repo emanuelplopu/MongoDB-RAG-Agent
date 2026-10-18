@@ -39,6 +39,7 @@ import {
   ArrowUpTrayIcon,
   ChevronDoubleLeftIcon,
   BugAntIcon,
+  PresentationChartLineIcon,
 } from '@heroicons/react/24/outline'
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid'
 import ThemeSwitcher from './ThemeSwitcher'
@@ -79,6 +80,7 @@ const systemMenuItems = [
   { nameKey: 'nav.strategies', href: '/system/strategies', icon: BeakerIcon },
   { nameKey: 'nav.backups', href: '/system/backups', icon: CloudArrowUpIcon },
   { nameKey: 'nav.liveDebug', href: '/system/debug', icon: BugAntIcon },
+  { nameKey: 'nav.telemetryHistory', href: '/system/telemetry', icon: PresentationChartLineIcon },
 ]
 
 // Tenant Icon component - uses tenant iconUrl with fallback to Q letter

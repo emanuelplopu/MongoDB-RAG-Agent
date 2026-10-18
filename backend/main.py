@@ -33,6 +33,7 @@ from backend.routers import evaluation as evaluation_router_module
 from backend.routers import scheduler as scheduler_router_module
 from backend.routers import telemetry as telemetry_router_module
 from backend.routers import telemetry_strategy as telemetry_strategy_router_module
+from backend.routers import telemetry_history as telemetry_history_router_module
 from backend.routers.cloud_sources import (
     connections_router as cloud_connections,
     oauth_router as cloud_oauth,
@@ -978,6 +979,7 @@ app.include_router(
 
 app.include_router(telemetry_router_module.router)
 app.include_router(telemetry_strategy_router_module.router)
+app.include_router(telemetry_history_router_module.router)
 
 app.include_router(
     strategy_specs_router_module.router,

@@ -40,6 +40,41 @@
   --color-dark-text: #f3f4f6;
 }
 
+/*
+ * Chart tokens (telemetry history charts). Categorical slots 1-4 in fixed order, validated
+ * (dataviz validate_palette.js) against the card surfaces: light #FFFBFE, dark #1f2937. In light
+ * mode slots 3-4 sit below 3:1 on the surface, so charts also ship legends, end labels and a
+ * table view. Dark values are their own validated steps, not an automatic flip.
+ */
+.viz-root {
+  --viz-surface: #FFFBFE;
+  --viz-text-primary: #0b0b0b;
+  --viz-text-secondary: #52514e;
+  --viz-muted: #898781;
+  --viz-grid: #e1e0d9;
+  --viz-axis: #c3c2b7;
+  --viz-band: rgba(11, 11, 11, 0.05);
+  --viz-crosshair: #898781;
+  --viz-series-1: #2a78d6;
+  --viz-series-2: #eb6834;
+  --viz-series-3: #1baf7a;
+  --viz-series-4: #eda100;
+}
+.dark .viz-root {
+  --viz-surface: #1f2937;
+  --viz-text-primary: #ffffff;
+  --viz-text-secondary: #c3c2b7;
+  --viz-muted: #898781;
+  --viz-grid: #374151;
+  --viz-axis: #4b5563;
+  --viz-band: rgba(255, 255, 255, 0.06);
+  --viz-crosshair: #9ca3af;
+  --viz-series-1: #3987e5;
+  --viz-series-2: #d95926;
+  --viz-series-3: #199e70;
+  --viz-series-4: #c98500;
+}
+
 /* Tenant brand gradient utility */
 .bg-gradient-brand {
   background: linear-gradient(to right, var(--color-gradient-from), var(--color-gradient-to));

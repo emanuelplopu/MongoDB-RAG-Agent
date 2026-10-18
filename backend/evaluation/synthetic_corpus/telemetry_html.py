@@ -244,7 +244,9 @@ def build_charts(samples: Sequence[Mapping[str, Any]], tl: Timeline, meta: Mappi
         if _any(mem_t := _col(samples, "gpu", "mem_temp_c")):
             series.append(Series("GPU memory", mem_t, 2))
         if _any(board := _col(samples, "host", "cpu_temp_c")):
-            series.append(Series("Board thermal zone", board, 3))
+            # The benchmark sampler reads an ACPI board zone; the host agent reads the CPU package sensor.
+            label = "CPU package" if meta.get("thermal_source") == "cpu_package" else "Board thermal zone"
+            series.append(Series(label, board, 3))
         refs = []
         limits = [t + h for t, h in zip(_col(samples, "gpu", "temp_c"), _col(samples, "gpu", "tlimit_c")) if t is not None and h is not None]
         if limits:

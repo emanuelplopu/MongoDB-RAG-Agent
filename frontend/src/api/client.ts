@@ -4088,3 +4088,215 @@ export const debugApi = {
     return response.data
   },
 }
+
+// ============== Telemetry history (host agent + activity, superadmin) ==============
+
+/** One aggregation bucket of host metrics (averages unless the name ends in `_max`). */
+export interface TelemetryHostPoint {
+  t: string
+  samples: number
+  cpu_pct: number | null
+  cpu_pct_max: number | null
+  mem_pct: number | null
+  mem_pct_max: number | null
+  mem_used_bytes: number | null
+  mem_total_bytes: number | null
+  gpu_util_pct: number | null
+  gpu_util_pct_max: number | null
+  vram_used_bytes: number | null
+  vram_total_bytes: number | null
+  gpu_temp_c: number | null
+  gpu_temp_c_max: number | null
+  cpu_temp_c: number | null
+  cpu_temp_c_max: number | null
+  gpu_power_w: number | null
+  gpu_power_w_max: number | null
+  cpu_power_w: number | null
+  cpu_power_w_max: number | null
+  disk_read_bps: number | null
+  disk_write_bps: number | null
+  net_rx_bps: number | null
+  net_tx_bps: number | null
+  backend_ms_max: number | null
+  backend_down: number
+  gpu_throttled: number
+}
+
+export interface TelemetryContainerPoint {
+  t: string
+  cpu_cores: number | null
+  cpu_cores_max: number | null
+  mem_bytes: number | null
+  mem_bytes_max: number | null
+}
+
+export interface TelemetryActivityPoint {
+  t: string
+  files_ok: number
+  files_failed: number
+  files_other: number
+  file_ms_avg: number | null
+  chats: number
+  chat_errors: number
+  chat_ms_avg: number | null
+}
+
+export interface TelemetryPhaseInterval {
+  job_id: string
+  phase: string
+  start: string
+  end: string
+  open: boolean
+}
+
+export interface TelemetryJobSummary {
+  job_id: string
+  status: string | null
+  tenant: string | null
+  source: string | null
+  first_ts: string
+  last_ts: string
+  files: number
+  failed: number
+}
+
+export interface TelemetryHistory {
+  start: string
+  end: string
+  bucket_seconds: number
+  agent_samples: number
+  host: TelemetryHostPoint[]
+  containers: Record<string, TelemetryContainerPoint[]>
+  activity: TelemetryActivityPoint[]
+  phases: TelemetryPhaseInterval[]
+  jobs: TelemetryJobSummary[]
+}
+
+export interface TelemetryEpisode {
+  start: string
+  end: string
+  samples: number
+  peak: number | null
+  detail: string | null
+}
+
+export type TelemetrySeverity = 'critical' | 'warning' | 'info'
+
+export interface TelemetryAnomaly {
+  kind: string
+  severity: TelemetrySeverity
+  title: string
+  detail: string
+  count: number
+  episodes: TelemetryEpisode[]
+  examples: Array<Record<string, unknown>>
+}
+
+export interface TelemetryAnomalyReport {
+  start: string
+  end: string
+  anomalies: TelemetryAnomaly[]
+}
+
+export interface TelemetryStepStat {
+  step: string
+  files: number
+  p50_ms: number | null
+  p95_ms: number | null
+  max_ms: number | null
+  total_ms: number | null
+  share_pct: number | null
+}
+
+export interface TelemetryExtStat {
+  ext: string
+  files: number
+  ok: number
+  failed: number
+  empty: number
+  p50_ms: number | null
+  p95_ms: number | null
+  max_ms: number | null
+  bytes: number | null
+  pages: number | null
+  ms_per_page: number | null
+}
+
+export interface TelemetryFileRow {
+  path: string
+  ext: string | null
+  outcome: string | null
+  duration_ms: number | null
+  size_bytes: number | null
+  pages: number | null
+  chunks: number | null
+  steps: Record<string, number>
+  error_type: string | null
+  error: string | null
+  ts: string | null
+}
+
+export interface TelemetryPhaseResources {
+  phase: string
+  start: string
+  end: string
+  duration_s: number
+  host: Record<string, number | null>
+  containers: Record<string, Record<string, number | null>>
+}
+
+export interface TelemetryJobReport {
+  job_id: string
+  status: string | null
+  tenant: string | null
+  source: string | null
+  start: string
+  end: string
+  running: boolean
+  files: number
+  outcomes: Record<string, number>
+  total_bytes: number | null
+  total_pages: number | null
+  total_chunks: number | null
+  files_per_hour: number | null
+  phases: TelemetryPhaseResources[]
+  steps: TelemetryStepStat[]
+  by_ext: TelemetryExtStat[]
+  slowest: TelemetryFileRow[]
+  failures: Array<Record<string, unknown>>
+  unfinished: TelemetryFileRow[]
+  throughput: TelemetryActivityPoint[]
+  /** Bucket size of `throughput`; buckets without files are omitted (zero). */
+  throughput_bucket_seconds: number
+  anomalies: TelemetryAnomaly[]
+  agent_samples: number
+}
+
+/** Telemetry history API (`/api/v1/telemetry`, superadmin only; 503 when history is disabled). */
+export const telemetryApi = {
+  history: async (hours: number, bucket?: number): Promise<TelemetryHistory> => {
+    const response = await api.get('/telemetry/history', { params: { hours, ...(bucket ? { bucket } : {}) } })
+    return response.data
+  },
+
+  jobs: async (hours = 168, limit = 50): Promise<TelemetryJobSummary[]> => {
+    const response = await api.get('/telemetry/jobs', { params: { hours, limit } })
+    return response.data
+  },
+
+  job: async (jobId: string): Promise<TelemetryJobReport> => {
+    const response = await api.get(`/telemetry/jobs/${encodeURIComponent(jobId)}`)
+    return response.data
+  },
+
+  anomalies: async (hours: number): Promise<TelemetryAnomalyReport> => {
+    const response = await api.get('/telemetry/anomalies', { params: { hours } })
+    return response.data
+  },
+
+  /** The job's self-contained HTML report as a Blob (fetched with the session token). */
+  jobReportHtml: async (jobId: string): Promise<Blob> => {
+    const response = await api.get(`/telemetry/jobs/${encodeURIComponent(jobId)}/report.html`, { responseType: 'blob' })
+    return response.data
+  },
+}
