@@ -535,6 +535,26 @@ def table_structure_enabled() -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+# Image-only PDFs (pure scans, no text layer) are OCRed like every other PDF. The skip is the
+# legacy pre-check of the concurrent loop: it dropped ~30% of the diejuristin PDFs before OCR
+# ran (docs/26-FORMAT_EDGE_AUDIT.md). It stays available for text-only profiles, where a scan
+# can only cost OCR time.
+DEFAULT_INGEST_SKIP_IMAGE_ONLY_PDF = False
+
+
+def skip_image_only_pdf_enabled() -> bool:
+    """Whether the concurrent loop skips image-only PDFs before OCR (``INGEST_SKIP_IMAGE_ONLY_PDF``)."""
+    raw = os.environ.get("INGEST_SKIP_IMAGE_ONLY_PDF")
+    if raw is None:
+        try:
+            raw = str(load_settings(use_profile=False).ingest_skip_image_only_pdf)
+        except Exception:  # settings need MONGODB_URI etc.; the harness has none
+            raw = None
+    if raw is None:
+        return DEFAULT_INGEST_SKIP_IMAGE_ONLY_PDF
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 # Keep page headers and footers (Docling's "furniture" content layer) in the stored content
 # and in the chunks. Docling drops them by default, which loses the Geschäftszahl header of
 # court documents, ERV delivery stamps and the bank details in letter footers.
@@ -576,6 +596,142 @@ def export_document_markdown(document: Any) -> str:
     if layers is None:
         return document.export_to_markdown()
     return document.export_to_markdown(included_content_layers=layers)
+
+
+# ---------------------------------------------------------------------------
+# Email (.msg/.eml) attachment extraction
+# ---------------------------------------------------------------------------
+# By default emails store only the body, headers and a list of attachment filenames; the
+# attached PDFs/scans/documents - which in a law-firm corpus routinely carry the substantive
+# content - are not opened. When MSG_EXTRACT_ATTACHMENTS is on, each substantive attachment is
+# written to a temp file and run back through the normal document reader (PDF -> OCR,
+# .doc -> antiword, .docx -> Docling, images -> OCR) and its text appended to the email content.
+
+DEFAULT_MSG_EXTRACT_ATTACHMENTS = False
+DEFAULT_MSG_ATTACHMENT_MAX_MB = 25
+DEFAULT_MSG_ATTACHMENT_MAX_COUNT = 20
+
+# Attachment names/extensions that never carry substantive content.
+_EMAIL_ATTACHMENT_NOISE_NAME = re.compile(r"(?:smime\.p7[sm]|winmail\.dat)$", re.I)
+_EMAIL_ATTACHMENT_SKIP_EXT = frozenset({".p7s", ".p7m", ".p7c", ".asc", ".sig", ".ics", ".vcf"})
+# Nested emails and media are not extracted from attachments (recursion / size / broken paths).
+_EMAIL_ATTACHMENT_AUDIO_VIDEO = frozenset({
+    ".mp3", ".wav", ".m4a", ".flac", ".mp4", ".avi", ".mkv", ".mov", ".webm", ".wmv",
+})
+_EMAIL_INLINE_IMAGE_EXT = frozenset({".png", ".gif", ".jpg", ".jpeg", ".bmp", ".webp"})
+_EMAIL_INLINE_IMAGE_MIN_BYTES = 50 * 1024  # smaller images are treated as logos/signatures
+_EMAIL_ATTACHMENT_PLACEHOLDER_RE = re.compile(r"^\s*\[(?:Video|Image|Skipped|Error|Empty email):", re.I)
+
+
+def email_attachment_text_extensions() -> frozenset:
+    """Attachment extensions whose text is extracted (documents + images, not email/media)."""
+    return frozenset(SUPPORTED_INGESTION_EXTENSIONS) - {".msg", ".eml"} - _EMAIL_ATTACHMENT_AUDIO_VIDEO
+
+
+def resolve_msg_attachment_config() -> Tuple[bool, int, int]:
+    """Resolve ``(enabled, max_bytes, max_count)`` for email attachment extraction.
+
+    Resolution order per value: environment (``MSG_EXTRACT_ATTACHMENTS``,
+    ``MSG_ATTACHMENT_MAX_MB``, ``MSG_ATTACHMENT_MAX_COUNT``), then ``src.settings.Settings``,
+    then the module defaults. A bad number is logged and replaced by its default.
+
+    Returns:
+        ``(enabled, max_bytes, max_count)``; ``max_bytes``/``max_count`` of 0 means no cap.
+    """
+    enabled_raw = os.environ.get("MSG_EXTRACT_ATTACHMENTS")
+    mb_raw = os.environ.get("MSG_ATTACHMENT_MAX_MB")
+    count_raw = os.environ.get("MSG_ATTACHMENT_MAX_COUNT")
+    if enabled_raw is None or mb_raw is None or count_raw is None:
+        try:
+            settings = load_settings(use_profile=False)
+            if enabled_raw is None:
+                enabled_raw = str(settings.msg_extract_attachments)
+            if mb_raw is None:
+                mb_raw = str(settings.msg_attachment_max_mb)
+            if count_raw is None:
+                count_raw = str(settings.msg_attachment_max_count)
+        except Exception:  # settings need MONGODB_URI etc.; the harness has none
+            pass
+    enabled = (enabled_raw or str(DEFAULT_MSG_EXTRACT_ATTACHMENTS)).strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+    max_mb = _parse_optional_int(mb_raw, "MSG_ATTACHMENT_MAX_MB")
+    max_mb = DEFAULT_MSG_ATTACHMENT_MAX_MB if max_mb is None or max_mb < 0 else max_mb
+    max_count = _parse_optional_int(count_raw, "MSG_ATTACHMENT_MAX_COUNT")
+    max_count = DEFAULT_MSG_ATTACHMENT_MAX_COUNT if max_count is None or max_count < 0 else max_count
+    return enabled, max_mb * 1024 * 1024, max_count
+
+
+def extract_email_attachment_text(
+    attachments: List[Tuple[str, bytes]],
+    reader: Callable[[str], Tuple[str, Any]],
+    max_bytes: int,
+    max_count: int,
+) -> List[str]:
+    """Extract text from email attachments by reusing the document reader.
+
+    Each attachment is written to a temporary file with its own extension and passed to
+    ``reader`` (normally :meth:`DocumentIngestionPipeline._read_document`), so PDFs are OCRed,
+    ``.doc`` goes through antiword, ``.docx`` through Docling and images through OCR. Noise
+    attachments (``smime.p7s``, ``winmail.dat``, signatures, calendar/contact files, tiny inline
+    logo images), nested emails, audio/video, unsupported types and oversized files are skipped.
+    One bad attachment never fails the email: each is isolated in a ``try``/``except``.
+
+    Args:
+        attachments: ``(filename, data)`` pairs; empty/non-bytes data is skipped.
+        reader: Callable returning ``(markdown_text, docling_doc)`` for a file path.
+        max_bytes: Skip attachments whose data exceeds this size (0 = no limit).
+        max_count: Extract from at most this many attachments (0 = no limit).
+
+    Returns:
+        Markdown blocks (``### Attachment: <name>`` + text), one per attachment with usable text.
+    """
+    import tempfile
+
+    blocks: List[str] = []
+    allowed = email_attachment_text_extensions()
+    processed = 0
+    for name, data in attachments:
+        if max_count and processed >= max_count:
+            break
+        name = name or "unnamed"
+        ext = os.path.splitext(name)[1].lower()
+        if not isinstance(data, (bytes, bytearray)) or not data:
+            continue
+        if _EMAIL_ATTACHMENT_NOISE_NAME.search(name) or ext in _EMAIL_ATTACHMENT_SKIP_EXT:
+            continue
+        if ext not in allowed:
+            continue
+        if ext in _EMAIL_INLINE_IMAGE_EXT and len(data) < _EMAIL_INLINE_IMAGE_MIN_BYTES:
+            continue  # logo / signature image, not a document scan
+        if max_bytes and len(data) > max_bytes:
+            logger.info(
+                f"Skipping large email attachment {name} "
+                f"({len(data) / 1024 / 1024:.1f}MB exceeds cap)"
+            )
+            continue
+        processed += 1
+        tmp = None
+        try:
+            fd, tmp = tempfile.mkstemp(suffix=ext, prefix="recallhub-att-")
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+            text, _doc = reader(tmp)
+            stripped = (text or "").strip()
+            if stripped and len(stripped) > 10 and not _EMAIL_ATTACHMENT_PLACEHOLDER_RE.match(stripped):
+                blocks.append(f"### Attachment: {name}\n\n{stripped}")
+            else:
+                logger.debug(f"Email attachment {name} produced no usable text")
+        except Exception as exc:  # noqa: BLE001 - one bad attachment must not fail the email
+            logger.warning(f"Failed to extract email attachment {name}: {exc}")
+        finally:
+            if tmp and os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+    return blocks
+
 
 # ISO 639-2/T codes (= Tesseract traineddata names) -> EasyOCR two-letter codes.
 # Two-letter input is accepted as well and normalised to the three-letter form.
@@ -1673,9 +1829,11 @@ class DocumentIngestionPipeline:
     def _read_msg_file(self, file_path: str) -> tuple[str, Optional[Any]]:
         """
         Extract text content from Outlook .msg email files.
-        
-        Extracts subject, sender, date, recipients, and body text.
-        Attachments are listed by name but not recursively processed.
+
+        Extracts subject, sender, date, recipients, and body text. Attachment filenames are
+        always listed; when ``MSG_EXTRACT_ATTACHMENTS`` is on, the text of substantive
+        attachments (PDF/doc/docx/images) is also extracted and appended
+        (:func:`extract_email_attachment_text`).
         
         Args:
             file_path: Path to the .msg file
@@ -1723,13 +1881,25 @@ class DocumentIngestionPipeline:
                     text = re.sub(r'\s+', ' ', text).strip()
                     parts.append(text)
             
-            # List attachments
+            # List attachments (always) and, when enabled, extract their text
             if msg.attachments:
                 parts.append("\n---\n**Attachments:**")
+                att_pairs: List[Tuple[str, bytes]] = []
                 for att in msg.attachments:
                     att_name = getattr(att, 'longFilename', None) or getattr(att, 'shortFilename', None) or 'unnamed'
                     parts.append(f"- {att_name}")
-            
+                    data = getattr(att, 'data', None)
+                    if isinstance(data, (bytes, bytearray)):
+                        att_pairs.append((att_name, bytes(data)))
+                enabled, max_bytes, max_count = resolve_msg_attachment_config()
+                if enabled and att_pairs:
+                    blocks = extract_email_attachment_text(
+                        att_pairs, self._read_document, max_bytes, max_count
+                    )
+                    if blocks:
+                        parts.append("\n---\n## Attachment contents")
+                        parts.extend(blocks)
+
             msg.close()
             
             content = "\n\n".join(parts)
@@ -1752,7 +1922,8 @@ class DocumentIngestionPipeline:
 
         Mirrors :meth:`_read_msg_file`: subject as heading, sender, recipients and
         date as header lines, then the plain-text body (HTML body as fallback).
-        Attachments are listed by name but not processed.
+        Attachment filenames are listed; when ``MSG_EXTRACT_ATTACHMENTS`` is on, the
+        text of substantive attachments is extracted and appended too.
 
         Args:
             file_path: Path to the .eml file
@@ -1788,10 +1959,25 @@ class DocumentIngestionPipeline:
                 if body and body.strip():
                     parts.append(body.strip())
 
-            attachments = [a.get_filename() or "unnamed" for a in msg.iter_attachments()]
+            att_pairs: List[Tuple[str, bytes]] = []
+            attachments = []
+            for a in msg.iter_attachments():
+                name = a.get_filename() or "unnamed"
+                attachments.append(name)
+                payload = a.get_payload(decode=True)
+                if isinstance(payload, (bytes, bytearray)):
+                    att_pairs.append((name, bytes(payload)))
             if attachments:
                 parts.append("\n---\n**Attachments:**")
                 parts.extend(f"- {name}" for name in attachments)
+                enabled, max_bytes, max_count = resolve_msg_attachment_config()
+                if enabled and att_pairs:
+                    blocks = extract_email_attachment_text(
+                        att_pairs, self._read_document, max_bytes, max_count
+                    )
+                    if blocks:
+                        parts.append("\n---\n## Attachment contents")
+                        parts.extend(blocks)
 
             content = "\n\n".join(parts)
             if not content.strip():
@@ -2840,7 +3026,9 @@ class DocumentIngestionPipeline:
         total_files = len(document_files)
         profile_key = os.getenv("PROFILE", "default")
         timeout_cfg = get_timeout_config()
-        
+        # Resolved once per run; scans are OCRed unless INGEST_SKIP_IMAGE_ONLY_PDF is set
+        skip_image_only_pdfs = skip_image_only_pdf_enabled()
+
         # Track timeout failures for potential retry
         timed_out_files: List[Tuple[int, str, Optional[str]]] = []  # (index, file_path, content_hash or None)
         
@@ -2933,8 +3121,10 @@ class DocumentIngestionPipeline:
                                 progress_callback(processed_count, total_files, file_path, 0)
                             return
                     
-                    # Pre-check: Skip image-only PDFs to save processing time
-                    if file_path.lower().endswith('.pdf'):
+                    # Pre-check (INGEST_SKIP_IMAGE_ONLY_PDF, off by default): skip image-only
+                    # PDFs for text-only profiles. Otherwise they go through Docling + OCR below,
+                    # exactly like the sequential path; a blank scan ends up as no_chunks.
+                    if skip_image_only_pdfs and file_path.lower().endswith('.pdf'):
                         is_image_only, check_reason = is_image_only_pdf(file_path)
                         if is_image_only:
                             logger.info(f"Skipping image-only PDF: {file_path} ({check_reason})")

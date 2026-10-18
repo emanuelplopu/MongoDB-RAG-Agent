@@ -49,6 +49,8 @@ If docs and code disagree, trust the current code first, then fix the docs.
 - Ingestion API: `backend/routers/ingestion.py`
 - Ingestion worker: `backend/workers/ingestion_worker.py`
 - Ingestion pipeline and chunking: `src/ingestion/` (`SUPPORTED_INGESTION_EXTENSIONS` is the canonical file filter); the Docling models it needs are baked into `backend/Dockerfile.base` under `DOCLING_ARTIFACTS_PATH` (add new docling models there, no runtime download fallback; `docs/15-DOCKER_BUILD_GUIDE.md`)
+- Image-only (pure scan) PDFs are OCRed in both ingestion loops; the concurrent loop's pre-check that skipped them is opt-in via `INGEST_SKIP_IMAGE_ONLY_PDF` (`skip_image_only_pdf_enabled` in `src/ingestion/ingest.py`, default off); audited in `docs/26-FORMAT_EDGE_AUDIT.md`
+- Email (.msg/.eml) attachment extraction: off by default; `MSG_EXTRACT_ATTACHMENTS` (+ `MSG_ATTACHMENT_MAX_MB`, `MSG_ATTACHMENT_MAX_COUNT`) opens attachments and appends their extracted text (`resolve_msg_attachment_config` / `extract_email_attachment_text` in `src/ingestion/ingest.py`); audited in `docs/26-FORMAT_EDGE_AUDIT.md`
 - Pre-ingestion estimator: `backend/services/ingestion_estimator.py`, `GET /api/v1/profiles/{key}/ingest/estimate` (in `backend/routers/profiles.py`), `quellexctl ingest estimate` (`backend/cli/ingest_commands.py`), the estimate line in `frontend/src/pages/IngestionManagementPage.tsx` (`ingestionApi.estimate`); documented in `docs/22-DOCUMENT_FOLDERS_AND_SHARES.md`
 - Profiles and tenant-aware model selection: `backend/routers/profiles.py`, `profiles.yaml`, `src/profile.py`
 - Profile document folders and network shares: `backend/services/document_folders.py` (`DOCUMENT_ROOTS` validation + browsing), `GET /api/v1/profiles/folders/browse`, `frontend/src/components/ServerFolderPicker.tsx`, the whole `./mounts` folder mounted at `/app/mounts` in `docker-compose.yml`, `docker-compose.shares.example.yml` + `installer/scripts/Add-NetworkShare.ps1` (CIFS volumes, loaded by `Start-Services.ps1`/`Stop-Services.ps1`/tray `ServiceManager.cs`); documented in `docs/22-DOCUMENT_FOLDERS_AND_SHARES.md`
@@ -58,7 +60,7 @@ If docs and code disagree, trust the current code first, then fix the docs.
 - Frontend API client: `frontend/src/api/client.ts`
 - Frontend tenants: `frontend/src/tenants/configs/`
 - Frontend tests and MSW setup: `frontend/src/test/`
-- Documentation: top-level master spec `01-SYSTEM_BLUEPRINT.md`; numbered blueprint set in `docs/` (`02-SYSTEM_BLUEPRINTS.md` … `25-OCR_SCALE_TEST.md`). Strategy OS deep-dive is `docs/07-STRATEGY_OS_OVERVIEW.md` through `docs/11-EXPLORATION_AND_SCHEDULER.md`.
+- Documentation: top-level master spec `01-SYSTEM_BLUEPRINT.md`; numbered blueprint set in `docs/` (`02-SYSTEM_BLUEPRINTS.md` … `26-FORMAT_EDGE_AUDIT.md`). Strategy OS deep-dive is `docs/07-STRATEGY_OS_OVERVIEW.md` through `docs/11-EXPLORATION_AND_SCHEDULER.md`. Non-scan format/edge-case ingestion audit is `docs/26-FORMAT_EDGE_AUDIT.md`.
 
 ## Non-Negotiable Rules
 
