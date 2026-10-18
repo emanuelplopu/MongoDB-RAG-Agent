@@ -608,18 +608,19 @@ async def get_stats(request: Request):
 
 
 @router.get("/host-stats", response_model=HostStatsResponse)
-async def get_host_stats(admin: UserResponse = Depends(require_admin)) -> HostStatsResponse:
+async def get_host_stats(request: Request, admin: UserResponse = Depends(require_admin)) -> HostStatsResponse:
     """Live host/GPU/container machine stats for the superadmin stats widget.
 
     Superadmin only (``require_admin``). Returns CPU, RAM, disk, temperature,
-    power and uptime. The API runs in a Linux container, so CPU/RAM/disk/uptime
-    are the container (Docker Desktop VM on Windows) view, GPU temperature/power/
-    VRAM come from ``nvidia-smi`` via passthrough, and CPU package temperature/
-    power are host-only and returned as ``null``. See the ``sources`` field for
-    the provenance of each metric. Sampling is cached (~3s TTL) and runs off the
-    request path, so polling stays cheap.
+    power, uptime, per-container use and the running activity from the Windows
+    host agent's latest sample (``source="host-agent"``). While the agent is
+    offline the API falls back to its own in-container view
+    (``source="container"``: the Docker Desktop VM, no GPU or CPU temperature/
+    power). The ``sources`` field labels each figure. Reads are a single indexed
+    query or a ~3s-cached local sample, so polling stays cheap.
     """
-    return await host_stats.collect_host_stats()
+    store = getattr(request.app.state, "telemetry_store", None)
+    return await host_stats.collect_host_stats(store)
 
 
 @router.get("/config", response_model=ConfigResponse)

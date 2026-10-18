@@ -507,13 +507,12 @@ class ConfigResponse(BaseModel):
 class HostStatsSources(BaseModel):
     """Where each metric in :class:`HostStatsResponse` actually comes from.
 
-    The API runs inside a Linux container, so the provenance of each figure
-    matters for interpretation. Values are one of ``"container"`` (read by
-    psutil inside the container — on Docker Desktop these reflect the Docker
-    Desktop/WSL2 VM, the closest-to-host numbers the container can see),
-    ``"gpu"`` (read from ``nvidia-smi`` via GPU passthrough — true GPU figures),
-    or ``"host"`` (requires the Windows host and is therefore unavailable from
-    inside the container — reported as ``null``).
+    Values are ``"host"`` (read on the Windows host by the host agent),
+    ``"gpu"`` (``nvidia-smi`` on the host, via the host agent), ``"container"``
+    (psutil inside the API container — on Docker Desktop that is the Docker
+    Desktop/WSL2 VM, used only while the host agent is offline) or
+    ``"unavailable"`` (no source can provide the figure right now; the value is
+    ``null``).
     """
     cpu: str = Field(description="Provenance of cpu_percent.")
     ram: str = Field(description="Provenance of the ram_* fields.")
@@ -526,15 +525,49 @@ class HostStatsSources(BaseModel):
     note: str = Field(description="Human-readable caveat about host vs container metrics.")
 
 
+class HostContainerStat(BaseModel):
+    """Resource use of one container, from the host agent's Docker Engine reads."""
+    name: str = Field(description="Container name, e.g. rag-backend-quellex.")
+    cpu_cores: Optional[float] = Field(default=None, description="CPU in use, in cores (1.0 = one full core).")
+    mem_bytes: Optional[int] = Field(default=None, description="Memory in use (cache excluded), bytes.")
+    mem_limit_bytes: Optional[int] = Field(default=None, description="Memory limit visible to the container, bytes.")
+
+
+class HostActivityState(BaseModel):
+    """What a backend process reported as running when the sample was taken."""
+    tenant: Optional[str] = Field(default=None, description="Tenant id of the reporting backend.")
+    source: Optional[str] = Field(default=None, description="'api' or 'worker'.")
+    job_id: Optional[str] = Field(default=None, description="Ingestion job id, when a job is running.")
+    job_status: Optional[str] = Field(default=None, description="Job status, e.g. running or paused.")
+    phase: Optional[str] = Field(default=None, description="Job phase, e.g. discovering or processing.")
+    step: Optional[str] = Field(default=None, description="Per-file step in progress, e.g. convert or embed.")
+    current_file: Optional[str] = Field(default=None, description="File being processed.")
+    processed_files: Optional[int] = Field(default=None, description="Files done so far.")
+    total_files: Optional[int] = Field(default=None, description="Files in the job.")
+    chat_active: bool = Field(default=False, description="A chat request finished or ran within the last minute.")
+
+
 class HostStatsResponse(BaseModel):
     """Live host/GPU/container machine stats for the superadmin stats widget.
 
-    Served by ``GET /api/v1/system/host-stats`` (superadmin only). Every numeric
-    field is ``None`` when its source is unavailable so the UI can hide or mark
-    the metric. See :class:`HostStatsSources` for the provenance of each figure.
+    Served by ``GET /api/v1/system/host-stats`` (superadmin only). Figures come
+    from the Windows host agent's latest sample (``source="host-agent"``); while
+    the agent is offline the API falls back to its own in-container view
+    (``source="container"``). Every numeric field is ``None`` when unavailable.
+    See :class:`HostStatsSources` for the provenance of each figure.
     """
     sampled_at: datetime = Field(description="When these metrics were sampled (UTC).")
     cached: bool = Field(description="True when served from the short-TTL cache rather than freshly sampled.")
+    source: str = Field(default="container", description="'host-agent' (true host figures) or 'container' (fallback view).")
+    agent_online: bool = Field(default=False, description="True when a fresh host-agent sample was available.")
+    agent_sample_age_seconds: Optional[float] = Field(default=None, description="Age of the host-agent sample in seconds.")
+    sensors_status: Optional[str] = Field(
+        default=None,
+        description=(
+            "Host agent hardware-sensor state: ok, driver_missing (PawnIO not installed), not_elevated "
+            "(agent not running as the service/administrator), disabled or error. CPU temperature needs ok."
+        ),
+    )
 
     # CPU — container/VM view (psutil)
     cpu_percent: Optional[float] = Field(default=None, description="System-wide CPU utilisation (0-100), container/VM view.")
@@ -567,7 +600,14 @@ class HostStatsResponse(BaseModel):
     vram_used_bytes: Optional[int] = Field(default=None, description="VRAM in use, in bytes, via nvidia-smi.")
     vram_total_bytes: Optional[int] = Field(default=None, description="Total VRAM, in bytes, via nvidia-smi.")
 
-    sources: HostStatsSources = Field(description="Provenance of each metric (host / gpu / container).")
+    containers: List[HostContainerStat] = Field(
+        default_factory=list, description="Per-container CPU/memory (host agent only), busiest first."
+    )
+    activity: List[HostActivityState] = Field(
+        default_factory=list, description="What the backends reported as running at sample time (host agent only)."
+    )
+
+    sources: HostStatsSources = Field(description="Provenance of each metric (host / gpu / container / unavailable).")
 
 
 # ============== Prompt Template Models ==============

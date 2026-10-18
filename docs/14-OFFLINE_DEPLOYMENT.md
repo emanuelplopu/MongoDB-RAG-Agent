@@ -143,6 +143,15 @@ The installer runs in 3 phases:
 
 Other computers then open `https://quellex.local` (see `docs/21-LAN_ACCESS.md`, including how to distribute the gateway's root certificate with `Export-LanCertificate.ps1`).
 
+### Optional: telemetry host agent
+
+`INSTALL.ps1` does not register the host agent (a Windows service needs administrator rights and
+is a deliberate choice). After the install, run `installer\scripts\Install-HostAgent.ps1` from an
+administrator prompt; `installer\build.ps1` puts the published agent in `output\host-agent`. Without
+it the machine-stats widget shows the Docker VM's view and System → Telemetry History has no host
+figures. CPU temperatures need the PawnIO driver: offline, bundle the PawnIO installer and pass
+`-EnableHardwareSensors -PawnIOInstaller <path>`. See `docs/12-TELEMETRY_SYSTEM.md`, "Host Telemetry History".
+
 ### Installer Parameters
 
 | Parameter | Default | Description |

@@ -86,10 +86,12 @@ class TestHostStatsSampler:
         assert stats.vram_total_bytes == int(16311.0 * 1024 * 1024)
         # Host-only metrics unavailable from the container.
         assert stats.cpu_power_watts is None
-        # Provenance labels present.
+        # Provenance labels reflect what was actually read in the container.
+        assert stats.source == "container"
+        assert stats.agent_online is False
         assert stats.sources.gpu_temp == "gpu"
         assert stats.sources.cpu == "container"
-        assert stats.sources.cpu_power == "host"
+        assert stats.sources.cpu_power == "unavailable"
 
     def test_second_call_within_ttl_is_cached(self):
         sampler = _make_sampler(ttl_seconds=60.0)
@@ -110,6 +112,9 @@ class TestHostStatsSampler:
         assert stats.gpu_percent is None
         assert stats.gpu_name is None
         assert stats.vram_used_bytes is None
+        # No GPU in the container (the production case): labelled unavailable.
+        assert stats.sources.gpu_temp == "unavailable"
+        assert stats.sources.gpu_power == "unavailable"
         # Container metrics still populated when the GPU is absent.
         assert stats.cpu_percent == 12.5
 
@@ -160,7 +165,7 @@ class TestHostStatsEndpoint:
     """Tests for GET /api/v1/system/host-stats."""
 
     def test_returns_stats_for_admin(self, client: TestClient, monkeypatch):
-        async def _fake_collect() -> HostStatsResponse:
+        async def _fake_collect(*_args) -> HostStatsResponse:
             return _sample_response()
 
         monkeypatch.setattr(host_stats, "collect_host_stats", _fake_collect)
@@ -184,7 +189,7 @@ class TestHostStatsEndpoint:
         """Non-admins are rejected before any sampling happens."""
         called = False
 
-        async def _should_not_run() -> HostStatsResponse:
+        async def _should_not_run(*_args) -> HostStatsResponse:
             nonlocal called
             called = True
             return _sample_response()
@@ -195,8 +200,134 @@ class TestHostStatsEndpoint:
             raise HTTPException(status_code=403, detail="Admin access required")
 
         app.dependency_overrides[require_admin] = _forbidden
-        with TestClient(app) as forbidden_client:
-            response = forbidden_client.get("/api/v1/system/host-stats")
+        # No context manager: skip the lifespan so no real Mongo connection is attempted.
+        forbidden_client = TestClient(app)
+        response = forbidden_client.get("/api/v1/system/host-stats")
 
         assert response.status_code == 403
         assert called is False
+
+
+# ── host-agent samples (Phase 1) ────────────────────────────────────────────
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+from backend.services.host_stats import collect_host_stats, response_from_agent_sample  # noqa: E402
+
+
+def _agent_sample(**overrides) -> dict:
+    """A host_samples document as written by the Windows host agent."""
+    sample = {
+        "ts": datetime(2026, 10, 18, 12, 0, 0, tzinfo=timezone.utc),
+        "meta": {"host": "TESTHOST", "source": "host-agent", "agent_version": "1.0.0", "schema": 1},
+        "uptime_s": 214603.0,
+        "cpu": {"pct": 37.5, "logical": 24},
+        "mem": {"used_bytes": 64 * 1024**3, "total_bytes": 256 * 1024**3, "pct": 25.0},
+        "disks": [
+            {"path": "D:\\", "used_bytes": 1, "total_bytes": 2, "pct": 50.0, "primary": False},
+            {"path": "C:\\", "used_bytes": 580 * 10**9, "total_bytes": 4 * 10**12, "pct": 14.5, "primary": True},
+        ],
+        "power": {"cpu_pkg_w": 22.1, "cpu_cores_w": 15.8, "gpu_w": 16.2},
+        "temp": {"gpu_c": 57.0, "cpu_pkg_c": 61.0},
+        "gpu": {"name": "NVIDIA RTX PRO 2000", "util_pct": 7.0, "vram_used_bytes": 4 * 1024**3,
+                "vram_total_bytes": 16 * 1024**3},
+        "containers": [
+            {"name": "rag-mongodb", "cpu_cores": 0.2, "mem_bytes": 900_000_000},
+            {"name": "rag-backend-quellex", "cpu_cores": 3.4, "mem_bytes": 5_000_000_000, "mem_limit_bytes": 25_000_000_000},
+        ],
+        "activity": [{"tenant": "quellex", "source": "api", "job_id": "job-1", "phase": "processing",
+                      "step": "embed", "current_file": "/app/mounts/a.pdf", "processed_files": 3, "total_files": 10,
+                      "unexpected_key": "ignored"}],
+        "sensors": {"status": "ok"},
+    }
+    sample.update(overrides)
+    return sample
+
+
+class TestAgentSampleMapping:
+    """response_from_agent_sample maps the host-agent document to the widget response."""
+
+    def test_maps_true_host_figures(self):
+        now = datetime(2026, 10, 18, 12, 0, 4, tzinfo=timezone.utc)
+        resp = response_from_agent_sample(_agent_sample(), now=now)
+
+        assert resp.source == "host-agent"
+        assert resp.agent_online is True
+        assert resp.agent_sample_age_seconds == 4.0
+        assert resp.cpu_percent == 37.5
+        assert resp.ram_total_bytes == 256 * 1024**3
+        # Primary drive chosen over the first entry.
+        assert resp.disk_path == "C:\\"
+        assert resp.disk_percent == 14.5
+        assert resp.cpu_power_watts == 22.1
+        assert resp.gpu_power_watts == 16.2
+        assert resp.cpu_temp_c == 61.0
+        assert resp.gpu_temp_c == 57.0
+        assert resp.uptime_seconds == 214603.0
+        assert resp.sensors_status == "ok"
+        assert resp.sources.cpu == "host"
+        assert resp.sources.cpu_power == "host"
+        assert resp.sources.gpu_temp == "gpu"
+
+    def test_containers_sorted_busiest_first_and_activity_mapped(self):
+        resp = response_from_agent_sample(_agent_sample())
+
+        assert [c.name for c in resp.containers] == ["rag-backend-quellex", "rag-mongodb"]
+        assert resp.containers[0].cpu_cores == 3.4
+        assert resp.activity[0].job_id == "job-1"
+        assert resp.activity[0].step == "embed"
+        assert resp.activity[0].processed_files == 3
+
+    def test_missing_cpu_temperature_is_marked_unavailable(self):
+        sample = _agent_sample(temp={"gpu_c": 57.0}, sensors={"status": "driver_missing"})
+        resp = response_from_agent_sample(sample)
+
+        assert resp.cpu_temp_c is None
+        assert resp.sources.cpu_temp == "unavailable"
+        assert resp.sensors_status == "driver_missing"
+
+    def test_naive_timestamp_treated_as_utc(self):
+        sample = _agent_sample(ts=datetime(2026, 10, 18, 12, 0, 0))
+        resp = response_from_agent_sample(sample, now=datetime(2026, 10, 18, 12, 0, 10, tzinfo=timezone.utc))
+        assert resp.agent_sample_age_seconds == 10.0
+
+
+class _FakeStore:
+    def __init__(self, sample=None, error: Exception | None = None):
+        self.sample = sample
+        self.error = error
+        self.max_age = None
+
+    async def latest_host_sample(self, *, max_age_seconds: float):
+        self.max_age = max_age_seconds
+        if self.error:
+            raise self.error
+        return self.sample
+
+
+class TestCollectHostStats:
+    """collect_host_stats prefers a fresh agent sample and falls back to the container view."""
+
+    @pytest.fixture(autouse=True)
+    def _fallback_sampler(self, monkeypatch):
+        sampler = _make_sampler()
+        monkeypatch.setattr(host_stats, "get_host_stats_sampler", lambda: sampler)
+
+    def test_uses_agent_sample_when_fresh(self):
+        store = _FakeStore(sample=_agent_sample(ts=datetime.now(timezone.utc) - timedelta(seconds=3)))
+        resp = asyncio.run(collect_host_stats(store))
+        assert resp.source == "host-agent"
+        assert store.max_age is not None and store.max_age > 0
+
+    def test_falls_back_when_agent_offline(self):
+        resp = asyncio.run(collect_host_stats(_FakeStore(sample=None)))
+        assert resp.source == "container"
+        assert resp.agent_online is False
+
+    def test_falls_back_when_store_errors(self):
+        resp = asyncio.run(collect_host_stats(_FakeStore(error=RuntimeError("mongo down"))))
+        assert resp.source == "container"
+
+    def test_falls_back_without_store(self):
+        resp = asyncio.run(collect_host_stats(None))
+        assert resp.source == "container"

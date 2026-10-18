@@ -457,7 +457,45 @@ class BackendSettings(BaseSettings):
         default=True,
         description="Wrap PII replacements with [PII:TYPE]...[/PII] markers in protected telemetry"
     )
-    
+
+    # Host + activity telemetry history (docs/12-TELEMETRY_SYSTEM.md)
+    telemetry_history_enabled: bool = Field(
+        default=True,
+        description=(
+            "Record activity events (ingestion phases, per-file steps, chat requests) "
+            "and read host-agent samples for the machine-stats widget and history."
+        ),
+    )
+    telemetry_database: str = Field(
+        default="recallhub_telemetry",
+        description=(
+            "MongoDB database holding host_samples, activity_events and "
+            "activity_current. Independent of the active profile database so "
+            "history survives profile switches; shared by all tenants on a host."
+        ),
+    )
+    host_samples_ttl_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        description="Retention of host_samples (time-series, written by the Windows host agent) in days.",
+    )
+    activity_events_ttl_days: int = Field(
+        default=90,
+        ge=1,
+        le=365,
+        description="Retention of activity_events (time-series checkpoint events) in days.",
+    )
+    host_agent_stale_seconds: int = Field(
+        default=20,
+        ge=5,
+        le=600,
+        description=(
+            "A host-agent sample older than this counts as offline; the stats "
+            "widget then falls back to the in-container view."
+        ),
+    )
+
     # Strategy OS configuration
     strategy_os_enabled: bool = Field(
         default=True,

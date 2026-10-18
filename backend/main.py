@@ -33,6 +33,7 @@ from backend.routers import evaluation as evaluation_router_module
 from backend.routers import scheduler as scheduler_router_module
 from backend.routers import telemetry as telemetry_router_module
 from backend.routers import telemetry_strategy as telemetry_strategy_router_module
+from backend.routers import telemetry_history as telemetry_history_router_module
 from backend.routers.cloud_sources import (
     connections_router as cloud_connections,
     oauth_router as cloud_oauth,
@@ -297,6 +298,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         if not hasattr(app.state, "resource_snapshot_collector"):
             app.state.resource_snapshot_collector = None
 
+    # Host + activity telemetry history (host_samples written by the Windows
+    # host agent; activity_events written here and by the ingestion worker).
+    app.state.telemetry_store = None
+    if settings.telemetry_history_enabled:
+        try:
+            from backend.services.telemetry_store import TelemetryStore
+
+            from backend.services.activity_events import ActivityEventRecorder, set_activity_recorder
+
+            telemetry_store = TelemetryStore.from_settings(settings)
+            await telemetry_store.ensure_collections()
+            app.state.telemetry_store = telemetry_store
+            activity_recorder = ActivityEventRecorder(telemetry_store, tenant=settings.tenant_id, source="api")
+            await activity_recorder.start()
+            set_activity_recorder(activity_recorder)
+            app.state.activity_recorder = activity_recorder
+            logger.info("Telemetry history ready (database=%s, recorder=%s)",
+                        telemetry_store.database_name, activity_recorder.key)
+        except Exception as e:
+            logger.warning("Telemetry history store init failed (non-fatal): %s", e)
+
     # Strategy OS initialization (Phase 0)
     if settings.strategy_os_enabled:
         try:
@@ -558,7 +580,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
             )
     except Exception as e:
         logger.warning(f"Error persisting final scheduler state: {e}")
-    
+
+    activity_recorder = getattr(app.state, "activity_recorder", None)
+    if activity_recorder is not None:
+        from backend.services.activity_events import set_activity_recorder
+
+        await activity_recorder.stop()
+        set_activity_recorder(None)
+    telemetry_store = getattr(app.state, "telemetry_store", None)
+    if telemetry_store is not None:
+        await telemetry_store.close()
+
     await db_manager.disconnect()
     logger.info("Database connection closed")
 
@@ -947,6 +979,7 @@ app.include_router(
 
 app.include_router(telemetry_router_module.router)
 app.include_router(telemetry_strategy_router_module.router)
+app.include_router(telemetry_history_router_module.router)
 
 app.include_router(
     strategy_specs_router_module.router,

@@ -157,6 +157,11 @@ public class TrayApplicationContext : ApplicationContext
         };
         menu.Items.Add(_statusMenuItem);
 
+        // Telemetry host agent state, refreshed only when the menu opens (no polling)
+        var hostAgentMenuItem = new ToolStripMenuItem(HostAgentStatus.Describe()) { Enabled = false };
+        menu.Items.Add(hostAgentMenuItem);
+        menu.Opening += (_, _) => hostAgentMenuItem.Text = HostAgentStatus.Describe();
+
         menu.Items.Add(new ToolStripSeparator());
 
         // Open the app (shows main window)

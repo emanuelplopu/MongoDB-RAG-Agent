@@ -73,6 +73,12 @@ installer/tray-app/bin/
 installer/tray-app/obj/
 installer/tray-app/.vs/
 
+# Host agent (.NET) build artifacts
+installer/host-agent/bin/
+installer/host-agent/obj/
+installer/host-agent.Tests/bin/
+installer/host-agent.Tests/obj/
+
 # Installer build outputs
 installer/output/
 installer/embedder/

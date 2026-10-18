@@ -42,6 +42,7 @@ import JobHistoryPage from './pages/JobHistoryPage'
 import BackupManagementPage from './pages/BackupManagementPage'
 import EmbeddingBenchmarkPage from './pages/EmbeddingBenchmarkPage'
 import LiveDebugPage from './pages/LiveDebugPage'
+import TelemetryHistoryPage from './pages/TelemetryHistoryPage'
 import FeatureGuard from './components/FeatureGuard'
 
 // Component to handle language redirect
@@ -152,6 +153,7 @@ function AppRoutes() {
                     <Route path="system/backups" element={<FeatureGuard feature="showBackups"><BackupManagementPage /></FeatureGuard>} />
                     <Route path="system/benchmark" element={<FeatureGuard feature="showEmbeddingBenchmark"><EmbeddingBenchmarkPage /></FeatureGuard>} />
                     <Route path="system/debug" element={<LiveDebugPage />} />
+                    <Route path="system/telemetry" element={<TelemetryHistoryPage />} />
                     <Route path="archived-chats" element={<ArchivedChatsPage />} />
                     <Route path="cloud-sources" element={<FeatureGuard feature="showCloudSources"><CloudSourcesPage /></FeatureGuard>} />
                     <Route path="cloud-sources/connections" element={<FeatureGuard feature="showCloudSources"><CloudSourceConnectionsPage /></FeatureGuard>} />
