@@ -24,6 +24,12 @@ WORKER_OWNED: Dict[str, Any] = {"runner": RUNNER_WORKER}
 # files may have been ingested from then on. Kept across resumes.
 FILES_STARTED_FIELD = "files_started_at"
 
+# Job field naming the tenant (``TENANT_ID``) the job belongs to. The API records its own
+# tenant on every job it writes; whoever queues a job for the shared ingestion worker must
+# set it too, because the worker serves every tenant and attributes the job's telemetry
+# to this field (jobs without it count as shared).
+TENANT_FIELD = "tenant"
+
 
 def reached_files(job: Mapping[str, Any]) -> bool:
     """Return whether the job's run got as far as processing files.

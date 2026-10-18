@@ -314,6 +314,19 @@ indexes `meta.job_id+ts` and `meta.kind+ts`. Written by `ActivityEventRecorder`
 `activity_current` holds one document per `<tenant>:<source>` with the live job/phase/step/file and
 `chat_last_active_at`; the agent stamps it onto every sample. Events contain internal file paths:
 treat the telemetry database like the document database (same access, TTL-limited).
+
+**Tenants.** Host samples describe the machine and are shown to every tenant. Activity is tenant
+data: `meta.tenant` (and `tenant` in `activity_current`) is the tenant the job or chat belongs to.
+A backend records everything under its `TENANT_ID` and writes `tenant` onto every
+`ingestion_jobs` document it saves (`TENANT_FIELD` in `backend/core/ingestion_jobs.py`). The
+ingestion worker serves every tenant: its own label is `shared` (or its `TENANT_ID` when a
+deployment pins it to one tenant), its live-state document is `shared:worker`, and a job's events
+and live state carry the `tenant` recorded on the job (`shared` when the job has none). Whoever
+queues a job for the worker must set that field. The API reads activity through a store scoped to
+its tenant (`TelemetryStore(tenant_scope=...)`): history, job lists, job reports, anomalies and
+the widget's "what is running" lines show only its own and `shared` activity, and another
+tenant's job id answers 404. `quellexctl telemetry` is an operator tool on the database and reads
+every tenant.
 `TELEMETRY_HISTORY_ENABLED=false` turns recording and the history API off (the widget then always
 shows the container view).
 
