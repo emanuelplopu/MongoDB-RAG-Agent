@@ -326,11 +326,6 @@ indexes `meta.job_id+ts` and `meta.kind+ts`. Written by `ActivityEventRecorder`
 | `file.start` / `file.end` | the pipeline via `src/ingestion/telemetry_hooks.py` | `file{path, name, ext, size_bytes}`; end: `outcome` (ok, empty, error, cancelled), `duration_ms`, `steps{hash_ms, convert_ms, ocr_repair_ms, chunk_ms, embed_ms, save_ms}`, `chunks`, `pages`, `chars`, `error_type`, `error` |
 | `chat.request` | agent coordinator | `session_id`, `trace_id`, `mode`, `strategy`, `model`, `duration_ms`, `orchestrator_ms`, `worker_ms`, `phases[]`, `outcome` — no message text |
 
-`meta.tenant` is the backend's `TENANT_ID` for API events. The ingestion worker is one container
-shared by every tenant on the host (no Compose profile), so its events carry `tenant: shared` unless
-`TENANT_ID` is set on the worker itself (single-tenant deployments); before 2026-10-18 it fell back to
-the settings default `recallhub`, also for Quellex jobs.
-
 `activity_current` holds one document per `<tenant>:<source>` with the live job/phase/step/file and
 `chat_last_active_at`; the agent stamps it onto every sample. Events contain internal file paths:
 treat the telemetry database like the document database (same access, TTL-limited).
