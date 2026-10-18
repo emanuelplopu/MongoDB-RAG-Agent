@@ -272,7 +272,7 @@ if HAS_TYPER:
             ),
         ),
         tenant: str = typer.Option(
-            "recallhub", "--tenant", "-t", help="Tenant scope (--mode runs)"
+            "recallhub", "--tenant", "-t", envvar="TENANT_ID", help="Tenant scope (--mode runs)"
         ),
         profile_key: Optional[str] = typer.Option(
             None, "--profile", "--profile-key", help="Profile key (--mode runs)"

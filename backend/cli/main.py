@@ -99,7 +99,7 @@ def run_async(coro):
 if HAS_TYPER:
     @app.callback()
     def main_callback(
-        tenant: str = typer.Option("recallhub", "--tenant", "-t", help="Tenant ID"),
+        tenant: str = typer.Option("recallhub", "--tenant", "-t", envvar="TENANT_ID", help="Tenant ID"),
         profile: str = typer.Option("default", "--profile", "-p", help="Profile key"),
         output_format: str = typer.Option("table", "--format", "-f", help="Output format: table or json"),
     ):
