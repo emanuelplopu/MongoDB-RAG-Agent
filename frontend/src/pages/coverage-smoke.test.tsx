@@ -2142,6 +2142,19 @@ describe('large workflow page coverage smoke tests', () => {
     })
   }, 15000)
 
+  it('leaves the personal database check and creation to superadmins', async () => {
+    authState.user = { ...authState.user, is_admin: false }
+    const fetchMock = installFetchMock()
+
+    renderRoute(<EmailCloudConfigPage />)
+
+    expect(await screen.findByText('emailConfigPage.dbAdminOnly')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'emailConfigPage.createDbCollections' })).not.toBeInTheDocument()
+    const calledUrls = fetchMock.mock.calls.map(([input]) => String(input))
+    expect(calledUrls.some((url) => url.includes('/system/database/check/'))).toBe(false)
+    expect(calledUrls.some((url) => url.includes('/system/database/create'))).toBe(false)
+  })
+
   it('renders unavailable email/cloud infrastructure and validates provider setup', async () => {
     const user = userEvent.setup()
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {

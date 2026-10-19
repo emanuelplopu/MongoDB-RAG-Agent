@@ -15,6 +15,8 @@ from passlib.context import CryptContext
 from jose import JWTError, jwt
 import bcrypt
 
+from backend.core.auth_middleware import extract_bearer_credentials
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -326,6 +328,25 @@ async def require_admin(
             detail="Admin access required"
         )
     return user
+
+
+async def require_admin_stream(request: Request) -> UserResponse:
+    """Require a superadmin on a Server-Sent-Events endpoint.
+
+    The browser opens SSE endpoints with ``EventSource``, which cannot send an
+    Authorization header, so the frontend appends ``?token=<jwt>``. This accepts
+    that query token (for paths ending in ``/stream`` only, the same rule as
+    ``RequireAuthMiddleware``) besides the Bearer and ``X-API-Key`` headers,
+    then applies :func:`require_admin`.
+
+    Raises:
+        HTTPException: 401 when unauthenticated, 403 for non-superadmins.
+    """
+    return await require_admin(
+        request,
+        extract_bearer_credentials(request),
+        request.headers.get("x-api-key"),
+    )
 
 
 async def require_org_admin(
