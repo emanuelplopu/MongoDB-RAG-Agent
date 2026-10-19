@@ -2,12 +2,16 @@
 Development telemetry service.
 
 Captures interaction traces with PII pseudonymization for data-driven development.
-Records are written as daily JSONL files with automatic rotation.
+Records are written as daily JSONL files with automatic rotation, one folder
+per tenant (``<storage_path>/<tenant>/<date>.jsonl``, raw records under
+``<tenant>/raw/``) because both tenant backends share ``data/telemetry`` on a
+host that runs both (docs/27-TENANT_ISOLATION.md).
 
 The service is entirely non-blocking: failures are logged but never crash the request.
 """
 
 import logging
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -20,6 +24,12 @@ from backend.models.telemetry import (
 from backend.services.pii_pseudonymizer import TelemetryPseudonymizer
 
 logger = logging.getLogger(__name__)
+
+
+def _tenant_folder(tenant: Optional[str]) -> Optional[str]:
+    """Folder name for a tenant id: lower-case, ``[a-z0-9_-]`` only; None when blank."""
+    name = re.sub(r"[^a-z0-9_-]", "_", (tenant or "").strip().lower())
+    return name or None
 
 
 class TelemetryService:
@@ -37,18 +47,27 @@ class TelemetryService:
         pii_mode: str = "both",
         retention_days: int = 90,
         pii_markers: bool = True,
+        tenant: Optional[str] = None,
     ) -> None:
         """Initialize the telemetry service.
 
         Args:
-            storage_path: Directory for JSONL telemetry files.
+            storage_path: Base directory for JSONL telemetry files.
             enabled: Whether telemetry collection is active.
             mode: Operating mode — 'dev', 'beta', 'production', or 'disabled'.
             pii_mode: PII handling — 'both', 'protected_only', 'raw_only', or 'disabled'.
             retention_days: How many days to keep telemetry files.
             pii_markers: Wrap PII replacements with ``[PII:TYPE]...[/PII]`` markers.
+            tenant: Tenant of this backend; its files go to ``<storage_path>/<tenant>``.
+                Without one, files go to ``storage_path`` itself (old layout).
         """
-        self._storage_path = Path(storage_path)
+        base_path = Path(storage_path)
+        self._tenant: Optional[str] = (tenant or "").strip().lower() or None
+        folder = _tenant_folder(tenant)
+        self._storage_path = base_path / folder if folder else base_path
+        #: Folder of files written before the per-tenant split (mixed tenants);
+        #: the viewer reads this tenant's records from it, rotation cleans it.
+        self._legacy_path: Optional[Path] = base_path if folder else None
         self._enabled = enabled
         self._mode = mode  # dev | beta | production | disabled
         self._pii_mode = pii_mode  # both | protected_only | raw_only | disabled
@@ -356,27 +375,18 @@ class TelemetryService:
                 f.write(record.model_dump_json() + "\n")
 
     async def rotate_old_files(self) -> None:
-        """Remove telemetry files older than retention period."""
-        if not self._storage_path.exists():
-            return
-
+        """Remove telemetry files older than retention period (own and legacy folders)."""
         cutoff = datetime.utcnow() - timedelta(days=self._retention_days)
         removed = 0
 
-        # Rotate protected files
-        for filepath in self._storage_path.glob("*.jsonl"):
-            try:
-                file_date = datetime.strptime(filepath.stem, "%Y-%m-%d")
-                if file_date < cutoff:
-                    filepath.unlink()
-                    removed += 1
-            except ValueError:
-                continue
+        folders = [self._storage_path, self._storage_path / "raw"]
+        if self._legacy_path is not None:
+            folders += [self._legacy_path, self._legacy_path / "raw"]
 
-        # Rotate raw files
-        raw_dir = self._storage_path / "raw"
-        if raw_dir.exists():
-            for filepath in raw_dir.glob("*.jsonl"):
+        for folder in folders:
+            if not folder.is_dir():
+                continue
+            for filepath in folder.glob("*.jsonl"):
                 try:
                     file_date = datetime.strptime(filepath.stem, "%Y-%m-%d")
                     if file_date < cutoff:

@@ -2,15 +2,20 @@
 
 Includes remote viewer API for the Electron telemetry viewer app.
 CORS middleware is configured in backend/main.py.
+
+The viewer only shows this backend's tenant: its own folder
+(``data/telemetry/<tenant>``) plus the records of this tenant in files written
+before telemetry was split per tenant (docs/27-TENANT_ISOLATION.md).
 """
 
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from fastapi import APIRouter, Request, Depends, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from typing import Iterator, Optional
 
 from backend.routers.auth import require_admin, UserResponse
 
@@ -137,41 +142,89 @@ def _get_telemetry_or_fail(request: Request):
     return telemetry
 
 
-def _date_range_files(storage_path: Path, date_from: Optional[str], date_to: Optional[str]) -> list[Path]:
-    """Return sorted JSONL files within the given date range."""
-    files = []
-    for filepath in sorted(storage_path.glob("*.jsonl"), reverse=True):
-        date_str = filepath.stem
-        if date_from and date_str < date_from:
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _day_sources(telemetry, source: str) -> list[tuple[Path, Optional[str]]]:
+    """Folders holding this backend's records, each with the tenant to filter on.
+
+    The service's own folder (``data/telemetry/<tenant>``) needs no filter.
+    Files written before telemetry was split per tenant sit directly in the
+    base folder and mix both tenants; only records of this tenant count there.
+    """
+    sub = "raw" if source == "raw" else None
+    own: Path = telemetry._storage_path
+    sources: list[tuple[Path, Optional[str]]] = [(own / sub if sub else own, None)]
+    legacy: Optional[Path] = getattr(telemetry, "_legacy_path", None)
+    tenant: Optional[str] = getattr(telemetry, "_tenant", None)
+    if legacy is not None and tenant:
+        sources.append((legacy / sub if sub else legacy, tenant))
+    return sources
+
+
+def _dates(telemetry, source: str) -> list[str]:
+    """Dates (YYYY-MM-DD) with a telemetry file in any source folder, newest first."""
+    dates: set[str] = set()
+    for folder, _tenant in _day_sources(telemetry, source):
+        if folder.is_dir():
+            dates.update(p.stem for p in folder.glob("*.jsonl") if _DATE_RE.match(p.stem))
+    return sorted(dates, reverse=True)
+
+
+def _dates_in_range(telemetry, source: str, date_from: Optional[str], date_to: Optional[str]) -> list[str]:
+    """Dates within the given range, newest first."""
+    return [
+        d for d in _dates(telemetry, source)
+        if not (date_from and d < date_from) and not (date_to and d > date_to)
+    ]
+
+
+def _iter_day(telemetry, date: str, source: str) -> Iterator[tuple[str, Optional[dict]]]:
+    """Yield ``(line, record)`` for one day's lines visible to this tenant.
+
+    ``record`` is None for a line that is not valid JSON; such lines only
+    count in the tenant's own files, since legacy lines cannot be attributed.
+    """
+    for folder, tenant in _day_sources(telemetry, source):
+        path = folder / f"{date}.jsonl"
+        if not path.is_file():
             continue
-        if date_to and date_str > date_to:
-            continue
-        files.append(filepath)
-    return files
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    record = None
+                if tenant is not None and (
+                    not isinstance(record, dict) or str(record.get("tenant") or "").strip().lower() != tenant
+                ):
+                    continue
+                yield line, record
+
+
+def _check_date(date: str) -> None:
+    """Reject anything but YYYY-MM-DD (the value becomes part of a file name)."""
+    if not _DATE_RE.match(date):
+        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
 
 
 @router.get("/files")
 async def list_telemetry_files(
     request: Request, user: UserResponse = Depends(require_admin)
 ):
-    """List available telemetry log files with metadata."""
+    """List available telemetry log files with metadata (this tenant's records only)."""
     telemetry = _get_telemetry_or_fail(request)
-    storage_path: Path = telemetry._storage_path
 
     files: list[TelemetryFileInfo] = []
-    for filepath in sorted(storage_path.glob("*.jsonl"), reverse=True):
-        date = filepath.stem  # YYYY-MM-DD
-        size = filepath.stat().st_size
-        # Count non-empty lines (records)
-        count = 0
-        with open(filepath, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    count += 1
-        # Check if raw version exists
-        raw_path = storage_path / "raw" / filepath.name
-        has_raw = raw_path.exists()
-        files.append(TelemetryFileInfo(date=date, size_bytes=size, record_count=count, has_raw=has_raw))
+    for date in _dates(telemetry, "protected"):
+        lines = [line for line, _record in _iter_day(telemetry, date, "protected")]
+        if not lines:
+            continue
+        size = sum(len(line.encode("utf-8")) for line in lines)
+        has_raw = next(_iter_day(telemetry, date, "raw"), None) is not None
+        files.append(TelemetryFileInfo(date=date, size_bytes=size, record_count=len(lines), has_raw=has_raw))
 
     return {"files": files}
 
@@ -185,23 +238,11 @@ async def get_telemetry_record(
 ):
     """Get a single telemetry record by ID."""
     telemetry = _get_telemetry_or_fail(request)
-    storage_path: Path = telemetry._storage_path
 
-    search_dir = storage_path / "raw" if source == "raw" else storage_path
-    if not search_dir.exists():
-        raise HTTPException(status_code=404, detail=f"Record {record_id} not found")
-
-    for filepath in search_dir.glob("*.jsonl"):
-        with open(filepath, "r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                try:
-                    record = json.loads(line)
-                    if record.get("record_id") == record_id:
-                        return record
-                except json.JSONDecodeError:
-                    continue
+    for date in _dates(telemetry, source):
+        for _line, record in _iter_day(telemetry, date, source):
+            if isinstance(record, dict) and record.get("record_id") == record_id:
+                return record
 
     raise HTTPException(status_code=404, detail=f"Record {record_id} not found")
 
@@ -217,28 +258,17 @@ async def get_telemetry_records(
 ):
     """Get paginated telemetry records for a specific date."""
     telemetry = _get_telemetry_or_fail(request)
-    storage_path: Path = telemetry._storage_path
-
-    if source == "raw":
-        filepath = storage_path / "raw" / f"{date}.jsonl"
-    else:
-        filepath = storage_path / f"{date}.jsonl"
-
-    if not filepath.exists():
-        raise HTTPException(status_code=404, detail=f"No telemetry file for {date} ({source})")
+    _check_date(date)
 
     records: list[dict] = []
     total = 0
-    with open(filepath, "r", encoding="utf-8") as f:
-        for line in f:
-            if not line.strip():
-                continue
-            total += 1
-            if total > offset and len(records) < limit:
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
+    for _line, record in _iter_day(telemetry, date, source):
+        total += 1
+        if total > offset and len(records) < limit and record is not None:
+            records.append(record)
+
+    if total == 0:
+        raise HTTPException(status_code=404, detail=f"No telemetry file for {date} ({source})")
 
     return {"records": records, "total": total, "has_more": (offset + limit) < total}
 
@@ -251,40 +281,33 @@ async def search_telemetry_records(
 ):
     """Search telemetry records with filters across date range."""
     telemetry = _get_telemetry_or_fail(request)
-    storage_path: Path = telemetry._storage_path
 
-    files = _date_range_files(storage_path, search.date_from, search.date_to)
     results: list[dict] = []
 
-    for filepath in files:
+    for date in _dates_in_range(telemetry, "protected", search.date_from, search.date_to):
         if len(results) >= search.limit:
             break
-        with open(filepath, "r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
+        for _line, record in _iter_day(telemetry, date, "protected"):
+            if len(results) >= search.limit:
+                break
+            if record is None:
+                continue
+
+            # Apply filters
+            if search.session_id and record.get("session_id") != search.session_id:
+                continue
+            if search.model and record.get("model") != search.model:
+                continue
+            if search.min_latency is not None:
+                latency = record.get("latency_ms") or record.get("duration_ms") or 0
+                if latency < search.min_latency:
                     continue
-                if len(results) >= search.limit:
-                    break
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
+            if search.query_text:
+                prompt = record.get("prompt", "") or record.get("query", "") or ""
+                if search.query_text.lower() not in prompt.lower():
                     continue
 
-                # Apply filters
-                if search.session_id and record.get("session_id") != search.session_id:
-                    continue
-                if search.model and record.get("model") != search.model:
-                    continue
-                if search.min_latency is not None:
-                    latency = record.get("latency_ms") or record.get("duration_ms") or 0
-                    if latency < search.min_latency:
-                        continue
-                if search.query_text:
-                    prompt = record.get("prompt", "") or record.get("query", "") or ""
-                    if search.query_text.lower() not in prompt.lower():
-                        continue
-
-                results.append(record)
+            results.append(record)
 
     return {"records": results, "total": len(results)}
 
@@ -297,7 +320,6 @@ async def get_telemetry_stats(
 ):
     """Get aggregated telemetry statistics."""
     telemetry = _get_telemetry_or_fail(request)
-    storage_path: Path = telemetry._storage_path
 
     # Determine date cutoff
     today = datetime.utcnow().date()
@@ -308,8 +330,6 @@ async def get_telemetry_stats(
     else:  # default 7d
         cutoff = (today - timedelta(days=7)).isoformat()
 
-    files = _date_range_files(storage_path, cutoff, None)
-
     records_count = 0
     total_latency = 0
     latency_count = 0
@@ -317,36 +337,31 @@ async def get_telemetry_stats(
     error_count = 0
     model_distribution: dict[str, int] = {}
 
-    for filepath in files:
-        with open(filepath, "r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+    for date in _dates_in_range(telemetry, "protected", cutoff, None):
+        for _line, record in _iter_day(telemetry, date, "protected"):
+            if record is None:
+                continue
 
-                records_count += 1
+            records_count += 1
 
-                # Latency
-                latency = record.get("latency_ms") or record.get("duration_ms")
-                if latency is not None:
-                    total_latency += latency
-                    latency_count += 1
+            # Latency
+            latency = record.get("latency_ms") or record.get("duration_ms")
+            if latency is not None:
+                total_latency += latency
+                latency_count += 1
 
-                # Tokens
-                tokens = record.get("total_tokens") or record.get("tokens") or 0
-                total_tokens += tokens
+            # Tokens
+            tokens = record.get("total_tokens") or record.get("tokens") or 0
+            total_tokens += tokens
 
-                # Errors
-                if record.get("error") or record.get("status") == "error":
-                    error_count += 1
+            # Errors
+            if record.get("error") or record.get("status") == "error":
+                error_count += 1
 
-                # Model distribution
-                model = record.get("model")
-                if model:
-                    model_distribution[model] = model_distribution.get(model, 0) + 1
+            # Model distribution
+            model = record.get("model")
+            if model:
+                model_distribution[model] = model_distribution.get(model, 0) + 1
 
     avg_latency = (total_latency / latency_count) if latency_count > 0 else None
     error_rate = (error_count / records_count) if records_count > 0 else 0.0

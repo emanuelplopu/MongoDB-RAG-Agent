@@ -53,6 +53,7 @@ If docs and code disagree, trust the current code first, then fix the docs.
 - Email (.msg/.eml) attachment extraction: off by default; `MSG_EXTRACT_ATTACHMENTS` (+ `MSG_ATTACHMENT_MAX_MB`, `MSG_ATTACHMENT_MAX_COUNT`) opens attachments and appends their extracted text (`resolve_msg_attachment_config` / `extract_email_attachment_text` in `src/ingestion/ingest.py`); audited in `docs/26-FORMAT_EDGE_AUDIT.md`
 - Pre-ingestion estimator: `backend/services/ingestion_estimator.py`, `GET /api/v1/profiles/{key}/ingest/estimate` (in `backend/routers/profiles.py`), `quellexctl ingest estimate` (`backend/cli/ingest_commands.py`), the estimate line in `frontend/src/pages/IngestionManagementPage.tsx` (`ingestionApi.estimate`); documented in `docs/22-DOCUMENT_FOLDERS_AND_SHARES.md`
 - Profiles and tenant-aware model selection: `backend/routers/profiles.py`, `profiles.yaml`, `src/profile.py`
+- Two tenants on one host (profile owners `ProfileConfig.tenant` + `LEGACY_PROFILE_TENANTS`, tenant-bound `ProfileManager` from `TENANT_ID`, locked re-read-before-write `profiles.yaml` updates, per-process active profile with `active_profiles.<tenant>`, per-tenant `data/telemetry/<tenant>` and `data/backups/<tenant>`, `personal_database_name()` in `backend/agent/federated_search.py`, tenant-scoped `scripts/full-backup.ps1` / `full-restore.ps1` via `Get-ProfileTenants`, `RECALLHUB_DOCUMENT_ROOTS` / `QUELLEX_DOCUMENT_ROOTS`): documented in `docs/27-TENANT_ISOLATION.md`
 - Profile document folders and network shares: `backend/services/document_folders.py` (`DOCUMENT_ROOTS` validation + browsing), `GET /api/v1/profiles/folders/browse`, `frontend/src/components/ServerFolderPicker.tsx`, the whole `./mounts` folder mounted at `/app/mounts` in `docker-compose.yml`, `docker-compose.shares.example.yml` + `installer/scripts/Add-NetworkShare.ps1` (CIFS volumes, loaded by `Start-Services.ps1`/`Stop-Services.ps1`/tray `ServiceManager.cs`); documented in `docs/22-DOCUMENT_FOLDERS_AND_SHARES.md`
 - Cloud source providers and registry: `backend/providers/`, `backend/providers/registry.py`
 - Backups: `backend/services/backup_service.py`, `backend/routers/backup.py`
@@ -60,7 +61,7 @@ If docs and code disagree, trust the current code first, then fix the docs.
 - Frontend API client: `frontend/src/api/client.ts`
 - Frontend tenants: `frontend/src/tenants/configs/`
 - Frontend tests and MSW setup: `frontend/src/test/`
-- Documentation: top-level master spec `01-SYSTEM_BLUEPRINT.md`; numbered blueprint set in `docs/` (`02-SYSTEM_BLUEPRINTS.md` … `26-FORMAT_EDGE_AUDIT.md`). Strategy OS deep-dive is `docs/07-STRATEGY_OS_OVERVIEW.md` through `docs/11-EXPLORATION_AND_SCHEDULER.md`. Non-scan format/edge-case ingestion audit is `docs/26-FORMAT_EDGE_AUDIT.md`.
+- Documentation: top-level master spec `01-SYSTEM_BLUEPRINT.md`; numbered blueprint set in `docs/` (`02-SYSTEM_BLUEPRINTS.md` … `27-TENANT_ISOLATION.md`). Strategy OS deep-dive is `docs/07-STRATEGY_OS_OVERVIEW.md` through `docs/11-EXPLORATION_AND_SCHEDULER.md`. Non-scan format/edge-case ingestion audit is `docs/26-FORMAT_EDGE_AUDIT.md`.
 
 ## Non-Negotiable Rules
 
@@ -272,6 +273,7 @@ docker compose --profile quellex build frontend-quellex
 - Profile folders are container paths. `./mounts` is mounted whole at `/app/mounts` in the backends and the worker, and network shares are attached below `/app/mounts` through `docker-compose.shares.yml`; the backend and the worker must see the same paths or the document viewer falls back to plain text. Ingestion jobs call `ProfileManager.reload()` first, so folder edits need no restart.
 - `frontend/src/api/client.ts` is the real frontend contract hub. If you change backend payloads and skip it, the UI will drift.
 - `openapi.json` is generated output. Do not hand-edit it.
+- Both tenant backends share one read-write `profiles.yaml`. Change it only through `ProfileManager` methods (they lock, re-read and apply one change); never rewrite it from memory. The API's profile manager is bound to its tenant and hides other tenants' profiles; the shared worker and the CLI are unbound. Use `list_all_profiles()` only where every tenant's profiles are really meant (`docs/27-TENANT_ISOLATION.md`).
 - There is historical config in the repo that uses embedded defaults for secret-like values. Do not repeat that pattern.
 
 ## Delivery Checklist

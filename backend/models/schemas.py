@@ -128,6 +128,9 @@ class ProfileConfig(BaseModel):
     """Profile configuration."""
     name: str = Field(..., description="Profile display name")
     description: Optional[str] = Field(None, description="Profile description")
+    tenant: Optional[str] = Field(
+        None, description="Owning tenant (effective, incl. legacy defaults); null = unassigned/shared"
+    )
     owner_user_id: Optional[str] = Field(None, description="User ID of profile owner")
     documents_folders: List[str] = Field(default_factory=list)
     database: str = Field(default="rag_db")
@@ -177,6 +180,13 @@ class ProfileUpdateRequest(BaseModel):
     documents_folders: Optional[List[str]] = Field(None, min_length=1)
     database: Optional[str] = None
     owner_user_id: Optional[str] = None
+    tenant: Optional[str] = Field(
+        None,
+        description=(
+            "Superadmin only: the backend's own tenant id claims an unassigned profile, "
+            "an empty string releases it (docs/27-TENANT_ISOLATION.md)"
+        ),
+    )
 
 
 class FolderEntry(BaseModel):

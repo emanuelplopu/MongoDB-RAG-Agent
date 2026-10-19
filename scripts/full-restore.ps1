@@ -70,6 +70,76 @@ function Write-Err   { param([string]$Msg) Write-Host "  [ERROR] $Msg" -Foregrou
 function Write-Info  { param([string]$Msg) Write-Host "  $Msg" -ForegroundColor Gray }
 function Write-Ts    { Write-Host "  $(Get-Date -Format 'HH:mm:ss') " -NoNewline -ForegroundColor DarkGray }
 
+# Profiles in profiles.yaml with their database and owning tenant: the profile's
+# "tenant:" field, else the legacy owner of a known key, else "" (unassigned, shared).
+# Same rules as src/profile.py (LEGACY_PROFILE_TENANTS); the copy in
+# full-backup.ps1 must stay identical (docs/27-TENANT_ISOLATION.md).
+function Get-ProfileTenants {
+    param([string]$Path)
+    $legacy = @{ "diejuristin" = "quellex"; "parhelion" = "recallhub"; "parhelion-full" = "recallhub" }
+    $result = @()
+    if (-not $Path -or -not (Test-Path $Path)) { return $result }
+    $inProfiles = $false
+    $current = $null
+    foreach ($line in (Get-Content $Path -Encoding UTF8)) {
+        if ($line -match '^profiles:\s*$') { $inProfiles = $true; continue }
+        if ($line -match '^\S') { $inProfiles = $false; continue }
+        if (-not $inProfiles) { continue }
+        if ($line -match '^  ([^\s#][^:]*):\s*$') {
+            $current = [pscustomobject]@{ Key = $Matches[1].Trim().Trim("'", '"'); Database = ""; Tenant = "" }
+            $result += $current
+            continue
+        }
+        if (-not $current) { continue }
+        if ($line -match '^    database:\s*(.+?)\s*$') { $current.Database = $Matches[1].Trim("'", '"') }
+        elseif ($line -match '^    tenant:\s*(.+?)\s*$') { $current.Tenant = $Matches[1].Trim("'", '"').ToLower() }
+    }
+    foreach ($p in $result) {
+        if (-not $p.Tenant -and $legacy.ContainsKey($p.Key)) { $p.Tenant = $legacy[$p.Key] }
+        if (-not $p.Database) { $p.Database = "rag_db" }
+    }
+    return $result
+}
+
+# Which dumped databases to replace (--drop), merge (no --drop) or skip when this
+# package is restored for $Tenant on a MongoDB that may also hold the other tenant.
+#   Own:   databases of profiles owned by $Tenant, its default database and its
+#          personal databases (user_rag_<tenant>_*, cloud_<tenant>_*)
+#   Skip:  databases only owned by the other tenant (older packages dumped them)
+#   Merge: everything else (admin, recallhub, unassigned profiles): restored without
+#          --drop, so documents already there are kept
+function Get-RestoreScope {
+    param([string]$DumpDir, [string]$ProfilesPath, [string]$Tenant, [string]$DefaultDb)
+    $other = if ($Tenant -eq "quellex") { "recallhub" } else { "quellex" }
+    $profiles = Get-ProfileTenants -Path $ProfilesPath
+    $own = @(); $merge = @(); $skip = @()
+    foreach ($dir in (Get-ChildItem $DumpDir -Directory -ErrorAction SilentlyContinue)) {
+        $db = $dir.Name
+        $owners = @($profiles | Where-Object { $_.Database -eq $db } | ForEach-Object { $_.Tenant })
+        if (($db -eq $DefaultDb) -or ($db -like "user_rag_${Tenant}_*") -or ($db -like "cloud_${Tenant}_*") -or ($owners -contains $Tenant)) {
+            $own += $db
+        } elseif (($db -like "user_rag_${other}_*") -or ($db -like "cloud_${other}_*") -or
+                  (($owners.Count -gt 0) -and -not ($owners -contains ""))) {
+            $skip += $db
+        } else {
+            $merge += $db
+        }
+    }
+    return [pscustomobject]@{ Own = $own; Merge = $merge; Skip = $skip }
+}
+
+# Per-tenant .env values written on restore (docker-compose.yml reads QUELLEX_* for
+# backend-quellex; MONGODB_DATABASE is the worker's and RecallHub's base database)
+$script:TenantEnv = @{
+    "quellex" = @{
+        ACTIVE_PROFILE           = "diejuristin"
+        MONGODB_DATABASE         = "rag_diejuristin"
+        QUELLEX_ACTIVE_PROFILE   = "diejuristin"
+        QUELLEX_MONGODB_DATABASE = "rag_diejuristin"
+    }
+    "recallhub" = @{ ACTIVE_PROFILE = "default"; MONGODB_DATABASE = "rag_db" }
+}
+
 Write-Host @"
 
 =============================================
@@ -470,14 +540,14 @@ if ((Test-Path $overridePath) -and $manifest) {
 # Ensure .env has correct tenant values
 $envFile = Join-Path $InstallPath ".env"
 if (Test-Path $envFile) {
-    $tenantConfig = @{
-        "quellex" = @{ ACTIVE_PROFILE = "parhelion"; MONGODB_DATABASE = "rag_parhelion" }
-        "recallhub" = @{ ACTIVE_PROFILE = "default"; MONGODB_DATABASE = "rag_db" }
-    }
     $envContent = Get-Content $envFile -Raw
-    $config = $tenantConfig[$Tenant]
+    $config = $script:TenantEnv[$Tenant]
     foreach ($key in $config.Keys) {
-        $envContent = $envContent -replace "(?m)^${key}=.*$", "${key}=$($config[$key])"
+        if ($envContent -match "(?m)^${key}=") {
+            $envContent = $envContent -replace "(?m)^${key}=.*$", "${key}=$($config[$key])"
+        } else {
+            $envContent = $envContent.TrimEnd() + "`r`n${key}=$($config[$key])`r`n"
+        }
     }
     Set-Content $envFile $envContent -Encoding UTF8
     Write-OK "Updated .env for tenant: $Tenant (ACTIVE_PROFILE=$($config['ACTIVE_PROFILE']), MONGODB_DATABASE=$($config['MONGODB_DATABASE']))"
@@ -487,7 +557,7 @@ if (Test-Path $envFile) {
 $profilesFile = Join-Path $InstallPath "profiles.yaml"
 if (Test-Path $profilesFile) {
     $profilesContent = Get-Content $profilesFile -Raw
-    $activeProfile = if ($Tenant -eq "quellex") { "parhelion" } else { "default" }
+    $activeProfile = $script:TenantEnv[$Tenant]['ACTIVE_PROFILE']
     $profilesContent = $profilesContent -replace "(?m)^active_profile:.*$", "active_profile: $activeProfile"
     Set-Content $profilesFile $profilesContent -Encoding UTF8
     Write-OK "Updated profiles.yaml active_profile to: $activeProfile"
@@ -642,17 +712,38 @@ if (Test-Path $mongoDumpDir) {
         Write-Info "Copying dump into container via docker cp..."
         docker cp "$mongoDumpDir" "${restoreContainer}:/dump"
 
-        # Restore inside container
-        Write-Info "Running mongorestore (parallel, gzipped)..."
-        $restoreOutput = docker exec $restoreContainer mongorestore --host=mongodb --port=27017 --dir=/dump --gzip --drop --numParallelCollections=4 2>&1 | Out-String
-        $restoreExitCode = $LASTEXITCODE
-        if ($restoreOutput) {
-            $restoreOutput.Trim() -split "`n" | Select-Object -Last 5 | ForEach-Object { Write-Info $_.Trim() }
+        # Restore inside container, scoped to this tenant (docs/27-TENANT_ISOLATION.md):
+        # --drop only replaces the tenant's own databases; shared and unassigned ones are
+        # merged and the other tenant's databases are left alone.
+        $scope = Get-RestoreScope -DumpDir $mongoDumpDir -ProfilesPath (Join-Path $InstallPath "profiles.yaml") `
+            -Tenant $Tenant -DefaultDb $script:TenantEnv[$Tenant]['MONGODB_DATABASE']
+        foreach ($skipDb in $scope.Skip) { Write-Warn "Not restoring database $skipDb (owned by the other tenant)" }
+        $restoreExitCode = 0
+        $passes = @(
+            @{ Dbs = $scope.Own;   Drop = $true;  Label = "tenant databases (replace)" },
+            @{ Dbs = $scope.Merge; Drop = $false; Label = "shared databases (merge)" }
+        )
+        foreach ($pass in $passes) {
+            if ($pass.Dbs.Count -eq 0) { continue }
+            Write-Info "Running mongorestore for $($pass.Label): $($pass.Dbs -join ', ')"
+            $restoreArgs = @("--host=mongodb", "--port=27017", "--dir=/dump", "--gzip", "--numParallelCollections=4")
+            if ($pass.Drop) { $restoreArgs += "--drop" }
+            foreach ($restoreDb in $pass.Dbs) { $restoreArgs += "--nsInclude=$restoreDb.*" }
+            $restoreOutput = docker exec $restoreContainer mongorestore @restoreArgs 2>&1 | Out-String
+            $passExitCode = $LASTEXITCODE
+            if ($restoreOutput) {
+                $restoreOutput.Trim() -split "`n" | Select-Object -Last 5 | ForEach-Object { Write-Info $_.Trim() }
+            }
+            if ($passExitCode -ne 0 -and $pass.Drop) {
+                $restoreExitCode = $passExitCode
+                Write-Err "MongoDB restore of $($pass.Label) failed (exit code: $passExitCode)"
+                if ($restoreOutput) { $restoreOutput.Trim() -split "`n" | Select-Object -Last 10 | ForEach-Object { Write-Err "  $_" } }
+            } elseif ($passExitCode -ne 0) {
+                # Without --drop, documents that already exist are reported as duplicate keys
+                Write-Warn "mongorestore of $($pass.Label) exited with $passExitCode (existing documents are kept)"
+            }
         }
-        if ($restoreExitCode -ne 0) {
-            Write-Err "MongoDB restore failed (exit code: $restoreExitCode)"
-            if ($restoreOutput) { $restoreOutput.Trim() -split "`n" | Select-Object -Last 10 | ForEach-Object { Write-Err "  $_" } }
-        } else {
+        if ($restoreExitCode -eq 0) {
             Write-OK "mongorestore completed successfully"
         }
 
@@ -670,6 +761,7 @@ if (Test-Path $mongoDumpDir) {
         Write-Info "Recreating Atlas Search indexes (vector_index + text_index)..."
         $dbsWithChunks = Get-ChildItem $mongoDumpDir -Directory -ErrorAction SilentlyContinue |
             Where-Object { Test-Path (Join-Path $_.FullName "chunks.bson.gz") } |
+            Where-Object { $scope.Skip -notcontains $_.Name } |
             ForEach-Object { $_.Name }
         if (-not $dbsWithChunks -or $dbsWithChunks.Count -eq 0) {
             Write-Info "No databases with chunks collection found - skipping index creation"
@@ -731,7 +823,17 @@ print('  createSearchIndexes ok=' + r.ok);
 
     try {
         $mongoArchiveDir = Split-Path $mongoArchive -Parent
-        $restoreOutput = docker run --rm --network $network -v "${mongoArchiveDir}:/backup" mongo:8.0 mongorestore --host=mongodb --port=27017 --archive=/backup/full_backup.archive --gzip --drop 2>&1 | Out-String
+        # Leave the other tenant's profile databases alone (docs/27-TENANT_ISOLATION.md)
+        $archiveArgs = @("--host=mongodb", "--port=27017", "--archive=/backup/full_backup.archive", "--gzip", "--drop")
+        $archiveProfiles = Get-ProfileTenants -Path (Join-Path $InstallPath "profiles.yaml")
+        foreach ($p in $archiveProfiles) {
+            $usedHere = $archiveProfiles | Where-Object { ($_.Database -eq $p.Database) -and ((-not $_.Tenant) -or ($_.Tenant -eq $Tenant)) }
+            if ($p.Tenant -and ($p.Tenant -ne $Tenant) -and -not $usedHere) {
+                Write-Warn "Not restoring database $($p.Database) (profile '$($p.Key)' is owned by tenant $($p.Tenant))"
+                $archiveArgs += "--nsExclude=$($p.Database).*"
+            }
+        }
+        $restoreOutput = docker run --rm --network $network -v "${mongoArchiveDir}:/backup" mongo:8.0 mongorestore @archiveArgs 2>&1 | Out-String
         if ($restoreOutput) {
             $restoreOutput.Trim() -split "`n" | Select-Object -Last 10 | ForEach-Object { Write-Info $_.Trim() }
         }

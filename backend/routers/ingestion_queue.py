@@ -472,7 +472,11 @@ async def _run_ingestion_job(job: Dict[str, Any], db) -> None:
         )
 
     pm = get_profile_manager()
-    pm.switch_profile(job["profile_key"])
+    # Fails for a profile deleted since it was queued, or owned by another tenant
+    # (the manager is tenant-bound); ingesting into the current profile instead
+    # would write the wrong database.
+    if not pm.switch_profile(job["profile_key"]):
+        raise ValueError(f"Profile '{job['profile_key']}' not found; nothing was ingested")
 
     # Create a tracked job in the database
     job_state = {

@@ -65,6 +65,10 @@ Related: `docs/21-LAN_ACCESS.md` (who can reach the install),
 - Queued ingestion jobs (`POST /api/v1/ingestion-queue/queue/add`) refuse to
   start when any configured folder is missing or unreadable and name the
   folders, instead of silently indexing a subset.
+- Every backend only sees its own tenant's profiles and the unassigned ones
+  (`tenant` field in `profiles.yaml`, `docs/27-TENANT_ISOLATION.md`); another
+  tenant's profile answers 404, also for superadmins. Profiles created
+  through the API belong to the creating backend's tenant.
 
 ## Setting it up
 
@@ -165,6 +169,7 @@ skips files that are already indexed.
 | Key | Default | Meaning |
 |---|---|---|
 | `DOCUMENT_ROOTS` | `/app/mounts,/app/documents` | Container paths organisation admins may pick folders under (comma separated). Backends only. |
+| `RECALLHUB_DOCUMENT_ROOTS` / `QUELLEX_DOCUMENT_ROOTS` | unset (falls back to `DOCUMENT_ROOTS`) | Per-tenant document roots on a host running both tenants, e.g. `/app/mounts/quellex` (`docs/27-TENANT_ISOLATION.md`). |
 | `MOUNT_MAPPINGS` | empty | `container_path=host_path` pairs separated by `\|` for "Open in Explorer". Managed for shares by the script; local folders by hand. |
 | `COMPOSE_FILE` | unset | Compose file list for plain `docker compose` calls; `;`-separated on Windows. Managed by the script unless customised. |
 | `SHARE_<NAME>_UNC` | – | `//server/share` of the share (forward slashes). |

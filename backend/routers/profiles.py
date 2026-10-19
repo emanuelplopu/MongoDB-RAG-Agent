@@ -1,11 +1,15 @@
 """Profile management router.
 
-Superadmins manage every profile. Organisation admins (``is_org_admin``) may
-rename, describe and pick the document folders of the profiles they have
-access to; the folders are restricted to the configured document roots
-(``DOCUMENT_ROOTS``), see :mod:`backend.services.document_folders`. Creating
-and deleting profiles, and changing a profile's database, stay superadmin
-operations.
+Superadmins manage every profile of their tenant. Organisation admins
+(``is_org_admin``) may rename, describe and pick the document folders of the
+profiles they have access to; the folders are restricted to the configured
+document roots (``DOCUMENT_ROOTS``), see :mod:`backend.services.document_folders`.
+Creating and deleting profiles, changing a profile's database and claiming or
+releasing a profile for the tenant stay superadmin operations.
+
+The profile manager of the API process is bound to ``settings.tenant_id``: it
+only lists and returns the tenant's own and unassigned profiles, so another
+tenant's profile answers 404 everywhere here (docs/27-TENANT_ISOLATION.md).
 """
 
 import asyncio
@@ -47,6 +51,23 @@ def get_profile_manager():
     return get_pm(settings.profiles_path)
 
 
+def _profile_response(pm, key: str, profile) -> ProfileConfig:
+    """API view of a stored profile, with its effective owning tenant."""
+    return ProfileConfig(
+        name=profile.name,
+        description=profile.description,
+        tenant=pm.profile_tenant(key),
+        documents_folders=profile.documents_folders,
+        database=profile.database,
+        collection_documents=profile.collection_documents,
+        collection_chunks=profile.collection_chunks,
+        vector_index=profile.vector_index,
+        text_index=profile.text_index,
+        embedding_model=profile.embedding_model,
+        llm_model=profile.llm_model
+    )
+
+
 @router.get("", response_model=ProfileListResponse)
 @router.get("/", response_model=ProfileListResponse)
 async def list_profiles(
@@ -70,18 +91,7 @@ async def list_profiles(
         for key, profile in all_profiles.items():
             # Only include profiles the user has access to
             if key in accessible_keys:
-                profiles[key] = ProfileConfig(
-                    name=profile.name,
-                    description=profile.description,
-                    documents_folders=profile.documents_folders,
-                    database=profile.database,
-                    collection_documents=profile.collection_documents,
-                    collection_chunks=profile.collection_chunks,
-                    vector_index=profile.vector_index,
-                    text_index=profile.text_index,
-                    embedding_model=profile.embedding_model,
-                    llm_model=profile.llm_model
-                )
+                profiles[key] = _profile_response(pm, key, profile)
         
         return ProfileListResponse(
             profiles=profiles,
@@ -102,18 +112,7 @@ async def get_active_profile(user: UserResponse = Depends(require_auth)):
         
         return {
             "key": pm.active_profile_key,
-            "profile": ProfileConfig(
-                name=profile.name,
-                description=profile.description,
-                documents_folders=profile.documents_folders,
-                database=profile.database,
-                collection_documents=profile.collection_documents,
-                collection_chunks=profile.collection_chunks,
-                vector_index=profile.vector_index,
-                text_index=profile.text_index,
-                embedding_model=profile.embedding_model,
-                llm_model=profile.llm_model
-            )
+            "profile": _profile_response(pm, pm.active_profile_key, profile)
         }
         
     except Exception as e:
@@ -218,20 +217,22 @@ async def create_profile(
     try:
         pm = get_profile_manager()
         
-        # Check if profile already exists
-        if request.key in pm.list_profiles():
+        # Check if profile already exists. Keys are unique across tenants
+        # (one profiles.yaml), so another tenant's key is taken as well.
+        if pm.profile_exists(request.key):
             raise HTTPException(
                 status_code=400,
                 detail=f"Profile '{request.key}' already exists"
             )
-        
-        # Create profile
+
+        # Create profile, owned by this backend's tenant
         success = pm.create_profile(
             key=request.key,
             name=request.name,
             description=request.description,
             documents_folders=request.documents_folders,
-            database=request.database
+            database=request.database,
+            tenant=settings.tenant_id
         )
         
         if success:
@@ -313,11 +314,13 @@ async def update_profile(
     """
     Update an existing profile.
 
-    Only non-null fields are updated. Superadmins may change everything.
-    Organisation admins may change the name, description and document
-    folders of profiles they have access to; their folders must be existing
-    directories below the configured document roots, and the database can
-    only be changed by a superadmin.
+    Only non-null fields are updated. Superadmins may change everything,
+    including the owning tenant: ``tenant`` set to this backend's tenant
+    claims an unassigned profile, ``""`` releases one; handing a profile to
+    another tenant is refused. Organisation admins may change the name,
+    description and document folders of profiles they have access to; their
+    folders must be existing directories below the configured document roots,
+    and the database and the tenant can only be changed by a superadmin.
     """
     try:
         pm = get_profile_manager()
@@ -341,6 +344,11 @@ async def update_profile(
                     status_code=403,
                     detail="Only a superadmin can change the database of a profile"
                 )
+            if payload.tenant is not None:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only a superadmin can change the tenant of a profile"
+                )
             if documents_folders is not None:
                 try:
                     documents_folders = await asyncio.to_thread(
@@ -349,13 +357,26 @@ async def update_profile(
                 except (FolderNotAllowedError, FolderNotFoundError) as exc:
                     raise HTTPException(status_code=400, detail=str(exc))
 
+        tenant = None
+        if payload.tenant is not None:
+            tenant = payload.tenant.strip().lower()
+            if tenant not in ("", settings.tenant_id.strip().lower()):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"A profile can only be claimed for this tenant ('{settings.tenant_id}') "
+                        "or released with an empty tenant"
+                    )
+                )
+
         # Update profile with provided values
         success = pm.update_profile(
             key=profile_key,
             name=payload.name,
             description=payload.description,
             documents_folders=documents_folders,
-            database=payload.database
+            database=payload.database,
+            tenant=tenant
         )
         
         if success:
@@ -405,18 +426,7 @@ async def get_profile(
         
         return {
             "key": profile_key,
-            "profile": ProfileConfig(
-                name=profile.name,
-                description=profile.description,
-                documents_folders=profile.documents_folders,
-                database=profile.database,
-                collection_documents=profile.collection_documents,
-                collection_chunks=profile.collection_chunks,
-                vector_index=profile.vector_index,
-                text_index=profile.text_index,
-                embedding_model=profile.embedding_model,
-                llm_model=profile.llm_model
-            ),
+            "profile": _profile_response(pm, profile_key, profile),
             "is_active": profile_key == pm.active_profile_key
         }
         
