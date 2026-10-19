@@ -461,8 +461,22 @@ if ($LASTEXITCODE -ge 8) {
     $srcSizeMB = [math]::Round(((Get-ChildItem $srcDest -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum / 1MB), 1)
     Write-OK "Source code: $srcSizeMB MB"
 }
-foreach ($critical in @("docker-compose.yml", "backend\main.py", "scripts\full-restore.ps1", "scripts\INSTALL.ps1", "installer\scripts\Start-Services.ps1", "installer\scripts\Write-TrayConfig.ps1")) {
+foreach ($critical in @("docker-compose.yml", "backend\main.py", "scripts\full-restore.ps1", "scripts\INSTALL.ps1", "installer\scripts\Start-Services.ps1", "installer\scripts\Write-TrayConfig.ps1", "installer\scripts\RecallHub-Secrets.psm1")) {
     if (-not (Test-Path (Join-Path $srcDest $critical))) { Write-Err "Source copy is missing $critical" }
+}
+
+# The login signing keys (RECALLHUB_/QUELLEX_JWT_SECRET_KEY) belong to this
+# install, not to the package: blank them in both .env copies. A restore over an
+# existing install keeps that install's keys; a fresh install generates its own.
+$secretsModule = Join-Path $PSScriptRoot "..\installer\scripts\RecallHub-Secrets.psm1"
+if (Test-Path $secretsModule) {
+    Import-Module $secretsModule -Force
+    foreach ($packagedEnv in @((Join-Path $configDest ".env"), (Join-Path $srcDest ".env"))) {
+        $cleared = @(Clear-JwtSecrets -EnvPath $packagedEnv)
+        if ($cleared.Count -gt 0) { Write-Info "  Login signing keys left out of the package: $($cleared -join ', ')" }
+    }
+} else {
+    Write-Err "installer\scripts\RecallHub-Secrets.psm1 not found - the package may carry this install's login signing keys"
 }
 
 # Step 8: Optional Docker image export

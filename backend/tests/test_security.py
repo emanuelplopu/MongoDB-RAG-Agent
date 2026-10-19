@@ -149,11 +149,14 @@ class TestClientIPExtraction:
 class TestJWTSecretValidation:
     """Test JWT secret validation."""
     
-    def test_validate_jwt_secret_default_in_dev(self):
-        """Test that default secret is allowed in development."""
-        with patch.dict(os.environ, {"APP_ENV": "development", "JWT_SECRET_KEY": ""}, clear=False):
+    def test_validate_jwt_secret_random_in_dev(self):
+        """Development without a key signs with a random key, never the public default."""
+        with patch.dict(
+            os.environ, {"APP_ENV": "development", "JWT_SECRET_KEY": "", "JWT_SECRET_REQUIRED": "false"}, clear=False
+        ):
             secret = validate_jwt_secret()
-            assert secret == "recallhub-secret-key-change-in-production"
+            assert secret != "recallhub-secret-key-change-in-production"
+            assert len(secret) == 64
     
     def test_validate_jwt_secret_custom(self):
         """Test that custom secret is returned."""

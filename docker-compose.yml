@@ -280,6 +280,12 @@ services:
 
       # Tenant
       - TENANT_ID=recallhub
+      # Login tokens are signed with this tenant's own key from .env (the
+      # installers generate it, docs/14-OFFLINE_DEPLOYMENT.md). Without a key the
+      # backend refuses to start; `:?` is not used because Compose would then
+      # demand the key of the other tenant's profile too, even for `down`.
+      - JWT_SECRET_KEY=${RECALLHUB_JWT_SECRET_KEY:-}
+      - JWT_SECRET_REQUIRED=true
       # Guest access stays allowed for RecallHub unless overridden in .env
       - REQUIRE_AUTH=${RECALLHUB_REQUIRE_AUTH:-false}
       - REGISTRATION_MODE=${REGISTRATION_MODE:-open}
@@ -457,6 +463,10 @@ services:
 
       # Tenant
       - TENANT_ID=quellex
+      # Own signing key per tenant (see the backend service above); a token
+      # from the RecallHub backend never verifies here.
+      - JWT_SECRET_KEY=${QUELLEX_JWT_SECRET_KEY:-}
+      - JWT_SECRET_REQUIRED=true
       - REGISTRATION_MODE=${REGISTRATION_MODE:-open}
       - INVITE_CODES=${INVITE_CODES:-}
       # Every API call needs a signed-in user (backend/core/auth_middleware.py);
