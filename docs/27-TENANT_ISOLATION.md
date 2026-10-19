@@ -146,6 +146,15 @@ profiles.
 - Within one backend the active profile is still process-global: all users of
   that backend follow a switch (chat, search, ingestion). That is the existing
   single-workspace design; it is now confined to the backend's own profiles.
+- **Behaviour change for the shared ingestion worker.** At start the worker
+  takes its job database from the file-wide `active_profile`
+  (`IngestionWorker.initialize`, falling back to `MONGODB_DATABASE`).
+  Backends used to rewrite that value with their `ACTIVE_PROFILE` pin at start
+  and on every switch. They no longer do, so the worker follows only what the
+  file says: set `active_profile` by hand (or let `full-restore.ps1` set it,
+  `diejuristin` for Quellex). The API currently runs ingestion itself (runner
+  `api`) and nothing queues worker jobs, so this only matters once it does. On
+  the live Quellex host the file already says `diejuristin`.
 
 ## 3. Chat telemetry
 
