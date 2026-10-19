@@ -177,7 +177,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     """Application lifespan manager - startup and shutdown."""
     # Startup
     logger.info("Starting RecallHub API...")
-    
+
+    # Scope profiles to this tenant (also bound from TENANT_ID when the manager was
+    # created): other tenants' profiles are hidden from every router (docs/27).
+    try:
+        from src.profile import get_profile_manager
+        get_profile_manager(settings.profiles_path).bind_tenant(settings.tenant_id)
+    except Exception as e:
+        logger.error(f"Failed to bind profiles to tenant '{settings.tenant_id}': {e}")
+
     # Initialize database connection
     db_manager = DatabaseManager()
     await db_manager.connect()
@@ -219,7 +227,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     
     # Initialize backup configuration and directories
     try:
-        backup_service = BackupService(db_manager)
+        backup_service = BackupService.for_api(db_manager)
         await backup_service.initialize_config()
     except Exception as e:
         logger.warning(f"Failed to initialize backup config: {e}")
@@ -242,6 +250,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
             pii_mode=settings.telemetry_pii_mode,
             retention_days=settings.telemetry_retention_days,
             pii_markers=settings.telemetry_pii_markers,
+            tenant=settings.tenant_id,
         )
         app.state.telemetry = telemetry_service
         # Set module-level reference for coordinator telemetry emission

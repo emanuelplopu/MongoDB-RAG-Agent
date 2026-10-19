@@ -75,6 +75,10 @@ class BackupMetadata(BaseModel):
     backup_type: BackupType = Field(..., description="Type of backup")
     status: BackupStatus = Field(..., description="Current status")
     profile_key: str = Field(..., description="Profile this backup belongs to")
+    tenant: Optional[str] = Field(
+        default=None,
+        description="Tenant owning the backup; unset on backups made before 2026-10-19 (attributed via the profile)",
+    )
     database_name: str = Field(..., description="MongoDB database name")
     name: Optional[str] = Field(default=None, description="User-provided name (for checkpoints)")
     description: Optional[str] = Field(default=None, description="Optional description")

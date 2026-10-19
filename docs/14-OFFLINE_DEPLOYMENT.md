@@ -45,7 +45,7 @@ Quellex_v0.8.8_YYYYMMDD_HHMMSS/
 ├── mongodb/dump/
 │   ├── admin/                   (shared)
 │   ├── recallhub/               (shared auth DB)
-│   └── rag_parhelion/           (tenant data)
+│   └── rag_diejuristin/         (tenant data)
 ├── config/
 │   ├── .env                     (tenant-specific)
 │   ├── docker-compose.yml
@@ -63,13 +63,21 @@ A RecallHub backup follows the same structure with `backend.tar`, `frontend.tar`
 | Docker profile | `--profile quellex` | `--profile recallhub` |
 | Backend image | `backend-quellex` | `backend` |
 | Frontend image | `frontend-quellex` | `frontend` |
-| ACTIVE_PROFILE | `parhelion` | `default` |
-| MONGODB_DATABASE | `rag_parhelion` | `rag_db` |
-| Databases | admin, recallhub, rag_parhelion | admin, recallhub, rag_db, rag_test_law, user_rag_* |
+| ACTIVE_PROFILE (+ `QUELLEX_ACTIVE_PROFILE`) | `diejuristin` | `default` |
+| MONGODB_DATABASE (+ `QUELLEX_MONGODB_DATABASE`) | `rag_diejuristin` | `rag_db` |
+| Databases | admin, recallhub, rag_diejuristin, own + unassigned profile DBs, user_rag_quellex_* / cloud_quellex_* | admin, recallhub, rag_db, rag_test_law, own + unassigned profile DBs, user_rag_* |
 | Install path | `C:\Quellex` | `C:\RecallHub` |
 | Ports (backend/frontend) | 11001 / 11081 | 11000 / 11080 |
 
 The `recallhub` database is always included — it holds the shared authentication data used by both tenants.
+
+Packages are scoped to their tenant (`docs/27-TENANT_ISOLATION.md`): `full-backup.ps1`
+leaves out databases of profiles owned by the other tenant (`tenant:` field in
+`profiles.yaml`, or the legacy owner of `diejuristin` / `parhelion` / `parhelion-full`),
+and `full-restore.ps1` replaces (`--drop`) only the tenant's own databases, merges shared
+and unassigned ones without `--drop`, and skips the other tenant's databases found in
+older packages. Packages made before 2026-10-19 mapped Quellex to `parhelion` /
+`rag_parhelion`; the restore now writes `diejuristin` / `rag_diejuristin`.
 
 ## System Requirements
 

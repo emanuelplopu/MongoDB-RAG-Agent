@@ -6,6 +6,11 @@ This service handles:
 - Checkpoints (lightweight state snapshots)
 - Post-ingestion automatic backups
 - Restore operations with multiple modes
+
+Backups are scoped to one tenant (docs/27-TENANT_ISOLATION.md): files go to
+``data/backups/<tenant>/<type>/<backup id>``, metadata records the tenant, and
+listing, restore, delete and storage statistics only cover the tenant's own
+backups. Profiles are resolved through the (tenant-bound) profile manager.
 """
 
 import os
@@ -20,6 +25,8 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from bson import json_util, ObjectId
 import uuid
+
+from src.profile import normalize_tenant
 
 from backend.models.backup_schemas import (
     BackupType, BackupStatus, RestoreMode,
@@ -63,23 +70,100 @@ SYSTEM_COLLECTIONS = [
 BACKUPS_COLLECTION = "backups_metadata"
 BACKUP_CONFIG_COLLECTION = "backup_config"
 
+#: Backup folder for processes without a tenant whose profile is unassigned
+SHARED_BACKUP_TENANT = "shared"
+
+
+class BackupScopeError(ValueError):
+    """The requested profile or database is unknown or belongs to another tenant."""
+
 
 class BackupService:
     """Service for managing database backups."""
     
-    def __init__(self, db_manager, profiles_manager=None):
+    def __init__(
+        self,
+        db_manager,
+        profiles_manager=None,
+        tenant_id: Optional[str] = None,
+        backup_location: Optional[str] = None,
+    ):
         """
         Initialize backup service.
-        
+
         Args:
             db_manager: DatabaseManager instance for MongoDB access
-            profiles_manager: Optional ProfileManager for profile resolution
+            profiles_manager: Optional ProfileManager for profile resolution;
+                a tenant-bound manager only resolves the tenant's profiles
+            tenant_id: Tenant whose backups this service manages; ``None``
+                (legacy callers) manages every backup
+            backup_location: Base backup folder (default ``data/backups``)
         """
         self.db_manager = db_manager
         self.profiles_manager = profiles_manager
+        self.tenant_id: Optional[str] = normalize_tenant(tenant_id)
+        self._base_dir = Path(backup_location or DEFAULT_BACKUP_CONFIG["backup_location"])
         self._current_backup: Optional[BackupProgress] = None
         self._backup_lock = asyncio.Lock()
-    
+
+    @classmethod
+    def for_api(cls, db_manager) -> "BackupService":
+        """Backup service of an API process: its tenant and tenant-bound profile manager."""
+        from backend.core.config import settings
+        from src.profile import get_profile_manager
+
+        return cls(
+            db_manager,
+            profiles_manager=get_profile_manager(settings.profiles_path),
+            tenant_id=settings.tenant_id,
+        )
+
+    def _backup_tenant(self, profile_key: Optional[str] = None) -> str:
+        """Tenant a new backup belongs to: the service's, else the profile owner's, else shared."""
+        if self.tenant_id:
+            return self.tenant_id
+        if self.profiles_manager is not None and profile_key:
+            owner = self.profiles_manager.profile_tenant(profile_key)
+            if owner:
+                return owner
+        return SHARED_BACKUP_TENANT
+
+    def backup_root(self, profile_key: Optional[str] = None) -> Path:
+        """Folder holding this tenant's backups (``data/backups/<tenant>``)."""
+        return self._base_dir / self._backup_tenant(profile_key)
+
+    def owns(self, backup: BackupMetadata) -> bool:
+        """Whether a backup belongs to this service's tenant.
+
+        Entries written before backups recorded their tenant are attributed
+        through their profile: they belong to the tenant owning the profile,
+        and to every tenant when the profile is unassigned or gone.
+        """
+        if self.tenant_id is None:
+            return True
+        if backup.tenant:
+            return normalize_tenant(backup.tenant) == self.tenant_id
+        if self.profiles_manager is None:
+            return True
+        owner = self.profiles_manager.profile_tenant(backup.profile_key)
+        return owner is None or owner == self.tenant_id
+
+    def _tenant_query(self) -> Dict[str, Any]:
+        """Mongo filter for this tenant's metadata plus legacy entries without a tenant."""
+        if self.tenant_id is None:
+            return {}
+        return {"$or": [{"tenant": self.tenant_id}, {"tenant": None}, {"tenant": {"$exists": False}}]}
+
+    def allowed_restore_databases(self) -> Optional[set]:
+        """Databases a restore may target: those of the tenant's visible profiles.
+
+        Returns:
+            None when unrestricted (legacy service without a tenant or profile manager).
+        """
+        if self.tenant_id is None or self.profiles_manager is None:
+            return None
+        return {profile.database for profile in self.profiles_manager.list_profiles().values()}
+
     async def get_config(self) -> BackupConfig:
         """Get backup configuration from database or defaults."""
         try:
@@ -121,7 +205,7 @@ class BackupService:
                 logger.info("Initialized default backup configuration")
             
             # Ensure backup directories exist
-            base_dir = Path(DEFAULT_BACKUP_CONFIG["backup_location"])
+            base_dir = self.backup_root()
             for backup_type in ["full", "incremental", "checkpoint", "post_ingestion"]:
                 type_dir = base_dir / backup_type
                 type_dir.mkdir(parents=True, exist_ok=True)
@@ -161,10 +245,9 @@ class BackupService:
             logger.error(f"Error updating backup config: {e}")
             raise
     
-    def _get_backup_dir(self, backup_type: BackupType) -> Path:
-        """Get the directory for a backup type."""
-        base_dir = Path(DEFAULT_BACKUP_CONFIG["backup_location"])
-        return base_dir / backup_type.value
+    def _get_backup_dir(self, backup_type: BackupType, profile_key: Optional[str] = None) -> Path:
+        """Get the tenant's directory for a backup type."""
+        return self.backup_root(profile_key) / backup_type.value
     
     def _generate_backup_id(self) -> str:
         """Generate a unique backup ID."""
@@ -173,14 +256,27 @@ class BackupService:
         return f"backup_{timestamp}_{unique_id}"
     
     async def _get_profile_database(self, profile_key: Optional[str]) -> Tuple[str, str]:
-        """Get database name for a profile."""
-        if self.profiles_manager:
-            profile = self.profiles_manager.get_profile(profile_key)
-            if profile:
-                return profile_key or "default", profile.database
-        
-        # Fall back to current database
-        return profile_key or "default", self.db_manager._current_database
+        """Resolve the profile to back up and its database.
+
+        Args:
+            profile_key: Profile to back up; None means the active profile.
+
+        Returns:
+            ``(profile_key, database_name)``.
+
+        Raises:
+            BackupScopeError: The profile is unknown or owned by another tenant.
+        """
+        pm = self.profiles_manager
+        if pm is None:
+            # Legacy callers without a profile manager: the current database
+            return profile_key or "default", self.db_manager._current_database
+
+        key = profile_key or pm.active_profile_key
+        profile = pm.get_profile(key)
+        if profile is None:
+            raise BackupScopeError(f"Profile '{key}' not found")
+        return key, profile.database
     
     async def _save_backup_metadata(self, metadata: BackupMetadata) -> None:
         """Save backup metadata to database."""
@@ -302,15 +398,16 @@ class BackupService:
         backup_id = self._generate_backup_id()
         profile_key_resolved, database_name = await self._get_profile_database(profile_key)
         
-        backup_dir = self._get_backup_dir(BackupType.FULL) / backup_id
+        backup_dir = self._get_backup_dir(BackupType.FULL, profile_key_resolved) / backup_id
         backup_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Create initial metadata
         metadata = BackupMetadata(
             backup_id=backup_id,
             backup_type=BackupType.FULL,
             status=BackupStatus.IN_PROGRESS,
             profile_key=profile_key_resolved,
+            tenant=self._backup_tenant(profile_key_resolved),
             database_name=database_name,
             name=name,
             created_at=datetime.now(),
@@ -529,7 +626,7 @@ class BackupService:
             profile_key, database_name = await self._get_profile_database(profile_key)
             
             config = await self.get_config()
-            backup_dir = self._get_backup_dir(BackupType.FULL) / backup_id
+            backup_dir = self._get_backup_dir(BackupType.FULL, profile_key) / backup_id
             backup_dir.mkdir(parents=True, exist_ok=True)
             
             metadata = BackupMetadata(
@@ -537,6 +634,7 @@ class BackupService:
                 backup_type=BackupType.FULL,
                 status=BackupStatus.IN_PROGRESS,
                 profile_key=profile_key,
+                tenant=self._backup_tenant(profile_key),
                 database_name=database_name,
                 name=name,
                 created_at=datetime.now(),
@@ -691,7 +789,7 @@ class BackupService:
                 return await self.create_full_backup(profile_key)
             
             config = await self.get_config()
-            backup_dir = self._get_backup_dir(BackupType.INCREMENTAL) / backup_id
+            backup_dir = self._get_backup_dir(BackupType.INCREMENTAL, profile_key) / backup_id
             backup_dir.mkdir(parents=True, exist_ok=True)
             
             metadata = BackupMetadata(
@@ -699,6 +797,7 @@ class BackupService:
                 backup_type=BackupType.INCREMENTAL,
                 status=BackupStatus.IN_PROGRESS,
                 profile_key=profile_key,
+                tenant=self._backup_tenant(profile_key),
                 database_name=database_name,
                 created_at=datetime.now(),
                 file_path=str(backup_dir),
@@ -800,7 +899,7 @@ class BackupService:
         backup_id = self._generate_backup_id()
         profile_key, database_name = await self._get_profile_database(profile_key)
         
-        backup_dir = self._get_backup_dir(BackupType.CHECKPOINT) / backup_id
+        backup_dir = self._get_backup_dir(BackupType.CHECKPOINT, profile_key) / backup_id
         backup_dir.mkdir(parents=True, exist_ok=True)
         
         db = self.db_manager.client[database_name]
@@ -846,6 +945,7 @@ class BackupService:
             backup_type=BackupType.CHECKPOINT,
             status=BackupStatus.COMPLETED,
             profile_key=profile_key,
+            tenant=self._backup_tenant(profile_key),
             database_name=database_name,
             name=name,
             description=description,
@@ -906,7 +1006,7 @@ class BackupService:
             backup_id = self._generate_backup_id()
             profile_key, database_name = await self._get_profile_database(profile_key)
             
-            backup_dir = self._get_backup_dir(BackupType.POST_INGESTION) / backup_id
+            backup_dir = self._get_backup_dir(BackupType.POST_INGESTION, profile_key) / backup_id
             backup_dir.mkdir(parents=True, exist_ok=True)
             
             db = self.db_manager.client[database_name]
@@ -927,6 +1027,7 @@ class BackupService:
                 backup_type=BackupType.POST_INGESTION,
                 status=BackupStatus.IN_PROGRESS,
                 profile_key=profile_key,
+                tenant=self._backup_tenant(profile_key),
                 database_name=database_name,
                 created_at=datetime.now(),
                 file_path=str(backup_dir),
@@ -1019,41 +1120,46 @@ class BackupService:
         limit: int = 50,
         skip: int = 0
     ) -> List[BackupMetadata]:
-        """List all backups with optional filters."""
+        """List this tenant's backups with optional filters."""
         try:
             db = self.db_manager.db
-            
-            query = {}
+
+            query = dict(self._tenant_query())
             if profile_key:
                 query["profile_key"] = profile_key
             if backup_type:
                 query["backup_type"] = backup_type.value
-            
-            cursor = db[BACKUPS_COLLECTION].find(query).sort("created_at", -1).skip(skip).limit(limit)
-            docs = await cursor.to_list(length=limit)
-            
+
+            # Legacy entries without a tenant are attributed per profile below,
+            # so paginate after filtering (backup counts are small: retention).
+            cursor = db[BACKUPS_COLLECTION].find(query).sort("created_at", -1)
+            docs = await cursor.to_list(length=None)
+
             backups = []
             for doc in docs:
                 if "_id" in doc:
                     del doc["_id"]
-                backups.append(BackupMetadata(**doc))
-            
-            return backups
+                backup = BackupMetadata(**doc)
+                if self.owns(backup):
+                    backups.append(backup)
+
+            return backups[skip:skip + limit]
         except Exception as e:
             logger.error(f"Error listing backups: {e}")
             return []
     
     async def get_backup(self, backup_id: str) -> Optional[BackupMetadata]:
-        """Get backup metadata by ID."""
+        """Get backup metadata by ID (None when unknown or another tenant's)."""
         try:
             db = self.db_manager.db
             doc = await db[BACKUPS_COLLECTION].find_one({"backup_id": backup_id})
-            
+
             if doc:
                 if "_id" in doc:
                     del doc["_id"]
-                return BackupMetadata(**doc)
-            
+                backup = BackupMetadata(**doc)
+                return backup if self.owns(backup) else None
+
             return None
         except Exception as e:
             logger.error(f"Error getting backup {backup_id}: {e}")
@@ -1070,21 +1176,20 @@ class BackupService:
             
             query = {
                 "profile_key": profile_key,
-                "status": BackupStatus.COMPLETED.value
+                "status": BackupStatus.COMPLETED.value,
+                **self._tenant_query(),
             }
             if backup_type:
                 query["backup_type"] = backup_type.value
-            
-            doc = await db[BACKUPS_COLLECTION].find_one(
-                query,
-                sort=[("created_at", -1)]
-            )
-            
-            if doc:
+
+            cursor = db[BACKUPS_COLLECTION].find(query).sort("created_at", -1)
+            async for doc in cursor:
                 if "_id" in doc:
                     del doc["_id"]
-                return BackupMetadata(**doc)
-            
+                backup = BackupMetadata(**doc)
+                if self.owns(backup):
+                    return backup
+
             return None
         except Exception as e:
             logger.error(f"Error getting last backup: {e}")
@@ -1137,8 +1242,15 @@ class BackupService:
                 result.error_message = f"Backup directory not found: {backup_dir}"
                 return result
             
-            # Get target database - use specified target or original
+            # Get target database - use specified target or original. A target
+            # must be the backup's own database or one of the tenant's profiles.
             database_name = target_database if target_database else backup.database_name
+            allowed = self.allowed_restore_databases()
+            if target_database and allowed is not None and target_database not in allowed | {backup.database_name}:
+                result.error_message = (
+                    f"Target database '{target_database}' does not belong to a profile of this tenant"
+                )
+                return result
             db = self.db_manager.client[database_name]
             
             logger.info(f"Restoring backup {backup_id} to database: {database_name} (original: {backup.database_name})")
@@ -1251,59 +1363,43 @@ class BackupService:
         return deleted_count
     
     async def get_storage_stats(self) -> StorageStats:
-        """Get backup storage statistics."""
+        """Get storage statistics of this tenant's backups.
+
+        Counts and sizes come from the tenant's own backup entries (their
+        folders on disk, else the recorded size), not from everything under
+        ``data/backups``, which holds the other tenant's backups too.
+        """
         stats = StorageStats()
-        
+
         try:
-            base_dir = Path(DEFAULT_BACKUP_CONFIG["backup_location"])
-            
-            if not base_dir.exists():
-                return stats
-            
-            # Calculate total size
-            for backup_type_dir in base_dir.iterdir():
-                if backup_type_dir.is_dir():
-                    backup_type = backup_type_dir.name
-                    
-                    for backup_dir in backup_type_dir.iterdir():
-                        if backup_dir.is_dir():
-                            size = sum(f.stat().st_size for f in backup_dir.rglob("*") if f.is_file())
-                            stats.total_size_bytes += size
-                            stats.total_backups += 1
-                            
-                            if backup_type not in stats.backups_by_type:
-                                stats.backups_by_type[backup_type] = 0
-                            stats.backups_by_type[backup_type] += 1
-            
-            # Get backup dates from database
-            db = self.db_manager.db
-            
-            oldest = await db[BACKUPS_COLLECTION].find_one(
-                {"status": BackupStatus.COMPLETED.value},
-                sort=[("created_at", 1)]
-            )
-            if oldest:
-                stats.oldest_backup = oldest.get("created_at")
-            
-            newest = await db[BACKUPS_COLLECTION].find_one(
-                {"status": BackupStatus.COMPLETED.value},
-                sort=[("created_at", -1)]
-            )
-            if newest:
-                stats.newest_backup = newest.get("created_at")
-            
-            # Get backups by profile
-            pipeline = [
-                {"$match": {"status": BackupStatus.COMPLETED.value}},
-                {"$group": {"_id": "$profile_key", "count": {"$sum": 1}}}
-            ]
-            async for doc in db[BACKUPS_COLLECTION].aggregate(pipeline):
-                stats.backups_by_profile[doc["_id"]] = doc["count"]
-            
+            backups = await self.list_backups(limit=100_000)
+
+            for backup in backups:
+                backup_dir = Path(backup.file_path) if backup.file_path else None
+                if backup_dir is not None and backup_dir.is_dir():
+                    size = sum(f.stat().st_size for f in backup_dir.rglob("*") if f.is_file())
+                else:
+                    size = backup.size_bytes
+                stats.total_size_bytes += size
+                stats.total_backups += 1
+
+                backup_type = backup.backup_type.value
+                stats.backups_by_type[backup_type] = stats.backups_by_type.get(backup_type, 0) + 1
+
+                if backup.status != BackupStatus.COMPLETED:
+                    continue
+                stats.backups_by_profile[backup.profile_key] = stats.backups_by_profile.get(backup.profile_key, 0) + 1
+                if stats.oldest_backup is None or backup.created_at < stats.oldest_backup:
+                    stats.oldest_backup = backup.created_at
+                if stats.newest_backup is None or backup.created_at > stats.newest_backup:
+                    stats.newest_backup = backup.created_at
+
             # Try to get available disk space
             try:
-                import shutil
-                total, used, free = shutil.disk_usage(base_dir)
+                space_dir = self.backup_root()
+                while not space_dir.exists() and space_dir != space_dir.parent:
+                    space_dir = space_dir.parent
+                total, used, free = shutil.disk_usage(space_dir)
                 stats.available_space_bytes = free
             except Exception:
                 pass

@@ -1,4 +1,10 @@
-"""Backup management router for creating, listing, and restoring backups."""
+"""Backup management router for creating, listing, and restoring backups.
+
+Every endpoint works on the backups of this backend's tenant only
+(``settings.tenant_id``, see docs/27-TENANT_ISOLATION.md): another tenant's
+backup or profile answers 404, and a restore cannot target another tenant's
+database.
+"""
 
 import logging
 from typing import Optional, List
@@ -13,7 +19,7 @@ from backend.models.backup_schemas import (
     BackupMetadata, BackupListResponse, BackupConfig, StorageStats,
     RestoreResult, BackupProgress
 )
-from backend.services.backup_service import BackupService
+from backend.services.backup_service import BackupScopeError, BackupService
 from backend.routers.auth import require_admin, UserResponse
 
 logger = logging.getLogger(__name__)
@@ -29,8 +35,8 @@ def get_backup_service(request: Request) -> BackupService:
     global _backup_service
     
     if _backup_service is None:
-        _backup_service = BackupService(request.app.state.db)
-    
+        _backup_service = BackupService.for_api(request.app.state.db)
+
     return _backup_service
 
 
@@ -87,7 +93,11 @@ async def create_backup(
             )
         
         return backup
-        
+
+    except HTTPException:
+        raise
+    except BackupScopeError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Backup creation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -118,7 +128,9 @@ async def create_checkpoint(
             description=checkpoint_request.description
         )
         return checkpoint
-        
+
+    except BackupScopeError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Checkpoint creation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -364,7 +376,8 @@ async def restore_from_backup(
     - selective: Restore specific collections only
     
     Options:
-    - target_database: Restore to a different database (useful for testing)
+    - target_database: Restore to a different database of this tenant's
+      profiles (useful for testing); other databases are refused
     
     WARNING: Full restore will delete existing data in the target database!
     
@@ -443,7 +456,7 @@ async def trigger_post_ingestion_backup(
     global _backup_service
     
     if _backup_service is None:
-        _backup_service = BackupService(db_manager)
+        _backup_service = BackupService.for_api(db_manager)
     
     try:
         backup = await _backup_service.create_post_ingestion_backup(

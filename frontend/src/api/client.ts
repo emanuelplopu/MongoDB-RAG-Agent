@@ -251,6 +251,8 @@ export interface SearchResponse {
 export interface Profile {
   name: string
   description?: string
+  /** Owning tenant (`recallhub`, `quellex`); null when the profile is shared (docs/27). */
+  tenant?: string | null
   documents_folders: string[]
   database: string
   collection_documents: string
@@ -1229,7 +1231,8 @@ export const profilesApi = {
     return response.data
   },
 
-  update: async (profileKey: string, data: { name?: string; description?: string; documents_folders?: string[]; database?: string }) => {
+  // tenant (superadmin only): this tenant's id claims an unassigned profile, '' releases it
+  update: async (profileKey: string, data: { name?: string; description?: string; documents_folders?: string[]; database?: string; tenant?: string }) => {
     const response = await api.put(`/profiles/${profileKey}`, data)
     return response.data
   },
@@ -3377,6 +3380,8 @@ export interface BackupMetadata {
   backup_type: BackupType
   status: BackupStatus
   profile_key: string
+  /** Owning tenant; unset on backups made before tenants were recorded */
+  tenant?: string | null
   database_name: string
   name?: string
   description?: string

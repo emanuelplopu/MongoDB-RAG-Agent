@@ -101,15 +101,17 @@ $script:TotalSteps  = 10
 # Per-tenant database configuration
 $script:SharedDbs = @("admin", "recallhub")
 $script:TenantDbs = @{
-    "quellex"   = @("rag_parhelion")
+    "quellex"   = @("rag_diejuristin")
     "recallhub" = @("rag_db", "rag_test_law")
 }
 
-# Per-tenant config values
+# Per-tenant config values (.env keys; docker-compose.yml reads QUELLEX_* for backend-quellex)
 $script:TenantConfig = @{
     "quellex" = @{
-        ACTIVE_PROFILE   = "parhelion"
-        MONGODB_DATABASE = "rag_parhelion"
+        ACTIVE_PROFILE           = "diejuristin"
+        MONGODB_DATABASE         = "rag_diejuristin"
+        QUELLEX_ACTIVE_PROFILE   = "diejuristin"
+        QUELLEX_MONGODB_DATABASE = "rag_diejuristin"
     }
     "recallhub" = @{
         ACTIVE_PROFILE   = "default"
@@ -123,6 +125,37 @@ function Write-Warn  { param([string]$Msg) Write-Host "  [WARN] $Msg" -Foregroun
 function Write-Err   { param([string]$Msg) Write-Host "  [ERROR] $Msg" -ForegroundColor Red; $script:Errors += $Msg }
 function Write-Info  { param([string]$Msg) Write-Host "  $Msg" -ForegroundColor Gray }
 function Write-Ts    { Write-Host "  $(Get-Date -Format 'HH:mm:ss') " -NoNewline -ForegroundColor DarkGray }
+
+# Profiles in profiles.yaml with their database and owning tenant: the profile's
+# "tenant:" field, else the legacy owner of a known key, else "" (unassigned, shared).
+# Same rules as src/profile.py (LEGACY_PROFILE_TENANTS); the copy in
+# full-restore.ps1 must stay identical (docs/27-TENANT_ISOLATION.md).
+function Get-ProfileTenants {
+    param([string]$Path)
+    $legacy = @{ "diejuristin" = "quellex"; "parhelion" = "recallhub"; "parhelion-full" = "recallhub" }
+    $result = @()
+    if (-not $Path -or -not (Test-Path $Path)) { return $result }
+    $inProfiles = $false
+    $current = $null
+    foreach ($line in (Get-Content $Path -Encoding UTF8)) {
+        if ($line -match '^profiles:\s*$') { $inProfiles = $true; continue }
+        if ($line -match '^\S') { $inProfiles = $false; continue }
+        if (-not $inProfiles) { continue }
+        if ($line -match '^  ([^\s#][^:]*):\s*$') {
+            $current = [pscustomobject]@{ Key = $Matches[1].Trim().Trim("'", '"'); Database = ""; Tenant = "" }
+            $result += $current
+            continue
+        }
+        if (-not $current) { continue }
+        if ($line -match '^    database:\s*(.+?)\s*$') { $current.Database = $Matches[1].Trim("'", '"') }
+        elseif ($line -match '^    tenant:\s*(.+?)\s*$') { $current.Tenant = $Matches[1].Trim("'", '"').ToLower() }
+    }
+    foreach ($p in $result) {
+        if (-not $p.Tenant -and $legacy.ContainsKey($p.Key)) { $p.Tenant = $legacy[$p.Key] }
+        if (-not $p.Database) { $p.Database = "rag_db" }
+    }
+    return $result
+}
 
 Write-Host @"
 
@@ -226,36 +259,48 @@ if ($waited -ge $maxWait) {
     Write-Warn "Health-check timed out after ${maxWait}s - attempting dump anyway..."
 }
 
-# Build database list: shared DBs + the static tenant table + every database that
-# profiles.yaml references and that actually exists. docker-compose.yml may pin a
-# tenant to a different profile than the table (e.g. backend-quellex -> test-law),
-# and a package that misses the live database restores an empty tenant.
+# Build database list: shared DBs + the static tenant table + every database of a
+# profile in profiles.yaml that this tenant owns or that is unassigned, and that
+# actually exists. docker-compose.yml may pin a tenant to a different profile than
+# the table (e.g. backend-quellex -> test-law), and a package that misses the live
+# database restores an empty tenant. Profiles owned by the other tenant are left
+# out: restoring them with this package would overwrite that tenant's data.
 $dbsToDump = $script:SharedDbs + $script:TenantDbs[$Tenant]
+$existingRaw = docker exec rag-mongodb mongosh --quiet --eval "db.adminCommand('listDatabases').databases.map(d=>d.name).join(',')" 2>&1 | Out-String
+$existing = @((($existingRaw.Trim() -split "`n" | Select-Object -Last 1).Trim()) -split "," | Where-Object { $_ })
 $profilesYaml = Join-Path $script:RepoRoot "profiles.yaml"
-if (Test-Path $profilesYaml) {
-    $profileDbs = [regex]::Matches((Get-Content $profilesYaml -Raw), '(?m)^\s*database:\s*(\S+)') | ForEach-Object { $_.Groups[1].Value.Trim() }
-    $existingRaw = docker exec rag-mongodb mongosh --quiet --eval "db.adminCommand('listDatabases').databases.map(d=>d.name).join(',')" 2>&1 | Out-String
-    $existing = (($existingRaw.Trim() -split "`n" | Select-Object -Last 1).Trim()) -split ","
-    foreach ($pdb in $profileDbs) {
-        if (($existing -contains $pdb) -and ($dbsToDump -notcontains $pdb)) { $dbsToDump += $pdb }
+# The profile this tenant's backend is pinned to in .env is always included
+$pinnedProfile = ""
+$envFile = Join-Path $script:RepoRoot ".env"
+if (Test-Path $envFile) {
+    $pinLine = Get-Content $envFile | Where-Object { $_ -match "^$($Tenant.ToUpper())_ACTIVE_PROFILE=" } | Select-Object -Last 1
+    if ($pinLine) { $pinnedProfile = ($pinLine -split "=", 2)[1].Trim().Trim("'", '"') }
+}
+foreach ($p in (Get-ProfileTenants -Path $profilesYaml)) {
+    if ($p.Tenant -and ($p.Tenant -ne $Tenant) -and ($p.Key -eq $pinnedProfile)) {
+        Write-Warn "Profile '$($p.Key)' is owned by tenant $($p.Tenant) but pinned for $Tenant in .env; including it"
+    } elseif ($p.Tenant -and ($p.Tenant -ne $Tenant)) {
+        Write-Info "Skipping profile '$($p.Key)' ($($p.Database)): owned by tenant $($p.Tenant)"
+        continue
     }
-    $dbsToDump = $dbsToDump | Where-Object { ($existing -contains $_) -or ($script:SharedDbs -contains $_) }
+    if (($existing -contains $p.Database) -and ($dbsToDump -notcontains $p.Database)) { $dbsToDump += $p.Database }
 }
 
-# For recallhub, dynamically discover user_rag_* databases
-if ($Tenant -eq "recallhub") {
-    Write-Info "Discovering user_rag_* databases..."
-    try {
-        $dbListRaw = docker compose --profile $Tenant exec -T mongodb mongosh --eval "db.adminCommand('listDatabases').databases.map(d=>d.name).filter(n=>n.startsWith('user_rag_')).join(',')" --quiet 2>&1 | Out-String
-        $dbListStr = ($dbListRaw.Trim() -split "`n" | Select-Object -Last 1).Trim()
-        if ($dbListStr) {
-            $userDbs = $dbListStr -split ","
-            $dbsToDump = $dbsToDump + $userDbs
-            Write-Info "Found user databases: $($userDbs -join ', ')"
-        }
-    } catch {
-        Write-Warn "Could not discover user_rag_* databases"
-    }
+# Personal databases (backend/agent/federated_search.py): user_rag_<tenant>_<user id>
+# and cloud_<tenant>_<user id>; RecallHub also keeps legacy user_rag_<email local part>.
+$personalDbs = @($existing | Where-Object {
+    ($_ -like "user_rag_${Tenant}_*") -or ($_ -like "cloud_${Tenant}_*") -or
+    (($Tenant -eq "recallhub") -and ($_ -like "user_rag_*") -and ($_ -notlike "user_rag_quellex_*"))
+})
+if ($personalDbs.Count -gt 0) {
+    Write-Info "Found personal databases: $($personalDbs -join ', ')"
+    foreach ($udb in $personalDbs) { if ($dbsToDump -notcontains $udb) { $dbsToDump += $udb } }
+}
+
+if ($existing.Count -gt 0) {
+    $dbsToDump = $dbsToDump | Where-Object { ($existing -contains $_) -or ($script:SharedDbs -contains $_) }
+} else {
+    Write-Warn "Could not list MongoDB databases; dumping the configured list unfiltered"
 }
 
 $dbList = $dbsToDump

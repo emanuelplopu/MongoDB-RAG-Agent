@@ -4,6 +4,7 @@ import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from backend.core.config import settings
 from backend.agent.schemas import (
     DataSource, DataSourceType, AccessType,
     TaskDefinition, TaskType, AgentPlan, EvaluationDecision,
@@ -217,10 +218,10 @@ class TestFederatedSearch:
         assert len(profile_sources) == 1
         assert profile_sources[0].database == "rag_company"
         
-        # Check personal source
+        # Check personal source: named by tenant and user id, not by email (docs/27)
         personal_sources = [s for s in sources if s.type == DataSourceType.PERSONAL]
         assert len(personal_sources) == 1
-        assert "john_doe" in personal_sources[0].database
+        assert personal_sources[0].database == f"user_rag_{settings.tenant_id}_user123"
 
     @staticmethod
     def _search_with_databases(names):
@@ -243,10 +244,11 @@ class TestFederatedSearch:
     @pytest.mark.asyncio
     async def test_get_available_sources_drops_sources_without_a_database(self):
         """Personal and cloud sources are only offered once their database exists."""
-        fs = self._search_with_databases(["rag_company", "cloud_john_doe"])
+        cloud_db = f"cloud_{settings.tenant_id}_user123"
+        fs = self._search_with_databases(["rag_company", cloud_db])
         sources = await self._available(fs)
         assert [s.type for s in sources] == [DataSourceType.PROFILE, DataSourceType.CLOUD_PRIVATE]
-        assert sources[1].database == "cloud_john_doe"
+        assert sources[1].database == cloud_db
 
     @pytest.mark.asyncio
     async def test_get_available_sources_always_keeps_the_profile(self):

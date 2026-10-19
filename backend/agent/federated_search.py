@@ -10,7 +10,9 @@ Supports strategy-specific scoring through the strategy pattern.
 """
 
 import asyncio
+import hashlib
 import logging
+import re
 import time
 from typing import List, Optional, Dict, Any, Set, Tuple, TYPE_CHECKING
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
@@ -35,6 +37,34 @@ logger = logging.getLogger(__name__)
 # How long the list of existing databases is reused before the server is asked again.
 # A freshly synced cloud source or ingested mailbox shows up for the planner within this time.
 DATABASE_LIST_TTL_SECONDS = 60.0
+
+# MongoDB limits database names to 64 bytes; stay one below for older servers.
+_MAX_DATABASE_NAME_BYTES = 63
+
+
+def personal_database_name(prefix: str, tenant: str, user_id: str) -> str:
+    """Name of a user's private database: ``<prefix>_<tenant>_<user id>``.
+
+    Both tenants share one MongoDB server and each has its own ``users``
+    collection, so the name carries the tenant and the user id (not the email
+    local part, which collided across tenants and across users such as
+    ``anna@a.at`` / ``anna@b.at``). See docs/27-TENANT_ISOLATION.md.
+
+    Args:
+        prefix: ``user_rag`` (personal data) or ``cloud`` (private cloud storage).
+        tenant: The backend's ``TENANT_ID``.
+        user_id: The user's id in that tenant's ``users`` collection.
+
+    Returns:
+        Lower-case name of ``[a-z0-9_-]`` characters, at most 63 bytes; longer
+        names are cut and end in a short hash of the full name.
+    """
+    raw = f"{prefix}_{tenant}_{user_id}".lower()
+    name = re.sub(r"[^a-z0-9_-]", "_", raw)
+    if len(name) > _MAX_DATABASE_NAME_BYTES:
+        digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
+        name = f"{name[:_MAX_DATABASE_NAME_BYTES - 11]}_{digest}"
+    return name
 
 
 class FederatedSearch:
@@ -114,8 +144,9 @@ class FederatedSearch:
         the server, which is what the planner and the search should see.
 
         Args:
-            user_id: Current user's ID
-            user_email: Current user's email
+            user_id: Current user's ID (names the personal and private cloud
+                databases, see :func:`personal_database_name`)
+            user_email: Current user's email (no longer part of any database name)
             active_profile_key: Currently active profile key
             active_profile_database: Database of the active profile
             accessible_profile_keys: List of profile keys user has access to
@@ -138,11 +169,11 @@ class FederatedSearch:
                 display_name=f"Profile: {active_profile_key}"
             ))
         
-        # 2. User's personal database (emails, private data)
-        # Format: user_rag_{first}_{last} derived from email
-        email_parts = user_email.lower().split("@")[0]
-        user_db_name = f"user_rag_{email_parts.replace('.', '_').replace('-', '_')}"
-        
+        # 2. User's personal database (emails, private data): per tenant and user id.
+        # The old user_rag_<email local part> collided across tenants and users.
+        tenant = settings.tenant_id
+        user_db_name = personal_database_name("user_rag", tenant, user_id)
+
         sources.append(DataSource(
             id=f"personal_{user_id}",
             type=DataSourceType.PERSONAL,
@@ -155,7 +186,7 @@ class FederatedSearch:
         ))
         
         # 3. User's private cloud storage
-        user_cloud_db = f"cloud_{email_parts.replace('.', '_').replace('-', '_')}"
+        user_cloud_db = personal_database_name("cloud", tenant, user_id)
         sources.append(DataSource(
             id=f"cloud_private_{user_id}",
             type=DataSourceType.CLOUD_PRIVATE,

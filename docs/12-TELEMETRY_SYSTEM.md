@@ -16,7 +16,7 @@ All telemetry operations are non-blocking and failure-tolerant — telemetry nev
 | `TELEMETRY_MODE` | `dev` | Operating mode: `dev` / `beta` / `production` / `disabled` |
 | `TELEMETRY_PII_MODE` | `both` | PII handling: `both` / `protected_only` / `raw_only` / `disabled` |
 | `TELEMETRY_RETENTION_DAYS` | `90` | Days to retain JSONL files before auto-deletion |
-| `TELEMETRY_STORAGE_PATH` | `data/telemetry` | Base storage directory for JSONL output |
+| `TELEMETRY_STORAGE_PATH` | `data/telemetry` | Base storage directory for JSONL output; each backend writes below `<path>/<TENANT_ID>/` |
 | `TELEMETRY_PII_MARKERS` | `true` | Wrap PII replacements with `[PII:TYPE]...[/PII]` markers |
 
 Settings are defined in `backend/core/config.py` within `BackendSettings` and loaded at startup.
@@ -67,14 +67,21 @@ This makes redactions visible in the telemetry viewer's comparison mode, showing
 
 ## Dual-Mode Storage
 
-### Protected Mode (`data/telemetry/YYYY-MM-DD.jsonl`)
+Each backend writes into its own tenant folder (`data/telemetry/<tenant>/`,
+e.g. `data/telemetry/quellex/2026-10-19.jsonl`), because both tenants share
+`./data/telemetry` on a host that runs both. Files written before 2026-10-19
+sit directly in `data/telemetry/` and mix both tenants; the viewer endpoints
+read them too but only return records whose `tenant` is the backend's own
+(`docs/27-TENANT_ISOLATION.md`).
+
+### Protected Mode (`data/telemetry/<tenant>/YYYY-MM-DD.jsonl`)
 
 - All text fields pseudonymized via the triple-engine pipeline
 - User IDs hashed to `user_XXXXX` format
 - Safe to share, analyze, and store long-term
 - PII markers show what was redacted (when enabled)
 
-### Raw Mode (`data/telemetry/raw/YYYY-MM-DD.jsonl`)
+### Raw Mode (`data/telemetry/<tenant>/raw/YYYY-MM-DD.jsonl`)
 
 - No pseudonymization applied
 - Contains real names, emails, addresses, content
@@ -211,7 +218,7 @@ The `_emit_telemetry()` method fires after each agent interaction completes:
 ## File Rotation
 
 - Files older than `TELEMETRY_RETENTION_DAYS` are automatically deleted
-- Both `data/telemetry/*.jsonl` and `data/telemetry/raw/*.jsonl` are cleaned
+- The tenant folder (`<tenant>/*.jsonl`, `<tenant>/raw/*.jsonl`) and the legacy `data/telemetry/*.jsonl` and `data/telemetry/raw/*.jsonl` are cleaned
 - Rotation runs at service startup via `rotate_old_files()`
 - Files are identified by their `YYYY-MM-DD` stem — non-date filenames are skipped
 

@@ -743,11 +743,13 @@ async def get_access_matrix(
         profiles = await get_user_accessible_profiles(request, admin.id)
     visible_user_ids = {user.id for user in users}
 
-    # Get access entries
+    # Get access entries (grants for profiles of another tenant are not shown)
     access: dict[str, list[str]] = {}
     async for entry in access_collection.find({}):
         user_id = entry["user_id"]
-        if not admin.is_admin and (user_id not in visible_user_ids or entry["profile_key"] not in profiles):
+        if entry["profile_key"] not in profiles:
+            continue
+        if not admin.is_admin and user_id not in visible_user_ids:
             continue
         if user_id not in access:
             access[user_id] = []
@@ -822,7 +824,11 @@ async def set_profile_access(
 
 
 async def user_has_profile_access(request: Request, user_id: str, profile_key: str) -> bool:
-    """Check if user has access to a profile."""
+    """Check if user has access to a profile of this backend's tenant."""
+    from src.profile import get_profile_manager
+    if profile_key not in get_profile_manager().list_profiles():
+        return False  # unknown, or owned by another tenant
+
     # Get user to check admin status
     users_collection = await get_users_collection(request)
     user_doc = await users_collection.find_one({"_id": user_id})
@@ -842,22 +848,30 @@ async def user_has_profile_access(request: Request, user_id: str, profile_key: s
 
 
 async def get_user_accessible_profiles(request: Request, user_id: str) -> list[str]:
-    """Get list of profile keys the user has access to."""
+    """Get list of profile keys the user has access to.
+
+    Only profiles visible to this backend's tenant count: the profile manager
+    is tenant-bound, and a stored grant for another tenant's (or a deleted)
+    profile is ignored.
+    """
+    from src.profile import get_profile_manager
+    visible = get_profile_manager().list_profiles()
+
     # Get user to check admin status
     users_collection = await get_users_collection(request)
     user_doc = await users_collection.find_one({"_id": user_id})
-    
-    # Admins have access to all profiles
+
+    # Admins have access to all profiles of the tenant
     if user_doc and user_doc.get("is_admin", False):
-        from src.profile import get_profile_manager
-        return list(get_profile_manager().list_profiles().keys())
-    
+        return list(visible.keys())
+
     # Get from profile_access collection
     access_collection = await get_profile_access_collection(request)
     profiles = []
     async for entry in access_collection.find({"user_id": user_id}):
-        profiles.append(entry["profile_key"])
-    
+        if entry["profile_key"] in visible:
+            profiles.append(entry["profile_key"])
+
     return profiles
 
 

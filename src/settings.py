@@ -334,10 +334,12 @@ def load_settings(use_profile: bool = True) -> Settings:
         # The ACTIVE_PROFILE environment variable selects the initial profile once per
         # process. Re-applying it on every settings load would silently undo explicit
         # profile switches (e.g. POST /ingestion/start with a profile), and a clean
-        # ingestion would then wipe the wrong database.
+        # ingestion would then wipe the wrong database. The pin is applied in memory
+        # only: writing it to profiles.yaml let each tenant backend overwrite the
+        # file-wide active profile at start (docs/27-TENANT_ISOLATION.md).
         global _env_profile_applied
         if base_settings.active_profile and not _env_profile_applied:
-            profile_manager.switch_profile(base_settings.active_profile)
+            profile_manager.switch_profile(base_settings.active_profile, persist=False, force=True)
             _env_profile_applied = True
         
         active_profile = profile_manager.active_profile

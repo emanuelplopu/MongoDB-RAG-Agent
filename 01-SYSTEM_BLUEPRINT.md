@@ -99,15 +99,15 @@
 **Purpose:** Isolate data, configuration, and document sources per project/client.
 
 **Data Model:**
-- `ProfileConfig`: `{name: string, description: string|null, owner_user_id: string|null, documents_folders: list[string], database: string (default "rag_db"), collection_documents: string (default "documents"), collection_chunks: string (default "chunks"), vector_index: string (default "vector_index"), text_index: string (default "text_index"), embedding_model: string|null, llm_model: string|null, orchestrator_model: string|null, orchestrator_provider: string|null, worker_model: string|null, worker_provider: string|null, embedding_provider: string|null, airbyte: AirbyteConfig|null, cloud_sources: list[CloudSourceAssociation]}`
+- `ProfileConfig`: `{name: string, description: string|null, tenant: string|null (owning tenant; unset = shared, legacy keys diejuristin -> quellex, parhelion/parhelion-full -> recallhub), owner_user_id: string|null, documents_folders: list[string], database: string (default "rag_db"), collection_documents: string (default "documents"), collection_chunks: string (default "chunks"), vector_index: string (default "vector_index"), text_index: string (default "text_index"), embedding_model: string|null, llm_model: string|null, orchestrator_model: string|null, orchestrator_provider: string|null, worker_model: string|null, worker_provider: string|null, embedding_provider: string|null, airbyte: AirbyteConfig|null, cloud_sources: list[CloudSourceAssociation]}`
 
-**Storage:** `profiles.yaml` file on disk + in-memory ProfileManager singleton. Active profile persisted to database.
+**Storage:** `profiles.yaml` file on disk (shared by both tenant backends: every write takes a file lock, re-reads the file and applies one change) + in-memory ProfileManager singleton bound to the backend's `TENANT_ID`, which hides profiles owned by another tenant (404 on every profile route). The shared ingestion worker and the CLI are unbound and see every profile. See `docs/27-TENANT_ISOLATION.md`.
 
 **Profile Switching Mechanism:**
 1. Client calls `POST /api/v1/profiles/switch` with `{profile_key: string}`
 2. `DatabaseManager.switch_database()` changes active MongoDB database and collection references
 3. All subsequent search/ingestion/chat operations use the switched database
-4. Active profile key persisted for restart recovery
+4. The active profile is per process: `ACTIVE_PROFILE` is applied in memory only, a switch is persisted to `active_profiles.<tenant>` in `profiles.yaml` (the file-wide `active_profile` is the default for unbound processes), and a reload keeps the process's active profile
 
 **API Endpoints:**
 | Method | Path | Auth | Description |
@@ -193,8 +193,8 @@
 
 **Data Source Types (DataSourceType enum):**
 - `PROFILE` — shared profile documents (database from profile config)
-- `PERSONAL` — user's personal data (database: `user_rag_{email_prefix}`)
-- `CLOUD_PRIVATE` — user's private cloud storage (database: `cloud_{email_prefix}`)
+- `PERSONAL` — user's personal data (database: `user_rag_{tenant}_{user_id}`, `personal_database_name()`)
+- `CLOUD_PRIVATE` — user's private cloud storage (database: `cloud_{tenant}_{user_id}`)
 - `CLOUD_SHARED` — shared cloud storage per profile (database: `cloud_shared_{profile_key}`)
 
 **Access Control:**

@@ -624,7 +624,9 @@ class IngestionWorker:
                             self._current_database = db_name
                     
                     temp_db = TempDBManager(self.mongo_client, self.db, self.db_name)
-                    backup_service = BackupService(temp_db)
+                    # Resolve the job's profile database; files go to the profile
+                    # owner's tenant folder (docs/27-TENANT_ISOLATION.md)
+                    backup_service = BackupService(temp_db, profiles_manager=pm)
                     
                     profile_key = config.get("profile", "default")
                     backup_result = await backup_service.create_post_ingestion_backup(
