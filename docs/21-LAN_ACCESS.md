@@ -33,15 +33,26 @@ a browser on another machine.
   stopping or cancelling runs, deleting documents, rebuilding metadata, setting
   up indexes, open-in-Explorer, clearing logs, failed documents, analytics and
   jobs, reading job status, logs (also the SSE streams), failed documents and
-  analytics, `/api/v1/ingestion-queue/*`, and `/api/v1/system/database/check`,
-  `/database/create` plus the other configuration writes in
-  `backend/routers/system.py`. Organisation admins and members get 403; the
+  analytics, `/api/v1/ingestion-queue/*`, and every route in
+  `backend/routers/system.py`, reads included: configuration writes,
+  `/database/check`, `/database/create`, and the reads behind the
+  Configuration page (`/config`, `/config/options`, `/config/saved`, `/stats`,
+  `/info`, `/indexes`, `/database-stats` with the newest document titles,
+  `/health/detailed`, `/worker-health`, `/llm-providers` with the masked API
+  keys, `/llm-providers/models/{id}`, `/models/embedding`,
+  `/models/capabilities`, `/tools`, the agent and ingestion performance,
+  timeout and accelerator settings). Only the reads member pages load stay open
+  to every signed-in user: `/api/v1/system/health` (public), `/models/llm` (chat
+  model picker), and `/airbyte/status`, `/email-providers`,
+  `/cloud-storage-providers` and `POST /database/test-connection` (Email and
+  cloud configuration page). Organisation admins and members get 403; the
   document browsing reads (`GET /api/v1/ingestion/documents...`) stay open to
   every signed-in user, and the UI hides delete, metadata rebuild,
   open-in-Explorer and the personal-database setup from them. RecallHub
   (`REQUIRE_AUTH=false`) applies the same role checks and answers guests with
   401. `backend/tests/test_ingestion_authorization.py` fails when a new write
-  route under `/api/v1/ingestion` or `/api/v1/system` ships without one.
+  route under `/api/v1/ingestion` or `/api/v1/system`, or a new read under
+  `/api/v1/system`, ships without one.
 - **Same start screen in the desktop app and in the browser.** Both open the
   frontend's root URL, and `frontend/src/components/StartPage.tsx` decides from
   the tenant config what the root shows (`startPage: 'login' | 'landing'`).

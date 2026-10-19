@@ -5,6 +5,10 @@ pause, stop or clean runs, delete documents, rebuild metadata, read job logs or
 touch other databases. Organisation admins and members get 403, guests 401.
 Document browsing stays open to every caller.
 
+The system router is system configuration too, reads included: only the health
+probe and the reads member pages load (chat model picker, Email/Cloud page)
+stay open; everything else needs a superadmin.
+
 The ``app`` fixture in ``conftest.py`` overrides ``require_admin`` with a
 superadmin; ``caller`` removes those overrides so the real dependencies run and
 only the user lookup (``get_current_user``) is replaced.
@@ -12,6 +16,8 @@ only the user lookup (``get_current_user``) is replaced.
 
 from __future__ import annotations
 
+import re
+import time
 from typing import Any, Callable, Iterator, Optional
 from unittest.mock import AsyncMock
 
@@ -137,6 +143,38 @@ INLINE_ADMIN_SYSTEM_WRITES: set[str] = {
     "/api/v1/system/models/{model_id:path}/approve",
 }
 
+#: System reads that stay open, with the caller that needs them. Every other GET needs a superadmin.
+OPEN_SYSTEM_READS: dict[str, str] = {
+    "/api/v1/system/health": "public health probe (Docker healthchecks, installer, tray app)",
+    "/api/v1/system/models/llm": "chat model picker (ChatSidebarContext) for every user",
+    "/api/v1/system/airbyte/status": "Email/Cloud configuration page load",
+    "/api/v1/system/email-providers": "Email/Cloud configuration page load",
+    "/api/v1/system/cloud-storage-providers": "Email/Cloud configuration page load",
+}
+
+#: Values for the path parameters of system GET routes.
+SAMPLE_PATH_PARAMS: dict[str, str] = {
+    "database_name": "quellex_other",
+    "provider_id": "openai",
+    "tool_id": system_module.AGENT_TOOLS[0]["id"],
+}
+
+#: Superadmin reads whose handlers run against ``mock_db`` without outbound calls.
+SYSTEM_READS_FOR_SUPERADMINS: list[str] = [
+    "/api/v1/system/info",
+    "/api/v1/system/config",
+    "/api/v1/system/config/options",
+    "/api/v1/system/config/saved",
+    "/api/v1/system/agent-performance",
+    "/api/v1/system/ingestion-performance",
+    "/api/v1/system/worker-health",
+    "/api/v1/system/llm-providers",
+    "/api/v1/system/llm-providers/models/openai",
+    "/api/v1/system/tools",
+    f"/api/v1/system/tools/{SAMPLE_PATH_PARAMS['tool_id']}",
+    "/api/v1/system/models/capabilities",
+]
+
 
 def _dependency_calls(route: APIRoute) -> set[Callable[..., Any]]:
     """All callables in a route's dependency tree."""
@@ -162,6 +200,21 @@ def _routes(prefix: str) -> list[tuple[str, APIRoute]]:
 
 def _is_superadmin_only(route: APIRoute) -> bool:
     return bool(_dependency_calls(route) & {require_admin, require_admin_stream})
+
+
+def _fill_path(path: str) -> str:
+    """Replace ``{name}`` / ``{name:path}`` parameters with :data:`SAMPLE_PATH_PARAMS` values."""
+    return re.sub(r"\{(\w+)(?::\w+)?\}", lambda match: SAMPLE_PATH_PARAMS[match.group(1)], path)
+
+
+def _system_reads() -> list[tuple[str, APIRoute]]:
+    return [(path, route) for path, route in _routes("/api/v1/system") if "GET" in (route.methods or ())]
+
+
+#: Concrete URL of every superadmin-only system read, taken from the route table.
+SYSTEM_ADMIN_READS: list[str] = sorted(
+    _fill_path(path) for path, _ in _system_reads() if path not in OPEN_SYSTEM_READS
+)
 
 
 @pytest.fixture(autouse=True)
@@ -218,6 +271,22 @@ class TestRouteTable:
         # The exceptions must still exist, or the lists above are stale
         system_paths = {path for path, _ in _routes("/api/v1/system")}
         assert set(OPEN_SYSTEM_WRITES) | INLINE_ADMIN_SYSTEM_WRITES <= system_paths
+
+    def test_only_member_page_reads_stay_open(self):
+        open_reads = sorted(path for path, route in _system_reads() if require_admin not in _dependency_calls(route))
+        assert open_reads == sorted(OPEN_SYSTEM_READS)
+
+    def test_system_admin_reads_cover_configuration_and_data(self):
+        # Spot-check the reads that expose keys, document titles or worker internals
+        for path in (
+            "/api/v1/system/llm-providers",
+            "/api/v1/system/database-stats",
+            "/api/v1/system/health/detailed",
+            "/api/v1/system/worker-health",
+            "/api/v1/system/config",
+            "/api/v1/system/models/capabilities",
+        ):
+            assert path in SYSTEM_ADMIN_READS
 
     def test_database_check_requires_superadmin(self):
         routes = [r for path, r in _routes("/api/v1/system") if path == "/api/v1/system/database/check/{database_name}"]
@@ -276,6 +345,20 @@ class TestNonAdminsAreRefused:
         _assert_nothing_written(mock_db)
         mock_db.get_sync_client.assert_not_called()
 
+    @pytest.mark.parametrize("user", [MEMBER, ORG], ids=["member", "org_admin"])
+    @pytest.mark.parametrize("path", SYSTEM_ADMIN_READS)
+    def test_system_admin_reads_return_403(self, caller, mock_db, user, path):
+        response = caller(user).get(path)
+        assert response.status_code == 403, response.text
+        assert response.json()["message"] == "Admin access required"
+        mock_db.get_sync_client.assert_not_called()
+
+    @pytest.mark.parametrize("path", SYSTEM_ADMIN_READS)
+    def test_system_admin_reads_return_401_for_guests(self, caller, mock_db, path):
+        response = caller(None).get(path)
+        assert response.status_code == 401, response.text
+        mock_db.get_sync_client.assert_not_called()
+
 
 class TestSuperadminsStillSucceed:
     def test_start_schedules_the_run(self, caller, mock_db):
@@ -305,6 +388,38 @@ class TestSuperadminsStillSucceed:
         response = caller(SUPER).post("/api/v1/ingestion/pause")
         assert response.status_code == 400
         assert response.json()["message"] == "No ingestion job is running"
+
+    @pytest.mark.parametrize("path", SYSTEM_READS_FOR_SUPERADMINS)
+    def test_system_reads_return_200(self, caller, monkeypatch, path):
+        # GET /llm-providers probes Ollama for live model names
+        monkeypatch.setattr(system_module, "_try_fetch_ollama_models", AsyncMock(return_value=None))
+        response = caller(SUPER).get(path)
+        assert response.status_code == 200, response.text
+
+    def test_llm_providers_still_mask_keys(self, caller, monkeypatch, mock_db):
+        monkeypatch.setattr(system_module, "_try_fetch_ollama_models", AsyncMock(return_value=None))
+        mock_db.db["any"].find_one.return_value = {"_id": "provider_config", "openai_api_key": "sk-secret-1234"}
+        body = caller(SUPER).get("/api/v1/system/llm-providers").json()
+        assert body["openai_api_key_masked"] == "****1234"
+        assert "sk-secret" not in str(body)
+
+
+class TestMemberPagesStillLoad:
+    """Members keep the reads the chat page and the Email/Cloud page load."""
+
+    @pytest.fixture(autouse=True)
+    def no_outbound_calls(self, monkeypatch) -> None:
+        monkeypatch.setattr(system_module.settings, "airbyte_enabled", False)
+        monkeypatch.setitem(system_module._models_cache, "models", [{"id": "gpt-5", "provider": "openai"}])
+        monkeypatch.setitem(system_module._models_cache, "timestamp", time.time())
+
+    @pytest.mark.parametrize("path", sorted(OPEN_SYSTEM_READS))
+    def test_members_get_200(self, caller, path):
+        response = caller(MEMBER).get(path)
+        assert response.status_code == 200, response.text
+
+    def test_guests_still_reach_the_health_probe(self, caller):
+        assert caller(None).get("/api/v1/system/health").status_code == 200
 
 
 class TestDocumentBrowsingStaysOpen:

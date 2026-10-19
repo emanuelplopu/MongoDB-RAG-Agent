@@ -154,31 +154,21 @@ class TestIngestionIntegration:
 
 
 class TestSystemStatsIntegration:
-    """Integration tests for system statistics."""
+    """System statistics and configuration are superadmin-only."""
 
-    def test_system_info(self, integration_client: TestClient):
-        """Test system info endpoint."""
-        response = integration_client.get("/api/v1/system/info")
-        assert response.status_code == 200
-        data = response.json()
-        assert "version" in data
-
-    def test_system_config(self, integration_client: TestClient):
-        """Test system config endpoint."""
-        response = integration_client.get("/api/v1/system/config")
-        assert response.status_code == 200
-        data = response.json()
-        assert "llm_provider" in data
-
-    def test_database_stats(self, integration_client: TestClient):
-        """Test database stats endpoint."""
-        response = integration_client.get("/api/v1/system/database-stats")
-        assert response.status_code in [200, 500]
-
-    def test_indexes_status(self, integration_client: TestClient):
-        """Test indexes status endpoint."""
-        response = integration_client.get("/api/v1/system/indexes")
-        assert response.status_code in [200, 500]
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/api/v1/system/info",
+            "/api/v1/system/config",
+            "/api/v1/system/database-stats",
+            "/api/v1/system/indexes",
+        ],
+    )
+    def test_anonymous_callers_get_401(self, integration_client: TestClient, path: str):
+        """Anonymous calls are refused before the handler runs."""
+        response = integration_client.get(path)
+        assert response.status_code == 401
 
 
 class TestEndToEndFlow:

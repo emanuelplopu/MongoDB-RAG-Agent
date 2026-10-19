@@ -1,4 +1,13 @@
-"""System and health check router."""
+"""System and health check router.
+
+Access: everything here is system configuration and requires a superadmin
+(``require_admin``), reads included. The exceptions are the health probe and
+the reads that member pages load: ``GET /health`` (public), ``GET /models/llm``
+(chat model picker), ``GET /airbyte/status``, ``GET /email-providers``,
+``GET /cloud-storage-providers`` and ``POST /database/test-connection`` (Email
+and cloud configuration page). ``backend/tests/test_ingestion_authorization.py``
+enforces this list.
+"""
 
 import logging
 import time
@@ -362,7 +371,7 @@ async def health_check(request: Request):
 
 
 @router.get("/health/detailed")
-async def detailed_health_check(request: Request) -> dict:
+async def detailed_health_check(request: Request, admin: UserResponse = Depends(require_admin)) -> dict:
     """Comprehensive health check including LLM providers, embeddings, and database.
 
     Performs individual connectivity checks with timing for:
@@ -575,7 +584,7 @@ async def detailed_health_check(request: Request) -> dict:
 
 
 @router.get("/stats", response_model=SystemStatsResponse)
-async def get_stats(request: Request):
+async def get_stats(request: Request, admin: UserResponse = Depends(require_admin)):
     """
     Get system statistics.
     
@@ -624,7 +633,7 @@ async def get_host_stats(request: Request, admin: UserResponse = Depends(require
 
 
 @router.get("/config", response_model=ConfigResponse)
-async def get_config():
+async def get_config(admin: UserResponse = Depends(require_admin)):
     """
     Get current configuration (non-sensitive).
     
@@ -651,7 +660,7 @@ async def get_config():
 
 
 @router.get("/indexes")
-async def get_indexes(request: Request):
+async def get_indexes(request: Request, admin: UserResponse = Depends(require_admin)):
     """Get detailed index status with stats."""
     db = request.app.state.db
     index_info = await db.check_indexes()
@@ -837,7 +846,7 @@ async def create_search_indexes(request: Request, admin: UserResponse = Depends(
 
 
 @router.get("/info")
-async def get_info():
+async def get_info(admin: UserResponse = Depends(require_admin)):
     """Get API information."""
     uptime = (datetime.now() - _startup_time).total_seconds()
     
@@ -892,7 +901,7 @@ async def reload_settings(admin: UserResponse = Depends(require_admin)):
 
 
 @router.get("/database-stats")
-async def get_database_stats(request: Request):
+async def get_database_stats(request: Request, admin: UserResponse = Depends(require_admin)):
     """Get detailed database statistics."""
     db = request.app.state.db
     
@@ -1160,7 +1169,7 @@ _embedding_models_cache = {
 
 
 @router.get("/models/embedding")
-async def list_embedding_models():
+async def list_embedding_models(admin: UserResponse = Depends(require_admin)):
     """
     List available embedding models from OpenAI API.
     
@@ -1246,7 +1255,7 @@ async def list_embedding_models():
 
 
 @router.get("/config/options")
-async def get_config_options():
+async def get_config_options(admin: UserResponse = Depends(require_admin)):
     """
     Get available configuration options.
     
@@ -1367,7 +1376,7 @@ async def save_config_to_db(request: Request, update: ConfigUpdateRequest, admin
 
 
 @router.get("/config/saved")
-async def get_saved_config(request: Request):
+async def get_saved_config(request: Request, admin: UserResponse = Depends(require_admin)):
     """
     Get the saved configuration from database.
     
@@ -1455,7 +1464,7 @@ class AgentPerformanceConfig(BaseModel):
 
 
 @router.get("/agent-performance")
-async def get_agent_performance_config(request: Request):
+async def get_agent_performance_config(request: Request, admin: UserResponse = Depends(require_admin)):
     """
     Get current agent performance configuration.
     
@@ -1612,7 +1621,7 @@ class IngestionPerformanceConfig(BaseModel):
 
 
 @router.get("/ingestion-performance")
-async def get_ingestion_performance_config(request: Request):
+async def get_ingestion_performance_config(request: Request, admin: UserResponse = Depends(require_admin)):
     """
     Get current ingestion performance configuration.
     
@@ -1770,7 +1779,7 @@ class AcceleratorConfigRequest(BaseModel):
 
 
 @router.get("/ingestion-timeout-config")
-async def get_ingestion_timeout_config(request: Request):
+async def get_ingestion_timeout_config(request: Request, admin: UserResponse = Depends(require_admin)):
     """
     Get current timeout configuration for file processing.
     
@@ -1852,7 +1861,7 @@ async def save_ingestion_timeout_config(request: Request, config: TimeoutConfigR
 
 
 @router.get("/ingestion-accelerator-config")
-async def get_ingestion_accelerator_config(request: Request):
+async def get_ingestion_accelerator_config(request: Request, admin: UserResponse = Depends(require_admin)):
     """
     Get current GPU/accelerator configuration for document processing.
     
@@ -1942,7 +1951,7 @@ async def save_ingestion_accelerator_config(request: Request, config: Accelerato
 # ==================== Ingestion Worker Health ====================
 
 @router.get("/worker-health")
-async def get_worker_health(request: Request):
+async def get_worker_health(request: Request, admin: UserResponse = Depends(require_admin)):
     """
     Check ingestion worker health status.
     
@@ -2008,7 +2017,7 @@ LLM_CONFIG_DOC_ID = "provider_config"
 
 
 @router.get("/llm-providers")
-async def get_llm_provider_config(request: Request):
+async def get_llm_provider_config(request: Request, admin: UserResponse = Depends(require_admin)):
     """
     Get current LLM provider configuration.
     
@@ -2254,7 +2263,7 @@ class ProviderTestResponse(BaseModel):
 
 
 @router.get("/llm-providers/models/{provider_id}")
-async def get_provider_models_detailed(provider_id: str):
+async def get_provider_models_detailed(provider_id: str, admin: UserResponse = Depends(require_admin)):
     """
     Get detailed model list for a specific provider.
     
@@ -3478,7 +3487,7 @@ class ToolTestResponse(BaseModel):
 
 
 @router.get("/tools")
-async def list_agent_tools():
+async def list_agent_tools(admin: UserResponse = Depends(require_admin)):
     """
     Get list of all available agent tools with descriptions and parameters.
     
@@ -3496,7 +3505,7 @@ async def list_agent_tools():
 
 
 @router.get("/tools/{tool_id}")
-async def get_tool_details(tool_id: str):
+async def get_tool_details(tool_id: str, admin: UserResponse = Depends(require_admin)):
     """Get detailed information about a specific tool."""
     for tool in AGENT_TOOLS:
         if tool["id"] == tool_id:
@@ -3731,12 +3740,9 @@ from backend.services.model_benchmark import ModelBenchmarkService
 @router.get("/models/capabilities")
 async def get_model_capabilities(
     request: Request,
-    user: UserResponse = Depends(get_current_user),
+    admin: UserResponse = Depends(require_admin),
 ):
     """Get all tested model capabilities and approval status. Admin only."""
-    if not user or not user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-
     db = request.app.state.db
     service = ModelBenchmarkService(db.db)
     capabilities = await service.get_capabilities()

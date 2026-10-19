@@ -786,16 +786,21 @@
 
 **Purpose:** System monitoring, configuration, and diagnostics.
 
-**System Router Endpoints:**
+**System Router Endpoints** (`backend/routers/system.py`; superadmin only except
+`/health`, `/models/llm`, `/airbyte/status`, `/email-providers`,
+`/cloud-storage-providers` and `POST /database/test-connection`, see
+`docs/21-LAN_ACCESS.md`):
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/system/health` | Health check (DB connectivity) |
+| GET | `/api/v1/system/health` | Health check (DB connectivity), public |
 | GET | `/api/v1/system/stats` | Database and system statistics |
 | GET | `/api/v1/system/config` | Current config (non-sensitive) |
-| PUT | `/api/v1/system/config` | Update system configuration |
-| GET | `/api/v1/system/version` | API version info |
+| POST | `/api/v1/system/config/update`, `/config/save` | Update / persist system configuration |
+| GET | `/api/v1/system/info` | API version info |
 
-**Admin Router Endpoints (prefix `/api/v1/admin`):**
+**Admin Router Endpoints (prefix `/api/v1/admin`):** defined in
+`backend/routers/admin.py` but not mounted in `backend/main.py`, so the paths
+below answer 404 (`/api/v1/admin/telemetry/...` is a different, mounted router).
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/dashboard` | Admin | System health dashboard |
@@ -1084,4 +1089,4 @@
 | `/api/v1/benchmark` | Embedding Benchmark | `routers/embedding_benchmark.py` |
 | `/api/v1/local-llm` | Local LLM | `routers/local_llm.py` |
 | `/api/v1/cloud-sources` | Cloud Sources | `routers/cloud_sources/` |
-| `/api/v1/admin` | Admin | `routers/admin.py` |
+| `/api/v1/admin` | Admin (not mounted) | `routers/admin.py` |
