@@ -8,9 +8,17 @@ using RecallHub.HostAgent.Storage;
 //   RecallHubHostAgent.exe              run (console, or as the RecallHubHostAgent Windows service)
 //   RecallHubHostAgent.exe --once       print one sample as JSON and exit (no write)
 //   RecallHubHostAgent.exe --dry-run    print every sample as JSON (no write)
+//   RecallHubHostAgent.exe --sensors    list every LibreHardwareMonitor sensor and the derived temperatures, then exit
+//                                       (no write, no configuration; run elevated)
 //
 // Configuration precedence: appsettings.json next to the exe < %ProgramData%\RecallHub\HostAgent\appsettings.json
 // < RECALLHUB_AGENT_* environment variables (e.g. RECALLHUB_AGENT_Agent__IntervalSeconds=10) < command line.
+
+if (args.Contains("--sensors"))
+{
+    Environment.ExitCode = SensorDiagnostics.Run(Console.Out, Console.Error);
+    return;
+}
 
 var mode = args.Contains("--once") ? OutputMode.Once
     : args.Contains("--dry-run") ? OutputMode.DryRun
