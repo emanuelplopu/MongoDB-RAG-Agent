@@ -259,6 +259,17 @@ ACPI thermal zones are not used for CPU temperature: on this hardware the only z
 sensor (~28 °C). LibreHardwareMonitor ≥ 0.9.5 replaced the WinRing0 driver (flagged by Microsoft
 Defender) with PawnIO, which is installed separately.
 
+**Drive temperatures.** LibreHardwareMonitor 0.9.6 reports an NVMe drive's thresholds as
+temperature sensors too ("Warning Temperature", "Critical Temperature", next to "Composite
+Temperature" and "Temperature #1"–"#8"); SATA drives have a single "Temperature". Per drive the agent
+takes "Composite Temperature", else "Temperature", else the hottest "Temperature #N" /
+"Temperature Sensor N", and never a name containing Warning, Critical, Limit, Threshold, Max or Min,
+nor an unknown name. The composite wins even when a single sensor (often the controller) reads
+hotter: it is the value the drive throttles on and the one Windows (`Get-StorageReliabilityCounter`)
+and SMART tools show. A drive with nothing usable has no `sensors.storage` entry. Agents before
+2026-10-18 took the highest value, i.e. the warning threshold (constant 84–87 °C on Crucial P310
+drives that were at 42–43 °C); ignore `storage_max_c` in samples older than the agent update.
+
 ### Installing the agent
 
 ```powershell
@@ -275,8 +286,12 @@ sensors), registers the service `RecallHubHostAgent` (delayed auto-start, restar
 checks the agent's event-log messages. If the service cannot reach Docker Desktop's engine pipe as
 LocalSystem it says so; re-run with `-Mode Task` (runs elevated at the user's logon). Offline
 installs pass `-PawnIOInstaller <PawnIO_setup.exe>` instead of using winget. Verify any time with
-`RecallHubHostAgent.exe --once` (prints one sample, writes nothing) or `--dry-run`. The tray app
-shows "Host agent: running / stopped / not installed".
+`RecallHubHostAgent.exe --once` (prints one sample, writes nothing) or `--dry-run`. For sensor
+questions, `RecallHubHostAgent.exe --sensors` from an administrator prompt lists every
+LibreHardwareMonitor device and sensor (type, name, value), marks which drive temperatures the agent
+uses or ignores, and prints the derived `temp` / `sensors` fields; it reads no configuration and
+writes nothing (the service can keep running). The tray app shows "Host agent: running / stopped /
+not installed".
 
 Configuration precedence: `appsettings.json` next to the exe < the ProgramData override <
 `RECALLHUB_AGENT_*` environment variables (e.g. `RECALLHUB_AGENT_Agent__IntervalSeconds=10`) <
