@@ -87,7 +87,8 @@
 **Integration Points:**
 - `get_current_user(request)` — dependency injector, returns `UserResponse | None`
 - `require_auth(request)` — dependency, raises 401 if not authenticated
-- `require_admin(request)` — dependency, raises 403 if not superadmin; guards all system configuration
+- `require_admin(request)` — dependency, raises 403 if not superadmin; guards all system configuration, including every ingestion endpoint except the document browsing reads
+- `require_admin_stream(request)` — `require_admin` for SSE endpoints; also accepts the `?token=` query token on paths ending in `/stream` (`EventSource` cannot send headers)
 - `require_org_admin(request)` — dependency, raises 403 unless superadmin or organisation admin; used only by user management, profile access, the team API-key listing, `PUT /api/v1/profiles/{key}` (own profiles, name/description/folders) and `GET /api/v1/profiles/folders/browse`
 - `user_has_profile_access(request, user_id, profile_key)` — checks access rights
 - `get_user_accessible_profiles(request, user_id)` — returns list of profile keys
@@ -358,6 +359,8 @@
 | GET | `/api/v1/ingestion/documents` | List ingested documents |
 | GET | `/api/v1/ingestion/documents/lookup` | Lookup specific document |
 | DELETE | `/api/v1/ingestion/documents/{id}` | Delete document + chunks |
+
+**Access:** superadmin only (`require_admin`; the `/logs/stream` and `/events/stream` SSE endpoints use `require_admin_stream`) for every ingestion endpoint, reads of job status, logs, failed documents and analytics included: they carry server paths of every profile, and the log buffer captures the root logger during a run. Only the document browsing reads (`GET /documents`, `/documents/folders`, `/documents/lookup`, `/documents/{id}`, `/documents/{id}/file`, `/documents/{id}/info`) and `GET /rebuild-metadata` stay open to every caller. Organisation admins and members get 403, guests 401.
 
 **Configuration (env vars):**
 - `INGESTION_MAX_CONCURRENT_FILES` (default 2, range 1-10)

@@ -26,6 +26,22 @@ a browser on another machine.
   root URL opens the login page, a signed-in user lands on the dashboard, every
   other route redirects guests to the login page, and the "continue as guest"
   options are gone.
+- **Roles on top of the session.** The middleware only proves that a caller is
+  signed in. Ingestion and system configuration also need a superadmin
+  (`is_admin`, `require_admin` in `backend/routers/auth.py`): starting
+  (including `clean_before_ingest` for any profile), pausing, resuming,
+  stopping or cancelling runs, deleting documents, rebuilding metadata, setting
+  up indexes, open-in-Explorer, clearing logs, failed documents, analytics and
+  jobs, reading job status, logs (also the SSE streams), failed documents and
+  analytics, `/api/v1/ingestion-queue/*`, and `/api/v1/system/database/check`,
+  `/database/create` plus the other configuration writes in
+  `backend/routers/system.py`. Organisation admins and members get 403; the
+  document browsing reads (`GET /api/v1/ingestion/documents...`) stay open to
+  every signed-in user, and the UI hides delete, metadata rebuild,
+  open-in-Explorer and the personal-database setup from them. RecallHub
+  (`REQUIRE_AUTH=false`) applies the same role checks and answers guests with
+  401. `backend/tests/test_ingestion_authorization.py` fails when a new write
+  route under `/api/v1/ingestion` or `/api/v1/system` ships without one.
 - **Same start screen in the desktop app and in the browser.** Both open the
   frontend's root URL, and `frontend/src/components/StartPage.tsx` decides from
   the tenant config what the root shows (`startPage: 'login' | 'landing'`).
@@ -127,7 +143,8 @@ an interceptor, so anything that bypasses axios needs explicit handling:
 - raw `fetch` calls: add the `Authorization: Bearer <token>` header (the
   client's auth-header helper);
 - `EventSource` (ingestion log/event streams): append `?token=<jwt>`; the
-  middleware accepts the query token only for paths ending in `/stream`;
+  middleware accepts the query token only for paths ending in `/stream`, and
+  superadmin-only streams check it through `require_admin_stream`;
 - files opened by the browser itself (`window.open`, `<iframe>`, downloads):
   fetch with the header and hand the browser a blob URL; do not put the token
   in a URL, it would land in the Caddy and nginx access logs;
@@ -243,6 +260,8 @@ docker compose --profile quellex ps
 curl.exe -k --resolve quellex.local:443:127.0.0.1 -I https://quellex.local/
 # API refuses guests, accepts a session
 curl.exe -k --resolve quellex.local:443:127.0.0.1 https://quellex.local/api/v1/ingestion/documents   # 401
+# Ingestion needs a superadmin: a member's API key is refused
+curl.exe -k --resolve quellex.local:443:127.0.0.1 -X POST -H "X-API-Key: <member key>" https://quellex.local/api/v1/ingestion/pause   # 403
 # Name answer from the tray app (run on another computer, or here after the firewall rules exist)
 Resolve-DnsName quellex.local
 ping quellex.local

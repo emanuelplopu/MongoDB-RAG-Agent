@@ -108,7 +108,9 @@ with `REQUIRE_AUTH=true` (the Quellex tenant, `docs/21-LAN_ACCESS.md`) set
 `RECALLHUB_API_KEY` to an API key of a user of that tenant (created in the
 UI under API keys, or a short-lived one for the run); it is sent as
 `X-API-Key`, read from the environment only and never written to a config or
-results file. Without it every call gets 401.
+results file. Without it every call gets 401. `bench-ingest` starts and polls
+ingestion runs, which needs a superadmin's key on either tenant; a member's
+key gets 403.
 
 ### `bench-ingest`
 

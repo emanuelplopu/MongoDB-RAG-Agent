@@ -222,7 +222,7 @@ def app(mock_db):
     Tests should handle potential errors from database operations gracefully.
     """
     from backend.main import app as fastapi_app
-    from backend.routers.auth import UserResponse, require_admin, require_auth
+    from backend.routers.auth import UserResponse, require_admin, require_admin_stream, require_auth
 
     async def _test_user_override() -> UserResponse:
         """Return a default authenticated test user."""
@@ -239,6 +239,7 @@ def app(mock_db):
     fastapi_app.state.db = mock_db
     fastapi_app.dependency_overrides[require_auth] = _test_user_override
     fastapi_app.dependency_overrides[require_admin] = _test_user_override
+    fastapi_app.dependency_overrides[require_admin_stream] = _test_user_override
 
     yield fastapi_app
 

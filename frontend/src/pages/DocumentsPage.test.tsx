@@ -106,6 +106,14 @@ vi.mock('react-arborist', () => ({
   NodeRendererProps: {},
 }))
 
+const superadmin = { id: 'admin-1', email: 'admin@example.com', name: 'Admin', is_admin: true }
+const member = { id: 'member-1', email: 'member@example.com', name: 'Member', is_admin: false }
+const authState = vi.hoisted(() => ({ user: null as Record<string, unknown> | null }))
+
+vi.mock('../contexts/AuthContext', () => ({
+  useAuth: () => authState,
+}))
+
 vi.mock('../api/client', () => ({
   documentsApi: {
     list: (...args: unknown[]) => listMock(...args),
@@ -284,6 +292,7 @@ describe('DocumentsPage', () => {
       }),
     })
     deleteMock.mockResolvedValue(undefined)
+    authState.user = superadmin
 
     vi.stubGlobal('confirm', vi.fn(() => true))
   })
@@ -384,6 +393,19 @@ describe('DocumentsPage', () => {
     })
     expect(screen.getByText('Page Two Report')).toBeInTheDocument()
     expect(screen.getAllByText('Page 2 of 2').length).toBeGreaterThan(0)
+  })
+
+  it('hides delete and metadata rebuild from users who are not superadmins', async () => {
+    authState.user = member
+    getMetadataRebuildStatusMock.mockResolvedValue({ status: null, running: false })
+
+    renderPage()
+
+    expect(await screen.findByText('Quarterly Report')).toBeInTheDocument()
+    expect(screen.queryByTitle('Delete')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Fix 1 docs/i })).not.toBeInTheDocument()
+    expect(deleteMock).not.toHaveBeenCalled()
+    expect(startMetadataRebuildMock).not.toHaveBeenCalled()
   })
 
   it('starts metadata rebuilds and deletes documents after confirmation', async () => {
