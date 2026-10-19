@@ -16,6 +16,8 @@ import {
 } from '@heroicons/react/24/outline'
 import { documentsApi, DocumentFullInfo, DocumentChunk, cloudSourcesApi } from '../api/client'
 import FilePreviewModal from '../components/FilePreviewModal'
+import { isSuperAdmin } from '../api/roles'
+import { useAuth } from '../contexts/AuthContext'
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 Bytes'
@@ -89,6 +91,9 @@ export default function DocumentPreviewPage() {
   const [error, setError] = useState<string | null>(null)
   const [showContent, setShowContent] = useState(false)
   const [openingExplorer, setOpeningExplorer] = useState(false)
+  // Opening a local file on the server host is superadmin-only; cloud links open in the browser for everyone
+  const { user } = useAuth()
+  const canOpenOnServer = isSuperAdmin(user)
   const [explorerMessage, setExplorerMessage] = useState<string | null>(null)
   
   // Cloud source state
@@ -254,23 +259,25 @@ export default function DocumentPreviewPage() {
           </div>
         )}
         
-        <button
-          onClick={handleOpenExplorer}
-          disabled={openingExplorer || (cloudSourceInfo?.is_cloud_source && !cloudSourceInfo.web_view_url)}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-xl hover:bg-primary-700 transition-colors disabled:opacity-50"
-        >
-          {cloudSourceInfo?.is_cloud_source ? (
-            <>
-              <ArrowTopRightOnSquareIcon className="h-5 w-5" />
-              {openingExplorer ? t('docPreviewPage.opening') : t('docPreviewPage.openInCloud')}
-            </>
-          ) : (
-            <>
-              <FolderOpenIcon className="h-5 w-5" />
-              {openingExplorer ? t('docPreviewPage.opening') : t('docPreviewPage.openInExplorer')}
-            </>
-          )}
-        </button>
+        {(cloudSourceInfo?.is_cloud_source || canOpenOnServer) && (
+          <button
+            onClick={handleOpenExplorer}
+            disabled={openingExplorer || (cloudSourceInfo?.is_cloud_source && !cloudSourceInfo.web_view_url)}
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-xl hover:bg-primary-700 transition-colors disabled:opacity-50"
+          >
+            {cloudSourceInfo?.is_cloud_source ? (
+              <>
+                <ArrowTopRightOnSquareIcon className="h-5 w-5" />
+                {openingExplorer ? t('docPreviewPage.opening') : t('docPreviewPage.openInCloud')}
+              </>
+            ) : (
+              <>
+                <FolderOpenIcon className="h-5 w-5" />
+                {openingExplorer ? t('docPreviewPage.opening') : t('docPreviewPage.openInExplorer')}
+              </>
+            )}
+          </button>
+        )}
         <button
           onClick={handleOpenPreview}
           className="flex items-center gap-2 px-4 py-2 bg-surface-variant dark:bg-gray-700 text-primary-900 dark:text-primary-200 rounded-xl hover:bg-primary-100 dark:hover:bg-gray-600 transition-colors"

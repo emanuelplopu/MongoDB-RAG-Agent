@@ -72,6 +72,14 @@ vi.mock('react-router-dom', async () => {
   }
 })
 
+const superadmin = { id: 'admin-1', email: 'admin@example.com', name: 'Admin', is_admin: true }
+const member = { id: 'member-1', email: 'member@example.com', name: 'Member', is_admin: false }
+const authState = vi.hoisted(() => ({ user: null as Record<string, unknown> | null }))
+
+vi.mock('../contexts/AuthContext', () => ({
+  useAuth: () => authState,
+}))
+
 vi.mock('../api/client', () => ({
   documentsApi: {
     getFullInfo: (...args: unknown[]) => getFullInfoMock(...args),
@@ -160,6 +168,7 @@ describe('DocumentPreviewPage', () => {
     getCachedFileMock.mockReset()
     getCachedFileUrlMock.mockReset()
     windowOpenMock.mockReset()
+    authState.user = superadmin
 
     Object.defineProperty(window, 'open', {
       configurable: true,
@@ -294,6 +303,38 @@ describe('DocumentPreviewPage', () => {
     })
 
     consoleErrorSpy.mockRestore()
+  })
+
+  it('hides Open in Explorer for local files from users who are not superadmins', async () => {
+    authState.user = member
+    getFullInfoMock.mockResolvedValue(documentFixture)
+    getCloudSourceInfoMock.mockRejectedValue(new Error('not a cloud source'))
+
+    renderPage()
+
+    expect(await screen.findByRole('heading', { name: 'Quarterly Report' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open in Explorer' })).not.toBeInTheDocument()
+    expect(openInExplorerMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps the cloud provider link for users who are not superadmins', async () => {
+    authState.user = member
+    getFullInfoMock.mockResolvedValue(documentFixture)
+    getCloudSourceInfoMock.mockResolvedValue({
+      is_cloud_source: true,
+      provider: 'google_drive',
+      connection_id: 'conn-1',
+      web_view_url: 'https://drive.example.com/file/123',
+      remote_path: '/Drive/Reports/q1-report.pdf',
+      is_cached: false,
+    })
+    const user = userEvent.setup()
+
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: 'Open in Cloud Provider' }))
+    expect(windowOpenMock).toHaveBeenCalledWith('https://drive.example.com/file/123', '_blank')
+    expect(openInExplorerMock).not.toHaveBeenCalled()
   })
 
   it('shows an error state when the document cannot be loaded', async () => {
