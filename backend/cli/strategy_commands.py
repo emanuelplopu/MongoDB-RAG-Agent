@@ -158,7 +158,7 @@ if HAS_TYPER:
             "default", "--profile", "-p", help="Profile key"
         ),
         tenant: str = typer.Option(
-            "recallhub", "--tenant", "-t", help="Tenant ID"
+            "recallhub", "--tenant", "-t", envvar="TENANT_ID", help="Tenant ID"
         ),
         output_format: str = typer.Option(
             "table", "--format", "-f", help="Output format: table or json"
@@ -201,7 +201,7 @@ if HAS_TYPER:
     @strategy_app.command("list")
     def strategy_list(
         tenant: str = typer.Option(
-            "recallhub", "--tenant", "-t", help="Tenant ID"
+            "recallhub", "--tenant", "-t", envvar="TENANT_ID", help="Tenant ID"
         ),
         output_format: str = typer.Option(
             "table", "--format", "-f", help="Output format: table or json"
@@ -247,7 +247,7 @@ if HAS_TYPER:
     def strategy_inspect(
         spec_id: str = typer.Argument(..., help="Strategy spec ID to inspect"),
         tenant: str = typer.Option(
-            "recallhub", "--tenant", "-t", help="Tenant ID"
+            "recallhub", "--tenant", "-t", envvar="TENANT_ID", help="Tenant ID"
         ),
         output_format: str = typer.Option(
             "table", "--format", "-f", help="Output format: table or json"
@@ -272,7 +272,7 @@ if HAS_TYPER:
             "default", "--profile", "-p", help="Profile key"
         ),
         tenant: str = typer.Option(
-            "recallhub", "--tenant", "-t", help="Tenant ID"
+            "recallhub", "--tenant", "-t", envvar="TENANT_ID", help="Tenant ID"
         ),
         output_format: str = typer.Option(
             "table", "--format", "-f", help="Output format: table or json"

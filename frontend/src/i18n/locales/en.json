@@ -1901,6 +1901,7 @@
     "cores": "cores",
     "ingesting": "Ingesting",
     "chatActive": "Chat active",
+    "sharedTenant": "Shared worker",
     "sourceHost": "Host",
     "sourceHostTooltip": "Read on the Windows host by the RecallHub host agent.",
     "sourceContainer": "VM view",

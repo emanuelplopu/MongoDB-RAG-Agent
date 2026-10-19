@@ -388,7 +388,7 @@ if HAS_TYPER:
             "regression", "--mode", help="Experiment mode for fired jobs"
         ),
         tenant: str = typer.Option(
-            "recallhub", "--tenant", "-t", help="Tenant scope"
+            "recallhub", "--tenant", "-t", envvar="TENANT_ID", help="Tenant scope"
         ),
         datasets: str = typer.Option(
             ..., "--datasets", help="Comma-separated dataset ids"

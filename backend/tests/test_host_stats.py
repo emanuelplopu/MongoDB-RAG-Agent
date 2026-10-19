@@ -278,6 +278,19 @@ class TestAgentSampleMapping:
         assert resp.activity[0].step == "embed"
         assert resp.activity[0].processed_files == 3
 
+    def test_other_tenants_activity_is_left_out(self):
+        activity = [
+            {"tenant": "quellex", "source": "api", "job_id": "q1", "current_file": "/app/mounts/Akten/a.pdf"},
+            {"tenant": "recallhub", "source": "api", "job_id": "r1", "current_file": "/app/mounts/other/b.pdf"},
+            {"tenant": "shared", "source": "worker", "job_id": "w1"},
+        ]
+        scoped = response_from_agent_sample(_agent_sample(activity=activity), tenant="quellex")
+        unscoped = response_from_agent_sample(_agent_sample(activity=activity))
+
+        assert [a.job_id for a in scoped.activity] == ["q1", "w1"]
+        assert [a.job_id for a in unscoped.activity] == ["q1", "r1", "w1"]
+        assert scoped.containers == unscoped.containers  # machine figures stay host-wide
+
     def test_missing_cpu_temperature_is_marked_unavailable(self):
         sample = _agent_sample(temp={"gpu_c": 57.0}, sensors={"status": "driver_missing"})
         resp = response_from_agent_sample(sample)
@@ -293,10 +306,11 @@ class TestAgentSampleMapping:
 
 
 class _FakeStore:
-    def __init__(self, sample=None, error: Exception | None = None):
+    def __init__(self, sample=None, error: Exception | None = None, tenant_scope: str | None = None):
         self.sample = sample
         self.error = error
         self.max_age = None
+        self.tenant_scope = tenant_scope
 
     async def latest_host_sample(self, *, max_age_seconds: float):
         self.max_age = max_age_seconds
@@ -318,6 +332,11 @@ class TestCollectHostStats:
         resp = asyncio.run(collect_host_stats(store))
         assert resp.source == "host-agent"
         assert store.max_age is not None and store.max_age > 0
+
+    def test_agent_sample_activity_follows_the_store_scope(self):
+        sample = _agent_sample(ts=datetime.now(timezone.utc) - timedelta(seconds=3))
+        resp = asyncio.run(collect_host_stats(_FakeStore(sample=sample, tenant_scope="recallhub")))
+        assert resp.activity == []  # the sample's only activity is the quellex backend's
 
     def test_falls_back_when_agent_offline(self):
         resp = asyncio.run(collect_host_stats(_FakeStore(sample=None)))

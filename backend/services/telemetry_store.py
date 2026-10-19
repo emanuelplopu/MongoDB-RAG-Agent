@@ -16,6 +16,13 @@ history survives profile switches and is shared by every tenant on the host:
   describing what is running right now; the host agent stamps it onto each
   sample so samples are self-describing.
 
+Host samples describe the machine and are visible to every tenant. Activity is
+tenant data (it holds file paths): ``meta.tenant`` is the tenant the job or chat
+belongs to, and :data:`SHARED_TENANT` marks activity of shared infrastructure
+that no tenant owns (the ingestion worker while idle, or a job queued without a
+tenant). A store built with ``tenant_scope`` reads only that tenant's and shared
+activity; the API scopes to ``settings.tenant_id``.
+
 Every timestamp written or read here is timezone-aware UTC. The store uses
 ``pymongo.AsyncMongoClient`` (repo rule: no new motor usage) with its own client,
 so it never depends on the profile-switching ``DatabaseManager``.
@@ -37,13 +44,31 @@ __all__ = [
     "HOST_SAMPLES",
     "ACTIVITY_EVENTS",
     "ACTIVITY_CURRENT",
+    "SHARED_TENANT",
     "TelemetryStore",
     "choose_bucket_seconds",
+    "tenant_visible",
 ]
 
 HOST_SAMPLES = "host_samples"
 ACTIVITY_EVENTS = "activity_events"
 ACTIVITY_CURRENT = "activity_current"
+
+#: ``meta.tenant`` of activity that belongs to no single tenant (visible to all of them).
+SHARED_TENANT = "shared"
+
+
+def tenant_visible(tenant: Optional[str], scope: Optional[str]) -> bool:
+    """Whether activity labelled ``tenant`` may be shown to a reader scoped to ``scope``.
+
+    Args:
+        tenant: The activity's tenant label (``None`` when missing).
+        scope: The reader's tenant, or ``None`` for an unscoped reader (operator tools).
+
+    Returns:
+        True for an unscoped reader, for the reader's own tenant and for shared activity.
+    """
+    return scope is None or tenant in (scope, SHARED_TENANT)
 
 _TIMESERIES_OPTIONS: dict[str, str] = {"timeField": "ts", "metaField": "meta", "granularity": "seconds"}
 
@@ -119,6 +144,9 @@ class TelemetryStore:
         activity_events_ttl_seconds: TTL applied to ``activity_events``.
         owns_client: Close the client in :meth:`close` (True when built by
             :meth:`from_settings`).
+        tenant_scope: When set, activity reads (:meth:`events`, :meth:`aggregate_events`,
+            :meth:`recent_jobs`) return only this tenant's and shared activity. Writes and
+            host-sample reads are never scoped.
     """
 
     def __init__(
@@ -129,17 +157,24 @@ class TelemetryStore:
         host_samples_ttl_seconds: int,
         activity_events_ttl_seconds: int,
         owns_client: bool = True,
+        tenant_scope: Optional[str] = None,
     ) -> None:
         self._client = client
         self._database = database
         self._host_ttl = int(host_samples_ttl_seconds)
         self._event_ttl = int(activity_events_ttl_seconds)
         self._owns_client = owns_client
+        self._tenant_scope = tenant_scope or None
         self._ready = False
 
     @classmethod
-    def from_settings(cls, settings: Any) -> "TelemetryStore":
-        """Build a store with its own client from ``BackendSettings``."""
+    def from_settings(cls, settings: Any, *, tenant_scope: Optional[str] = None) -> "TelemetryStore":
+        """Build a store with its own client from ``BackendSettings``.
+
+        Args:
+            settings: ``BackendSettings``.
+            tenant_scope: Tenant whose activity this store reads (``None``: every tenant).
+        """
         client = AsyncMongoClient(
             settings.mongodb_uri,
             tz_aware=True,
@@ -152,7 +187,19 @@ class TelemetryStore:
             settings.telemetry_database,
             host_samples_ttl_seconds=settings.host_samples_ttl_days * 86400,
             activity_events_ttl_seconds=settings.activity_events_ttl_days * 86400,
+            tenant_scope=tenant_scope,
         )
+
+    @property
+    def tenant_scope(self) -> Optional[str]:
+        """Tenant whose activity this store reads, or ``None`` for every tenant."""
+        return self._tenant_scope
+
+    def tenant_filter(self) -> dict[str, Any]:
+        """``activity_events`` filter limiting reads to the scoped tenant (empty when unscoped)."""
+        if self._tenant_scope is None:
+            return {}
+        return {"meta.tenant": {"$in": [self._tenant_scope, SHARED_TENANT]}}
 
     @property
     def db(self) -> Any:
@@ -342,7 +389,7 @@ class TelemetryStore:
         limit: int = 5000,
         newest_first: bool = False,
     ) -> list[dict[str, Any]]:
-        """Events filtered by time range, kinds and job id, ordered by time."""
+        """Events filtered by time range, kinds and job id (and the tenant scope), ordered by time."""
         query: dict[str, Any] = {}
         if start is not None or end is not None:
             query["ts"] = {}
@@ -356,12 +403,15 @@ class TelemetryStore:
             query["meta.job_id"] = job_id
         if extra_filter:
             query.update(extra_filter)
+        query.update(self.tenant_filter())  # last, so a caller's filter cannot widen the scope
         cursor = self.db[ACTIVITY_EVENTS].find(query, projection={"_id": 0}).sort("ts", -1 if newest_first else 1).limit(limit)
         return [doc async for doc in cursor]
 
     async def aggregate_events(self, pipeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Run an aggregation over ``activity_events``."""
-        return await (await self.db[ACTIVITY_EVENTS].aggregate(pipeline)).to_list(length=None)
+        """Run an aggregation over ``activity_events`` (prefixed with the tenant scope's ``$match``)."""
+        scope = self.tenant_filter()
+        stages = [{"$match": scope}, *pipeline] if scope else pipeline
+        return await (await self.db[ACTIVITY_EVENTS].aggregate(stages)).to_list(length=None)
 
     async def aggregate_samples(self, pipeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Run an aggregation over ``host_samples``."""
@@ -390,5 +440,5 @@ class TelemetryStore:
         out: list[dict[str, Any]] = []
         for row in rows:
             statuses = sorted(row.pop("statuses") or [], key=lambda s: s["ts"])
-            out.append({"job_id": row.pop("_id"), "status": statuses[-1]["status"] if statuses else None, **row})
+            out.append({"job_id": row.pop("_id"), "status": statuses[-1].get("status") if statuses else None, **row})
         return out

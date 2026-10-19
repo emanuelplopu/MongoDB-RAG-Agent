@@ -268,6 +268,75 @@ class TestActivityEventRecorder:
         record_event("chat.request", session_id="x")  # must not raise
 
 
+class TestJobTenantAttribution:
+    """The shared worker labels each job's activity with the job's tenant, not its own."""
+
+    def test_bound_job_events_and_state_carry_the_job_tenant(self):
+        store = _FakeStore()
+        rec = ActivityEventRecorder(store, tenant="shared", source="worker", host="H")
+        rec.bind_job_tenant("j1", "quellex")
+        rec.job_status("j1", "running")
+        rec.emit("file.start", {"job_id": None, "file": {"path": "/a.pdf"}})  # pipeline event without an id
+        asyncio.run(rec.flush())
+
+        assert [d["meta"]["tenant"] for d in store.inserted] == ["quellex", "quellex"]
+        assert rec.key == "shared:worker"  # one live-state document per process, whatever the job
+        assert store.current["shared:worker"]["tenant"] == "quellex"
+
+    def test_release_restores_the_process_tenant(self):
+        store = _FakeStore()
+        rec = ActivityEventRecorder(store, tenant="shared", source="worker")
+        rec.bind_job_tenant("j1", "recallhub")
+        rec.job_status("j1", "completed")
+        rec.release_job_tenant("j1")
+        rec.emit("job.phase", {"job_id": "j2", "phase": "discovering"})  # an unbound job
+        asyncio.run(rec.flush())
+
+        assert [d["meta"]["tenant"] for d in store.inserted] == ["recallhub", "shared"]
+        assert store.current["shared:worker"]["tenant"] == "shared"
+
+    def test_empty_tenant_keeps_the_default(self):
+        rec = ActivityEventRecorder(_FakeStore(), tenant="quellex", source="api")
+        rec.bind_job_tenant("j1", "")
+        assert rec.tenant_for("j1") == "quellex"
+        assert rec.state()["tenant"] == "quellex"
+
+
+class TestWorkerTenant:
+    def test_default_is_shared_not_the_settings_default(self, monkeypatch):
+        from backend.workers.ingestion_worker import worker_default_tenant
+
+        monkeypatch.delenv("TENANT_ID", raising=False)
+        assert worker_default_tenant() == "shared"
+        monkeypatch.setenv("TENANT_ID", " quellex ")
+        assert worker_default_tenant() == "quellex"
+
+    def test_job_tenant_prefers_the_recorded_tenant(self, monkeypatch):
+        from backend.workers.ingestion_worker import job_tenant
+
+        monkeypatch.delenv("TENANT_ID", raising=False)
+        assert job_tenant({"job_id": "j", "tenant": "quellex"}) == "quellex"
+        assert job_tenant({"job_id": "j", "tenant": "  "}) == "shared"
+        assert job_tenant({"job_id": "j"}) == "shared"
+
+    def test_api_records_its_tenant_on_saved_jobs(self, monkeypatch):
+        from backend.core.config import settings
+        from backend.routers import ingestion
+
+        saved: list[dict[str, Any]] = []
+
+        class _Jobs:
+            async def replace_one(self, _filter, doc, upsert=False):
+                saved.append(doc)
+
+        db = SimpleNamespace(db={ingestion.INGESTION_JOBS_COLLECTION: _Jobs()})
+        monkeypatch.setattr(settings, "tenant_id", "quellex")
+        asyncio.run(ingestion.save_job_to_db(db, {"job_id": "j1", "status": "RUNNING"}))
+        asyncio.run(ingestion.save_job_to_db(db, {"job_id": "j2", "tenant": "recallhub"}))
+
+        assert [(d["_id"], d["tenant"]) for d in saved] == [("j1", "quellex"), ("j2", "recallhub")]
+
+
 # ── instrumented code paths ──────────────────────────────────────────────────
 
 

@@ -11,6 +11,7 @@ from backend.agent.strategy.models import (
     StrategyRunState,
 )
 from backend.agent.strategy.nodes.base import NodeExecutor
+from backend.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,8 @@ class BusinessContextNodeExecutor(NodeExecutor):
         # Ensure we have a resolver
         resolver = self.resolver
         if resolver is None:
-            tenant_id: str = node.config.get("tenant_id", "recallhub")
+            # The running backend's tenant, not RecallHub's (whose policy allows web and cross-profile sources)
+            tenant_id: str = node.config.get("tenant_id") or settings.tenant_id
             config_path: str = node.config.get("config_path", "backend/config")
             resolver = BusinessContextResolver(tenant_id=tenant_id, config_path=config_path)
 

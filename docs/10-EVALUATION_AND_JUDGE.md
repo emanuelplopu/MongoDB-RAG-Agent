@@ -220,7 +220,9 @@ The router takes care of auth (admin-only by default) and rate limiting.
 
 ## 10. CLI (`quellexctl eval ...`, `quellexctl experiment ...`)
 
-`backend/cli/eval_commands.py` exposes the evaluation surface as Typer commands:
+`backend/cli/eval_commands.py` exposes the evaluation surface as Typer commands. Every
+`quellexctl` `--tenant` option defaults to the `TENANT_ID` environment variable (like the
+backends), and to `recallhub` only when that is unset:
 
 | Command | Purpose |
 |---|---|

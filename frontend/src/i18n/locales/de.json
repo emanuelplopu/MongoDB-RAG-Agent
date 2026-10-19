@@ -1901,6 +1901,7 @@
     "cores": "Kerne",
     "ingesting": "Import",
     "chatActive": "Chat aktiv",
+    "sharedTenant": "Gemeinsamer Worker",
     "sourceHost": "Host",
     "sourceHostTooltip": "Vom RecallHub-Host-Agent auf dem Windows-Host gemessen.",
     "sourceContainer": "VM-Sicht",
