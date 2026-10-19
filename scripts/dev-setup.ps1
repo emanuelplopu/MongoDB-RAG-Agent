@@ -113,6 +113,15 @@ if (-not (Test-Path $envFile)) {
     Write-Host "  [OK] .env already exists" -ForegroundColor Green
 }
 
+# Login token signing keys: the compose backends refuse to start without them.
+# Existing keys are kept; only missing ones are generated (values never shown).
+if (Test-Path $envFile) {
+    Import-Module (Join-Path $RepoRoot "installer\scripts\RecallHub-Secrets.psm1") -Force
+    foreach ($r in @(Initialize-JwtSecrets -EnvPath $envFile)) {
+        Write-Host "  [OK] $($r.Name): $($r.Action.ToLower())" -ForegroundColor Green
+    }
+}
+
 # ------------------------------------------------------------------
 # Step 3: Build Docker images
 # ------------------------------------------------------------------

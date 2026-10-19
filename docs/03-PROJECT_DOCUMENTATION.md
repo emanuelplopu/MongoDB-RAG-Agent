@@ -1331,8 +1331,11 @@ OPENAI_API_KEY=sk-...
 GOOGLE_API_KEY=...
 ANTHROPIC_API_KEY=sk-ant-...
 
-# JWT Secret (change in production!)
-JWT_SECRET_KEY=your-secret-key-here
+# Login token signing keys, one per tenant (docker-compose.yml passes them as
+# JWT_SECRET_KEY; the backends refuse to start without them). Generate with:
+#   python -c "import secrets; print(secrets.token_hex(32))"
+RECALLHUB_JWT_SECRET_KEY=
+QUELLEX_JWT_SECRET_KEY=
 ```
 
 ### 13.2 Optional Variables

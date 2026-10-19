@@ -120,6 +120,10 @@ Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: st
 ; Post-installation tasks (output captured to log files under {commonappdata}
 ; so the same paths resolve identically whether running elevated or as the
 ; user, and so the tray app can read its own logs at runtime).
+; Login token signing key: generated once into {app}\secrets.env, which [Files]
+; never ships, so upgrades keep it (the backend refuses to start without it).
+; First step, so it also creates the log folder the later steps redirect into.
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""New-Item -ItemType Directory -Force -Path '{commonappdata}\RecallHub\logs' | Out-Null; & '{app}\scripts\Initialize-JwtSecrets.ps1' -InstallPath '{app}' -Hardened *> '{commonappdata}\RecallHub\logs\initialize-secrets-run.log'""" ; StatusMsg: "Generating the login signing key..."; Description: "Generate the login signing key"; Flags: runhidden waituntilterminated
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Configure-Firewall.ps1' *> '{commonappdata}\RecallHub\logs\configure-firewall-run.log'""" ; StatusMsg: "Configuring firewall..."; Description: "Configure firewall rules"; Flags: runhidden waituntilterminated
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Load-Images.ps1' *> '{commonappdata}\RecallHub\logs\load-images-run.log'""" ; StatusMsg: "Loading Docker images..."; Description: "Load bundled Docker images"; Flags: runhidden waituntilterminated
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\Import-OllamaModels.ps1' *> '{commonappdata}\RecallHub\logs\import-models-run.log'""" ; StatusMsg: "Importing Ollama models..."; Description: "Import bundled Ollama models"; Flags: runhidden waituntilterminated
@@ -144,6 +148,7 @@ Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\s
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\logs"
+Type: files; Name: "{app}\secrets.env"
 Type: files; Name: "{commonappdata}\RecallHub\window-state.json"
 Type: files; Name: "{userdesktop}\{#MyAppName}.lnk"
 Type: dirifempty; Name: "{app}"

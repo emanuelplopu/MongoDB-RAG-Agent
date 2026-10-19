@@ -1,7 +1,6 @@
 """Authentication router - User registration, login, JWT management, and API keys."""
 
 import logging
-import os
 import uuid
 import secrets
 import hashlib
@@ -14,6 +13,9 @@ from pydantic import BaseModel, Field, EmailStr
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 import bcrypt
+
+from backend.core.config import settings
+from backend.core.security import get_jwt_secret
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +37,12 @@ def _bcrypt_verify(password: str, hashed: str) -> bool:
 # Fallback CryptContext (used if bcrypt direct fails)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# JWT settings
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "recallhub-secret-key-change-in-production")
+# JWT settings. The signing key is per tenant (JWT_SECRET_KEY, see
+# backend.core.security.validate_jwt_secret); there is no built-in fallback.
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24 * 7  # 7 days
+#: Claim naming the tenant (TENANT_ID) that issued a login token.
+TENANT_CLAIM = "tid"
 
 # Security scheme
 security = HTTPBearer(auto_error=False)
@@ -193,12 +197,46 @@ def get_password_hash(password: str) -> str:
     return _bcrypt_hash(password)
 
 
+def _token_tenant() -> str:
+    """Return the tenant id this backend issues and accepts login tokens for."""
+    return (settings.tenant_id or "").strip().lower()
+
+
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Create JWT access token."""
+    """Create a JWT access token for this backend's tenant.
+
+    The token carries ``tid`` (``TENANT_CLAIM``) so a backend of another tenant
+    rejects it even when both run with the same signing key.
+    """
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS))
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    to_encode.update({"exp": expire, TENANT_CLAIM: _token_tenant()})
+    return jwt.encode(to_encode, get_jwt_secret(), algorithm=ALGORITHM)
+
+
+def decode_access_token(token: str) -> Optional[dict]:
+    """Return the claims of a valid login token issued by this tenant.
+
+    Args:
+        token: The bearer token as sent by the client.
+
+    Returns:
+        The claims, or None when the signature or expiry is invalid or when
+        ``tid`` is missing (tokens from before tenant claims) or names another
+        tenant.
+    """
+    try:
+        claims = jwt.decode(token, get_jwt_secret(), algorithms=[ALGORITHM])
+    except JWTError:
+        return None
+    if claims.get(TENANT_CLAIM) != _token_tenant():
+        logger.debug(
+            "Rejected a login token for tenant %r (this backend serves %r)",
+            claims.get(TENANT_CLAIM),
+            _token_tenant(),
+        )
+        return None
+    return claims
 
 
 def generate_api_key() -> str:
@@ -263,13 +301,11 @@ async def get_current_user(
             
             user_id = api_key_doc["user_id"]
     
-    # Try JWT token
+    # Try JWT token (signature, expiry and tenant claim)
     if not user_id and credentials:
-        try:
-            payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-            user_id = payload.get("sub")
-        except JWTError:
-            pass
+        claims = decode_access_token(credentials.credentials)
+        if claims:
+            user_id = claims.get("sub")
     
     if not user_id:
         return None

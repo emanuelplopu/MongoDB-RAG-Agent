@@ -52,7 +52,8 @@ from backend.core.auth_middleware import RequireAuthMiddleware, extract_bearer_c
 from backend.core.security import (
     RateLimitMiddleware,
     SecurityHeadersMiddleware,
-    validate_jwt_secret,
+    InsecureJwtSecretError,
+    get_jwt_secret,
     get_docs_urls,
 )
 
@@ -79,15 +80,6 @@ try:
 except RuntimeError:
     # Event loop not running yet, will be configured later
     pass
-
-# Validate JWT secret on startup
-try:
-    _jwt_secret = validate_jwt_secret()
-    logger.info("JWT secret key validated")
-except ValueError as e:
-    logger.critical(f"Security configuration error: {e}")
-    # Don't raise here - let the app start but log the critical issue
-    # In production, this will be caught by health checks
 
 
 # Request timeout middleware to prevent blocking requests
@@ -177,7 +169,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     """Application lifespan manager - startup and shutdown."""
     # Startup
     logger.info("Starting RecallHub API...")
-    
+
+    # Login tokens must be signed with this tenant's own key. Where a key is
+    # required (JWT_SECRET_REQUIRED / APP_ENV=production) a missing or public
+    # key aborts startup instead of serving forgeable sessions.
+    try:
+        get_jwt_secret()
+    except InsecureJwtSecretError as e:
+        logger.critical(f"Security configuration error: {e}")
+        raise
+    logger.info("JWT signing key validated")
+
     # Initialize database connection
     db_manager = DatabaseManager()
     await db_manager.connect()
@@ -687,15 +689,15 @@ def _is_admin_request(request: Request) -> bool:
             return False
         
         token = auth_header[7:]  # Remove "Bearer " prefix
-        from jose import jwt
-        import os
-        secret_key = os.getenv("JWT_SECRET_KEY", "recallhub-secret-key-change-in-production")
-        payload = jwt.decode(token, secret_key, algorithms=["HS256"])
-        
+        # Same signing key and tenant check as every authenticated request
+        payload = auth.decode_access_token(token)
+        if not payload:
+            return False
+
         # Look up user in database to check admin status
         # For performance, we just check if request came with valid token
         # The actual admin check happens in the error response handling
-        return payload.get("is_admin", False)
+        return bool(payload.get("is_admin", False))
     except Exception:
         return False
 

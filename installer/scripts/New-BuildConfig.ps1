@@ -147,6 +147,9 @@ services:
     container_name: $($Config.containers.backend)
     env_file:
       - ./.env
+      # JWT_SECRET_KEY, generated once per install by scripts\Initialize-JwtSecrets.ps1
+      # (setup.iss); never shipped, so upgrades that replace .env keep it.
+      - ./secrets.env
     volumes:
       - documents_data:/app/documents:ro
       - projects_data:/app/projects:ro
@@ -252,6 +255,9 @@ APP_LOG_LEVEL=$($Config.security.logLevel)
 VERSION=$($Config.app.version)
 
 # Security Settings
+# The login token signing key (JWT_SECRET_KEY) is NOT in this file: it is
+# generated per install into secrets.env (scripts\Initialize-JwtSecrets.ps1).
+JWT_SECRET_REQUIRED=true
 EXPOSE_API_DOCS=$exposeApiDocs
 ENABLE_DEBUG_ROUTES=$enableDebugRoutes
 BIND_HOST=$($Config.security.bindHost)

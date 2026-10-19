@@ -10,6 +10,8 @@
     2. Restores Test_Data to a configurable path
     3. Copies source code to the install location
     4. Updates docker-compose.override.yml with new path mappings
+       and keeps the install's login signing keys in .env (generates them on
+       a first install; packages carry none)
     5. Restores ALL MongoDB databases from the dump
     6. Loads or rebuilds Docker images
     7. Starts all services and verifies health
@@ -215,6 +217,23 @@ if (Test-Path $sourceDir) {
     Write-OK "Source code present"
 } else {
     Write-Warn "Source code directory not found"
+}
+
+# Login token signing keys belong to this install, not to the package (packages
+# carry none, see full-backup.ps1). Capture the install's own keys now, before
+# Steps 5 and 6 overwrite its .env, and put them back after Step 6.
+$secretsModule = @(
+    (Join-Path $PSScriptRoot "..\installer\scripts\RecallHub-Secrets.psm1"),
+    (Join-Path $sourceDir "installer\scripts\RecallHub-Secrets.psm1")
+) | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $secretsModule) {
+    Write-Err "installer\scripts\RecallHub-Secrets.psm1 not found - cannot set up the login signing keys"
+    exit 1
+}
+Import-Module $secretsModule -Force
+$preservedJwtSecrets = Get-JwtSecrets -EnvPath (Join-Path $InstallPath ".env")
+if ($preservedJwtSecrets.Count -gt 0) {
+    Write-Info "Keeping this install's login signing keys: $(@($preservedJwtSecrets.Keys | Sort-Object) -join ', ')"
 }
 
 # Step 4: Restore Test_Data
@@ -481,6 +500,18 @@ if (Test-Path $envFile) {
     }
     Set-Content $envFile $envContent -Encoding UTF8
     Write-OK "Updated .env for tenant: $Tenant (ACTIVE_PROFILE=$($config['ACTIVE_PROFILE']), MONGODB_DATABASE=$($config['MONGODB_DATABASE']))"
+}
+
+# Login token signing keys (docker-compose.yml passes them to the backends as
+# JWT_SECRET_KEY; the backends refuse to start without them): this install's
+# keys from before the restore, else valid ones in .env, else new ones.
+try {
+    foreach ($r in @(Initialize-JwtSecrets -EnvPath $envFile -Preserve $preservedJwtSecrets)) {
+        Write-OK "$($r.Name): $($r.Action.ToLower())"
+    }
+} catch {
+    Write-Err "Could not write the login signing keys to ${envFile}: $($_.Exception.Message)"
+    exit 1
 }
 
 # Update profiles.yaml active_profile

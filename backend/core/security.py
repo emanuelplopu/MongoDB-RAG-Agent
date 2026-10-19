@@ -3,7 +3,7 @@
 This module provides:
 - Rate limiting for authentication endpoints
 - Security headers middleware
-- JWT secret validation
+- JWT signing key validation (refuses public or missing keys where required)
 - Registration control
 """
 
@@ -280,43 +280,101 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 # JWT Secret Validation
 # ============================================
 
-def validate_jwt_secret() -> str:
-    """Validate and return the JWT secret key.
-    
-    Raises:
-        ValueError: If secret is missing or insecure in production
+#: Signing keys that are public and must never sign a login token: the fallback
+#: that releases before 2026-10 used (it is in the public repository).
+PUBLIC_JWT_SECRETS: frozenset[str] = frozenset({"recallhub-secret-key-change-in-production"})
+
+#: Shortest accepted signing key. The installers generate 64 hex characters.
+MIN_JWT_SECRET_LENGTH = 32
+
+
+class InsecureJwtSecretError(ValueError):
+    """The JWT signing key is missing, public or too short where one is required."""
+
+
+def jwt_secret_required() -> bool:
+    """Return True when the API must not run without a signing key of its own.
+
+    That is the case for ``APP_ENV=production`` and whenever
+    ``JWT_SECRET_REQUIRED`` is true; docker-compose.yml sets the latter for both
+    tenant backends.
     """
-    secret = os.getenv("JWT_SECRET_KEY", "")
-    default_secret = "recallhub-secret-key-change-in-production"
-    is_production = os.getenv("APP_ENV", "development").lower() == "production"
-    
-    # Check if using default/empty secret
-    if not secret or secret == default_secret:
-        if is_production:
+    if os.getenv("APP_ENV", "development").strip().lower() == "production":
+        return True
+    return os.getenv("JWT_SECRET_REQUIRED", "false").strip().lower() in ("true", "1", "yes", "on")
+
+
+def validate_jwt_secret() -> str:
+    """Validate and return the JWT signing key from ``JWT_SECRET_KEY``.
+
+    Where a key is required (``jwt_secret_required``), a missing, public or
+    short key raises. Elsewhere (local development, tests) a missing or public
+    key is replaced by a random key for this process, so no token ever verifies
+    against a value published in the repository; such sessions end when the
+    process restarts.
+
+    Returns:
+        The signing key to use.
+
+    Raises:
+        InsecureJwtSecretError: If a key is required and the configured one is
+            missing, public or shorter than ``MIN_JWT_SECRET_LENGTH``.
+    """
+    secret = os.getenv("JWT_SECRET_KEY", "").strip()
+    required = jwt_secret_required()
+    tenant_variable = f"{os.getenv('TENANT_ID', 'recallhub').strip().upper()}_JWT_SECRET_KEY"
+    how_to_fix = (
+        f"Set {tenant_variable} in the install's .env (docker-compose.yml passes it to the "
+        "backend as JWT_SECRET_KEY; installer/scripts/Initialize-JwtSecrets.ps1 generates it, "
+        "-Hardened writes secrets.env of the hardened installer) and recreate the backend "
+        "container. By hand: python -c \"import secrets; print(secrets.token_hex(32))\""
+    )
+
+    if not secret or secret in PUBLIC_JWT_SECRETS:
+        if required:
             logger.critical(
-                "SECURITY ALERT: JWT_SECRET_KEY is not set or using default value! "
-                "This is a critical security vulnerability in production."
+                "SECURITY: JWT_SECRET_KEY is not set or is the public default; "
+                "refusing to sign login tokens with it."
             )
-            raise ValueError(
-                "JWT_SECRET_KEY must be set to a secure value in production. "
-                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            raise InsecureJwtSecretError(
+                f"JWT_SECRET_KEY must be set to a secure value of its own. {how_to_fix}"
             )
-        else:
-            # Development mode - warn but allow
-            logger.warning(
-                "Using default JWT secret key. "
-                "Set JWT_SECRET_KEY environment variable for production."
+        logger.warning(
+            "JWT_SECRET_KEY is not set or is the public default: signing login tokens with a "
+            "random key for this process, so sessions end when the API restarts. %s",
+            how_to_fix,
+        )
+        return generate_secure_secret()
+
+    if len(secret) < MIN_JWT_SECRET_LENGTH:
+        if required:
+            raise InsecureJwtSecretError(
+                f"JWT_SECRET_KEY must be at least {MIN_JWT_SECRET_LENGTH} characters long. {how_to_fix}"
             )
-            return default_secret
-    
-    # Validate secret strength
-    if len(secret) < 32:
-        if is_production:
-            raise ValueError("JWT_SECRET_KEY must be at least 32 characters long")
-        else:
-            logger.warning("JWT_SECRET_KEY is shorter than recommended (32+ chars)")
-    
+        logger.warning("JWT_SECRET_KEY is shorter than recommended (%d+ chars)", MIN_JWT_SECRET_LENGTH)
+
     return secret
+
+
+_jwt_secret: Optional[str] = None
+
+
+def get_jwt_secret() -> str:
+    """Return this process's JWT signing key, validating it on first use.
+
+    Raises:
+        InsecureJwtSecretError: See ``validate_jwt_secret``.
+    """
+    global _jwt_secret
+    if _jwt_secret is None:
+        _jwt_secret = validate_jwt_secret()
+    return _jwt_secret
+
+
+def reset_jwt_secret() -> None:
+    """Forget the cached signing key so the next use re-reads ``JWT_SECRET_KEY`` (tests)."""
+    global _jwt_secret
+    _jwt_secret = None
 
 
 def generate_secure_secret() -> str:
