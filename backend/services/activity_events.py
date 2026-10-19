@@ -19,6 +19,11 @@ Event kinds:
 ``refresh_interval`` seconds while a job or chat is active so the Windows host agent sees it as
 fresh and stamps it onto its samples.
 
+Tenants: an API process records everything under its own tenant. The ingestion worker is shared
+by every tenant on the host, so its recorder runs under :data:`~backend.services.telemetry_store.SHARED_TENANT`
+(or the worker's ``TENANT_ID``) and :meth:`ActivityEventRecorder.bind_job_tenant` attributes a
+job's events, and the live state while it runs, to the tenant recorded on the job.
+
 Events hold internal file paths (same sensitivity as the indexed documents; TTL-limited).
 """
 
@@ -61,7 +66,8 @@ class ActivityEventRecorder:
 
     Args:
         store: A :class:`~backend.services.telemetry_store.TelemetryStore`.
-        tenant: Tenant id of this process (``settings.tenant_id``).
+        tenant: Tenant id of this process (``settings.tenant_id``), or ``"shared"`` for the
+            ingestion worker; events of a job bound with :meth:`bind_job_tenant` use the job's.
         source: ``"api"`` or ``"worker"``.
         host: Host name recorded in ``activity_current`` (defaults to this machine).
         flush_interval: Seconds between flushes.
@@ -94,6 +100,7 @@ class ActivityEventRecorder:
         self._lock = threading.Lock()
         self._state: dict[str, Any] = {"tenant": tenant, "source": source, "host": host or socket.gethostname(),
                                        **{f: None for f in _JOB_STATE_FIELDS}, "chat_last_active_at": None}
+        self._job_tenants: dict[str, str] = {}
         self._dirty = True
         self._last_state_write = 0.0
         self._dropped = 0
@@ -104,6 +111,36 @@ class ActivityEventRecorder:
     def key(self) -> str:
         """``activity_current`` document id of this process."""
         return self._key
+
+    @property
+    def tenant(self) -> str:
+        """Default tenant of this process's events."""
+        return self._tenant
+
+    def bind_job_tenant(self, job_id: str, tenant: Optional[str]) -> None:
+        """Attribute the events of ``job_id`` (and the live state while it runs) to ``tenant``.
+
+        Args:
+            job_id: Ingestion job id.
+            tenant: The job's tenant; empty keeps this process's default tenant.
+        """
+        if not job_id or not tenant:
+            return
+        with self._lock:
+            self._job_tenants[job_id] = tenant
+        self._update_state({"tenant": tenant})
+
+    def release_job_tenant(self, job_id: str) -> None:
+        """Forget the tenant of a finished job and report the process's own tenant again."""
+        with self._lock:
+            self._job_tenants.pop(job_id, None)
+        self._update_state({"tenant": self._tenant})
+
+    def tenant_for(self, job_id: Optional[str]) -> str:
+        """Tenant label of an event of ``job_id`` (or of the running job when it has no id)."""
+        with self._lock:
+            key = job_id or self._state.get("job_id")
+            return self._job_tenants.get(key, self._tenant) if key else self._tenant
 
     @property
     def dropped(self) -> int:
@@ -131,7 +168,8 @@ class ActivityEventRecorder:
                 return
             job_id = fields.pop("job_id", None)
             now = _utcnow()
-            doc = {"ts": now, "meta": {"kind": kind, "source": self._source, "tenant": self._tenant, "job_id": job_id}, **fields}
+            meta = {"kind": kind, "source": self._source, "tenant": self.tenant_for(job_id), "job_id": job_id}
+            doc = {"ts": now, "meta": meta, **fields}
             with self._lock:
                 if len(self._queue) >= self._max_queue:
                     self._queue.popleft()

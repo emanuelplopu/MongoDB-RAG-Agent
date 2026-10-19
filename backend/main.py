@@ -316,7 +316,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
             from backend.services.activity_events import ActivityEventRecorder, set_activity_recorder
 
-            telemetry_store = TelemetryStore.from_settings(settings)
+            # Host metrics are machine-wide; activity reads are scoped to this tenant (+ shared)
+            telemetry_store = TelemetryStore.from_settings(settings, tenant_scope=settings.tenant_id)
             await telemetry_store.ensure_collections()
             app.state.telemetry_store = telemetry_store
             activity_recorder = ActivityEventRecorder(telemetry_store, tenant=settings.tenant_id, source="api")

@@ -39,6 +39,7 @@ import psutil
 from backend.core.config import settings
 from backend.evaluation.synthetic_corpus.resources import GpuProbe, HostProbe
 from backend.models.schemas import HostActivityState, HostContainerStat, HostStatsResponse, HostStatsSources
+from backend.services.telemetry_store import tenant_visible
 
 logger = logging.getLogger(__name__)
 
@@ -336,12 +337,16 @@ def _primary_disk(sample: dict[str, Any]) -> dict[str, Any]:
     return disks[0] if disks else {}
 
 
-def response_from_agent_sample(sample: dict[str, Any], *, now: Optional[datetime] = None) -> HostStatsResponse:
+def response_from_agent_sample(
+    sample: dict[str, Any], *, now: Optional[datetime] = None, tenant: Optional[str] = None
+) -> HostStatsResponse:
     """Map one ``host_samples`` document (written by the host agent) to the widget response.
 
     Args:
         sample: A host-agent sample (layout documented in docs/12-TELEMETRY_SYSTEM.md).
         now: Reference time for the sample age (defaults to UTC now).
+        tenant: Reader's tenant. The machine figures are host-wide, but the stamped activity
+            (job, phase, current file) of other tenants is left out; ``None`` keeps all of it.
 
     Returns:
         A :class:`HostStatsResponse` with ``source="host-agent"``.
@@ -375,7 +380,7 @@ def response_from_agent_sample(sample: dict[str, Any], *, now: Optional[datetime
     activity = [
         HostActivityState(**{k: a.get(k) for k in HostActivityState.model_fields if k in a})
         for a in (sample.get("activity") or [])
-        if isinstance(a, dict)
+        if isinstance(a, dict) and tenant_visible(a.get("tenant"), tenant)
     ]
 
     cpu_temp = _num(temp.get("cpu_pkg_c"))
@@ -441,5 +446,5 @@ async def collect_host_stats(store: Optional[Any] = None) -> HostStatsResponse:
             logger.debug("host-agent sample read failed, using container view: %s", exc)
             sample = None
         if sample:
-            return response_from_agent_sample(sample)
+            return response_from_agent_sample(sample, tenant=getattr(store, "tenant_scope", None))
     return await get_host_stats_sampler().get_stats()

@@ -283,7 +283,7 @@ export default function HostStatsWidget() {
             <MetricRow
               key={`${a.tenant}:${a.source}`}
               icon={a.job_id ? ArrowPathIcon : ChatBubbleLeftRightIcon}
-              label={a.tenant ?? t('hostStats.activity')}
+              label={a.tenant === 'shared' ? t('hostStats.sharedTenant') : (a.tenant ?? t('hostStats.activity'))}
               value={label}
               title={a.current_file ?? undefined}
             />

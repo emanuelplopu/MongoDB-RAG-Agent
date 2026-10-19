@@ -14,8 +14,10 @@ import pytest
 from backend.services.telemetry_store import (
     ACTIVITY_EVENTS,
     HOST_SAMPLES,
+    SHARED_TENANT,
     TelemetryStore,
     choose_bucket_seconds,
+    tenant_visible,
 )
 
 
@@ -137,3 +139,81 @@ class TestEnsureCollections:
         assert all(name != HOST_SAMPLES for name, _ in db.created)
         assert not any(cmd[0] == "collMod" and cmd[1] == HOST_SAMPLES for cmd in db.commands)
         assert "not a time-series collection" in caplog.text
+
+
+class _QueryCursor(_Cursor):
+    def sort(self, *_args, **_kwargs):
+        return self
+
+    def limit(self, _n):
+        return self
+
+    async def to_list(self, length=None):
+        return list(self._docs)
+
+
+class _QueryCollection:
+    """Records the filters and pipelines the store sends to ``activity_events``."""
+
+    def __init__(self):
+        self.queries: list[dict[str, Any]] = []
+        self.pipelines: list[list[dict[str, Any]]] = []
+
+    def find(self, query, projection=None):
+        self.queries.append(query)
+        return _QueryCursor([])
+
+    async def aggregate(self, pipeline):
+        self.pipelines.append(pipeline)
+        return _QueryCursor([])
+
+
+def _scoped_store(scope: str | None) -> tuple[TelemetryStore, _QueryCollection]:
+    db = _Database()
+    events = _QueryCollection()
+    db.collections[ACTIVITY_EVENTS] = events
+    store = TelemetryStore(_Client(db), "recallhub_telemetry", host_samples_ttl_seconds=86400,
+                           activity_events_ttl_seconds=86400, owns_client=False, tenant_scope=scope)
+    return store, events
+
+
+class TestTenantScope:
+    """Activity holds tenant data; a scoped store reads only its tenant's and shared activity."""
+
+    @pytest.mark.asyncio
+    async def test_unscoped_store_reads_every_tenant(self):
+        store, events = _scoped_store(None)
+        await store.events(kinds=["file.end"])
+        await store.aggregate_events([{"$match": {"meta.kind": "file.end"}}])
+
+        assert "meta.tenant" not in events.queries[0]
+        assert events.pipelines[0] == [{"$match": {"meta.kind": "file.end"}}]
+
+    @pytest.mark.asyncio
+    async def test_scoped_find_cannot_be_widened_by_a_caller_filter(self):
+        store, events = _scoped_store("quellex")
+        await store.events(job_id="j1", extra_filter={"meta.tenant": "recallhub"})
+
+        assert events.queries[0]["meta.tenant"] == {"$in": ["quellex", SHARED_TENANT]}
+        assert events.queries[0]["meta.job_id"] == "j1"
+
+    @pytest.mark.asyncio
+    async def test_scoped_aggregations_start_with_the_tenant_match(self):
+        store, events = _scoped_store("quellex")
+        now = datetime.now(timezone.utc)
+        await store.aggregate_events([{"$group": {"_id": None}}])
+        await store.recent_jobs(now - timedelta(hours=1), now)
+
+        scope = {"$match": {"meta.tenant": {"$in": ["quellex", SHARED_TENANT]}}}
+        assert events.pipelines[0] == [scope, {"$group": {"_id": None}}]
+        assert events.pipelines[1][0] == scope  # job lists and reports inherit the scope
+
+    @pytest.mark.parametrize("tenant, scope, visible", [
+        ("quellex", "quellex", True),
+        (SHARED_TENANT, "quellex", True),
+        ("recallhub", "quellex", False),
+        (None, "quellex", False),
+        ("recallhub", None, True),
+    ])
+    def test_tenant_visible(self, tenant, scope, visible):
+        assert tenant_visible(tenant, scope) is visible

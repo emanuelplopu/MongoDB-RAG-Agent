@@ -12,6 +12,7 @@ section "Host Telemetry History".
 ```powershell
 dotnet run -- --once                     # one sample as JSON, nothing written
 dotnet run -- --dry-run                  # every sample as JSON, nothing written
+dotnet run -- --sensors                  # (elevated) every LibreHardwareMonitor sensor + derived temperatures, nothing written
 dotnet test ..\host-agent.Tests          # unit tests (+ MongoDB round trip with RECALLHUB_TEST_MONGO_URI)
 dotnet publish -c Release                # self-contained single file in bin\Release\...\publish
 ..\scripts\Install-HostAgent.ps1 [-EnableHardwareSensors -InstallPawnIO] [-Mode Task]
@@ -26,5 +27,6 @@ dotnet publish -c Release                # self-contained single file in bin\Rel
 | `Probes/NvidiaSmiProbe.cs` | GPU via `nvidia-smi` (field-set detection, throttle reasons) |
 | `Probes/DockerProbe.cs` | per-container CPU cores, memory, I/O, restarts, health (Engine API over a named pipe) |
 | `Probes/HttpProbes.cs` | Ollama `/api/ps`, backend `/health` latency |
-| `Probes/HardwareSensors.cs` | LibreHardwareMonitor + PawnIO temperatures and fans (opt-in) |
+| `Probes/HardwareSensors.cs` | LibreHardwareMonitor + PawnIO temperatures and fans (opt-in); drive temperature selection |
+| `Probes/SensorDiagnostics.cs` | `--sensors`: lists every sensor (name, type, value) and marks which drive temperatures are used |
 | `Storage/MongoStorage.cs` | time-series collection creation, buffered writes, `activity_current` reader |

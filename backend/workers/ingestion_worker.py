@@ -24,11 +24,12 @@ from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 from dotenv import load_dotenv
 
 from backend.core.ingestion_jobs import (
-    FILES_STARTED_FIELD, RUNNER_WORKER, WORKER_OWNED, reached_files, resume_config
+    FILES_STARTED_FIELD, RUNNER_WORKER, TENANT_FIELD, WORKER_OWNED, reached_files, resume_config
 )
 from backend.services.activity_events import (
     ActivityEventRecorder, get_activity_recorder, set_activity_recorder
 )
+from backend.services.telemetry_store import SHARED_TENANT
 from src.ingestion import telemetry_hooks
 
 # Import backup service for post-ingestion backups
@@ -55,6 +56,31 @@ INGESTION_CONFIG_COLLECTION = "ingestion_config"
 
 # How often a paused job re-checks for RESUME/STOP commands and shutdown
 _PAUSE_POLL_SECONDS: float = 1.0
+
+
+def worker_default_tenant() -> str:
+    """Tenant label of the worker's own (not job-bound) telemetry.
+
+    The one ingestion-worker container serves every tenant's jobs, so unlike a backend it has
+    no tenant of its own.
+
+    Returns:
+        ``TENANT_ID`` when the deployment pins the worker to one tenant, else ``"shared"``.
+        The settings default (``recallhub``) is deliberately not used: it mislabelled Quellex
+        activity on Quellex-only hosts.
+    """
+    return os.getenv("TENANT_ID", "").strip() or SHARED_TENANT
+
+
+def job_tenant(job: Dict[str, Any]) -> str:
+    """Tenant a job belongs to: the ``tenant`` its creator recorded, else the worker's default.
+
+    Args:
+        job: The claimed ``ingestion_jobs`` document.
+    """
+    tenant = job.get(TENANT_FIELD)
+    return tenant.strip() if isinstance(tenant, str) and tenant.strip() else worker_default_tenant()
+
 
 # Status constants (matching backend schemas)
 class IngestionStatus:
@@ -153,9 +179,7 @@ class IngestionWorker:
 
             self._telemetry_store = TelemetryStore.from_settings(settings)
             await self._telemetry_store.ensure_collections()
-            recorder = ActivityEventRecorder(
-                self._telemetry_store, tenant=os.getenv("TENANT_ID", settings.tenant_id), source="worker"
-            )
+            recorder = ActivityEventRecorder(self._telemetry_store, tenant=worker_default_tenant(), source="worker")
             await recorder.start()
             set_activity_recorder(recorder)
             logger.info(f"Telemetry history enabled ({recorder.key})")
@@ -397,7 +421,11 @@ class IngestionWorker:
         )
 
         # Per-file pipeline events of this job carry its id (inherited by the pipeline's tasks)
+        # and, since this worker serves every tenant, the tenant recorded on the job
         telemetry_token = telemetry_hooks.bind_job(job_id)
+        recorder = get_activity_recorder()
+        if recorder is not None:
+            recorder.bind_job_tenant(job_id, job_tenant(job))
         self._emit_job(job_id, status="running", resumed=bool(job.get("resumed_at")), profile=config.get("profile"))
         self._emit_job(job_id, phase="initializing")
 
@@ -658,6 +686,8 @@ class IngestionWorker:
         finally:
             self.current_job_id = None
             telemetry_hooks.reset_job(telemetry_token)
+            if recorder is not None:
+                recorder.release_job_tenant(job_id)
             await self._flush_logs()
     
     async def _check_control_command(self, job_id: str) -> Optional[str]:

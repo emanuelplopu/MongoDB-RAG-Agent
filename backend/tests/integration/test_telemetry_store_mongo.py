@@ -118,3 +118,26 @@ async def test_activity_current_upsert(store):
     await store.upsert_activity_current("quellex:api", {"job_id": "j2", "phase": "finalizing"})
     docs = [d async for d in store.db["activity_current"].find({})]
     assert docs == [{"_id": "quellex:api", "job_id": "j2", "phase": "finalizing"}]
+
+
+@pytest.mark.asyncio
+async def test_tenant_scope_reads_own_and_shared_activity_only(store):
+    def event(tenant: str, job: str, seconds: int, kind: str = "file.end") -> dict:
+        fields = {"status": "completed"} if kind == "job.status" else {"outcome": "ok", "file": {"path": f"/app/mounts/{tenant}/{job}.pdf"}}
+        return {"ts": T0 + timedelta(seconds=seconds), "meta": {"kind": kind, "source": "api", "tenant": tenant, "job_id": job}, **fields}
+
+    await store.insert_events([
+        event("quellex", "q1", 1), event("quellex", "q1", 2, "job.status"),
+        event("recallhub", "r1", 3), event("recallhub", "r1", 4, "job.status"),
+        event("shared", "w1", 5),
+    ])
+    quellex = TelemetryStore(store._client, store.database_name, host_samples_ttl_seconds=86400,
+                             activity_events_ttl_seconds=86400, owns_client=False, tenant_scope="quellex")
+    start, end = T0, T0 + timedelta(minutes=1)
+
+    assert {e["meta"]["job_id"] for e in await quellex.events(start=start, end=end)} == {"q1", "w1"}
+    assert await quellex.events(job_id="r1") == []  # another tenant's job is not found at all
+    assert {j["job_id"] for j in await quellex.recent_jobs(start, end)} == {"q1", "w1"}
+    counts = await quellex.aggregate_events([{"$group": {"_id": "$meta.tenant", "n": {"$sum": 1}}}])
+    assert {c["_id"]: c["n"] for c in counts} == {"quellex": 2, "shared": 1}
+    assert len(await store.events(start=start, end=end)) == 5  # the unscoped store (operator tools) sees all

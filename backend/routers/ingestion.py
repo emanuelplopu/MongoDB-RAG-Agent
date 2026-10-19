@@ -19,7 +19,7 @@ from backend.models.schemas import (
 )
 from backend.core.config import settings
 from backend.core.ingestion_jobs import (
-    API_OWNED, INTERRUPTED_STATUS, RUNNER_API, reached_files, resume_config
+    API_OWNED, INTERRUPTED_STATUS, RUNNER_API, TENANT_FIELD, reached_files, resume_config
 )
 from backend.routers.auth import require_admin, UserResponse
 from backend.routers.backup import trigger_post_ingestion_backup
@@ -105,9 +105,9 @@ async def get_jobs_collection(db):
 
 
 async def save_job_to_db(db, job: dict):
-    """Save or update a job in the database."""
+    """Save or update a job in the database, recording the tenant it belongs to."""
     collection = await get_jobs_collection(db)
-    job_doc = {**job, "_id": job["job_id"]}
+    job_doc = {**job, "_id": job["job_id"], TENANT_FIELD: job.get(TENANT_FIELD) or settings.tenant_id}
     await collection.replace_one(
         {"_id": job["job_id"]},
         job_doc,
