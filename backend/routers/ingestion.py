@@ -21,7 +21,7 @@ from backend.core.config import settings
 from backend.core.ingestion_jobs import (
     API_OWNED, INTERRUPTED_STATUS, RUNNER_API, reached_files, resume_config
 )
-from backend.routers.auth import require_admin, UserResponse
+from backend.routers.auth import require_admin, require_admin_stream
 from backend.routers.backup import trigger_post_ingestion_backup
 from backend.services.activity_events import get_activity_recorder
 from backend.services.file_registry import FileRegistryService
@@ -30,6 +30,16 @@ from fastapi import Depends
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+#: Route dependencies for the superadmin-only endpoints. Ingestion is system
+#: configuration: starting, pausing or cleaning runs, deleting documents and
+#: reading job state, logs, failures and analytics (server paths of every
+#: profile; the log buffer captures the root logger, so other users' requests
+#: too) need ``is_admin``. Only the document browsing GETs (``/documents...``)
+#: and the metadata-rebuild status stay open to every caller.
+SUPERADMIN_ONLY = [Depends(require_admin)]
+#: Same rule for the SSE streams, which take the session token from ``?token=``
+SUPERADMIN_ONLY_STREAM = [Depends(require_admin_stream)]
 
 # Collection name for persisted ingestion jobs
 INGESTION_JOBS_COLLECTION = "ingestion_jobs"
@@ -1355,7 +1365,7 @@ async def run_ingestion(
         _is_paused = False
 
 
-@router.post("/start", response_model=IngestionStatusResponse)
+@router.post("/start", response_model=IngestionStatusResponse, dependencies=SUPERADMIN_ONLY)
 async def start_ingestion(
     request_obj: Request,
     request: IngestionStartRequest,
@@ -1413,7 +1423,7 @@ async def start_ingestion(
     return IngestionStatusResponse(**job)
 
 
-@router.get("/status", response_model=IngestionStatusResponse)
+@router.get("/status", response_model=IngestionStatusResponse, dependencies=SUPERADMIN_ONLY)
 async def get_ingestion_status(request: Request):
     """
     Get current ingestion status.
@@ -1504,7 +1514,7 @@ async def get_ingestion_status(request: Request):
     )
 
 
-@router.get("/status/{job_id}", response_model=IngestionStatusResponse)
+@router.get("/status/{job_id}", response_model=IngestionStatusResponse, dependencies=SUPERADMIN_ONLY)
 async def get_job_status(request: Request, job_id: str):
     """Get status of a specific ingestion job."""
     db = request.app.state.db
@@ -1523,7 +1533,7 @@ async def get_job_status(request: Request, job_id: str):
     return IngestionStatusResponse(**response_fields)
 
 
-@router.post("/cancel/{job_id}", response_model=SuccessResponse)
+@router.post("/cancel/{job_id}", response_model=SuccessResponse, dependencies=SUPERADMIN_ONLY)
 async def cancel_ingestion(request: Request, job_id: str):
     """
     Cancel a running ingestion job.
@@ -1558,7 +1568,7 @@ async def cancel_ingestion(request: Request, job_id: str):
     return SuccessResponse(success=True, message="Ingestion cancelled")
 
 
-@router.get("/jobs")
+@router.get("/jobs", dependencies=SUPERADMIN_ONLY)
 async def list_ingestion_jobs(request: Request):
     """List all ingestion jobs."""
     db = request.app.state.db
@@ -1578,7 +1588,7 @@ async def list_ingestion_jobs(request: Request):
     return {"jobs": jobs}
 
 
-@router.get("/runs", response_model=IngestionRunsResponse)
+@router.get("/runs", response_model=IngestionRunsResponse, dependencies=SUPERADMIN_ONLY)
 async def list_ingestion_runs(
     request: Request,
     page: int = 1,
@@ -1662,7 +1672,7 @@ _pending_files_queue: List[dict] = []
 _pending_files_lock = asyncio.Lock()
 
 
-@router.get("/pending-files")
+@router.get("/pending-files", dependencies=SUPERADMIN_ONLY)
 async def get_pending_files(
     request: Request,
     limit: int = 500
@@ -1912,7 +1922,7 @@ async def _run_metadata_rebuild(db):
         logger.error(f"Metadata rebuild failed: {e}", exc_info=True)
 
 
-@router.post("/rebuild-metadata")
+@router.post("/rebuild-metadata", dependencies=SUPERADMIN_ONLY)
 async def start_metadata_rebuild(request: Request):
     """
     Start async metadata rebuild to fix chunks_count for all documents.
@@ -1980,7 +1990,7 @@ async def get_metadata_rebuild_status():
     }
 
 
-@router.delete("/rebuild-metadata")
+@router.delete("/rebuild-metadata", dependencies=SUPERADMIN_ONLY)
 async def cancel_metadata_rebuild():
     """
     Cancel the running metadata rebuild process.
@@ -1997,7 +2007,7 @@ async def cancel_metadata_rebuild():
     return {"success": True, "message": "Rebuild cancellation requested"}
 
 
-@router.post("/pause", response_model=SuccessResponse)
+@router.post("/pause", response_model=SuccessResponse, dependencies=SUPERADMIN_ONLY)
 async def pause_ingestion(request: Request):
     """
     Pause the current ingestion job.
@@ -2025,7 +2035,7 @@ async def pause_ingestion(request: Request):
     return SuccessResponse(success=True, message="Pause requested - will pause after the current document(s)")
 
 
-@router.post("/resume", response_model=SuccessResponse)
+@router.post("/resume", response_model=SuccessResponse, dependencies=SUPERADMIN_ONLY)
 async def resume_ingestion(request: Request):
     """
     Resume a paused ingestion job.
@@ -2052,7 +2062,7 @@ async def resume_ingestion(request: Request):
     return SuccessResponse(success=True, message="Ingestion resumed")
 
 
-@router.post("/stop", response_model=SuccessResponse)
+@router.post("/stop", response_model=SuccessResponse, dependencies=SUPERADMIN_ONLY)
 async def stop_ingestion(request: Request):
     """
     Stop the current ingestion job immediately.
@@ -2090,7 +2100,7 @@ async def stop_ingestion(request: Request):
     return SuccessResponse(success=True, message="Ingestion stopped")
 
 
-@router.get("/logs/stream")
+@router.get("/logs/stream", dependencies=SUPERADMIN_ONLY_STREAM)
 async def stream_logs():
     """
     Stream ingestion logs via Server-Sent Events (SSE).
@@ -2137,7 +2147,7 @@ async def stream_logs():
     )
 
 
-@router.get("/events/stream")
+@router.get("/events/stream", dependencies=SUPERADMIN_ONLY_STREAM)
 async def stream_events():
     """
     Stream structured ingestion events via Server-Sent Events (SSE).
@@ -2223,7 +2233,7 @@ async def stream_events():
     )
 
 
-@router.get("/logs")
+@router.get("/logs", dependencies=SUPERADMIN_ONLY)
 async def get_ingestion_logs(since: int = 0, limit: int = 1000):
     """
     Get ingestion logs.
@@ -2256,7 +2266,7 @@ async def get_ingestion_logs(since: int = 0, limit: int = 1000):
     }
 
 
-@router.delete("/logs")
+@router.delete("/logs", dependencies=SUPERADMIN_ONLY)
 async def clear_logs():
     """Clear all ingestion logs."""
     _ingestion_logs.clear()
@@ -2537,7 +2547,7 @@ async def get_document(request: Request, document_id: str):
     }
 
 
-@router.delete("/documents/{document_id}", response_model=SuccessResponse)
+@router.delete("/documents/{document_id}", response_model=SuccessResponse, dependencies=SUPERADMIN_ONLY)
 async def delete_document(request: Request, document_id: str):
     """Delete a document and its chunks."""
     db = request.app.state.db
@@ -2616,7 +2626,7 @@ def _translate_container_to_host_path(container_path: str) -> str | None:
     return host_path
 
 
-@router.post("/documents/{document_id}/open-explorer")
+@router.post("/documents/{document_id}/open-explorer", dependencies=SUPERADMIN_ONLY)
 async def open_in_explorer(request: Request, document_id: str):
     """
     Open the document's folder in OS file explorer.
@@ -2839,7 +2849,7 @@ async def get_document_full_info(request: Request, document_id: str):
     }
 
 
-@router.post("/setup-indexes", response_model=SuccessResponse)
+@router.post("/setup-indexes", response_model=SuccessResponse, dependencies=SUPERADMIN_ONLY)
 async def setup_indexes(request: Request):
     """
     Setup MongoDB search indexes.
@@ -2861,7 +2871,7 @@ async def setup_indexes(request: Request):
 
 # ===== Failed Documents Endpoints =====
 
-@router.get("/failed-documents")
+@router.get("/failed-documents", dependencies=SUPERADMIN_ONLY)
 async def get_failed_documents(
     request: Request,
     skip: int = 0,
@@ -2906,7 +2916,7 @@ async def get_failed_documents(
     }
 
 
-@router.get("/failed-documents/summary")
+@router.get("/failed-documents/summary", dependencies=SUPERADMIN_ONLY)
 async def get_failed_documents_summary(request: Request):
     """Get summary statistics of failed documents."""
     db = request.app.state.db.db
@@ -2936,7 +2946,7 @@ async def get_failed_documents_summary(request: Request):
     }
 
 
-@router.post("/failed-documents/{doc_id}/resolve")
+@router.post("/failed-documents/{doc_id}/resolve", dependencies=SUPERADMIN_ONLY)
 async def resolve_failed_document(request: Request, doc_id: str):
     """Mark a failed document as resolved (manually handled)."""
     db = request.app.state.db.db
@@ -2952,7 +2962,7 @@ async def resolve_failed_document(request: Request, doc_id: str):
     return {"success": True, "message": "Document marked as resolved"}
 
 
-@router.delete("/failed-documents/{doc_id}")
+@router.delete("/failed-documents/{doc_id}", dependencies=SUPERADMIN_ONLY)
 async def delete_failed_document(request: Request, doc_id: str):
     """Delete a failed document record."""
     db = request.app.state.db.db
@@ -2965,7 +2975,7 @@ async def delete_failed_document(request: Request, doc_id: str):
     return {"success": True, "message": "Failed document record deleted"}
 
 
-@router.delete("/failed-documents")
+@router.delete("/failed-documents", dependencies=SUPERADMIN_ONLY)
 async def clear_failed_documents(
     request: Request,
     resolved_only: bool = True
@@ -2985,7 +2995,7 @@ async def clear_failed_documents(
 
 # ===== Ingestion Analytics Endpoints =====
 
-@router.get("/analytics/overview")
+@router.get("/analytics/overview", dependencies=SUPERADMIN_ONLY)
 async def get_ingestion_analytics_overview(request: Request):
     """Get overview analytics for ingestion."""
     db = request.app.state.db.db
@@ -3040,7 +3050,7 @@ async def get_ingestion_analytics_overview(request: Request):
     }
 
 
-@router.get("/analytics/outliers")
+@router.get("/analytics/outliers", dependencies=SUPERADMIN_ONLY)
 async def get_ingestion_outliers(
     request: Request,
     threshold_std: float = 2.0,
@@ -3096,7 +3106,7 @@ async def get_ingestion_outliers(
     }
 
 
-@router.get("/analytics/by-extension")
+@router.get("/analytics/by-extension", dependencies=SUPERADMIN_ONLY)
 async def get_analytics_by_extension(request: Request):
     """Get processing stats grouped by file extension."""
     db = request.app.state.db.db
@@ -3151,7 +3161,7 @@ async def get_analytics_by_extension(request: Request):
     }
 
 
-@router.get("/analytics/no-chunks")
+@router.get("/analytics/no-chunks", dependencies=SUPERADMIN_ONLY)
 async def get_no_chunks_analytics(request: Request):
     """
     Get detailed analytics for documents that produced no chunks.
@@ -3243,7 +3253,7 @@ async def get_no_chunks_analytics(request: Request):
     }
 
 
-@router.get("/analytics/timeline")
+@router.get("/analytics/timeline", dependencies=SUPERADMIN_ONLY)
 async def get_analytics_timeline(
     request: Request,
     hours: int = 24
@@ -3294,7 +3304,7 @@ async def get_analytics_timeline(
     }
 
 
-@router.delete("/analytics/clear")
+@router.delete("/analytics/clear", dependencies=SUPERADMIN_ONLY)
 async def clear_analytics_data(request: Request, older_than_days: int = 30):
     """Clear old analytics data."""
     db = request.app.state.db.db
@@ -3315,7 +3325,7 @@ async def clear_analytics_data(request: Request, older_than_days: int = 30):
 # JOB HISTORY ENDPOINTS
 # =============================================================================
 
-@router.get("/jobs")
+@router.get("/jobs", dependencies=SUPERADMIN_ONLY)
 async def list_jobs(
     request: Request,
     skip: int = 0,
@@ -3407,7 +3417,7 @@ async def list_jobs(
     }
 
 
-@router.get("/jobs/{job_id}")
+@router.get("/jobs/{job_id}", dependencies=SUPERADMIN_ONLY)
 async def get_job_details(request: Request, job_id: str):
     """
     Get full details for a specific job including all metadata.
@@ -3460,7 +3470,7 @@ async def get_job_details(request: Request, job_id: str):
     }
 
 
-@router.get("/jobs/{job_id}/stats")
+@router.get("/jobs/{job_id}/stats", dependencies=SUPERADMIN_ONLY)
 async def get_job_stats(
     request: Request,
     job_id: str,
@@ -3498,7 +3508,7 @@ async def get_job_stats(
     }
 
 
-@router.get("/jobs/{job_id}/logs")
+@router.get("/jobs/{job_id}/logs", dependencies=SUPERADMIN_ONLY)
 async def get_job_logs(request: Request, job_id: str):
     """
     Get logs for a specific job.
@@ -3515,7 +3525,7 @@ async def get_job_logs(request: Request, job_id: str):
     }
 
 
-@router.get("/jobs/{job_id}/failed")
+@router.get("/jobs/{job_id}/failed", dependencies=SUPERADMIN_ONLY)
 async def get_job_failed_documents(
     request: Request,
     job_id: str,
@@ -3553,7 +3563,7 @@ async def get_job_failed_documents(
     }
 
 
-@router.delete("/jobs/{job_id}")
+@router.delete("/jobs/{job_id}", dependencies=SUPERADMIN_ONLY)
 async def delete_job(request: Request, job_id: str):
     """
     Delete a job and all its related data (stats, failed documents, logs).
@@ -3580,7 +3590,7 @@ async def delete_job(request: Request, job_id: str):
     }
 
 
-@router.get("/jobs/stats/summary")
+@router.get("/jobs/stats/summary", dependencies=SUPERADMIN_ONLY)
 async def get_jobs_summary(request: Request):
     """
     Get overall summary statistics for all jobs.

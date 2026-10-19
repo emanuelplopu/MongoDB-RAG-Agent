@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../contexts/AuthContext'
+import { isSuperAdmin } from '../api/roles'
 import {
   EnvelopeIcon,
   CloudIcon,
@@ -177,6 +178,8 @@ export default function EmailCloudConfigPage() {
   // Get current user from auth context
   const { user } = useAuth()
   const { t } = useTranslation()
+  // Checking and creating databases is superadmin-only on the server (403 otherwise)
+  const canManageDatabases = isSuperAdmin(user)
   
   // Generate user-specific database name from user's name
   const userDatabase = useMemo(() => {
@@ -287,9 +290,6 @@ export default function EmailCloudConfigPage() {
       const profileKey = profileResp.key
       setActiveProfileKey(profileKey)
       
-      // Check the user-specific database status (not profile database)
-      await checkDatabaseStatus(userDatabase)
-      
       // Get cloud sources for profile
       const sourcesResp = await fetchJSON<{ cloud_sources: CloudSourceAssociation[] }>(
         `${API_BASE}/profiles/${profileKey}/cloud-sources`
@@ -299,9 +299,9 @@ export default function EmailCloudConfigPage() {
       // Ignore errors - profile might not have cloud sources
       setConfiguredSources([])
     }
-  }, [userDatabase])
+  }, [])
 
-  const checkDatabaseStatus = async (dbName: string) => {
+  const checkDatabaseStatus = useCallback(async (dbName: string) => {
     setCheckingDatabase(true)
     try {
       const status = await fetchJSON<DatabaseStatus>(`${API_BASE}/system/database/check/${dbName}`)
@@ -311,7 +311,14 @@ export default function EmailCloudConfigPage() {
     } finally {
       setCheckingDatabase(false)
     }
-  }
+  }, [])
+
+  // Check the user-specific database (not the profile database) once the account is known
+  useEffect(() => {
+    if (canManageDatabases) {
+      checkDatabaseStatus(userDatabase)
+    }
+  }, [canManageDatabases, userDatabase, checkDatabaseStatus])
 
   const testMongoConnection = useCallback(async () => {
     setTestingMongo(true)
@@ -355,7 +362,7 @@ export default function EmailCloudConfigPage() {
     } finally {
       setCreatingDatabase(false)
     }
-  }, [userDatabase, showSuccess])
+  }, [userDatabase, showSuccess, checkDatabaseStatus])
 
   const openConfigModal = useCallback((_type: 'email' | 'cloud', provider: EmailProvider | CloudStorageProvider, existingSource?: CloudSourceAssociation) => {
     setSelectedProvider(provider)
@@ -649,17 +656,21 @@ export default function EmailCloudConfigPage() {
               {user?.name && <span className="ml-2">({user.name})</span>}
             </p>
           </div>
-          <button
-            onClick={() => checkDatabaseStatus(userDatabase)}
-            disabled={checkingDatabase}
-            className="text-sm text-primary hover:underline flex items-center gap-1"
-          >
-            {checkingDatabase && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
-            Refresh
-          </button>
+          {canManageDatabases && (
+            <button
+              onClick={() => checkDatabaseStatus(userDatabase)}
+              disabled={checkingDatabase}
+              className="text-sm text-primary hover:underline flex items-center gap-1"
+            >
+              {checkingDatabase && <ArrowPathIcon className="h-4 w-4 animate-spin" />}
+              Refresh
+            </button>
+          )}
         </div>
 
-        {databaseStatus ? (
+        {!canManageDatabases ? (
+          <p className="text-secondary dark:text-gray-400">{t('emailConfigPage.dbAdminOnly')}</p>
+        ) : databaseStatus ? (
           <div className="space-y-4">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="bg-surface-variant dark:bg-gray-700 rounded-lg p-4">

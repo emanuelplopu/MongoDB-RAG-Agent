@@ -703,7 +703,7 @@ async def get_indexes(request: Request):
 
 
 @router.post("/indexes/create")
-async def create_search_indexes(request: Request):
+async def create_search_indexes(request: Request, admin: UserResponse = Depends(require_admin)):
     """
     Create or recreate search indexes.
     
@@ -863,7 +863,7 @@ async def get_info():
 
 
 @router.post("/reload-settings")
-async def reload_settings():
+async def reload_settings(admin: UserResponse = Depends(require_admin)):
     """
     Reload settings from environment.
     
@@ -1502,7 +1502,7 @@ async def get_agent_performance_config(request: Request):
 
 
 @router.post("/agent-performance")
-async def save_agent_performance_config(request: Request, config: AgentPerformanceConfig):
+async def save_agent_performance_config(request: Request, config: AgentPerformanceConfig, admin: UserResponse = Depends(require_admin)):
     """
     Save agent performance configuration to database.
     
@@ -1651,7 +1651,7 @@ async def get_ingestion_performance_config(request: Request):
 
 
 @router.post("/ingestion-performance")
-async def save_ingestion_performance_config(request: Request, config: IngestionPerformanceConfig):
+async def save_ingestion_performance_config(request: Request, config: IngestionPerformanceConfig, admin: UserResponse = Depends(require_admin)):
     """
     Save ingestion performance configuration to database.
     
@@ -1797,7 +1797,7 @@ async def get_ingestion_timeout_config(request: Request):
 
 
 @router.post("/ingestion-timeout-config")
-async def save_ingestion_timeout_config(request: Request, config: TimeoutConfigRequest):
+async def save_ingestion_timeout_config(request: Request, config: TimeoutConfigRequest, admin: UserResponse = Depends(require_admin)):
     """
     Update timeout configuration for file processing.
     
@@ -1882,7 +1882,7 @@ async def get_ingestion_accelerator_config(request: Request):
 
 
 @router.post("/ingestion-accelerator-config")
-async def save_ingestion_accelerator_config(request: Request, config: AcceleratorConfigRequest):
+async def save_ingestion_accelerator_config(request: Request, config: AcceleratorConfigRequest, admin: UserResponse = Depends(require_admin)):
     """
     Update GPU/accelerator configuration for document processing.
     
@@ -2989,7 +2989,7 @@ class DatabaseCreateRequest(BaseModel):
 
 
 @router.get("/database/check/{database_name}")
-async def check_database_exists(request: Request, database_name: str):
+async def check_database_exists(request: Request, database_name: str, admin: UserResponse = Depends(require_admin)):
     """
     Check if a MongoDB database exists and has required collections.
     
@@ -3058,7 +3058,7 @@ async def check_database_exists(request: Request, database_name: str):
 
 
 @router.post("/database/create")
-async def create_database(request: Request, create_request: DatabaseCreateRequest):
+async def create_database(request: Request, create_request: DatabaseCreateRequest, admin: UserResponse = Depends(require_admin)):
     """
     Create a MongoDB database with required RAG collections.
     
@@ -3505,7 +3505,7 @@ async def get_tool_details(tool_id: str):
 
 
 @router.post("/tools/test")
-async def test_agent_tool(request: Request, test_request: ToolTestRequest):
+async def test_agent_tool(request: Request, test_request: ToolTestRequest, admin: UserResponse = Depends(require_admin)):
     """
     Test a specific agent tool with optional parameters.
     
