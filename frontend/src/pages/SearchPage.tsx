@@ -92,7 +92,7 @@ export default function SearchPage() {
               onFocus={() => recentSearches.length > 0 && setShowRecent(true)}
               onBlur={() => setTimeout(() => setShowRecent(false), 200)}
               placeholder={t('search.placeholder')}
-              className="w-full rounded-2xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 py-3 pl-12 pr-4 text-primary-900 dark:text-gray-200 placeholder:text-secondary dark:placeholder:text-gray-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              className="w-full rounded-2xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 py-3 pl-12 pr-4 text-primary-900 dark:text-gray-200 placeholder:text-secondary dark:placeholder:text-gray-500 focus:border-primary focus:outline-hidden focus:ring-2 focus:ring-primary/20"
             />
             
             {/* Recent Searches Dropdown */}
@@ -126,7 +126,7 @@ export default function SearchPage() {
                   onClick={() => setSearchType(type)}
                   className={`rounded-lg px-4 py-2 text-sm font-medium transition-all ${
                     searchType === type
-                      ? 'bg-primary text-white shadow-sm'
+                      ? 'bg-primary text-white shadow-xs'
                       : 'text-secondary dark:text-gray-400 hover:text-primary-700 dark:hover:text-primary-400'
                   }`}
                 >
@@ -141,7 +141,7 @@ export default function SearchPage() {
               <select
                 value={matchCount}
                 onChange={(e) => setMatchCount(Number(e.target.value))}
-                className="rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none"
+                className="rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden"
               >
                 {[5, 10, 20, 50].map((n) => (
                   <option key={n} value={n}>

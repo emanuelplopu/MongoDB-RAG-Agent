@@ -99,7 +99,7 @@ export default function DeveloperDocsPage() {
   return (
     <div className="min-h-screen bg-background dark:bg-gray-900">
       {/* Header */}
-      <div className="bg-surface dark:bg-gray-800 shadow">
+      <div className="bg-surface dark:bg-gray-800 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
           <h1 className="text-3xl font-display font-bold text-primary-900 dark:text-white">
             {t('devDocsPage.title')}
@@ -117,9 +117,9 @@ export default function DeveloperDocsPage() {
             href={`${API_BASE_URL}/docs`}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center p-4 bg-white dark:bg-gray-800 rounded-lg shadow hover:shadow-md transition-shadow"
+            className="flex items-center p-4 bg-white dark:bg-gray-800 rounded-lg shadow-sm hover:shadow-md transition-shadow"
           >
-            <div className="flex-shrink-0 p-3 bg-blue-100 dark:bg-blue-900 rounded-lg">
+            <div className="shrink-0 p-3 bg-blue-100 dark:bg-blue-900 rounded-lg">
               <svg className="w-6 h-6 text-blue-600 dark:text-blue-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
@@ -134,9 +134,9 @@ export default function DeveloperDocsPage() {
             href={`${API_BASE_URL}/redoc`}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center p-4 bg-white dark:bg-gray-800 rounded-lg shadow hover:shadow-md transition-shadow"
+            className="flex items-center p-4 bg-white dark:bg-gray-800 rounded-lg shadow-sm hover:shadow-md transition-shadow"
           >
-            <div className="flex-shrink-0 p-3 bg-purple-100 dark:bg-purple-900 rounded-lg">
+            <div className="shrink-0 p-3 bg-purple-100 dark:bg-purple-900 rounded-lg">
               <svg className="w-6 h-6 text-purple-600 dark:text-purple-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
               </svg>
@@ -151,9 +151,9 @@ export default function DeveloperDocsPage() {
             href={`${API_BASE_URL}/openapi.json`}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center p-4 bg-white dark:bg-gray-800 rounded-lg shadow hover:shadow-md transition-shadow"
+            className="flex items-center p-4 bg-white dark:bg-gray-800 rounded-lg shadow-sm hover:shadow-md transition-shadow"
           >
-            <div className="flex-shrink-0 p-3 bg-green-100 dark:bg-green-900 rounded-lg">
+            <div className="shrink-0 p-3 bg-green-100 dark:bg-green-900 rounded-lg">
               <svg className="w-6 h-6 text-green-600 dark:text-green-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
@@ -166,14 +166,14 @@ export default function DeveloperDocsPage() {
         </div>
 
         {/* Quick Start Guide */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow mb-8 overflow-hidden">
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm mb-8 overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{t('devDocsPage.quickStart')}</h2>
           </div>
           <div className="p-6 space-y-6">
             <div>
               <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">{t('devDocsPage.baseUrl')}</h3>
-              <code className="block bg-gray-100 dark:bg-gray-700 p-3 rounded text-sm font-mono">
+              <code className="block bg-gray-100 dark:bg-gray-700 p-3 rounded-sm text-sm font-mono">
                 {window.location.origin}/api/v1
               </code>
             </div>
@@ -187,13 +187,13 @@ export default function DeveloperDocsPage() {
               {/* Method 1: API Key */}
               <div className="mb-6">
                 <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-2 flex items-center gap-2">
-                  <span className="px-2 py-0.5 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 text-xs rounded">{t('devDocsPage.recommended')}</span>
+                  <span className="px-2 py-0.5 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 text-xs rounded-sm">{t('devDocsPage.recommended')}</span>
                   {t('devDocsPage.method1Title')}
                 </h4>
                 <p className="text-gray-600 dark:text-gray-400 mb-2 text-sm">
                   {t('devDocsPage.method1Desc')}
                 </p>
-                <pre className="bg-gray-100 dark:bg-gray-700 p-3 rounded text-sm font-mono overflow-x-auto">
+                <pre className="bg-gray-100 dark:bg-gray-700 p-3 rounded-sm text-sm font-mono overflow-x-auto">
 {`# Using API Key (best for external apps like FocusAhead)
 curl -X POST "${window.location.origin}/api/v1/search/hybrid" \\
   -H "X-API-Key: rag_your_api_key_here" \\
@@ -216,7 +216,7 @@ curl -X POST "${window.location.origin}/api/v1/sessions/SESSION_ID/messages" \\
                 <p className="text-gray-600 dark:text-gray-400 mb-2 text-sm">
                   {t('devDocsPage.method2Desc')}
                 </p>
-                <pre className="bg-gray-100 dark:bg-gray-700 p-3 rounded text-sm font-mono overflow-x-auto">
+                <pre className="bg-gray-100 dark:bg-gray-700 p-3 rounded-sm text-sm font-mono overflow-x-auto">
 {`# Login to get a JWT token
 curl -X POST "${window.location.origin}/api/v1/auth/login" \\
   -H "Content-Type: application/json" \\
@@ -234,7 +234,7 @@ curl "${window.location.origin}/api/v1/search/hybrid" \\
             <div>
               <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">{t('devDocsPage.commonOps')}</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="bg-gray-50 dark:bg-gray-700 p-4 rounded">
+                <div className="bg-gray-50 dark:bg-gray-700 p-4 rounded-sm">
                   <h4 className="font-medium text-gray-900 dark:text-white mb-2">{t('devDocsPage.searchKb')}</h4>
                   <pre className="text-xs font-mono overflow-x-auto">
 {`POST /api/v1/search/hybrid
@@ -246,7 +246,7 @@ curl "${window.location.origin}/api/v1/search/hybrid" \\
                   </pre>
                 </div>
                 
-                <div className="bg-gray-50 dark:bg-gray-700 p-4 rounded">
+                <div className="bg-gray-50 dark:bg-gray-700 p-4 rounded-sm">
                   <h4 className="font-medium text-gray-900 dark:text-white mb-2">{t('devDocsPage.chatAgent')}</h4>
                   <pre className="text-xs font-mono overflow-x-auto">
 {`POST /api/v1/sessions/{id}/messages
@@ -258,7 +258,7 @@ curl "${window.location.origin}/api/v1/search/hybrid" \\
                   </pre>
                 </div>
                 
-                <div className="bg-gray-50 dark:bg-gray-700 p-4 rounded">
+                <div className="bg-gray-50 dark:bg-gray-700 p-4 rounded-sm">
                   <h4 className="font-medium text-gray-900 dark:text-white mb-2">{t('devDocsPage.startIngestion')}</h4>
                   <pre className="text-xs font-mono overflow-x-auto">
 {`POST /api/v1/ingestion/start
@@ -270,7 +270,7 @@ curl "${window.location.origin}/api/v1/search/hybrid" \\
                   </pre>
                 </div>
                 
-                <div className="bg-gray-50 dark:bg-gray-700 p-4 rounded">
+                <div className="bg-gray-50 dark:bg-gray-700 p-4 rounded-sm">
                   <h4 className="font-medium text-gray-900 dark:text-white mb-2">{t('devDocsPage.systemStatus')}</h4>
                   <pre className="text-xs font-mono overflow-x-auto">
 {`GET /api/v1/system/health
@@ -283,7 +283,7 @@ GET /api/v1/status/dashboard`}
         </div>
 
         {/* API Reference */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex flex-wrap items-center justify-between gap-4">
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{t('devDocsPage.apiReference')}</h2>
             <div className="flex items-center gap-2">
@@ -324,7 +324,7 @@ GET /api/v1/status/dashboard`}
           ) : (
             <div className="flex">
               {/* Tag sidebar */}
-              <div className="w-48 flex-shrink-0 border-r border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+              <div className="w-48 shrink-0 border-r border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
                 <nav className="p-2 space-y-1 max-h-[600px] overflow-y-auto">
                   {apiTags.map((tag) => (
                     <button
@@ -351,7 +351,7 @@ GET /api/v1/status/dashboard`}
                       key={`${endpoint.method}-${endpoint.path}-${idx}`}
                       className="flex items-start gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                     >
-                      <span className={`px-2 py-1 text-xs font-bold rounded ${getMethodColor(endpoint.method)}`}>
+                      <span className={`px-2 py-1 text-xs font-bold rounded-sm ${getMethodColor(endpoint.method)}`}>
                         {endpoint.method}
                       </span>
                       <div className="flex-1 min-w-0">
@@ -366,7 +366,7 @@ GET /api/v1/status/dashboard`}
                         href={`${API_BASE_URL}/docs#/${endpoint.tag}/${endpoint.method.toLowerCase()}_${endpoint.path.replace(/\//g, '_').replace(/[{}]/g, '')}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="flex-shrink-0 px-2 py-1 text-xs bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 rounded hover:bg-indigo-200 dark:hover:bg-indigo-800"
+                        className="shrink-0 px-2 py-1 text-xs bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 rounded-sm hover:bg-indigo-200 dark:hover:bg-indigo-800"
                       >
                         {t('devDocsPage.tryIt')}
                       </a>
@@ -384,7 +384,7 @@ GET /api/v1/status/dashboard`}
         </div>
 
         {/* SDK/Client Libraries */}
-        <div className="mt-8 bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+        <div className="mt-8 bg-white dark:bg-gray-800 rounded-lg shadow-sm overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white">{t('devDocsPage.clientLibraries')}</h2>
           </div>
@@ -392,7 +392,7 @@ GET /api/v1/status/dashboard`}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div>
                 <h3 className="font-medium text-gray-900 dark:text-white mb-2">Python</h3>
-                <pre className="bg-gray-100 dark:bg-gray-700 p-3 rounded text-xs font-mono overflow-x-auto">
+                <pre className="bg-gray-100 dark:bg-gray-700 p-3 rounded-sm text-xs font-mono overflow-x-auto">
 {`import requests
 
 API_URL = "${window.location.origin}/api/v1"
@@ -423,7 +423,7 @@ answer = response.json()`}
               
               <div>
                 <h3 className="font-medium text-gray-900 dark:text-white mb-2">JavaScript/TypeScript</h3>
-                <pre className="bg-gray-100 dark:bg-gray-700 p-3 rounded text-xs font-mono overflow-x-auto">
+                <pre className="bg-gray-100 dark:bg-gray-700 p-3 rounded-sm text-xs font-mono overflow-x-auto">
 {`const API_URL = "${window.location.origin}/api/v1";
 const API_KEY = "rag_your_api_key_here";
 
@@ -458,7 +458,7 @@ const answer = await fetch(
               
               <div>
                 <h3 className="font-medium text-gray-900 dark:text-white mb-2">cURL</h3>
-                <pre className="bg-gray-100 dark:bg-gray-700 p-3 rounded text-xs font-mono overflow-x-auto">
+                <pre className="bg-gray-100 dark:bg-gray-700 p-3 rounded-sm text-xs font-mono overflow-x-auto">
 {`# Search with API Key
 curl -X POST \\
   "${window.location.origin}/api/v1/search/hybrid" \\
@@ -480,7 +480,7 @@ curl -X POST \\
 
         {/* Rate Limits & Best Practices */}
         <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6">
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">{t('devDocsPage.rateLimits')}</h2>
             <ul className="space-y-2 text-gray-600 dark:text-gray-400">
               <li className="flex items-center gap-2">
@@ -502,7 +502,7 @@ curl -X POST \\
             </ul>
           </div>
 
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6">
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">{t('devDocsPage.bestPractices')}</h2>
             <ul className="space-y-2 text-gray-600 dark:text-gray-400">
               <li className="flex items-start gap-2">

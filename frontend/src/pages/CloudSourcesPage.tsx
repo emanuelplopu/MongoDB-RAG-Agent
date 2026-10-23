@@ -326,7 +326,7 @@ export default function CloudSourcesPage() {
                 key={i}
                 className="flex items-start gap-3 p-3 rounded-xl bg-red-50 dark:bg-red-900/20"
               >
-                <ExclamationTriangleIcon className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
+                <ExclamationTriangleIcon className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-red-700 dark:text-red-400">{error.message}</p>
                   <p className="text-xs text-red-500 dark:text-red-500 mt-1">

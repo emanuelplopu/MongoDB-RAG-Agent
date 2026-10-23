@@ -433,7 +433,7 @@ export default function CloudSourceConnectPage() {
 
           {/* Security Note */}
           <div className="rounded-xl bg-gray-50 dark:bg-gray-700/50 p-4 flex items-start gap-3">
-            <LockClosedIcon className="h-5 w-5 text-gray-400 flex-shrink-0 mt-0.5" />
+            <LockClosedIcon className="h-5 w-5 text-gray-400 shrink-0 mt-0.5" />
             <div>
               <p className="text-sm text-secondary dark:text-gray-400">
                 {t('cloudConnectPage.securityNote')}

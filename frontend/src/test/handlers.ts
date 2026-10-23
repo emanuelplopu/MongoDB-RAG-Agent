@@ -2,7 +2,7 @@
  * MSW (Mock Service Worker) handlers for API mocking in tests.
  */
 
-import { http, HttpResponse } from 'msw'
+import { http, HttpResponse } from 'msw/http'
 
 const API_BASE = '/api/v1'
 

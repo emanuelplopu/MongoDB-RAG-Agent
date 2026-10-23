@@ -1296,7 +1296,7 @@ export default function ConfigurationPage() {
                   <span className="text-lg font-semibold text-primary-900 dark:text-gray-200">
                     {t('config.modelCapabilities.score')}: {capTestResult.overall?.toFixed(1)}/10
                   </span>
-                  <span className={`px-2 py-0.5 rounded text-xs font-bold ${capTestResult.auto_pass ? 'bg-green-100 dark:bg-green-800 text-green-800 dark:text-green-200' : 'bg-red-100 dark:bg-red-800 text-red-800 dark:text-red-200'}`}>
+                  <span className={`px-2 py-0.5 rounded-sm text-xs font-bold ${capTestResult.auto_pass ? 'bg-green-100 dark:bg-green-800 text-green-800 dark:text-green-200' : 'bg-red-100 dark:bg-red-800 text-red-800 dark:text-red-200'}`}>
                     {capTestResult.auto_pass ? t('config.modelCapabilities.pass') : t('config.modelCapabilities.fail')}
                   </span>
                 </div>
@@ -1455,7 +1455,7 @@ export default function ConfigurationPage() {
           {/* Tools Overview Help */}
           <div className="rounded-2xl bg-blue-50 dark:bg-blue-900/20 p-6">
             <div className="flex items-start gap-3">
-              <InformationCircleIcon className="h-6 w-6 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+              <InformationCircleIcon className="h-6 w-6 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
               <div>
                 <h3 className="text-lg font-medium text-blue-900 dark:text-blue-100 mb-2">{t('config.tools.aboutTitle')}</h3>
                 <p className="text-sm text-blue-800 dark:text-blue-200 mb-3">
@@ -1479,7 +1479,7 @@ export default function ConfigurationPage() {
                     <span className="text-2xl">{tool.icon}</span>
                     <div>
                       <h3 className="text-lg font-medium text-primary-900 dark:text-gray-200">{tool.name}</h3>
-                      <span className="text-xs bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded text-gray-600 dark:text-gray-400">
+                      <span className="text-xs bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded-sm text-gray-600 dark:text-gray-400">
                         {tool.category}
                       </span>
                     </div>
@@ -1521,7 +1521,7 @@ export default function ConfigurationPage() {
                   <div className="space-y-2">
                     {tool.parameters.map(param => (
                       <div key={param.name} className="flex items-center gap-2 text-sm">
-                        <code className="px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded text-gray-800 dark:text-gray-300">
+                        <code className="px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded-sm text-gray-800 dark:text-gray-300">
                           {param.name}
                         </code>
                         <span className="text-gray-500 dark:text-gray-500">({param.type})</span>
@@ -1618,7 +1618,7 @@ export default function ConfigurationPage() {
                         )}
                         
                         {toolTestResult.result_preview && (
-                          <div className="mt-2 p-3 bg-white dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700">
+                          <div className="mt-2 p-3 bg-white dark:bg-gray-800 rounded-sm border border-gray-200 dark:border-gray-700">
                             <pre className="text-xs text-gray-600 dark:text-gray-400 whitespace-pre-wrap overflow-x-auto">
                               {toolTestResult.result_preview}
                             </pre>
@@ -1704,7 +1704,7 @@ export default function ConfigurationPage() {
                   type="checkbox"
                   checked={offlineConfig.enabled}
                   onChange={e => setOfflineConfig(prev => ({ ...prev, enabled: e.target.checked }))}
-                  className="rounded"
+                  className="rounded-sm"
                 />
                 <span className="text-sm font-medium text-primary-900 dark:text-gray-200">Enable Offline Mode</span>
               </label>
@@ -1899,7 +1899,7 @@ export default function ConfigurationPage() {
                     type="checkbox"
                     checked={selectedPresets.includes(preset.name)}
                     onChange={() => togglePreset(preset.name)}
-                    className="mt-1 rounded"
+                    className="mt-1 rounded-sm"
                   />
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-primary-900 dark:text-gray-200 text-sm">{preset.name}</p>
@@ -2041,7 +2041,7 @@ export default function ConfigurationPage() {
                     <div>
                       <p className="font-medium text-primary-900 dark:text-gray-200">{endpoint.name}</p>
                       <p className="text-sm text-secondary dark:text-gray-400">{endpoint.url}</p>
-                      <span className="text-xs px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400">
+                      <span className="text-xs px-2 py-0.5 rounded-sm bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400">
                         {endpoint.provider_type}
                       </span>
                     </div>
@@ -2198,7 +2198,7 @@ export default function ConfigurationPage() {
                 <select
                   value={defaultMatchCount}
                   onChange={(e) => setDefaultMatchCount(Number(e.target.value))}
-                  className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none"
+                  className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden"
                 >
                   {(configOptions?.options.match_count_options || [5, 10, 15, 20, 25, 50, 100]).map((n) => (
                     <option key={n} value={n}>
@@ -2223,7 +2223,7 @@ export default function ConfigurationPage() {
                     <select
                       value={llmModel}
                       onChange={(e) => setLlmModel(e.target.value)}
-                      className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none"
+                      className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden"
                     >
                       {llmModels.map((model) => (
                         <option key={model.id} value={model.id}>
@@ -2256,7 +2256,7 @@ export default function ConfigurationPage() {
                           setEmbeddingDimension(modelInfo.dimension)
                         }
                       }}
-                      className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none"
+                      className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden"
                     >
                       {embeddingModels.map((model) => (
                         <option key={model.id} value={model.id}>
@@ -2281,7 +2281,7 @@ export default function ConfigurationPage() {
                     <select
                       value={embeddingDimension}
                       onChange={(e) => setEmbeddingDimension(Number(e.target.value))}
-                      className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none"
+                      className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden"
                     >
                       {(configOptions?.options.embedding_dimensions || [256, 512, 768, 1024, 1536, 3072]).map((dim) => (
                         <option key={dim} value={dim}>
@@ -2384,7 +2384,7 @@ export default function ConfigurationPage() {
                   max={20}
                   value={agentConfig.parallel_workers}
                   onChange={(e) => handleAgentConfigChange('parallel_workers', Number(e.target.value))}
-                  className={`w-full rounded-lg border ${agentConfigErrors.parallel_workers ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                  className={`w-full rounded-lg border ${agentConfigErrors.parallel_workers ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden`}
                 />
                 {agentConfigErrors.parallel_workers && (
                   <p className="mt-1 text-xs text-red-500">{agentConfigErrors.parallel_workers}</p>
@@ -2405,7 +2405,7 @@ export default function ConfigurationPage() {
                   max={10}
                   value={agentConfig.max_iterations}
                   onChange={(e) => handleAgentConfigChange('max_iterations', Number(e.target.value))}
-                  className={`w-full rounded-lg border ${agentConfigErrors.max_iterations ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                  className={`w-full rounded-lg border ${agentConfigErrors.max_iterations ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden`}
                 />
                 {agentConfigErrors.max_iterations && (
                   <p className="mt-1 text-xs text-red-500">{agentConfigErrors.max_iterations}</p>
@@ -2426,7 +2426,7 @@ export default function ConfigurationPage() {
                   max={50}
                   value={agentConfig.max_sources_per_search}
                   onChange={(e) => handleAgentConfigChange('max_sources_per_search', Number(e.target.value))}
-                  className={`w-full rounded-lg border ${agentConfigErrors.max_sources_per_search ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                  className={`w-full rounded-lg border ${agentConfigErrors.max_sources_per_search ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden`}
                 />
                 {agentConfigErrors.max_sources_per_search && (
                   <p className="mt-1 text-xs text-red-500">{agentConfigErrors.max_sources_per_search}</p>
@@ -2460,7 +2460,7 @@ export default function ConfigurationPage() {
                   max={50}
                   value={agentConfig.global_max_orchestrators}
                   onChange={(e) => handleAgentConfigChange('global_max_orchestrators', Number(e.target.value))}
-                  className={`w-full rounded-lg border ${agentConfigErrors.global_max_orchestrators ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                  className={`w-full rounded-lg border ${agentConfigErrors.global_max_orchestrators ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden`}
                 />
                 {agentConfigErrors.global_max_orchestrators && (
                   <p className="mt-1 text-xs text-red-500">{agentConfigErrors.global_max_orchestrators}</p>
@@ -2481,7 +2481,7 @@ export default function ConfigurationPage() {
                   max={100}
                   value={agentConfig.global_max_workers}
                   onChange={(e) => handleAgentConfigChange('global_max_workers', Number(e.target.value))}
-                  className={`w-full rounded-lg border ${agentConfigErrors.global_max_workers ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                  className={`w-full rounded-lg border ${agentConfigErrors.global_max_workers ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden`}
                 />
                 {agentConfigErrors.global_max_workers && (
                   <p className="mt-1 text-xs text-red-500">{agentConfigErrors.global_max_workers}</p>
@@ -2515,7 +2515,7 @@ export default function ConfigurationPage() {
                   max={300}
                   value={agentConfig.worker_timeout}
                   onChange={(e) => handleAgentConfigChange('worker_timeout', Number(e.target.value))}
-                  className={`w-full rounded-lg border ${agentConfigErrors.worker_timeout ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                  className={`w-full rounded-lg border ${agentConfigErrors.worker_timeout ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden`}
                 />
                 {agentConfigErrors.worker_timeout && (
                   <p className="mt-1 text-xs text-red-500">{agentConfigErrors.worker_timeout}</p>
@@ -2536,7 +2536,7 @@ export default function ConfigurationPage() {
                   max={600}
                   value={agentConfig.orchestrator_timeout}
                   onChange={(e) => handleAgentConfigChange('orchestrator_timeout', Number(e.target.value))}
-                  className={`w-full rounded-lg border ${agentConfigErrors.orchestrator_timeout ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                  className={`w-full rounded-lg border ${agentConfigErrors.orchestrator_timeout ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden`}
                 />
                 {agentConfigErrors.orchestrator_timeout && (
                   <p className="mt-1 text-xs text-red-500">{agentConfigErrors.orchestrator_timeout}</p>
@@ -2557,7 +2557,7 @@ export default function ConfigurationPage() {
                   max={3600}
                   value={agentConfig.total_timeout}
                   onChange={(e) => handleAgentConfigChange('total_timeout', Number(e.target.value))}
-                  className={`w-full rounded-lg border ${agentConfigErrors.total_timeout ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                  className={`w-full rounded-lg border ${agentConfigErrors.total_timeout ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden`}
                 />
                 {agentConfigErrors.total_timeout && (
                   <p className="mt-1 text-xs text-red-500">{agentConfigErrors.total_timeout}</p>
@@ -2588,7 +2588,7 @@ export default function ConfigurationPage() {
                 <select
                   value={agentConfig.default_mode}
                   onChange={(e) => setAgentConfig(prev => ({ ...prev, default_mode: e.target.value }))}
-                  className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none"
+                  className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden"
                 >
                   <option value="auto">Auto (Adaptive)</option>
                   <option value="fast">Fast (Skip orchestration)</option>
@@ -2610,7 +2610,7 @@ export default function ConfigurationPage() {
                   max={500}
                   value={agentConfig.auto_fast_threshold}
                   onChange={(e) => handleAgentConfigChange('auto_fast_threshold', Number(e.target.value))}
-                  className={`w-full rounded-lg border ${agentConfigErrors.auto_fast_threshold ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                  className={`w-full rounded-lg border ${agentConfigErrors.auto_fast_threshold ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden`}
                 />
                 {agentConfigErrors.auto_fast_threshold && (
                   <p className="mt-1 text-xs text-red-500">{agentConfigErrors.auto_fast_threshold}</p>
@@ -2632,7 +2632,7 @@ export default function ConfigurationPage() {
                     onChange={(e) => setAgentConfig(prev => ({ ...prev, skip_evaluation: e.target.checked }))}
                     className="sr-only peer"
                   />
-                  <div className="w-11 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary rounded-full peer dark:bg-gray-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                  <div className="w-11 h-6 bg-gray-300 peer-focus:outline-hidden peer-focus:ring-2 peer-focus:ring-primary rounded-full peer dark:bg-gray-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
                   <span className="ml-3 text-sm text-secondary dark:text-gray-400">
                     {agentConfig.skip_evaluation ? 'Enabled (Faster)' : 'Disabled (More thorough)'}
                   </span>
@@ -2694,7 +2694,7 @@ export default function ConfigurationPage() {
                   onChange={(e) => setIngestionConfig(prev => ({ ...prev, process_isolation_enabled: e.target.checked }))}
                   className="sr-only peer"
                 />
-                <div className="w-11 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary rounded-full peer dark:bg-gray-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                <div className="w-11 h-6 bg-gray-300 peer-focus:outline-hidden peer-focus:ring-2 peer-focus:ring-primary rounded-full peer dark:bg-gray-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
                 <span className="ml-3 text-sm text-secondary dark:text-gray-400">
                   {ingestionConfig.process_isolation_enabled ? 'Enabled (Recommended)' : 'Disabled'}
                 </span>
@@ -2727,7 +2727,7 @@ export default function ConfigurationPage() {
                   max={10}
                   value={ingestionConfig.max_concurrent_files}
                   onChange={(e) => handleIngestionConfigChange('max_concurrent_files', Number(e.target.value))}
-                  className={`w-full rounded-lg border ${ingestionConfigErrors.max_concurrent_files ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                  className={`w-full rounded-lg border ${ingestionConfigErrors.max_concurrent_files ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden`}
                 />
                 {ingestionConfigErrors.max_concurrent_files && (
                   <p className="mt-1 text-xs text-red-500">{ingestionConfigErrors.max_concurrent_files}</p>
@@ -2748,7 +2748,7 @@ export default function ConfigurationPage() {
                   max={16}
                   value={ingestionConfig.thread_pool_workers}
                   onChange={(e) => handleIngestionConfigChange('thread_pool_workers', Number(e.target.value))}
-                  className={`w-full rounded-lg border ${ingestionConfigErrors.thread_pool_workers ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                  className={`w-full rounded-lg border ${ingestionConfigErrors.thread_pool_workers ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden`}
                 />
                 {ingestionConfigErrors.thread_pool_workers && (
                   <p className="mt-1 text-xs text-red-500">{ingestionConfigErrors.thread_pool_workers}</p>
@@ -2770,7 +2770,7 @@ export default function ConfigurationPage() {
                   step={0.5}
                   value={ingestionConfig.job_poll_interval_seconds}
                   onChange={(e) => handleIngestionConfigChange('job_poll_interval_seconds', Number(e.target.value))}
-                  className={`w-full rounded-lg border ${ingestionConfigErrors.job_poll_interval_seconds ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                  className={`w-full rounded-lg border ${ingestionConfigErrors.job_poll_interval_seconds ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden`}
                 />
                 {ingestionConfigErrors.job_poll_interval_seconds && (
                   <p className="mt-1 text-xs text-red-500">{ingestionConfigErrors.job_poll_interval_seconds}</p>
@@ -2804,7 +2804,7 @@ export default function ConfigurationPage() {
                   max={500}
                   value={ingestionConfig.embedding_batch_size}
                   onChange={(e) => handleIngestionConfigChange('embedding_batch_size', Number(e.target.value))}
-                  className={`w-full rounded-lg border ${ingestionConfigErrors.embedding_batch_size ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                  className={`w-full rounded-lg border ${ingestionConfigErrors.embedding_batch_size ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden`}
                 />
                 {ingestionConfigErrors.embedding_batch_size && (
                   <p className="mt-1 text-xs text-red-500">{ingestionConfigErrors.embedding_batch_size}</p>
@@ -2826,7 +2826,7 @@ export default function ConfigurationPage() {
                   step={100}
                   value={ingestionConfig.embedding_requests_per_minute}
                   onChange={(e) => handleIngestionConfigChange('embedding_requests_per_minute', Number(e.target.value))}
-                  className={`w-full rounded-lg border ${ingestionConfigErrors.embedding_requests_per_minute ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                  className={`w-full rounded-lg border ${ingestionConfigErrors.embedding_requests_per_minute ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden`}
                 />
                 {ingestionConfigErrors.embedding_requests_per_minute && (
                   <p className="mt-1 text-xs text-red-500">{ingestionConfigErrors.embedding_requests_per_minute}</p>
@@ -2856,7 +2856,7 @@ export default function ConfigurationPage() {
                 step={30}
                 value={ingestionConfig.file_processing_timeout}
                 onChange={(e) => handleIngestionConfigChange('file_processing_timeout', Number(e.target.value))}
-                className={`w-full max-w-xs rounded-lg border ${ingestionConfigErrors.file_processing_timeout ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
+                className={`w-full max-w-xs rounded-lg border ${ingestionConfigErrors.file_processing_timeout ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden`}
               />
               {ingestionConfigErrors.file_processing_timeout && (
                 <p className="mt-1 text-xs text-red-500">{ingestionConfigErrors.file_processing_timeout}</p>
@@ -2879,7 +2879,7 @@ export default function ConfigurationPage() {
           {/* Info Card */}
           <div className="rounded-2xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-6">
             <div className="flex items-start gap-3">
-              <InformationCircleIcon className="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
+              <InformationCircleIcon className="h-5 w-5 text-blue-500 shrink-0 mt-0.5" />
               <div>
                 <h4 className="text-sm font-medium text-blue-900 dark:text-blue-200 mb-2">Configuration Notes</h4>
                 <ul className="text-sm text-blue-800 dark:text-blue-300 space-y-1">
@@ -2929,21 +2929,21 @@ function ProviderCard({ provider, onSelectModel, onTestModel }: {
         <div className="flex items-center gap-2 flex-wrap">
           {provider.status === 'available' && (
             <>
-              <span className="px-2 py-1 text-xs font-medium bg-green-200 dark:bg-green-800 text-green-800 dark:text-green-200 rounded">
+              <span className="px-2 py-1 text-xs font-medium bg-green-200 dark:bg-green-800 text-green-800 dark:text-green-200 rounded-sm">
                 {provider.models.length} models
               </span>
               {provider.supports_vision && (
-                <span className="px-2 py-1 text-xs font-medium bg-purple-200 dark:bg-purple-800 text-purple-800 dark:text-purple-200 rounded">
+                <span className="px-2 py-1 text-xs font-medium bg-purple-200 dark:bg-purple-800 text-purple-800 dark:text-purple-200 rounded-sm">
                   Vision
                 </span>
               )}
               {provider.supports_audio && (
-                <span className="px-2 py-1 text-xs font-medium bg-blue-200 dark:bg-blue-800 text-blue-800 dark:text-blue-200 rounded">
+                <span className="px-2 py-1 text-xs font-medium bg-blue-200 dark:bg-blue-800 text-blue-800 dark:text-blue-200 rounded-sm">
                   Audio
                 </span>
               )}
               {provider.supports_video && (
-                <span className="px-2 py-1 text-xs font-medium bg-indigo-200 dark:bg-indigo-800 text-indigo-800 dark:text-indigo-200 rounded">
+                <span className="px-2 py-1 text-xs font-medium bg-indigo-200 dark:bg-indigo-800 text-indigo-800 dark:text-indigo-200 rounded-sm">
                   Video
                 </span>
               )}
@@ -2980,14 +2980,14 @@ function ProviderCard({ provider, onSelectModel, onTestModel }: {
                 <div className="flex gap-1">
                   <button
                     onClick={(e) => { e.stopPropagation(); onTestModel(provider.id, model.name, model.type || 'chat') }}
-                    className="p-1.5 text-primary hover:bg-primary-100 dark:hover:bg-primary-900/30 rounded"
+                    className="p-1.5 text-primary hover:bg-primary-100 dark:hover:bg-primary-900/30 rounded-sm"
                     title="Test"
                   >
                     <PlayIcon className="h-4 w-4" />
                   </button>
                   <button
                     onClick={(e) => { e.stopPropagation(); onSelectModel(provider, model.name, (model.type as 'chat' | 'embedding' | 'vision' | 'audio') || 'chat') }}
-                    className="p-1.5 text-green-500 hover:bg-green-100 dark:hover:bg-green-900/30 rounded"
+                    className="p-1.5 text-green-500 hover:bg-green-100 dark:hover:bg-green-900/30 rounded-sm"
                     title="Select"
                   >
                     <CheckCircleIcon className="h-4 w-4" />

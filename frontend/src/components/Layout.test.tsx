@@ -414,7 +414,7 @@ afterEach(() => {
 describe('Layout', () => {
   it('renders the sidebar shell, outlet, and authenticated user info', async () => {
     mockStore.state.isAuthenticated = true
-    const firstRender = renderWithRouter('/chat')
+    renderWithRouter('/chat')
 
     await waitFor(() => expect(mockFns.listProfiles).toHaveBeenCalled())
     expect(screen.getAllByText('New chat').length).toBeGreaterThan(0)

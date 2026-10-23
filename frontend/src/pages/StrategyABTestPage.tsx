@@ -447,7 +447,7 @@ export default function StrategyABTestPage() {
           <button
             onClick={compareResponses}
             disabled={isComparing}
-            className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 px-8 py-4 text-white font-medium transition-all hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+            className="flex items-center gap-2 rounded-xl bg-linear-to-r from-blue-500 to-purple-500 px-8 py-4 text-white font-medium transition-all hover:from-blue-600 hover:to-purple-600 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
           >
             {isComparing ? (
               <>
@@ -468,7 +468,7 @@ export default function StrategyABTestPage() {
       {comparisonResult && (
         <div className="space-y-4">
           {/* Winner Banner */}
-          <div className="rounded-2xl bg-gradient-to-r from-green-500 to-emerald-500 p-6 text-white shadow-lg">
+          <div className="rounded-2xl bg-linear-to-r from-green-500 to-emerald-500 p-6 text-white shadow-lg">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm opacity-80">{t('strategies.overallWinner', 'Overall Winner')}</p>

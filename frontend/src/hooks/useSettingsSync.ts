@@ -58,7 +58,7 @@ export function clearSyncedPreferences() {
  * Returns functions to pull from DB, push to DB, and update individual fields.
  */
 export function useSettingsSync() {
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout>>()
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
   const pendingUpdatesRef = useRef<UserPreferencesSync>({})
   const isMountedRef = useRef(true)
 

@@ -45,7 +45,6 @@ vi.mock('react-i18next', () => ({
 import type {
   Document,
   DocumentListResponse,
-  FolderInfo,
   FoldersResponse,
   MetadataRebuildStatus,
 } from '../api/client'

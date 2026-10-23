@@ -302,7 +302,7 @@ export default function FilePreviewModal({ isOpen, onClose, fileUrl, filename, f
       case 'xlsx':
         return (
           <div
-            className="overflow-auto max-h-[80vh] p-4 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-gray-300 [&_td]:dark:border-gray-600 [&_td]:px-2 [&_td]:py-1 [&_td]:text-sm [&_th]:border [&_th]:border-gray-300 [&_th]:dark:border-gray-600 [&_th]:px-2 [&_th]:py-1 [&_th]:text-sm [&_th]:bg-gray-100 [&_th]:dark:bg-gray-700 [&_table]:text-primary-900 [&_table]:dark:text-gray-300"
+            className="overflow-auto max-h-[80vh] p-4 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-gray-300 dark:[&_td]:border-gray-600 [&_td]:px-2 [&_td]:py-1 [&_td]:text-sm [&_th]:border [&_th]:border-gray-300 dark:[&_th]:border-gray-600 [&_th]:px-2 [&_th]:py-1 [&_th]:text-sm [&_th]:bg-gray-100 dark:[&_th]:bg-gray-700 [&_table]:text-primary-900 dark:[&_table]:text-gray-300"
             dangerouslySetInnerHTML={{ __html: xlsxHtml }}
           />
         )
@@ -362,7 +362,7 @@ export default function FilePreviewModal({ isOpen, onClose, fileUrl, filename, f
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4"
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
       <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[95vh] flex flex-col overflow-hidden">

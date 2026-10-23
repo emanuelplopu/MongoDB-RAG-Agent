@@ -23,7 +23,7 @@ export default function ThemeToggle() {
             onClick={() => setTheme(option.value)}
             className={`flex items-center justify-center rounded-full p-2 transition-all duration-200 ${
               isActive
-                ? 'bg-primary text-white shadow-sm'
+                ? 'bg-primary text-white shadow-xs'
                 : 'text-secondary dark:text-gray-400 hover:bg-white/50 dark:hover:bg-gray-600'
             }`}
             title={option.label}

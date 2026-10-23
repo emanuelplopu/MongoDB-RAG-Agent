@@ -168,7 +168,7 @@ export default function HostStatsWidget() {
       <button
         type="button"
         onClick={() => setCollapsed(false)}
-        className="fixed bottom-[88px] right-4 z-30 flex items-center gap-1.5 rounded-full border border-gray-200 bg-white/90 px-3 py-1.5 text-xs font-medium text-gray-600 shadow-md backdrop-blur transition-colors hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800/90 dark:text-gray-300 dark:hover:bg-gray-700"
+        className="fixed bottom-[88px] right-4 z-30 flex items-center gap-1.5 rounded-full border border-gray-200 bg-white/90 px-3 py-1.5 text-xs font-medium text-gray-600 shadow-md backdrop-blur-sm transition-colors hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800/90 dark:text-gray-300 dark:hover:bg-gray-700"
         aria-label={t('hostStats.expand')}
         title={t('hostStats.title')}
       >
@@ -187,17 +187,17 @@ export default function HostStatsWidget() {
 
   return (
     <div
-      className="fixed bottom-[88px] right-4 z-30 w-64 select-none rounded-xl border border-gray-200 bg-white/95 p-3 text-xs shadow-lg backdrop-blur dark:border-gray-700 dark:bg-gray-800/95"
+      className="fixed bottom-[88px] right-4 z-30 w-64 select-none rounded-xl border border-gray-200 bg-white/95 p-3 text-xs shadow-lg backdrop-blur-sm dark:border-gray-700 dark:bg-gray-800/95"
       role="region"
       aria-label={t('hostStats.title')}
     >
       {/* Header */}
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-1.5 font-semibold text-gray-700 dark:text-gray-200">
-          <CpuChipIcon className="h-4 w-4 flex-shrink-0" />
+          <CpuChipIcon className="h-4 w-4 shrink-0" />
           <span className="truncate">{t('hostStats.title')}</span>
         </span>
-        <div className="flex flex-shrink-0 items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
           {stats && (
             <span
               className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
@@ -213,7 +213,7 @@ export default function HostStatsWidget() {
           <button
             type="button"
             onClick={() => setCollapsed(true)}
-            className="rounded p-0.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+            className="rounded-sm p-0.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
             aria-label={t('hostStats.collapse')}
             title={t('hostStats.collapse')}
           >
@@ -222,7 +222,7 @@ export default function HostStatsWidget() {
           <button
             type="button"
             onClick={() => setDismissed(true)}
-            className="rounded p-0.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+            className="rounded-sm p-0.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
             aria-label={t('hostStats.dismiss')}
             title={t('hostStats.dismiss')}
           >

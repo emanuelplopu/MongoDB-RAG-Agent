@@ -271,7 +271,7 @@ export default function UserManagementPage() {
                     id="is_org_admin"
                     checked={createForm.is_org_admin || false}
                     onChange={(e) => setCreateForm({ ...createForm, is_org_admin: e.target.checked })}
-                    className="rounded"
+                    className="rounded-sm"
                   />
                   <label htmlFor="is_org_admin" className="text-sm text-primary-900 dark:text-gray-200">
                     {t('users.orgAdminPrivileges', 'Organisation admin (manages team users)')}
@@ -285,7 +285,7 @@ export default function UserManagementPage() {
                       id="is_admin"
                       checked={createForm.is_admin}
                       onChange={(e) => setCreateForm({ ...createForm, is_admin: e.target.checked })}
-                      className="rounded"
+                      className="rounded-sm"
                     />
                     <label htmlFor="is_admin" className="text-sm text-primary-900 dark:text-gray-200">
                       {t('users.adminPrivileges', 'Administrator privileges')}
@@ -384,7 +384,7 @@ export default function UserManagementPage() {
                     checked={editForm.is_org_admin || false}
                     onChange={(e) => setEditForm({ ...editForm, is_org_admin: e.target.checked })}
                     disabled={editingUser.id === currentUser?.id && !actorIsSuperAdmin}
-                    className="rounded"
+                    className="rounded-sm"
                   />
                   <label htmlFor="edit_is_org_admin" className="text-sm text-primary-900 dark:text-gray-200">
                     {t('users.orgAdminPrivileges', 'Organisation admin (manages team users)')}
@@ -402,7 +402,7 @@ export default function UserManagementPage() {
                       checked={editForm.is_admin || false}
                       onChange={(e) => setEditForm({ ...editForm, is_admin: e.target.checked })}
                       disabled={editingUser.id === currentUser?.id}
-                      className="rounded"
+                      className="rounded-sm"
                     />
                     <label htmlFor="edit_is_admin" className="text-sm text-primary-900 dark:text-gray-200">
                       {t('users.adminPrivileges', 'Administrator privileges')}

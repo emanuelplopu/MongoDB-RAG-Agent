@@ -123,7 +123,7 @@ export default function LoginPage() {
               role="status"
               className="mb-6 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-4 flex items-start gap-3"
             >
-              <InformationCircleIcon className="h-5 w-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+              <InformationCircleIcon className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
               <p className="text-sm text-amber-800 dark:text-amber-200">{t('errors.sessionExpired.message')}</p>
             </div>
           )}
@@ -137,7 +137,7 @@ export default function LoginPage() {
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
+                  className="w-full px-4 py-3 rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-hidden"
                   placeholder={t('login.namePlaceholder')}
                   required={!isLogin}
                 />
@@ -151,7 +151,7 @@ export default function LoginPage() {
                       type="text"
                       value={titlePrefix}
                       onChange={(e) => setTitlePrefix(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
+                      className="w-full px-3 py-2 rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-hidden"
                       placeholder="Mag., Dr., RA"
                     />
                   </div>
@@ -163,7 +163,7 @@ export default function LoginPage() {
                       type="text"
                       value={titleSuffix}
                       onChange={(e) => setTitleSuffix(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
+                      className="w-full px-3 py-2 rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-hidden"
                       placeholder="Rechtsanwältin, LL.M."
                     />
                   </div>
@@ -179,7 +179,7 @@ export default function LoginPage() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-3 rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
+                className="w-full px-4 py-3 rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-hidden"
                 placeholder={t('login.emailPlaceholder')}
                 required
               />
@@ -193,7 +193,7 @@ export default function LoginPage() {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none"
+                className="w-full px-4 py-3 rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 text-primary-900 dark:text-gray-100 focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-hidden"
                 placeholder={t('login.passwordPlaceholder')}
                 required
                 minLength={6}
@@ -203,7 +203,7 @@ export default function LoginPage() {
             {error && (
               <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4">
                 <div className="flex items-start gap-3">
-                  <ExclamationCircleIcon className="h-5 w-5 text-red-500 dark:text-red-400 flex-shrink-0 mt-0.5" />
+                  <ExclamationCircleIcon className="h-5 w-5 text-red-500 dark:text-red-400 shrink-0 mt-0.5" />
                   <div className="flex-1">
                     <p className="text-red-600 dark:text-red-400 text-sm">{error}</p>
                     {errorId && (
@@ -219,7 +219,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full py-3 px-4 rounded-xl bg-primary text-white font-medium hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="w-full py-3 px-4 rounded-xl bg-primary text-white font-medium hover:bg-primary-700 focus:outline-hidden focus:ring-2 focus:ring-primary/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {isLoading ? (
                 <span className="flex items-center justify-center gap-2">

@@ -9,7 +9,7 @@ Last reviewed: 2026-10-10
 RecallHub is no longer just the original `examples/` RAG prototype. The active product is:
 
 - `backend/`: production FastAPI API, orchestration, providers, services, auth, backups, cloud sync, search, and admin endpoints.
-- `frontend/`: production React 18 + TypeScript + Vite 6 UI with tenant-aware branding and feature gating.
+- `frontend/`: production React 19 + TypeScript + Vite 8 (Tailwind CSS 4, Vitest 5) UI with tenant-aware branding and feature gating.
 - `backend/workers/ingestion_worker.py`: background ingestion worker that keeps the API responsive.
 - `src/`: still important shared Python code for ingestion, profiles, CLI tooling, and settings integration used by the worker and some backend flows.
 - `docker-compose.yml`: the main multi-tenant dev/runtime stack.
@@ -108,7 +108,7 @@ npm --prefix frontend run test:run
 npm --prefix frontend run build
 ```
 
-`frontend/package.json` defines the canonical scripts. `build` also type-checks via `tsc && vite build`.
+`frontend/package.json` defines the canonical scripts. `build` also type-checks via `tsc && vite build`. Since 2026-10-23 `tsc` is the native TypeScript 7 compiler (`@typescript/native`, an npm alias of `typescript@7`), while the `typescript` package is an alias of `@typescript/typescript6`: TypeScript 7 ships no JavaScript API yet, and typescript-eslint, the editor and other tooling need the 6.x API. Drop the alias once typescript-eslint supports TypeScript 7.1+. `tsconfig.json` has no `baseUrl` (removed in TS 7).
 
 ### Docker dev stack
 
@@ -272,6 +272,7 @@ docker compose --profile quellex build frontend-quellex
 - Profile folders are container paths. `./mounts` is mounted whole at `/app/mounts` in the backends and the worker, and network shares are attached below `/app/mounts` through `docker-compose.shares.yml`; the backend and the worker must see the same paths or the document viewer falls back to plain text. Ingestion jobs call `ProfileManager.reload()` first, so folder edits need no restart.
 - `frontend/src/api/client.ts` is the real frontend contract hub. If you change backend payloads and skip it, the UI will drift.
 - `openapi.json` is generated output. Do not hand-edit it.
+- Never run `tsc -p frontend/tsconfig.node.json` on its own: that config is `composite` without `noEmit`, so it writes `vite.config.js`, `vite.config.d.ts` and `tsconfig.node.tsbuildinfo` next to `vite.config.ts`, and Vite then loads the stale `.js` first. Delete those files if they appear. `npm run build` only type-checks `tsconfig.json`.
 - There is historical config in the repo that uses embedded defaults for secret-like values. Do not repeat that pattern.
 
 ## Delivery Checklist

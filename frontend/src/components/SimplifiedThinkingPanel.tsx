@@ -63,7 +63,7 @@ export default function SimplifiedThinkingPanel({ thinking }: SimplifiedThinking
               className="text-xs text-primary-800 dark:text-gray-300 space-y-0.5"
             >
               <div className="flex items-center gap-2">
-                <CheckCircleIcon className="h-3 w-3 text-green-500 flex-shrink-0" />
+                <CheckCircleIcon className="h-3 w-3 text-green-500 shrink-0" />
                 <span className="text-secondary dark:text-gray-400">{t('userView.searched')}:</span>
                 <span className="truncate max-w-[250px]">
                   {op.query.length > 80 ? op.query.substring(0, 80) + '...' : op.query}
@@ -84,9 +84,9 @@ export default function SimplifiedThinkingPanel({ thinking }: SimplifiedThinking
               className="flex items-center gap-2 text-xs text-primary-800 dark:text-gray-300"
             >
               {tool.success ? (
-                <CheckCircleIcon className="h-3 w-3 text-green-500 flex-shrink-0" />
+                <CheckCircleIcon className="h-3 w-3 text-green-500 shrink-0" />
               ) : (
-                <XCircleIcon className="h-3 w-3 text-red-500 flex-shrink-0" />
+                <XCircleIcon className="h-3 w-3 text-red-500 shrink-0" />
               )}
               <span>
                 {t(`userView.toolType.${tool.tool_name}`, { defaultValue: t('userView.toolType.default') })}

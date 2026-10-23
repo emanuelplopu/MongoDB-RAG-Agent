@@ -69,7 +69,7 @@ function ChunkCard({ chunk, index }: { chunk: DocumentChunk; index: number }) {
           {Object.keys(chunk.metadata).length > 0 && (
             <div className="mt-3 pt-3 border-t border-surface-variant dark:border-gray-700">
               <p className="text-xs font-medium text-secondary mb-2">{t('docPreviewPage.metadata')}</p>
-              <pre className="text-xs text-secondary bg-gray-50 dark:bg-gray-800 p-2 rounded overflow-x-auto">
+              <pre className="text-xs text-secondary bg-gray-50 dark:bg-gray-800 p-2 rounded-sm overflow-x-auto">
                 {JSON.stringify(chunk.metadata, null, 2)}
               </pre>
             </div>
@@ -100,7 +100,7 @@ export default function DocumentPreviewPage() {
     remote_path?: string
     is_cached?: boolean
   } | null>(null)
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+   
   const [_loadingCloudInfo, setLoadingCloudInfo] = useState(false)
   
   // File preview modal state
@@ -294,7 +294,7 @@ export default function DocumentPreviewPage() {
             <button
               onClick={() => {
                 // Extract the path: for host paths it's after the emoji, for container paths it's after the double newline
-                let path = ''
+                let path: string
                 if (explorerMessage.startsWith('📂')) {
                   path = explorerMessage.replace('📂 ', '')
                 } else {
@@ -321,7 +321,7 @@ export default function DocumentPreviewPage() {
       {/* Document Info Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* File Info */}
-        <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-xs">
           <div className="flex items-center gap-2 mb-3">
             <DocumentIcon className="h-5 w-5 text-primary" />
             <h3 className="font-medium text-primary-900 dark:text-primary-200">{t('docPreviewPage.fileInfo')}</h3>
@@ -353,7 +353,7 @@ export default function DocumentPreviewPage() {
         </div>
 
         {/* Chunks Info */}
-        <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-xs">
           <div className="flex items-center gap-2 mb-3">
             <CubeIcon className="h-5 w-5 text-primary" />
             <h3 className="font-medium text-primary-900 dark:text-primary-200">{t('docPreviewPage.chunksSemantic')}</h3>
@@ -383,7 +383,7 @@ export default function DocumentPreviewPage() {
         </div>
 
         {/* Metadata */}
-        <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-xs">
           <div className="flex items-center gap-2 mb-3">
             <ClockIcon className="h-5 w-5 text-primary" />
             <h3 className="font-medium text-primary-900 dark:text-primary-200">{t('docPreviewPage.timestamps')}</h3>
@@ -407,7 +407,7 @@ export default function DocumentPreviewPage() {
 
       {/* File Path / Cloud Source Path */}
       {(doc.file_path || cloudSourceInfo?.remote_path) && (
-        <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-xs">
           <h3 className="font-medium text-primary-900 dark:text-primary-200 mb-2">
             {cloudSourceInfo?.is_cloud_source ? t('docPreviewPage.cloudPath') : t('docPreviewPage.filePath')}
           </h3>
@@ -424,7 +424,7 @@ export default function DocumentPreviewPage() {
 
       {/* Document Metadata */}
       {Object.keys(doc.metadata).length > 0 && (
-        <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-xs">
           <h3 className="font-medium text-primary-900 dark:text-primary-200 mb-3">{t('docPreviewPage.documentMetadata')}</h3>
           <pre className="text-sm bg-gray-50 dark:bg-gray-900 p-3 rounded-lg text-secondary overflow-x-auto">
             {JSON.stringify(doc.metadata, null, 2)}
@@ -433,7 +433,7 @@ export default function DocumentPreviewPage() {
       )}
 
       {/* Raw Content Preview */}
-      <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-xs">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-medium text-primary-900 dark:text-primary-200">{t('docPreviewPage.documentContent')}</h3>
           <button
@@ -451,7 +451,7 @@ export default function DocumentPreviewPage() {
       </div>
 
       {/* Chunks Section */}
-      <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-xs">
         <h3 className="font-medium text-primary-900 dark:text-primary-200 mb-4">
           {t('docPreviewPage.chunksCount', { count: doc.chunks_count })}
         </h3>

@@ -289,9 +289,9 @@ export function SettingsToggle({
         disabled={disabled}
         onClick={() => !disabled && onChange(!checked)}
         className={`
-          relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full 
+          relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full 
           border-2 border-transparent transition-colors duration-200 ease-in-out
-          focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2
+          focus:outline-hidden focus:ring-2 focus:ring-primary focus:ring-offset-2
           disabled:cursor-not-allowed
           ${checked ? 'bg-primary' : 'bg-gray-200 dark:bg-gray-600'}
         `}
@@ -340,7 +340,7 @@ export function SettingsSelect<T extends string>({
         value={value}
         onChange={(e) => onChange(e.target.value as T)}
         disabled={disabled}
-        className="px-3 py-1.5 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:cursor-not-allowed"
+        className="px-3 py-1.5 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 text-sm focus:outline-hidden focus:ring-2 focus:ring-primary disabled:cursor-not-allowed"
       >
         {options.map(option => (
           <option key={option.value} value={option.value}>
@@ -395,7 +395,7 @@ export function SettingsNumber({
           step={step}
           onChange={(e) => onChange(Number(e.target.value))}
           disabled={disabled}
-          className="w-20 px-3 py-1.5 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 text-sm text-right focus:outline-none focus:ring-2 focus:ring-primary disabled:cursor-not-allowed"
+          className="w-20 px-3 py-1.5 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 text-sm text-right focus:outline-hidden focus:ring-2 focus:ring-primary disabled:cursor-not-allowed"
         />
         {suffix && (
           <span className="text-sm text-gray-500 dark:text-gray-400">{suffix}</span>

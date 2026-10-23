@@ -462,7 +462,7 @@ export default function IngestionAnalyticsPage() {
                             style={{ height: `${Math.max(height, 2)}%` }}
                           />
                           <div className="absolute bottom-full mb-2 hidden group-hover:block z-10">
-                            <div className="bg-gray-900 text-white text-xs rounded px-2 py-1 whitespace-nowrap">
+                            <div className="bg-gray-900 text-white text-xs rounded-sm px-2 py-1 whitespace-nowrap">
                               {entry.hour.split('T')[1]}:00 - {entry.files_processed} files ({entry.successful} ok)
                             </div>
                           </div>

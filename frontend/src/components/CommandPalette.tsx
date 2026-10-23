@@ -239,7 +239,7 @@ export default function CommandPalette({ isOpen, onClose }: CommandPaletteProps)
     <div className="fixed inset-0 z-50 overflow-y-auto">
       {/* Backdrop */}
       <div 
-        className="fixed inset-0 bg-black/50 backdrop-blur-sm"
+        className="fixed inset-0 bg-black/50 backdrop-blur-xs"
         onClick={onClose}
       />
       
@@ -259,9 +259,9 @@ export default function CommandPalette({ isOpen, onClose }: CommandPaletteProps)
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Search pages, actions..."
-              className="flex-1 bg-transparent text-primary-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none"
+              className="flex-1 bg-transparent text-primary-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-hidden"
             />
-            <kbd className="hidden sm:inline-flex items-center gap-1 px-2 py-1 text-xs text-gray-400 bg-gray-100 dark:bg-gray-700 rounded">
+            <kbd className="hidden sm:inline-flex items-center gap-1 px-2 py-1 text-xs text-gray-400 bg-gray-100 dark:bg-gray-700 rounded-sm">
               ESC
             </kbd>
           </div>
@@ -295,7 +295,7 @@ export default function CommandPalette({ isOpen, onClose }: CommandPaletteProps)
                           }
                         `}
                       >
-                        <Icon className="h-5 w-5 flex-shrink-0" />
+                        <Icon className="h-5 w-5 shrink-0" />
                         <div className="flex-1 min-w-0">
                           <div className="font-medium truncate">{item.label}</div>
                           {item.description && (
@@ -305,7 +305,7 @@ export default function CommandPalette({ isOpen, onClose }: CommandPaletteProps)
                           )}
                         </div>
                         {isSelected && (
-                          <ArrowRightIcon className="h-4 w-4 flex-shrink-0" />
+                          <ArrowRightIcon className="h-4 w-4 shrink-0" />
                         )}
                       </button>
                     )
@@ -318,15 +318,15 @@ export default function CommandPalette({ isOpen, onClose }: CommandPaletteProps)
           {/* Footer */}
           <div className="px-4 py-2 border-t border-gray-200 dark:border-gray-700 flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400">
             <span className="flex items-center gap-1">
-              <kbd className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-700 rounded">↑↓</kbd>
+              <kbd className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-700 rounded-sm">↑↓</kbd>
               Navigate
             </span>
             <span className="flex items-center gap-1">
-              <kbd className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-700 rounded">↵</kbd>
+              <kbd className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-700 rounded-sm">↵</kbd>
               Select
             </span>
             <span className="flex items-center gap-1">
-              <kbd className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-700 rounded">Esc</kbd>
+              <kbd className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-700 rounded-sm">Esc</kbd>
               Close
             </span>
           </div>

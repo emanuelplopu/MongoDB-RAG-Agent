@@ -32,7 +32,7 @@ export function useLocalStorage<T>(
   } = options
 
   const fullKey = prefix + key
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout>>()
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
 
   // Initialize state from localStorage or use initial value
   const [storedValue, setStoredValue] = useState<T>(() => {

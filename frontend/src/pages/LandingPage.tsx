@@ -84,7 +84,7 @@ export default function LandingPage() {
   // Minimal variant: streamlined hero + single CTA, no features/benefits sections
   if (variant === 'minimal') {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-background to-surface-variant dark:from-gray-900 dark:to-gray-800 flex flex-col">
+      <div className="min-h-screen bg-linear-to-b from-background to-surface-variant dark:from-gray-900 dark:to-gray-800 flex flex-col">
         <div className="absolute top-4 right-4 z-50 flex items-center gap-2">
           <LanguageSwitcher />
           <ThemeSwitcher />
@@ -139,7 +139,7 @@ export default function LandingPage() {
   const isProfessional = variant === 'professional'
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-background to-surface-variant dark:from-gray-900 dark:to-gray-800">
+    <div className="min-h-screen bg-linear-to-b from-background to-surface-variant dark:from-gray-900 dark:to-gray-800">
       {/* Top Bar with Language and Theme Switchers */}
       <div className="absolute top-4 right-4 z-50 flex items-center gap-2">
         <LanguageSwitcher />
@@ -232,8 +232,8 @@ export default function LandingPage() {
               className="group relative bg-surface dark:bg-gray-800 rounded-2xl p-6 shadow-elevation-1 hover:shadow-elevation-3 transition-all duration-300 hover:-translate-y-1"
             >
               {/* Gradient border effect on hover */}
-              <div className={`absolute inset-0 rounded-2xl bg-gradient-to-r ${feature.color} opacity-0 group-hover:opacity-100 transition-opacity duration-300 -z-10 blur-sm`} />
-              <div className="absolute inset-[1px] rounded-2xl bg-surface dark:bg-gray-800" />
+              <div className={`absolute inset-0 rounded-2xl bg-linear-to-r ${feature.color} opacity-0 group-hover:opacity-100 transition-opacity duration-300 -z-10 blur-xs`} />
+              <div className="absolute inset-px rounded-2xl bg-surface dark:bg-gray-800" />
               
               <div className="relative">
                 <div className={`inline-flex items-center justify-center w-14 h-14 rounded-xl ${feature.bgLight} mb-4`}>
@@ -268,7 +268,7 @@ export default function LandingPage() {
               <ul className="space-y-4">
                 {benefitKeys.map((benefitKey) => (
                   <li key={benefitKey} className="flex items-start gap-3">
-                    <CheckCircleIcon className="h-6 w-6 text-green-500 flex-shrink-0 mt-0.5" />
+                    <CheckCircleIcon className="h-6 w-6 text-green-500 shrink-0 mt-0.5" />
                     <span className="text-primary-900 dark:text-gray-200">{t(benefitKey)}</span>
                   </li>
                 ))}
@@ -284,10 +284,10 @@ export default function LandingPage() {
                     <div className="w-3 h-3 rounded-full bg-green-500" />
                   </div>
                   <div className="space-y-3">
-                    <div className="h-4 bg-surface-variant dark:bg-gray-700 rounded w-3/4" />
-                    <div className="h-4 bg-surface-variant dark:bg-gray-700 rounded w-1/2" />
-                    <div className="h-4 bg-primary/20 rounded w-5/6" />
-                    <div className="h-4 bg-surface-variant dark:bg-gray-700 rounded w-2/3" />
+                    <div className="h-4 bg-surface-variant dark:bg-gray-700 rounded-sm w-3/4" />
+                    <div className="h-4 bg-surface-variant dark:bg-gray-700 rounded-sm w-1/2" />
+                    <div className="h-4 bg-primary/20 rounded-sm w-5/6" />
+                    <div className="h-4 bg-surface-variant dark:bg-gray-700 rounded-sm w-2/3" />
                   </div>
                   <div className="flex items-center gap-2 text-sm text-secondary dark:text-gray-400 pt-2">
                     <SparklesIcon className="h-4 w-4 text-primary" />

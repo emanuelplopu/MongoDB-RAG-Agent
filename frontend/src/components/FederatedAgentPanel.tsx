@@ -89,7 +89,7 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
         )}
         <CpuChipIcon className="h-3 w-3" />
         <span className="font-medium">{t('agentPanel.header')}</span>
-        <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300">
+        <span className="text-[10px] px-1.5 py-0.5 rounded-sm bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300">
           {trace.mode}
         </span>
         <span className="text-[10px] opacity-60">
@@ -105,8 +105,8 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
         <div className="mt-2 space-y-3 pl-4 border-l-2 border-primary-200 dark:border-primary-800">
           {/* Models used */}
           <div className="flex items-center gap-3 text-[10px] text-secondary dark:text-gray-500">
-            <span>🧠 {t('agentPanel.orchestratorModel')} <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">{trace.models?.orchestrator ?? t('agentPanel.na')}</code></span>
-            <span>⚡ {t('agentPanel.workerModel')} <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">{trace.models?.worker ?? t('agentPanel.na')}</code></span>
+            <span>🧠 {t('agentPanel.orchestratorModel')} <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded-sm">{trace.models?.orchestrator ?? t('agentPanel.na')}</code></span>
+            <span>⚡ {t('agentPanel.workerModel')} <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded-sm">{trace.models?.worker ?? t('agentPanel.na')}</code></span>
           </div>
 
           {/* Orchestrator Steps */}
@@ -146,7 +146,7 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
                           <p className="text-[10px] text-gray-600 dark:text-gray-400 line-clamp-2 flex-1">
                             {step.reasoning.length > 200 ? step.reasoning.slice(0, 200) + '...' : step.reasoning}
                           </p>
-                          <CopyIconButton text={step.reasoning} size="xs" className="flex-shrink-0" />
+                          <CopyIconButton text={step.reasoning} size="xs" className="shrink-0" />
                         </div>
                       )}
                     </div>
@@ -203,7 +203,7 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
 
                       {/* Input */}
                       {step.input && Object.keys(step.input).length > 0 && (
-                        <div className="bg-gray-100 dark:bg-gray-700/50 rounded px-2 py-1 flex items-start gap-1">
+                        <div className="bg-gray-100 dark:bg-gray-700/50 rounded-sm px-2 py-1 flex items-start gap-1">
                           <div className="flex-1">
                             <span className="text-[10px] text-secondary dark:text-gray-500 font-medium">{t('agentPanel.input')} </span>
                             <span className="text-primary-900 dark:text-gray-200 text-[10px]">
@@ -213,7 +213,7 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
                               })()}
                             </span>
                           </div>
-                          <CopyIconButton text={JSON.stringify(step.input, null, 2)} size="xs" className="flex-shrink-0" />
+                          <CopyIconButton text={JSON.stringify(step.input, null, 2)} size="xs" className="shrink-0" />
                         </div>
                       )}
 
@@ -233,7 +233,7 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
                       {(step.documents ?? []).length > 0 && (
                         <div className="space-y-1 border-t border-gray-200 dark:border-gray-700 pt-1">
                           {(step.documents ?? []).slice(0, 2).map((doc, didx) => (
-                            <div key={didx} className="bg-gray-50 dark:bg-gray-800 rounded px-2 py-1">
+                            <div key={didx} className="bg-gray-50 dark:bg-gray-800 rounded-sm px-2 py-1">
                               <div className="flex items-center justify-between">
                                 <span className="text-[10px] font-medium text-primary-700 dark:text-primary-300 truncate max-w-[180px]">
                                   {doc.title}
@@ -285,7 +285,7 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
                     {(trace.sources?.documents ?? []).slice(0, 5).map((doc, idx) => (
                       <div
                         key={idx}
-                        className="p-2 rounded bg-gray-50 dark:bg-gray-800 text-xs"
+                        className="p-2 rounded-sm bg-gray-50 dark:bg-gray-800 text-xs"
                       >
                         <div className="flex items-center justify-between">
                           <span className="font-medium text-primary-700 dark:text-primary-300 truncate max-w-[200px]">
@@ -293,7 +293,7 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
                           </span>
                           <div className="flex items-center gap-1">
                             <CopyIconButton text={doc.excerpt} size="xs" />
-                            <span className="text-[9px] px-1 py-0.5 rounded bg-primary-100 dark:bg-primary-900 text-primary-600 dark:text-primary-400">
+                            <span className="text-[9px] px-1 py-0.5 rounded-sm bg-primary-100 dark:bg-primary-900 text-primary-600 dark:text-primary-400">
                               {doc.source_type}
                             </span>
                           </div>
@@ -323,7 +323,7 @@ export default function FederatedAgentPanel({ trace }: FederatedAgentPanelProps)
                     {(trace.sources?.web_links ?? []).slice(0, 3).map((link, idx) => (
                       <div
                         key={idx}
-                        className="p-2 rounded bg-gray-50 dark:bg-gray-800 text-xs"
+                        className="p-2 rounded-sm bg-gray-50 dark:bg-gray-800 text-xs"
                       >
                         <div className="flex items-center gap-1">
                           <a

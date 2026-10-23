@@ -285,7 +285,7 @@ function SuggestionCard({ suggestion }: { suggestion: OptimizationSuggestion }) 
   return (
     <div className={`${styles.bg} ${styles.border} border-l-4 rounded-r-xl p-4`}>
       <div className="flex items-start gap-3">
-        <ExclamationTriangleIcon className={`h-5 w-5 ${styles.icon} flex-shrink-0 mt-0.5`} />
+        <ExclamationTriangleIcon className={`h-5 w-5 ${styles.icon} shrink-0 mt-0.5`} />
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-1">
             <h4 className="font-medium text-primary-900 dark:text-gray-200">{suggestion.title}</h4>

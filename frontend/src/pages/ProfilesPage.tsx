@@ -340,7 +340,7 @@ export default function ProfilesPage() {
                   onChange={(e) => setNewProfile({ ...newProfile, key: e.target.value })}
                   placeholder="my-project"
                   required
-                  className="w-full rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-primary-900 dark:text-gray-200 placeholder:text-secondary dark:placeholder:text-gray-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  className="w-full rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-primary-900 dark:text-gray-200 placeholder:text-secondary dark:placeholder:text-gray-500 focus:border-primary focus:outline-hidden focus:ring-2 focus:ring-primary/20"
                 />
               </div>
               <div>
@@ -353,7 +353,7 @@ export default function ProfilesPage() {
                   onChange={(e) => setNewProfile({ ...newProfile, name: e.target.value })}
                   placeholder="My Project"
                   required
-                  className="w-full rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-primary-900 dark:text-gray-200 placeholder:text-secondary dark:placeholder:text-gray-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  className="w-full rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-primary-900 dark:text-gray-200 placeholder:text-secondary dark:placeholder:text-gray-500 focus:border-primary focus:outline-hidden focus:ring-2 focus:ring-primary/20"
                 />
               </div>
             </div>
@@ -366,7 +366,7 @@ export default function ProfilesPage() {
                 value={newProfile.description}
                 onChange={(e) => setNewProfile({ ...newProfile, description: e.target.value })}
                 placeholder="Optional description"
-                className="w-full rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-primary-900 dark:text-gray-200 placeholder:text-secondary dark:placeholder:text-gray-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                className="w-full rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-primary-900 dark:text-gray-200 placeholder:text-secondary dark:placeholder:text-gray-500 focus:border-primary focus:outline-hidden focus:ring-2 focus:ring-primary/20"
               />
             </div>
             <div>
@@ -379,7 +379,7 @@ export default function ProfilesPage() {
                 onChange={(e) => setNewProfile({ ...newProfile, documents_folders: e.target.value })}
                 placeholder="./documents, ./data (comma-separated)"
                 required
-                className="w-full rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-primary-900 dark:text-gray-200 placeholder:text-secondary dark:placeholder:text-gray-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                className="w-full rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-primary-900 dark:text-gray-200 placeholder:text-secondary dark:placeholder:text-gray-500 focus:border-primary focus:outline-hidden focus:ring-2 focus:ring-primary/20"
               />
             </div>
             <div>
@@ -391,7 +391,7 @@ export default function ProfilesPage() {
                 value={newProfile.database}
                 onChange={(e) => setNewProfile({ ...newProfile, database: e.target.value })}
                 placeholder="Optional (defaults to profile key)"
-                className="w-full rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-primary-900 dark:text-gray-200 placeholder:text-secondary dark:placeholder:text-gray-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                className="w-full rounded-xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-4 py-2 text-primary-900 dark:text-gray-200 placeholder:text-secondary dark:placeholder:text-gray-500 focus:border-primary focus:outline-hidden focus:ring-2 focus:ring-primary/20"
               />
             </div>
             <div className="flex gap-3 pt-2">
@@ -532,7 +532,7 @@ export default function ProfilesPage() {
                       value={editProfile.name}
                       onChange={(e) => setEditProfile({ ...editProfile, name: e.target.value })}
                       required
-                      className="w-full rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
+                      className="w-full rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden focus:ring-1 focus:ring-primary/20"
                     />
                   </div>
                   <div>
@@ -543,7 +543,7 @@ export default function ProfilesPage() {
                       type="text"
                       value={editProfile.description}
                       onChange={(e) => setEditProfile({ ...editProfile, description: e.target.value })}
-                      className="w-full rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
+                      className="w-full rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden focus:ring-1 focus:ring-primary/20"
                     />
                   </div>
                   <div>
@@ -559,12 +559,12 @@ export default function ProfilesPage() {
                             key={folder}
                             className="flex items-center gap-2 rounded-lg bg-surface-variant dark:bg-gray-700 px-2 py-1 text-xs text-primary-900 dark:text-gray-200"
                           >
-                            <FolderIcon className="h-4 w-4 text-secondary dark:text-gray-400 flex-shrink-0" />
+                            <FolderIcon className="h-4 w-4 text-secondary dark:text-gray-400 shrink-0" />
                             <span className="truncate flex-1" title={folder}>{folder}</span>
                             <button
                               type="button"
                               onClick={() => removeFolder(folder)}
-                              className="rounded p-1 text-secondary hover:text-red-600 dark:hover:text-red-400"
+                              className="rounded-sm p-1 text-secondary hover:text-red-600 dark:hover:text-red-400"
                               title={t('profiles.removeFolder', 'Remove folder')}
                               aria-label={`${t('profiles.removeFolder', 'Remove folder')}: ${folder}`}
                             >
@@ -587,7 +587,7 @@ export default function ProfilesPage() {
                         }}
                         placeholder={t('profiles.folderPathPlaceholder')}
                         aria-label={t('profiles.addFolder', 'Add folder')}
-                        className="flex-1 min-w-0 rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
+                        className="flex-1 min-w-0 rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden focus:ring-1 focus:ring-primary/20"
                       />
                       <button
                         type="button"
@@ -617,7 +617,7 @@ export default function ProfilesPage() {
                         type="text"
                         value={editProfile.database}
                         onChange={(e) => setEditProfile({ ...editProfile, database: e.target.value })}
-                        className="w-full rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
+                        className="w-full rounded-lg border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden focus:ring-1 focus:ring-primary/20"
                       />
                     </div>
                   )}
