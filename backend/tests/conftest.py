@@ -5,6 +5,7 @@ Pytest fixtures and configuration for testing the FastAPI backend.
 """
 
 import asyncio
+import os
 import sys
 from types import ModuleType, SimpleNamespace
 from typing import Any, AsyncGenerator, Generator
@@ -13,6 +14,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 from httpx import AsyncClient, ASGITransport
+
+# Keep every test away from the database the developer's `.env` points at (on the dev box
+# that is the live stack): pydantic-settings and python-dotenv never override variables
+# that are already set, so these defaults win over `.env`. A test that needs a database
+# must start its own (the integration tests use a throwaway MongoDB) or set the URI itself.
+os.environ.setdefault("MONGODB_URI", "mongodb://localhost:27017/?directConnection=true")
+os.environ.setdefault("MONGODB_DATABASE", "test_rag_db")
 
 
 if "litellm" not in sys.modules:

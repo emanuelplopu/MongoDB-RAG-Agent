@@ -94,11 +94,18 @@ class TestIngestionControl:
 class TestIndexSetup:
     """Test index setup endpoints."""
 
-    def test_setup_indexes(self, client: TestClient):
-        """Test setting up search indexes."""
+    def test_setup_indexes(self, client: TestClient, monkeypatch):
+        """Test setting up search indexes (the real routine is stubbed).
+
+        ``src.setup_indexes.create_indexes`` connects to the MONGODB_URI of the local
+        ``.env`` and drops/recreates the vector index with that file's EMBEDDING_DIMENSION:
+        unstubbed, this test rewrote the live 768-d index as 3072-d on 2026-10-23.
+        """
+        calls = []
+        monkeypatch.setattr("src.setup_indexes.create_indexes", lambda: calls.append("called"))
         response = client.post("/api/v1/ingestion/setup-indexes")
-        # Should return result or error
-        assert response.status_code in [200, 500]
+        assert response.status_code == 200
+        assert calls == ["called"]
 
 
 class TestIngestionValidation:
