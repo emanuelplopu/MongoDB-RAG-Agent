@@ -404,7 +404,7 @@ services:
   # gateway/README.md and docs/21-LAN_ACCESS.md.
   gateway:
     profiles: [recallhub]
-    image: caddy:2.10-alpine
+    image: caddy:2.11-alpine
     container_name: rag-gateway
     ports:
       - "${RECALLHUB_GATEWAY_HTTPS_PORT:-11443}:443"
@@ -582,7 +582,7 @@ services:
   # request through here needs a login and a valid session.
   gateway-quellex:
     profiles: [quellex]
-    image: caddy:2.10-alpine
+    image: caddy:2.11-alpine
     container_name: rag-gateway-quellex
     ports:
       - "${QUELLEX_GATEWAY_HTTPS_PORT:-443}:443"

@@ -81,6 +81,27 @@ Edit `requirements-ml-heavy.txt` or `requirements-api.txt`, then:
 .\build-backend.ps1 -All
 ```
 
+The requirement files only set **floors** (`package>=x.y`), so every base
+build resolves to the newest compatible release on PyPI that day; there is no
+lockfile in the image (`uv.lock` is gitignored and not used by Docker). Raise
+the floors to the versions a rebuilt image was verified with so a later build
+cannot silently regress below them, and bump `ARG BASE_VERSION` in
+`backend/Dockerfile.base` whenever the dependency layer changes.
+
+### Building on a side-tagged base (without touching the live stack)
+
+`Dockerfile.fast` and `Dockerfile.worker` take a `BASE_IMAGE` build argument
+(default `recallhub-backend-base:latest`). To verify a dependency change
+without re-tagging `latest` or restarting the running containers:
+
+```powershell
+docker build -f backend/Dockerfile.base -t recallhub-backend-base:deps-check .
+docker build -f backend/Dockerfile.fast   --build-arg BASE_IMAGE=recallhub-backend-base:deps-check -t recallhub-backend:deps-check .
+docker build -f backend/Dockerfile.worker --build-arg BASE_IMAGE=recallhub-backend-base:deps-check -t recallhub-ingestion-worker:deps-check .
+```
+
+Re-tag to `latest` only when rolling out.
+
 ### Docling models in the base image
 
 Docling downloads its layout, table-structure and OCR models from

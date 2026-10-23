@@ -296,7 +296,7 @@ The uninstaller removes (in order):
 | Quellex LAN gateway (HTTPS / redirect) | 443 / 80 | network: `https://quellex.local` |
 | MongoDB Atlas Local | 11017 | this machine |
 
-The gateway image `caddy:2.10-alpine` is part of every image export
+The gateway image `caddy:2.11-alpine` is part of every image export
 (`export-docker-images.ps1`), so offline installs start it without a registry.
 
 ### Path Configuration
