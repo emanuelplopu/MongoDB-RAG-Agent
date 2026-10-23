@@ -127,11 +127,49 @@ settings surfaces, passed through by `docker-compose.yml`; evidence in
 | `INGEST_PAGE_FURNITURE` | `false` | Keep Docling's furniture layer (page headers/footers: Geschäftszahl headers, `Hinterlegt am …` ERV stamps, IBAN/UID footers) in the stored Markdown **and** in the HybridChunker's chunks. Docling drops it by default for every format; it never reached the index before. |
 | `OCR_IMAGE_NOISE_GATE` | `false` | Store `[Image: … - no readable text]` instead of letter soup for image files whose OCR output has a word-like token ratio < 0.45 and OCR confidence < 0.65 (or ratio < 0.25); photographed letters, forms and screenshots pass. |
 | `INGEST_SKIP_IMAGE_ONLY_PDF` | `false` | Image-only PDFs (pure scans without a text layer, ~30 % of the PDFs of a law-firm NAS) are OCRed like every other PDF, in the concurrent worker loop (`max_concurrent_files > 1`, the default of 2) as in the sequential one. `true` restores the old pre-check that skips them before OCR and records them as `image_only_pdf` without content — only for text-only profiles. A blank scan that is OCRed ends as `no_chunks`. See `docs/26-FORMAT_EDGE_AUDIT.md`. |
+| `INGEST_THREAD_POOL_WORKERS` | `4` | Size of the pipeline's shared thread pool (hashing, Docling conversion, folder discovery) for a run that passes none (CLI). The Configuration page's `thread_pool_workers` sets it per run, and the pool is never smaller than `max_concurrent_files`. See "Parallel conversions" below. |
+| `INGEST_DOCLING_THREADS` | derived | CPU threads per Docling model (layout, TableFormer). Default: the cores shared evenly across the pool, at most Docling's 4 (`OMP_NUM_THREADS` pins it too). |
+| `OCR_OMP_THREAD_LIMIT` | derived | OpenMP threads per Tesseract process. Default: the cores shared evenly across the pool, 1-4; `0` leaves OpenMP free. Applied through a generated wrapper command (`tesseract_command()` in `src/ingestion/ocr_tesseract.py`), so it never caps PyTorch in the ingestion process. |
 
 Converters are cached per worker thread and configuration
 (`create_document_converter()` / `create_image_converter()`); Docling keeps
 its initialised pipeline per converter instance, so the former per-file
 construction reloaded the layout model for every scanned file.
+
+**Parallel conversions (throughput).** Every run converts on one shared
+thread pool (`DocumentIngestionPipeline.configure_executor()`), sized from the
+performance config the Configuration page saves
+(`ingestion_config.performance_config`; API
+`GET`/`POST /api/v1/system/ingestion-performance`): `thread_pool_workers`
+threads, never fewer than `max_concurrent_files`, at most 32. Until 2026-10-23
+the pool was fixed at 2, so no setting could run more than two conversions at
+a time, and a job started from the UI (it runs inside the API process, not in
+the ingestion worker) fell back to one file at a time while no config was
+saved; both now follow the settings defaults (2 files, 4 threads). The CPU
+threads of the Docling models and of each Tesseract process are shared across
+the pool (table above), because Tesseract 5's OpenMP otherwise oversubscribes
+the CPU.
+
+Measured 2026-10-23 on an Ultra 9 285HX (23 cores to Docker, synthetic 150-DPI
+scan pages, Tesseract deu+eng, tables on): 1 conversion at a time 0.28 pages/s,
+2 → 0.50, 4 → 0.85, 8 → 1.36; 12 with free OpenMP threads collapsed to 0.30
+(22 cores busy, 39 s per page), while 16 with one OpenMP thread per Tesseract
+reached 2.00 pages/s on 13 busy cores, ~0.6 GB RSS per thread. Born-digital
+PDFs cost ~0.4 s/page for the layout model on the CPU (4 threads) and
+~0.1 s/page on the GPU; OCR time does not change with a GPU. Size the pool to
+the cores you can spare and to the memory of the Docker VM (`.wslconfig` on
+Windows: Docker Desktop gets a fraction of the host's RAM, and each conversion
+thread needs ~0.6 GB on top of MongoDB's cache), then watch `docker stats`
+during the first minutes of a run.
+
+A GPU in the worker or backend container (`deploy.resources.reservations.devices`
+as for `embedder-gpu`) is picked up automatically (`get_effective_device()`).
+The Docling accelerator options are always a real `AcceleratorOptions`
+(`docling_accelerator_options()`); the former dict assignment made every
+conversion fail with `'dict' object has no attribute 'device'` as soon as a
+GPU was visible. Each pool thread keeps its own converter, so N threads load
+the layout and TableFormer models N times on the GPU; keep that within the
+VRAM left by the embedder and the chat model.
 
 **Audio Processing** uses Whisper:
 - Transcribes audio content to text

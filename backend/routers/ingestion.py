@@ -1175,11 +1175,16 @@ async def run_ingestion(
                 raise asyncio.CancelledError("Shutdown requested")
             asyncio.create_task(progress_callback_async(current, total, current_file, chunks_in_file))
         
-        # Load performance config for concurrency
-        perf_config = await db.db["ingestion_config"].find_one({"_id": "performance_config"})
-        max_concurrent = perf_config.get("max_concurrent_files", 1) if perf_config else 1
-        
-        logger.info(f"Running ingestion with max_concurrent_files={max_concurrent}")
+        # Load performance config for concurrency (Configuration page); until one is
+        # saved the settings defaults apply, as in the ingestion worker
+        perf_config = await db.db["ingestion_config"].find_one({"_id": "performance_config"}) or {}
+        max_concurrent = int(perf_config.get("max_concurrent_files", settings.ingestion_max_concurrent_files))
+        thread_pool_workers = int(perf_config.get("thread_pool_workers", settings.ingestion_thread_pool_workers))
+
+        logger.info(
+            f"Running ingestion with max_concurrent_files={max_concurrent}, "
+            f"thread_pool_workers={thread_pool_workers}"
+        )
 
         async def pause_checkpoint() -> None:
             # The pipeline cleans before its file loop: from the first file on, a resume
@@ -1194,6 +1199,7 @@ async def run_ingestion(
             progress_callback=progress_callback,
             incremental=config.get("incremental", True),
             max_concurrent_files=max_concurrent,
+            thread_pool_workers=thread_pool_workers,
             job_id=job_id,
             pause_checkpoint=pause_checkpoint
         )

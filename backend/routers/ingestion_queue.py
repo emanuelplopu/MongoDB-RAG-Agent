@@ -612,17 +612,23 @@ async def _run_ingestion_job(job: Dict[str, Any], db) -> None:
         def sync_progress_callback(current: int, total: int, current_file: str = None, chunks_in_file: int = 0):
             asyncio.create_task(progress_callback_async(current, total, current_file, chunks_in_file))
         
-        # Load performance config for concurrency settings
-        perf_config = await db.db["ingestion_config"].find_one({"_id": "performance_config"})
-        max_concurrent = perf_config.get("max_concurrent_files", 1) if perf_config else 1
-        
-        logger.info(f"Running ingestion with max_concurrent_files={max_concurrent}")
-        
+        # Load performance config for concurrency settings (Configuration page); until one
+        # is saved the settings defaults apply, as in the ingestion worker
+        perf_config = await db.db["ingestion_config"].find_one({"_id": "performance_config"}) or {}
+        max_concurrent = int(perf_config.get("max_concurrent_files", settings.ingestion_max_concurrent_files))
+        thread_pool_workers = int(perf_config.get("thread_pool_workers", settings.ingestion_thread_pool_workers))
+
+        logger.info(
+            f"Running ingestion with max_concurrent_files={max_concurrent}, "
+            f"thread_pool_workers={thread_pool_workers}"
+        )
+
         # Run ingestion with configured concurrency
         results = await pipeline.ingest_documents(
             progress_callback=sync_progress_callback,
             incremental=job.get("incremental", True),
-            max_concurrent_files=max_concurrent
+            max_concurrent_files=max_concurrent,
+            thread_pool_workers=thread_pool_workers,
         )
         
         # Update final status

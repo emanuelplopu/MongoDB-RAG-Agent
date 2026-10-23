@@ -147,9 +147,9 @@ export default function ConfigurationPage() {
 
     // Validation rules for ingestion config fields
     const ingestionConfigValidation: Record<string, { min: number; max: number; label: string }> = {
-      max_concurrent_files: { min: 1, max: 10, label: 'Concurrent Files' },
+      max_concurrent_files: { min: 1, max: 32, label: 'Concurrent Files' },
       embedding_batch_size: { min: 10, max: 500, label: 'Embedding Batch Size' },
-      thread_pool_workers: { min: 1, max: 16, label: 'Thread Pool Workers' },
+      thread_pool_workers: { min: 1, max: 32, label: 'Thread Pool Workers' },
       embedding_requests_per_minute: { min: 100, max: 10000, label: 'Requests/Minute' },
       file_processing_timeout: { min: 60, max: 1800, label: 'File Timeout' },
       job_poll_interval_seconds: { min: 0.5, max: 10, label: 'Poll Interval' }
@@ -2719,12 +2719,12 @@ export default function ConfigurationPage() {
                   Concurrent Files
                 </label>
                 <p className="text-xs text-secondary dark:text-gray-500 mb-3">
-                  Files to process in parallel (1-10)
+                  Files converted in parallel (1-32); the thread pool is never smaller than this
                 </p>
                 <input
                   type="number"
                   min={1}
-                  max={10}
+                  max={32}
                   value={ingestionConfig.max_concurrent_files}
                   onChange={(e) => handleIngestionConfigChange('max_concurrent_files', Number(e.target.value))}
                   className={`w-full rounded-lg border ${ingestionConfigErrors.max_concurrent_files ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
@@ -2740,12 +2740,12 @@ export default function ConfigurationPage() {
                   Thread Pool Workers
                 </label>
                 <p className="text-xs text-secondary dark:text-gray-500 mb-3">
-                  Workers for CPU-bound tasks (1-16)
+                  Threads for hashing and document conversion (1-32); CPU threads per OCR process are shared across them
                 </p>
                 <input
                   type="number"
                   min={1}
-                  max={16}
+                  max={32}
                   value={ingestionConfig.thread_pool_workers}
                   onChange={(e) => handleIngestionConfigChange('thread_pool_workers', Number(e.target.value))}
                   className={`w-full rounded-lg border ${ingestionConfigErrors.thread_pool_workers ? 'border-red-500 dark:border-red-500' : 'border-gray-300 dark:border-gray-600'} bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-none`}
