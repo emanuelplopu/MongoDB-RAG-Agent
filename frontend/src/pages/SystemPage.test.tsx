@@ -35,7 +35,7 @@ const renderWithRouter = (ui: React.ReactElement) => {
 }
 
 // Start MSW server before tests
-beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
+beforeAll(() => server.listen({ onUnhandledFrame: 'error' }))
 afterEach(() => {
   server.resetHandlers()
   vi.clearAllMocks()

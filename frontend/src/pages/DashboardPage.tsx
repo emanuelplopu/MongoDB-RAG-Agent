@@ -110,7 +110,7 @@ export default function DashboardPage() {
         }
       })
 
-      let tokenEstimate = 0
+      let tokenEstimate: number
       if (file.type.startsWith('image/')) tokenEstimate = 765
       else if (file.type.startsWith('text/')) tokenEstimate = Math.floor(file.size / 4)
       else tokenEstimate = Math.floor(file.size / 100)

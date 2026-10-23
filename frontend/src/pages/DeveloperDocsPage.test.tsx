@@ -108,15 +108,17 @@ describe('DeveloperDocsPage', () => {
     expect(fetchMock).toHaveBeenCalledWith('/openapi.json', expect.objectContaining({ headers: expect.any(Object) }))
     expect(screen.getByText('4 endpoints')).toBeInTheDocument()
 
-    expect(screen.getByRole('button', { name: 'Auth (1)' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Documents (2)' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Other (1)' })).toBeInTheDocument()
+    // The count lives in a nested <span>; jsdom 30 computes the accessible name
+    // without an inserted space ("Auth(1)"), older jsdom added one.
+    expect(screen.getByRole('button', { name: /^Auth\s?\(1\)$/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Documents\s?\(2\)$/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Other\s?\(1\)$/ })).toBeInTheDocument()
 
     expect(screen.getByText('/auth/login')).toBeInTheDocument()
     expect(screen.getByText('Log a user in')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Try it' })).toHaveAttribute('href', '/docs#/Auth/post__auth_login')
 
-    await user.click(screen.getByRole('button', { name: 'Documents (2)' }))
+    await user.click(screen.getByRole('button', { name: /^Documents\s?\(2\)$/ }))
     expect(await screen.findByText('/documents')).toBeInTheDocument()
     expect(screen.getByText('/documents/{id}')).toBeInTheDocument()
 

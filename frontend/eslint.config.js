@@ -22,6 +22,16 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      // eslint-plugin-react-hooks 7 enables the React Compiler rules in
+      // "recommended". This app does not use the compiler; the rules that
+      // fire on existing code (72 sites on 2026-10-23) are warnings so new
+      // regressions in the other compiler rules still fail the script.
+      "react-hooks/set-state-in-effect": "warn",
+      "react-hooks/immutability": "warn",
+      "react-hooks/preserve-manual-memoization": "warn",
+      "react-hooks/static-components": "warn",
+      "react-hooks/refs": "warn",
+      "react-hooks/purity": "warn",
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
       // Unused `catch (err)` bindings, `_`-prefixed placeholders and rest-sibling
       // destructuring (`({ node, ...props })`) are established patterns here.

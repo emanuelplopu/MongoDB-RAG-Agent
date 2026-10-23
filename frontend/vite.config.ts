@@ -17,7 +17,7 @@ export default defineConfig({
     },
   },
   build: {
-    rollupOptions: {
+    rolldownOptions: {
       output: {
         // Include tenant in chunk names for cache busting between tenants
         chunkFileNames: `assets/${tenant}-[name]-[hash].js`,

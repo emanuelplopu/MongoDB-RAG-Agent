@@ -312,7 +312,7 @@ export default function ChatPage() {
       })
 
       // Estimate tokens for the attachment
-      let tokenEstimate = 0
+      let tokenEstimate: number
       if (file.type.startsWith('image/')) {
         // Default estimate for images (will be refined by backend)
         tokenEstimate = 765 // Default for 1024x1024 image

@@ -294,7 +294,7 @@ export default function DocumentPreviewPage() {
             <button
               onClick={() => {
                 // Extract the path: for host paths it's after the emoji, for container paths it's after the double newline
-                let path = ''
+                let path: string
                 if (explorerMessage.startsWith('📂')) {
                   path = explorerMessage.replace('📂 ', '')
                 } else {
