@@ -118,6 +118,11 @@ services:
       - OCR_RECT_DILATION=${OCR_RECT_DILATION:-20}
       - OCR_IMAGE_NOISE_GATE=${OCR_IMAGE_NOISE_GATE:-false}
       - INGEST_SKIP_IMAGE_ONLY_PDF=${INGEST_SKIP_IMAGE_ONLY_PDF:-false}
+      # Parallel conversions (docs/04, "Parallel conversions"): pool size for runs that
+      # pass none, CPU threads per Docling model and per Tesseract process (derived when empty)
+      - INGEST_THREAD_POOL_WORKERS=${INGEST_THREAD_POOL_WORKERS:-4}
+      - INGEST_DOCLING_THREADS=${INGEST_DOCLING_THREADS:-}
+      - OCR_OMP_THREAD_LIMIT=${OCR_OMP_THREAD_LIMIT:-}
       - MSG_EXTRACT_ATTACHMENTS=${MSG_EXTRACT_ATTACHMENTS:-false}
       - MSG_ATTACHMENT_MAX_MB=${MSG_ATTACHMENT_MAX_MB:-25}
       - MSG_ATTACHMENT_MAX_COUNT=${MSG_ATTACHMENT_MAX_COUNT:-20}
@@ -315,6 +320,11 @@ services:
       - OCR_RECT_DILATION=${OCR_RECT_DILATION:-20}
       - OCR_IMAGE_NOISE_GATE=${OCR_IMAGE_NOISE_GATE:-false}
       - INGEST_SKIP_IMAGE_ONLY_PDF=${INGEST_SKIP_IMAGE_ONLY_PDF:-false}
+      # Parallel conversions (docs/04, "Parallel conversions"): pool size for runs that
+      # pass none, CPU threads per Docling model and per Tesseract process (derived when empty)
+      - INGEST_THREAD_POOL_WORKERS=${INGEST_THREAD_POOL_WORKERS:-4}
+      - INGEST_DOCLING_THREADS=${INGEST_DOCLING_THREADS:-}
+      - OCR_OMP_THREAD_LIMIT=${OCR_OMP_THREAD_LIMIT:-}
       - MSG_EXTRACT_ATTACHMENTS=${MSG_EXTRACT_ATTACHMENTS:-false}
       - MSG_ATTACHMENT_MAX_MB=${MSG_ATTACHMENT_MAX_MB:-25}
       - MSG_ATTACHMENT_MAX_COUNT=${MSG_ATTACHMENT_MAX_COUNT:-20}
@@ -496,6 +506,11 @@ services:
       - OCR_RECT_DILATION=${OCR_RECT_DILATION:-20}
       - OCR_IMAGE_NOISE_GATE=${OCR_IMAGE_NOISE_GATE:-false}
       - INGEST_SKIP_IMAGE_ONLY_PDF=${INGEST_SKIP_IMAGE_ONLY_PDF:-false}
+      # Parallel conversions (docs/04, "Parallel conversions"): pool size for runs that
+      # pass none, CPU threads per Docling model and per Tesseract process (derived when empty)
+      - INGEST_THREAD_POOL_WORKERS=${INGEST_THREAD_POOL_WORKERS:-4}
+      - INGEST_DOCLING_THREADS=${INGEST_DOCLING_THREADS:-}
+      - OCR_OMP_THREAD_LIMIT=${OCR_OMP_THREAD_LIMIT:-}
       - MSG_EXTRACT_ATTACHMENTS=${MSG_EXTRACT_ATTACHMENTS:-false}
       - MSG_ATTACHMENT_MAX_MB=${MSG_ATTACHMENT_MAX_MB:-25}
       - MSG_ATTACHMENT_MAX_COUNT=${MSG_ATTACHMENT_MAX_COUNT:-20}
@@ -647,6 +662,11 @@ services:
       - OCR_RECT_DILATION=${OCR_RECT_DILATION:-20}
       - OCR_IMAGE_NOISE_GATE=${OCR_IMAGE_NOISE_GATE:-false}
       - INGEST_SKIP_IMAGE_ONLY_PDF=${INGEST_SKIP_IMAGE_ONLY_PDF:-false}
+      # Parallel conversions (docs/04, "Parallel conversions"): pool size for runs that
+      # pass none, CPU threads per Docling model and per Tesseract process (derived when empty)
+      - INGEST_THREAD_POOL_WORKERS=${INGEST_THREAD_POOL_WORKERS:-4}
+      - INGEST_DOCLING_THREADS=${INGEST_DOCLING_THREADS:-}
+      - OCR_OMP_THREAD_LIMIT=${OCR_OMP_THREAD_LIMIT:-}
       - MSG_EXTRACT_ATTACHMENTS=${MSG_EXTRACT_ATTACHMENTS:-false}
       - MSG_ATTACHMENT_MAX_MB=${MSG_ATTACHMENT_MAX_MB:-25}
       - MSG_ATTACHMENT_MAX_COUNT=${MSG_ATTACHMENT_MAX_COUNT:-20}

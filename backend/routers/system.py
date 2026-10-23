@@ -1595,11 +1595,17 @@ class IngestionPerformanceConfig(BaseModel):
     process_isolation_enabled: bool = Field(default=True, description="Run ingestion in separate worker process")
     
     # Concurrency settings
-    max_concurrent_files: int = Field(default=2, ge=1, le=10, description="Max files to process concurrently")
+    max_concurrent_files: int = Field(
+        default=2, ge=1, le=32,
+        description="Files processed concurrently; their conversions run in parallel on the thread pool",
+    )
     embedding_batch_size: int = Field(default=100, ge=10, le=500, description="Chunks to embed per API call")
-    
+
     # Worker pool settings
-    thread_pool_workers: int = Field(default=4, ge=1, le=16, description="Thread pool workers for CPU tasks")
+    thread_pool_workers: int = Field(
+        default=4, ge=1, le=32,
+        description="Thread pool workers for CPU tasks (hashing, Docling conversion); never below max_concurrent_files",
+    )
     
     # Rate limiting
     embedding_requests_per_minute: int = Field(default=3000, ge=100, le=10000, description="Embedding API rate limit")

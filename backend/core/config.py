@@ -247,8 +247,8 @@ class BackendSettings(BaseSettings):
     )
     ingestion_max_concurrent_files: int = Field(
         default=2,
-        ge=1, le=10,
-        description="Maximum number of files to process concurrently"
+        ge=1, le=32,
+        description="Maximum number of files to process concurrently (their conversions run in parallel)"
     )
     ingestion_embedding_batch_size: int = Field(
         default=100,
@@ -257,8 +257,8 @@ class BackendSettings(BaseSettings):
     )
     ingestion_thread_pool_workers: int = Field(
         default=4,
-        ge=1, le=16,
-        description="Number of thread pool workers for CPU-bound tasks"
+        ge=1, le=32,
+        description="Thread pool workers for CPU-bound tasks (hashing, Docling conversion); never below max_concurrent_files"
     )
     ingestion_embedding_requests_per_minute: int = Field(
         default=3000,

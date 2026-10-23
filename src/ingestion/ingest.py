@@ -413,6 +413,112 @@ def update_accelerator_config(
 
 
 # ---------------------------------------------------------------------------
+# Parallel conversions: thread pool size and CPU threads per model
+# ---------------------------------------------------------------------------
+#
+# The pipeline hashes, converts (Docling) and discovers files on one shared thread
+# pool. Its size follows the performance config (`thread_pool_workers`, Configuration
+# page) and is never smaller than the file concurrency of a run, so `max_concurrent_files`
+# conversions really run at once (it was fixed at 2 until 2026-10-23, which capped every
+# run at two conversions whatever the config said). The CPU threads of the Docling
+# models (layout, TableFormer) and of each Tesseract process are shared across the pool.
+
+MAX_THREAD_POOL_WORKERS = 32
+DEFAULT_THREAD_POOL_WORKERS = 4
+MAX_DOCLING_THREADS = 4
+_pool_workers_in_force: int = 0
+
+
+def available_cpu_count() -> int:
+    """CPUs this process may run on (affinity aware where the platform reports it)."""
+    try:
+        return len(os.sched_getaffinity(0))  # type: ignore[attr-defined]
+    except (AttributeError, OSError):
+        return os.cpu_count() or 1
+
+
+def _positive_int_env(*names: str) -> Optional[int]:
+    """The first positive integer among the environment variables ``names``."""
+    for name in names:
+        raw = os.getenv(name)
+        if raw is None or raw.strip() == "":
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            logger.warning(f"Ignoring non-numeric {name}={raw!r}")
+            continue
+        if value > 0:
+            return value
+    return None
+
+
+def default_thread_pool_workers() -> int:
+    """Pool size of a run that passes none: ``INGEST_THREAD_POOL_WORKERS`` or 4."""
+    return min(
+        MAX_THREAD_POOL_WORKERS,
+        _positive_int_env("INGEST_THREAD_POOL_WORKERS") or DEFAULT_THREAD_POOL_WORKERS,
+    )
+
+
+def resolve_thread_pool_workers(configured: Optional[int], max_concurrent_files: int = 1) -> int:
+    """Pool size for a run: ``configured`` (``thread_pool_workers``), never below the file concurrency.
+
+    Args:
+        configured: The performance config's ``thread_pool_workers``; the default when None/0.
+        max_concurrent_files: File concurrency of the run.
+
+    Returns:
+        The pool size, 1..MAX_THREAD_POOL_WORKERS.
+    """
+    base = int(configured) if configured else default_thread_pool_workers()
+    return max(1, min(MAX_THREAD_POOL_WORKERS, max(base, int(max_concurrent_files or 1))))
+
+
+def docling_num_threads(pool_workers: Optional[int] = None) -> int:
+    """CPU threads per Docling model (layout, TableFormer) for the pool size in force.
+
+    ``INGEST_DOCLING_THREADS`` (or Docling's own ``OMP_NUM_THREADS``) pins it; otherwise
+    the cores are shared evenly across the pool, at most Docling's default of 4.
+
+    Args:
+        pool_workers: Pool size to size for; the pool in force (or the default) when omitted.
+
+    Returns:
+        Threads per model, at least 1.
+    """
+    pinned = _positive_int_env("INGEST_DOCLING_THREADS", "OMP_NUM_THREADS")
+    if pinned:
+        return pinned
+    pool = pool_workers or _pool_workers_in_force or default_thread_pool_workers()
+    return max(1, min(MAX_DOCLING_THREADS, available_cpu_count() // max(1, pool)))
+
+
+def docling_accelerator_options(device: Optional[str] = None, num_threads: Optional[int] = None):
+    """Docling ``AcceleratorOptions`` for ``device`` (the effective device when omitted).
+
+    Always a real options object: a plain dict assigned to
+    ``pipeline_options.accelerator_options`` is not coerced by pydantic, and Docling
+    then failed every conversion with ``'dict' object has no attribute 'device'`` as
+    soon as a GPU was visible to the container (found 2026-10-23).
+
+    Args:
+        device: ``cpu``, ``cuda``, ``mps`` or ``auto``; ``cuda`` honours the configured
+            ``cuda_device_id`` (``cuda:N``).
+        num_threads: CPU threads per model; :func:`docling_num_threads` when omitted.
+
+    Returns:
+        A ``docling.datamodel.accelerator_options.AcceleratorOptions``.
+    """
+    from docling.datamodel.accelerator_options import AcceleratorOptions
+
+    device = device or get_effective_device()
+    if device == "cuda" and _accelerator_config.cuda_device_id > 0:
+        device = f"cuda:{_accelerator_config.cuda_device_id}"
+    return AcceleratorOptions(device=device, num_threads=num_threads or docling_num_threads())
+
+
+# ---------------------------------------------------------------------------
 # OCR engine configuration (Docling; scanned PDFs and image files)
 # ---------------------------------------------------------------------------
 
@@ -1034,6 +1140,13 @@ def build_ocr_options(config: OcrConfig, scale: Optional[float] = None):
             kwargs["psm"] = config.psm
         if config.tessdata_path:
             kwargs["path"] = config.tessdata_path
+        try:
+            from src.ingestion.ocr_tesseract import tesseract_command
+
+            # Wrapper that caps the OpenMP threads of each Tesseract process (OCR_OMP_THREAD_LIMIT)
+            kwargs["tesseract_cmd"] = tesseract_command()
+        except ImportError:  # older Docling without docling.models.stages: plain `tesseract`
+            pass
         options = None
         if config.osd_min_confidence > 0:
             try:
@@ -1178,7 +1291,10 @@ def create_document_converter(ocr_config: Optional[OcrConfig] = None):
         Configured DocumentConverter instance
     """
     ocr_config = ocr_config or resolve_ocr_config()
-    key = ("pdf", ocr_config, get_effective_device(), _accelerator_config.enable_ocr_acceleration)
+    key = (
+        "pdf", ocr_config, get_effective_device(), _accelerator_config.enable_ocr_acceleration,
+        docling_num_threads(),  # a resized pool rebuilds the converters with the new thread count
+    )
     return _cached_converter(key, lambda: _build_document_converter(ocr_config))
 
 
@@ -1195,17 +1311,16 @@ def _build_document_converter(ocr_config: OcrConfig):
         # Configure pipeline options for PDF processing
         pipeline_options = PdfPipelineOptions()
 
-        # Set accelerator device
+        # Accelerator: always a real AcceleratorOptions (see docling_accelerator_options)
+        pipeline_options.accelerator_options = docling_accelerator_options(device)
         if device in ["cuda", "mps"]:
-            pipeline_options.accelerator_options = {
-                "device": device,
-            }
-            if device == "cuda" and cfg.cuda_device_id > 0:
-                pipeline_options.accelerator_options["device_id"] = cfg.cuda_device_id
-
-            logger.info(f"Docling converter using GPU acceleration: {device}")
+            logger.info(
+                f"Docling converter using GPU acceleration: {pipeline_options.accelerator_options.device}"
+            )
         else:
-            logger.info("Docling converter using CPU")
+            logger.info(
+                f"Docling converter using CPU ({pipeline_options.accelerator_options.num_threads} threads per model)"
+            )
 
         # Enable OCR with acceleration if configured
         if cfg.enable_ocr_acceleration:
@@ -1264,7 +1379,7 @@ def create_image_converter(ocr_config: Optional[OcrConfig] = None, image_path: O
         dims = read_image_dimensions(image_path)
         if dims is not None:
             scale = ocr_config.image_scale(*dims)
-    key = ("image", ocr_config, get_effective_device())
+    key = ("image", ocr_config, get_effective_device(), docling_num_threads())
     converter = _cached_converter(key, lambda: _build_image_converter(ocr_config, None))
     if scale is not None:
         set_image_ocr_scale(converter, scale)
@@ -1324,10 +1439,8 @@ def _build_image_converter(ocr_config: OcrConfig, scale: Optional[float]):
     pipeline_options.do_ocr = True
     pipeline_options.do_table_structure = table_structure_enabled()
 
-    # Get effective device for acceleration
-    device = get_effective_device()
-    if device in ["cuda", "mps"]:
-        pipeline_options.accelerator_options = {"device": device}
+    # Accelerator: always a real AcceleratorOptions (see docling_accelerator_options)
+    pipeline_options.accelerator_options = docling_accelerator_options(get_effective_device())
 
     apply_ocr_options(pipeline_options, ocr_config, scale=scale)
 
@@ -1386,16 +1499,57 @@ def map_error_type_to_classification(error_type: Optional[str], chunks_created: 
 class DocumentIngestionPipeline:
     """Pipeline for ingesting documents into MongoDB vector database."""
     
-    # Thread pool for CPU-intensive operations (shared across instances)
-    # Using max 2 workers to leave resources for API handling
+    # Thread pool for the CPU-bound steps (hashing, Docling conversion, folder discovery),
+    # shared across instances. Sized per run by configure_executor() from the performance
+    # config; see resolve_thread_pool_workers().
     _executor: Optional[ThreadPoolExecutor] = None
-    
+    _executor_workers: int = 0
+
     @classmethod
     def get_executor(cls) -> ThreadPoolExecutor:
-        """Get or create thread pool executor."""
+        """The shared thread pool, created at its default size on first use."""
         if cls._executor is None:
-            # Use only 2 threads to leave CPU for API requests
-            cls._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ingest_")
+            cls.configure_executor(default_thread_pool_workers())
+        return cls._executor
+
+    @classmethod
+    def configure_executor(cls, workers: int) -> ThreadPoolExecutor:
+        """Size the shared pool to ``workers`` threads and share the CPU threads accordingly.
+
+        A pool of another size is replaced; the old one finishes its running tasks in the
+        background. Runs never overlap within one process (the API refuses a second job,
+        the worker takes one at a time), so a run reconfigures an idle pool. The Tesseract
+        thread limit (``OCR_OMP_THREAD_LIMIT``) follows the new size unless pinned, and
+        converters built for the old size are rebuilt on their next use (their cache key
+        carries the Docling thread count).
+
+        Args:
+            workers: Requested pool size; clamped to 1..MAX_THREAD_POOL_WORKERS.
+
+        Returns:
+            The pool in force.
+        """
+        global _pool_workers_in_force
+        workers = max(1, min(MAX_THREAD_POOL_WORKERS, int(workers)))
+        if cls._executor is not None and cls._executor_workers == workers:
+            return cls._executor
+        previous = cls._executor
+        cls._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ingest_")
+        cls._executor_workers = workers
+        _pool_workers_in_force = workers
+        if previous is not None:
+            previous.shutdown(wait=False)
+        try:
+            from src.ingestion.ocr_tesseract import configure_tesseract_threads
+        except ImportError:  # Docling not installed (unit tests without it): no Tesseract either
+            tesseract_threads: Optional[int] = None
+        else:
+            tesseract_threads = configure_tesseract_threads(workers)
+        logger.info(
+            f"Ingestion thread pool: {workers} workers; Docling threads per model: "
+            f"{docling_num_threads(workers)}; Tesseract OpenMP threads per process: "
+            f"{tesseract_threads if tesseract_threads else 'unlimited'}"
+        )
         return cls._executor
 
     def __init__(
@@ -2741,7 +2895,8 @@ class DocumentIngestionPipeline:
         incremental: bool = True,
         max_concurrent_files: int = 1,
         job_id: Optional[str] = None,
-        pause_checkpoint: Optional[Callable[[], Awaitable[None]]] = None
+        pause_checkpoint: Optional[Callable[[], Awaitable[None]]] = None,
+        thread_pool_workers: Optional[int] = None,
     ) -> List[IngestionResult]:
         """Ingest all documents; see :meth:`_ingest_documents_impl` for the arguments.
 
@@ -2756,6 +2911,7 @@ class DocumentIngestionPipeline:
                 max_concurrent_files=max_concurrent_files,
                 job_id=job_id,
                 pause_checkpoint=pause_checkpoint,
+                thread_pool_workers=thread_pool_workers,
             )
         finally:
             if token is not None:
@@ -2767,7 +2923,8 @@ class DocumentIngestionPipeline:
         incremental: bool = True,
         max_concurrent_files: int = 1,
         job_id: Optional[str] = None,
-        pause_checkpoint: Optional[Callable[[], Awaitable[None]]] = None
+        pause_checkpoint: Optional[Callable[[], Awaitable[None]]] = None,
+        thread_pool_workers: Optional[int] = None,
     ) -> List[IngestionResult]:
         """
         Ingest all documents from the documents folder.
@@ -2781,12 +2938,18 @@ class DocumentIngestionPipeline:
                 starts. It may block to pause the run between files, or raise
                 ``asyncio.CancelledError`` to abort it. The synchronous
                 ``progress_callback`` cannot do either without blocking the event loop.
+            thread_pool_workers: Size of the shared thread pool for this run (the
+                performance config's ``thread_pool_workers``); ``INGEST_THREAD_POOL_WORKERS``
+                or 4 when omitted, and never below ``max_concurrent_files``.
 
         Returns:
             List of ingestion results
         """
         if not self._initialized:
             await self.initialize()
+
+        # Size the shared pool for this run: conversions, hashing and discovery run on it
+        self.configure_executor(resolve_thread_pool_workers(thread_pool_workers, max_concurrent_files))
 
         # Clean existing data if requested
         if self.clean_before_ingest:

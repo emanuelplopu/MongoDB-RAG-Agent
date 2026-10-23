@@ -31,7 +31,9 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import tempfile
+import threading
 from typing import ClassVar, Dict, List, Literal, Optional, Type
 
 import pandas as pd
@@ -273,3 +275,121 @@ def register_tesseract_model() -> None:
         if RecallHubTesseractCliOcrOptions not in factory.classes:
             factory.register(RecallHubTesseractCliOcrModel, "recallhub", __name__)
     _registered = True
+
+
+# --------------------------------------------------------------------------------------
+# OpenMP threads per Tesseract process
+# --------------------------------------------------------------------------------------
+#
+# Tesseract 5 is built with OpenMP and takes up to four threads per process. That is
+# fine for one or two conversions at a time; with many parallel conversions the
+# processes oversubscribe the CPU and throughput collapses (measured 2026-10-23 on
+# 23 cores: 8 parallel conversions 1.4 pages/s, 12 parallel 0.3 pages/s; capped to
+# one thread each, 16 parallel reach 2.0 pages/s). The limit therefore follows the
+# size of the ingestion thread pool. It reaches Tesseract through a generated wrapper
+# command that exports OMP_THREAD_LIMIT for the Tesseract process only: exporting it
+# in the ingestion process itself would also cap PyTorch's threads for the layout model.
+
+OMP_LIMIT_ENV = "OCR_OMP_THREAD_LIMIT"
+MAX_TESSERACT_THREADS = 4
+_limit_pinned_at_import: Optional[str] = os.environ.get(OMP_LIMIT_ENV)
+_wrapper_lock = threading.Lock()
+_wrapper_path: Optional[str] = None
+
+
+def available_cpu_count() -> int:
+    """CPUs this process may run on (affinity aware where the platform reports it)."""
+    try:
+        return len(os.sched_getaffinity(0))  # type: ignore[attr-defined]
+    except (AttributeError, OSError):
+        return os.cpu_count() or 1
+
+
+def tesseract_thread_limit(pool_workers: int, cpu_count: Optional[int] = None) -> int:
+    """OpenMP threads each Tesseract process may use when ``pool_workers`` conversions run at once.
+
+    The cores are shared evenly across the pool, one to four threads per process.
+
+    Args:
+        pool_workers: Size of the ingestion thread pool.
+        cpu_count: CPUs available; detected when omitted.
+
+    Returns:
+        The thread limit, 1..4.
+    """
+    cores = cpu_count if cpu_count is not None else available_cpu_count()
+    return max(1, min(MAX_TESSERACT_THREADS, cores // max(1, int(pool_workers))))
+
+
+def configure_tesseract_threads(pool_workers: int, pinned: Optional[str] = None) -> int:
+    """Set ``OCR_OMP_THREAD_LIMIT`` for a pool of ``pool_workers`` conversions.
+
+    A value pinned in the environment at start-up wins (``0`` leaves OpenMP free);
+    otherwise the limit is :func:`tesseract_thread_limit`. The variable is read by the
+    wrapper of :func:`tesseract_command` for every Tesseract process it starts, so a
+    run can change it without rebuilding its converters.
+
+    Args:
+        pool_workers: Size of the ingestion thread pool.
+        pinned: The environment value to honour; the value at import when omitted.
+
+    Returns:
+        The limit in force (0 = unlimited).
+    """
+    pinned = _limit_pinned_at_import if pinned is None else pinned
+    if pinned is not None and pinned.strip() != "":
+        try:
+            limit = max(0, int(pinned))
+        except ValueError:
+            _log.warning("Ignoring non-numeric %s=%r", OMP_LIMIT_ENV, pinned)
+        else:
+            os.environ[OMP_LIMIT_ENV] = str(limit)
+            return limit
+    limit = tesseract_thread_limit(pool_workers)
+    os.environ[OMP_LIMIT_ENV] = str(limit)
+    return limit
+
+
+def tesseract_command(real_command: Optional[str] = None, directory: Optional[str] = None) -> str:
+    """The command Docling runs for Tesseract: a wrapper applying ``OCR_OMP_THREAD_LIMIT``.
+
+    The wrapper is a short ``sh`` script that exports ``OMP_THREAD_LIMIT`` from
+    ``OCR_OMP_THREAD_LIMIT`` (unset or ``0``: OpenMP stays free) and execs the real
+    binary. It is generated once per process. Where no wrapper can run (not POSIX, or
+    no ``tesseract`` on PATH) the plain command is returned and the limit has no effect.
+
+    Args:
+        real_command: The Tesseract binary to wrap; resolved from PATH when omitted.
+        directory: Where to write the wrapper; a temporary directory when omitted.
+
+    Returns:
+        The command to put into ``TesseractCliOcrOptions.tesseract_cmd``.
+    """
+    global _wrapper_path
+    explicit = real_command is not None or directory is not None
+    if not explicit:
+        if _wrapper_path is not None:
+            return _wrapper_path
+        if os.name != "posix":
+            return "tesseract"
+    real = real_command or shutil.which("tesseract")
+    if not real:
+        return "tesseract"
+    with _wrapper_lock:
+        if not explicit and _wrapper_path is not None:
+            return _wrapper_path
+        target_dir = directory or tempfile.mkdtemp(prefix="recallhub-tesseract-")
+        path = os.path.join(target_dir, "tesseract")
+        script = (
+            "#!/bin/sh\n"
+            "# Generated by RecallHub (src/ingestion/ocr_tesseract.py): caps the OpenMP threads of\n"
+            "# this Tesseract process to OCR_OMP_THREAD_LIMIT (unset or 0 leaves them free).\n"
+            'if [ -n "$%s" ] && [ "$%s" != "0" ]; then export OMP_THREAD_LIMIT="$%s"; fi\n'
+            'exec "%s" "$@"\n'
+        ) % (OMP_LIMIT_ENV, OMP_LIMIT_ENV, OMP_LIMIT_ENV, real)
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(script)
+        os.chmod(path, 0o755)
+        if not explicit:
+            _wrapper_path = path
+        return path

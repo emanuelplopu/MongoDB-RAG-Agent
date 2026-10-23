@@ -231,7 +231,7 @@ class IngestionWorker:
                     logger.info(f"Config changed: max_concurrent_files {old_concurrent} -> {new_concurrent}")
                 logger.info(f"Using config: max_concurrent={self.config['max_concurrent_files']}, thread_pool={self.config['thread_pool_workers']}")
             else:
-                logger.warning("No performance_config found in system_config collection, using defaults")
+                logger.warning("No performance_config found in ingestion_config collection, using defaults")
         except Exception as e:
             logger.warning(f"Could not load config from DB, using defaults: {e}")
     
@@ -566,7 +566,8 @@ class IngestionWorker:
             results = await pipeline.ingest_documents(
                 progress_callback=sync_progress_callback,
                 incremental=config.get("incremental", True),
-                max_concurrent_files=self.config.get("max_concurrent_files", 1)
+                max_concurrent_files=self.config.get("max_concurrent_files", 1),
+                thread_pool_workers=self.config.get("thread_pool_workers"),
             )
             
             # Update phase: finalizing
