@@ -24,6 +24,7 @@ import {
   RemoteFolder,
   SourcePath,
 } from '../api/client'
+import { getErrorMessage } from '../api/errors'
 import { useAuth } from '../contexts/AuthContext'
 import FolderPicker from '../components/FolderPicker'
 
@@ -113,8 +114,8 @@ export default function CloudSourceConnectionsPage() {
       ])
       setConnections(connRes.connections)
       setProviders(provRes.providers)
-    } catch (err: any) {
-      setError(err.message || 'Failed to load connections')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Failed to load connections'))
     } finally {
       setIsLoading(false)
     }
@@ -130,8 +131,8 @@ export default function CloudSourceConnectionsPage() {
       ])
       setSelectedConnection(conn)
       setSyncConfigs(configs.configs)
-    } catch (err: any) {
-      setError(err.message || 'Failed to load connection details')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Failed to load connection details'))
     }
   }, [])
 
@@ -157,10 +158,10 @@ export default function CloudSourceConnectionsPage() {
     try {
       const result = await cloudSourcesApi.testConnection(selectedConnection.id)
       setTestResult(result)
-    } catch (err: any) {
+    } catch (err) {
       setTestResult({
         success: false,
-        message: err.message || 'Connection test failed',
+        message: getErrorMessage(err, 'Connection test failed'),
       })
     } finally {
       setIsTesting(false)
@@ -175,8 +176,8 @@ export default function CloudSourceConnectionsPage() {
       setShowDeleteConfirm(false)
       navigate('/cloud-sources/connections')
       fetchConnections()
-    } catch (err: any) {
-      setError(err.message || 'Failed to delete connection')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Failed to delete connection'))
     } finally {
       setIsDeleting(false)
     }
@@ -187,8 +188,8 @@ export default function CloudSourceConnectionsPage() {
     try {
       const updated = await cloudSourcesApi.refreshOAuthTokens(selectedConnection.id)
       setSelectedConnection(updated)
-    } catch (err: any) {
-      setError(err.message || 'Failed to refresh tokens')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Failed to refresh tokens'))
     }
   }
 
@@ -676,8 +677,8 @@ function CreateSyncConfigModal({ connection, onClose, onCreated }: CreateSyncCon
         delete_removed: deleteRemoved,
       })
       onCreated()
-    } catch (err: any) {
-      setError(err.message || 'Failed to create sync configuration')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Failed to create sync configuration'))
     } finally {
       setIsSubmitting(false)
     }

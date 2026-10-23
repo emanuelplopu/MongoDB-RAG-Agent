@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useEffect } from 'react'
-import { 
+import {
   MagnifyingGlassIcon, 
   ArrowsRightLeftIcon,
   InformationCircleIcon,
@@ -17,6 +17,9 @@ import {
   XMarkIcon
 } from '@heroicons/react/24/outline'
 import { modelVersionsApi, ModelVersion, ModelListResponse } from '../api/modelVersions'
+
+/** Sort orders offered by the list's `<select>`. */
+type ModelSortKey = 'release_date' | 'cost' | 'name'
 
 interface ModelVersionSelectorProps {
   currentOrchestrator?: string
@@ -43,7 +46,7 @@ const ModelVersionSelector: React.FC<ModelVersionSelectorProps> = ({
   const [selectedProvider, setSelectedProvider] = useState<string>('all')
   const [selectedType, setSelectedType] = useState<string>('all')
   const [showDeprecated, setShowDeprecated] = useState(false)
-  const [sortBy, setSortBy] = useState<'release_date' | 'cost' | 'name'>('release_date')
+  const [sortBy, setSortBy] = useState<ModelSortKey>('release_date')
   
   const [switching, setSwitching] = useState(false)
   const [switchSuccess, setSwitchSuccess] = useState<string | null>(null)
@@ -69,12 +72,18 @@ const ModelVersionSelector: React.FC<ModelVersionSelectorProps> = ({
         limit: 100
       })
       setModels(response.models)
-    } catch (err: any) {
-      const isNetworkError = err.message === 'Network Error' || err.code === 'ERR_NETWORK' || !err.response
+    } catch (err) {
+      // modelVersionsApi uses its own axios instance, so raw AxiosErrors arrive here
+      const axiosErr = (typeof err === 'object' && err !== null ? err : {}) as {
+        message?: string
+        code?: string
+        response?: { data?: { detail?: string } }
+      }
+      const isNetworkError = axiosErr.message === 'Network Error' || axiosErr.code === 'ERR_NETWORK' || !axiosErr.response
       if (isNetworkError) {
         setError('Cannot connect to the backend server. Please ensure the backend is running and try again.')
       } else {
-        setError(err.response?.data?.detail || err.message || 'Failed to load models')
+        setError(axiosErr.response?.data?.detail || axiosErr.message || 'Failed to load models')
       }
     } finally {
       setLoading(false)
@@ -141,8 +150,8 @@ const ModelVersionSelector: React.FC<ModelVersionSelectorProps> = ({
       
       setSwitchSuccess(`Successfully switched ${modelType} to ${modelId}`)
       setTimeout(() => setSwitchSuccess(null), 3000)
-    } catch (err: any) {
-      setSwitchError(err.message || `Failed to switch ${modelType} model`)
+    } catch (err) {
+      setSwitchError(err instanceof Error && err.message ? err.message : `Failed to switch ${modelType} model`)
     } finally {
       setSwitching(false)
     }
@@ -286,7 +295,7 @@ const ModelVersionSelector: React.FC<ModelVersionSelectorProps> = ({
           
           <select
             value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as any)}
+            onChange={(e) => setSortBy(e.target.value as ModelSortKey)}
             className="px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
           >
             <option value="release_date">Sort by Release Date</option>

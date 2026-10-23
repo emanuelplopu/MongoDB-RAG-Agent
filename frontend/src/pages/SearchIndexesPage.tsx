@@ -222,28 +222,28 @@ export default function SearchIndexesPage() {
                 <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
                   <p className="text-sm text-secondary dark:text-gray-400 mb-2">{t('indexes.cpu')}</p>
                   <p className="font-medium text-primary-900 dark:text-gray-200">
-                    {(dashboard.resource_allocation.cpu as any)?.cores || 0} {t('indexes.cores')}
+                    {dashboard.resource_allocation.cpu?.cores || 0} {t('indexes.cores')}
                   </p>
                   <p className="text-xs text-secondary dark:text-gray-500">
-                    {t('indexes.usage')}: {(dashboard.resource_allocation.cpu as any)?.usage_percent?.toFixed(1) || 0}%
+                    {t('indexes.usage')}: {dashboard.resource_allocation.cpu?.usage_percent?.toFixed(1) || 0}%
                   </p>
                 </div>
                 <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
                   <p className="text-sm text-secondary dark:text-gray-400 mb-2">{t('indexes.memory')}</p>
                   <p className="font-medium text-primary-900 dark:text-gray-200">
-                    {(dashboard.resource_allocation.memory as any)?.total_gb || 0} GB {t('indexes.total')}
+                    {dashboard.resource_allocation.memory?.total_gb || 0} GB {t('indexes.total')}
                   </p>
                   <p className="text-xs text-secondary dark:text-gray-500">
-                    {t('indexes.available')}: {(dashboard.resource_allocation.memory as any)?.available_gb?.toFixed(1) || 0} GB
+                    {t('indexes.available')}: {dashboard.resource_allocation.memory?.available_gb?.toFixed(1) || 0} GB
                   </p>
                 </div>
                 <div className="rounded-xl bg-surface-variant dark:bg-gray-700 p-4">
                   <p className="text-sm text-secondary dark:text-gray-400 mb-2">{t('indexes.mongodb')}</p>
                   <p className="font-medium text-primary-900 dark:text-gray-200">
-                    {t('indexes.pool')}: {(dashboard.resource_allocation.mongodb as any)?.connection_pool_size || 10}
+                    {t('indexes.pool')}: {dashboard.resource_allocation.mongodb?.connection_pool_size || 10}
                   </p>
                   <p className="text-xs text-secondary dark:text-gray-500">
-                    {t('indexes.recommended')}: {(dashboard.resource_allocation.mongodb as any)?.recommended_pool_size || 50}
+                    {t('indexes.recommended')}: {dashboard.resource_allocation.mongodb?.recommended_pool_size || 50}
                   </p>
                 </div>
               </div>

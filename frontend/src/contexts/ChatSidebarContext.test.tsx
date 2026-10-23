@@ -8,6 +8,40 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { ChatSidebarProvider, useChatSidebar } from './ChatSidebarContext'
 import * as client from '../api/client'
+import type { ChatFolder, ChatSession, SessionListResponse } from '../api/client'
+
+// Typed fixtures: each test sets the few fields it checks, the rest take defaults.
+const makeSession = (overrides: Partial<ChatSession> & Pick<ChatSession, 'id'>): ChatSession => ({
+  title: 'Chat',
+  model: 'gpt-4.1-mini',
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+  messages: [],
+  stats: {
+    total_messages: 0,
+    total_input_tokens: 0,
+    total_output_tokens: 0,
+    total_tokens: 0,
+    total_cost_usd: 0,
+    avg_tokens_per_second: 0,
+  },
+  is_pinned: false,
+  is_archived: false,
+  ...overrides,
+})
+
+const makeFolder = (overrides: Partial<ChatFolder> & Pick<ChatFolder, 'id'>): ChatFolder => ({
+  name: 'Folder',
+  color: '#000',
+  created_at: '2026-01-01T00:00:00Z',
+  is_expanded: true,
+  ...overrides,
+})
+
+const listResponse = (sessions: ChatSession[], folders: ChatFolder[] = []): SessionListResponse => ({
+  sessions,
+  folders,
+})
 
 // Mock useNavigate and useLocation
 const { mockNavigate, mockLocation, mockPreferences } = vi.hoisted(() => ({
@@ -150,7 +184,11 @@ function TestConsumer() {
       <button data-testid="move-selected-root" onClick={() => void context.moveSelectedToFolder(null)}>Move Selected Root</button>
       <button
         data-testid="set-pending"
-        onClick={() => context.setPendingMessage('Draft prompt', [{ id: 'att-1' }])}
+        onClick={() =>
+          context.setPendingMessage('Draft prompt', [
+            { filename: 'att-1.txt', content_type: 'text/plain', size_bytes: 1, token_estimate: 1 },
+          ])
+        }
       >
         Set Pending
       </button>
@@ -209,15 +247,13 @@ describe('ChatSidebarContext', () => {
 
   describe('Initial state', () => {
     it('should load sessions on mount', async () => {
-      vi.mocked(client.sessionsApi.list).mockResolvedValue({
-        sessions: [
-          { id: 'session-1', title: 'Chat 1', is_pinned: false },
-          { id: 'session-2', title: 'Chat 2', is_pinned: true },
+      vi.mocked(client.sessionsApi.list).mockResolvedValue(listResponse(
+        [
+          makeSession({ id: 'session-1', title: 'Chat 1' }),
+          makeSession({ id: 'session-2', title: 'Chat 2', is_pinned: true }),
         ],
-        folders: [
-          { id: 'folder-1', name: 'Project', color: '#000' },
-        ],
-      } as any)
+        [makeFolder({ id: 'folder-1', name: 'Project' })],
+      ))
       
       renderWithProvider()
       
@@ -259,11 +295,7 @@ describe('ChatSidebarContext', () => {
     it('should create a new session', async () => {
       const user = userEvent.setup()
       
-      vi.mocked(client.sessionsApi.create).mockResolvedValue({
-        id: 'new-session',
-        title: 'New Chat',
-        is_pinned: false,
-      } as any)
+      vi.mocked(client.sessionsApi.create).mockResolvedValue(makeSession({ id: 'new-session', title: 'New Chat' }))
       
       renderWithProvider()
       
@@ -283,12 +315,9 @@ describe('ChatSidebarContext', () => {
       const user = userEvent.setup()
 
       mockPreferences.defaultModel = 'gpt-4.1-mini'
-      vi.mocked(client.sessionsApi.create).mockResolvedValue({
-        id: 'new-session',
-        title: 'New Chat',
-        is_pinned: false,
-        folder_id: 'folder-1',
-      } as any)
+      vi.mocked(client.sessionsApi.create).mockResolvedValue(
+        makeSession({ id: 'new-session', title: 'New Chat', folder_id: 'folder-1' }),
+      )
 
       renderWithProvider()
 
@@ -313,11 +342,7 @@ describe('ChatSidebarContext', () => {
       const user = userEvent.setup()
 
       mockLocation.pathname = '/dashboard'
-      vi.mocked(client.sessionsApi.get).mockResolvedValue({
-        id: 'session-1',
-        title: 'Loaded Session',
-        is_pinned: false,
-      } as any)
+      vi.mocked(client.sessionsApi.get).mockResolvedValue(makeSession({ id: 'session-1', title: 'Loaded Session' }))
 
       renderWithProvider()
 
@@ -337,15 +362,8 @@ describe('ChatSidebarContext', () => {
     it('should delete a session, clear its draft, and reset current state', async () => {
       const user = userEvent.setup()
 
-      vi.mocked(client.sessionsApi.list).mockResolvedValue({
-        sessions: [{ id: 'session-1', title: 'Chat 1', is_pinned: false }],
-        folders: [],
-      } as any)
-      vi.mocked(client.sessionsApi.get).mockResolvedValue({
-        id: 'session-1',
-        title: 'Chat 1',
-        is_pinned: false,
-      } as any)
+      vi.mocked(client.sessionsApi.list).mockResolvedValue(listResponse([makeSession({ id: 'session-1', title: 'Chat 1' })]))
+      vi.mocked(client.sessionsApi.get).mockResolvedValue(makeSession({ id: 'session-1', title: 'Chat 1' }))
 
       renderWithProvider()
 
@@ -371,15 +389,8 @@ describe('ChatSidebarContext', () => {
     it('should toggle pins and update titles, including empty-title cancel handling', async () => {
       const user = userEvent.setup()
 
-      vi.mocked(client.sessionsApi.list).mockResolvedValue({
-        sessions: [{ id: 'session-1', title: 'Chat 1', is_pinned: false }],
-        folders: [],
-      } as any)
-      vi.mocked(client.sessionsApi.get).mockResolvedValue({
-        id: 'session-1',
-        title: 'Chat 1',
-        is_pinned: false,
-      } as any)
+      vi.mocked(client.sessionsApi.list).mockResolvedValue(listResponse([makeSession({ id: 'session-1', title: 'Chat 1' })]))
+      vi.mocked(client.sessionsApi.get).mockResolvedValue(makeSession({ id: 'session-1', title: 'Chat 1' }))
 
       renderWithProvider()
 
@@ -414,15 +425,10 @@ describe('ChatSidebarContext', () => {
     it('should create and delete folders and persist collapsed folder state', async () => {
       const user = userEvent.setup()
 
-      vi.mocked(client.sessionsApi.list).mockResolvedValue({
-        sessions: [],
-        folders: [{ id: 'folder-1', name: 'Existing', color: '#000' }],
-      } as any)
-      vi.mocked(client.sessionsApi.createFolder).mockResolvedValue({
-        id: 'folder-2',
-        name: 'Project Alpha',
-        color: '#111',
-      } as any)
+      vi.mocked(client.sessionsApi.list).mockResolvedValue(listResponse([], [makeFolder({ id: 'folder-1', name: 'Existing' })]))
+      vi.mocked(client.sessionsApi.createFolder).mockResolvedValue(
+        makeFolder({ id: 'folder-2', name: 'Project Alpha', color: '#111' }),
+      )
 
       renderWithProvider()
 
@@ -458,11 +464,10 @@ describe('ChatSidebarContext', () => {
     it('should move selected sessions to a folder and expose pending message state', async () => {
       const user = userEvent.setup()
 
-      vi.mocked(client.sessionsApi.list).mockResolvedValue({
-        sessions: [{ id: 's1', title: 'Chat 1', is_pinned: false }],
-        folders: [{ id: 'folder-1', name: 'Existing', color: '#000' }],
-      } as any)
-      vi.mocked(client.sessionsApi.moveToFolder).mockResolvedValue({} as any)
+      vi.mocked(client.sessionsApi.list).mockResolvedValue(
+        listResponse([makeSession({ id: 's1', title: 'Chat 1' })], [makeFolder({ id: 'folder-1', name: 'Existing' })]),
+      )
+      vi.mocked(client.sessionsApi.moveToFolder).mockResolvedValue({ success: true, moved_count: 1 })
 
       renderWithProvider()
 
@@ -492,7 +497,7 @@ describe('ChatSidebarContext', () => {
             pricing: { input: 0.15, output: 0.6 },
           },
         ],
-      } as any)
+      })
 
       renderWithProvider()
 
@@ -528,10 +533,7 @@ describe('ChatSidebarContext', () => {
     it('should support selecting and deselecting one session explicitly', async () => {
       const user = userEvent.setup()
 
-      vi.mocked(client.sessionsApi.list).mockResolvedValue({
-        sessions: [{ id: 'session-1', title: 'Chat 1', is_pinned: false }],
-        folders: [],
-      } as any)
+      vi.mocked(client.sessionsApi.list).mockResolvedValue(listResponse([makeSession({ id: 'session-1', title: 'Chat 1' })]))
 
       renderWithProvider()
 
@@ -549,20 +551,15 @@ describe('ChatSidebarContext', () => {
     it('should keep non-target sessions untouched when pinning, renaming, and moving', async () => {
       const user = userEvent.setup()
 
-      vi.mocked(client.sessionsApi.list).mockResolvedValue({
-        sessions: [
-          { id: 'session-1', title: 'Chat 1', is_pinned: false, folder_id: undefined },
-          { id: 'session-2', title: 'Chat 2', is_pinned: false, folder_id: undefined },
+      vi.mocked(client.sessionsApi.list).mockResolvedValue(listResponse(
+        [
+          makeSession({ id: 'session-1', title: 'Chat 1' }),
+          makeSession({ id: 'session-2', title: 'Chat 2' }),
         ],
-        folders: [{ id: 'folder-1', name: 'Existing', color: '#000' }],
-      } as any)
-      vi.mocked(client.sessionsApi.get).mockResolvedValue({
-        id: 'session-1',
-        title: 'Chat 1',
-        is_pinned: false,
-        folder_id: undefined,
-      } as any)
-      vi.mocked(client.sessionsApi.moveToFolder).mockResolvedValue({} as any)
+        [makeFolder({ id: 'folder-1', name: 'Existing' })],
+      ))
+      vi.mocked(client.sessionsApi.get).mockResolvedValue(makeSession({ id: 'session-1', title: 'Chat 1' }))
+      vi.mocked(client.sessionsApi.moveToFolder).mockResolvedValue({ success: true, moved_count: 1 })
 
       renderWithProvider()
 
@@ -592,21 +589,16 @@ describe('ChatSidebarContext', () => {
     it('should clear or update the current session when bulk actions affect it', async () => {
       const user = userEvent.setup()
 
-      const sessionsFixture = {
-        sessions: [{ id: 'session-1', title: 'Chat 1', is_pinned: false, folder_id: undefined }],
-        folders: [{ id: 'folder-1', name: 'Existing', color: '#000' }],
-      } as any
+      const sessionsFixture = listResponse(
+        [makeSession({ id: 'session-1', title: 'Chat 1' })],
+        [makeFolder({ id: 'folder-1', name: 'Existing' })],
+      )
 
       vi.mocked(client.sessionsApi.list).mockResolvedValue(sessionsFixture)
-      vi.mocked(client.sessionsApi.get).mockResolvedValue({
-        id: 'session-1',
-        title: 'Chat 1',
-        is_pinned: false,
-        folder_id: undefined,
-      } as any)
-      vi.mocked(client.sessionsApi.archiveSessions).mockResolvedValue({} as any)
-      vi.mocked(client.sessionsApi.deletePermanently).mockResolvedValue({} as any)
-      vi.mocked(client.sessionsApi.moveToFolder).mockResolvedValue({} as any)
+      vi.mocked(client.sessionsApi.get).mockResolvedValue(makeSession({ id: 'session-1', title: 'Chat 1' }))
+      vi.mocked(client.sessionsApi.archiveSessions).mockResolvedValue({ success: true, archived_count: 1 })
+      vi.mocked(client.sessionsApi.deletePermanently).mockResolvedValue({ success: true, deleted_count: 1 })
+      vi.mocked(client.sessionsApi.moveToFolder).mockResolvedValue({ success: true, moved_count: 1 })
 
       renderWithProvider()
 
@@ -669,10 +661,9 @@ describe('ChatSidebarContext', () => {
       const user = userEvent.setup()
       const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-      vi.mocked(client.sessionsApi.list).mockResolvedValue({
-        sessions: [{ id: 'session-1', title: 'Chat 1', is_pinned: false, folder_id: undefined }],
-        folders: [{ id: 'folder-1', name: 'Existing', color: '#000' }],
-      } as any)
+      vi.mocked(client.sessionsApi.list).mockResolvedValue(
+        listResponse([makeSession({ id: 'session-1', title: 'Chat 1' })], [makeFolder({ id: 'folder-1', name: 'Existing' })]),
+      )
       vi.mocked(client.sessionsApi.get).mockRejectedValue(new Error('Load failed'))
       vi.mocked(client.sessionsApi.delete).mockRejectedValue(new Error('Delete failed'))
       vi.mocked(client.sessionsApi.update).mockRejectedValue(new Error('Update failed'))
@@ -742,13 +733,10 @@ describe('ChatSidebarContext', () => {
     it('should select all sessions', async () => {
       const user = userEvent.setup()
       
-      vi.mocked(client.sessionsApi.list).mockResolvedValue({
-        sessions: [
-          { id: 's1', title: 'Chat 1', is_pinned: false },
-          { id: 's2', title: 'Chat 2', is_pinned: false },
-        ],
-        folders: [],
-      } as any)
+      vi.mocked(client.sessionsApi.list).mockResolvedValue(listResponse([
+        makeSession({ id: 's1', title: 'Chat 1' }),
+        makeSession({ id: 's2', title: 'Chat 2' }),
+      ]))
       
       renderWithProvider()
       
@@ -764,10 +752,7 @@ describe('ChatSidebarContext', () => {
     it('should clear selection', async () => {
       const user = userEvent.setup()
       
-      vi.mocked(client.sessionsApi.list).mockResolvedValue({
-        sessions: [{ id: 's1', title: 'Chat 1', is_pinned: false }],
-        folders: [],
-      } as any)
+      vi.mocked(client.sessionsApi.list).mockResolvedValue(listResponse([makeSession({ id: 's1', title: 'Chat 1' })]))
       
       renderWithProvider()
       
@@ -787,14 +772,11 @@ describe('ChatSidebarContext', () => {
     it('should archive selected sessions', async () => {
       const user = userEvent.setup()
       
-      vi.mocked(client.sessionsApi.list).mockResolvedValue({
-        sessions: [
-          { id: 's1', title: 'Chat 1', is_pinned: false },
-          { id: 's2', title: 'Chat 2', is_pinned: false },
-        ],
-        folders: [],
-      } as any)
-      vi.mocked(client.sessionsApi.archiveSessions).mockResolvedValue({} as any)
+      vi.mocked(client.sessionsApi.list).mockResolvedValue(listResponse([
+        makeSession({ id: 's1', title: 'Chat 1' }),
+        makeSession({ id: 's2', title: 'Chat 2' }),
+      ]))
+      vi.mocked(client.sessionsApi.archiveSessions).mockResolvedValue({ success: true, archived_count: 2 })
       
       renderWithProvider()
       
@@ -818,13 +800,8 @@ describe('ChatSidebarContext', () => {
     it('should delete selected sessions permanently', async () => {
       const user = userEvent.setup()
       
-      vi.mocked(client.sessionsApi.list).mockResolvedValue({
-        sessions: [
-          { id: 's1', title: 'Chat 1', is_pinned: false },
-        ],
-        folders: [],
-      } as any)
-      vi.mocked(client.sessionsApi.deletePermanently).mockResolvedValue({} as any)
+      vi.mocked(client.sessionsApi.list).mockResolvedValue(listResponse([makeSession({ id: 's1', title: 'Chat 1' })]))
+      vi.mocked(client.sessionsApi.deletePermanently).mockResolvedValue({ success: true, deleted_count: 1 })
       
       renderWithProvider()
       

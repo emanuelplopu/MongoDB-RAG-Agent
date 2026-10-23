@@ -13,6 +13,7 @@ import {
   RemoteFolder,
   RemoteFile,
 } from '../api/client'
+import { getErrorMessage } from '../api/errors'
 
 interface FolderPickerProps {
   connectionId: string
@@ -95,8 +96,8 @@ export default function FolderPicker({
           }
           setBreadcrumbs(crumbs)
         }
-      } catch (err: any) {
-        setError(err.message || 'Failed to load folder contents')
+      } catch (err) {
+        setError(getErrorMessage(err, 'Failed to load folder contents'))
       } finally {
         setIsLoading(false)
       }

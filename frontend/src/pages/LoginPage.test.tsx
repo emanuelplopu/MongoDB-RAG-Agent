@@ -390,8 +390,7 @@ describe('LoginPage', () => {
   describe('Error handling', () => {
     it('should handle 401 error specially', async () => {
       const user = userEvent.setup()
-      const error = new Error('Unauthorized')
-      ;(error as any).status = 401
+      const error = Object.assign(new Error('Unauthorized'), { status: 401 })
       mockLogin.mockRejectedValue(error)
       
       renderLoginPage()
@@ -407,8 +406,7 @@ describe('LoginPage', () => {
 
     it('should handle 500 error specially', async () => {
       const user = userEvent.setup()
-      const error = new Error('Server error')
-      ;(error as any).status = 500
+      const error = Object.assign(new Error('Server error'), { status: 500 })
       mockLogin.mockRejectedValue(error)
       
       renderLoginPage()

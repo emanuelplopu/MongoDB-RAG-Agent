@@ -156,7 +156,7 @@ export function UserPreferencesProvider({ children }: UserPreferencesProviderPro
       for (const [key, value] of Object.entries(updates)) {
         const dbKey = REVERSE_SYNC_KEY_MAP[key]
         if (dbKey) {
-          (dbUpdates as any)[dbKey] = value
+          Object.assign(dbUpdates, { [dbKey]: value })
         }
       }
       if (Object.keys(dbUpdates).length > 0) {
@@ -185,9 +185,9 @@ export function UserPreferencesProvider({ children }: UserPreferencesProviderPro
     setPreferencesState(prev => {
       const updated = { ...prev }
       for (const [dbKey, localKey] of Object.entries(SYNC_KEY_MAP)) {
-        const value = (syncPrefs as any)[dbKey]
+        const value = syncPrefs[dbKey as keyof UserPreferencesSync]
         if (value !== null && value !== undefined) {
-          (updated as any)[localKey as string] = value
+          Object.assign(updated, { [localKey]: value })
         }
       }
       return updated

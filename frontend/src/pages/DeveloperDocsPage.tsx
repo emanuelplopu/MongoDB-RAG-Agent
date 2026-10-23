@@ -14,6 +14,13 @@ interface ApiTag {
   endpoints: ApiEndpoint[]
 }
 
+/** The parts of an OpenAPI operation object this page reads. */
+interface OpenApiOperation {
+  tags?: string[]
+  summary?: string
+  description?: string
+}
+
 const API_BASE_URL = import.meta.env.VITE_API_URL || ''
 
 export default function DeveloperDocsPage() {
@@ -45,7 +52,7 @@ export default function DeveloperDocsPage() {
       const tagMap: Record<string, ApiEndpoint[]> = {}
       
       for (const [path, methods] of Object.entries(spec.paths || {})) {
-        for (const [method, details] of Object.entries(methods as Record<string, any>)) {
+        for (const [method, details] of Object.entries(methods as Record<string, OpenApiOperation>)) {
           if (method === 'parameters') continue
           
           const tags = details.tags || ['Other']

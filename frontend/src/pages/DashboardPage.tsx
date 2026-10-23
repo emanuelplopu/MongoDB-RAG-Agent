@@ -155,7 +155,7 @@ export default function DashboardPage() {
         createData.model = preferences.defaultModel
       }
       const session = await sessionsApi.create(createData)
-      setSessions((prev: any) => [session, ...prev])
+      setSessions(prev => [session, ...prev])
       setCurrentSession(session)
 
       // Set pending message so ChatPageNew picks it up

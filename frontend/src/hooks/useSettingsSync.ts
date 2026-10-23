@@ -88,7 +88,7 @@ export function useSettingsSync() {
       // DB values override local for all non-null fields
       for (const [key, value] of Object.entries(dbPrefs)) {
         if (value !== null && value !== undefined) {
-          (merged as any)[key] = value
+          Object.assign(merged, { [key]: value })
         }
       }
 

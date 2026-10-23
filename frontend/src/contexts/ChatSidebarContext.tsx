@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import {
   sessionsApi,
   systemApi,
+  AttachmentInfo,
   ChatSession,
   ChatFolder,
   LLMModel,
@@ -37,7 +38,7 @@ interface ChatSidebarContextType {
   selectedSessions: Set<string>
   // Pending message (for dashboard-to-chat transition)
   pendingMessage: string | null
-  pendingAttachments: any[] | null
+  pendingAttachments: AttachmentInfo[] | null
 
   // Actions
   loadSessions: () => Promise<void>
@@ -65,7 +66,7 @@ interface ChatSidebarContextType {
   archiveSelected: () => Promise<void>
   deleteSelected: () => Promise<void>
   moveSelectedToFolder: (folderId: string | null) => Promise<void>
-  setPendingMessage: (message: string | null, attachments?: any[] | null) => void
+  setPendingMessage: (message: string | null, attachments?: AttachmentInfo[] | null) => void
 }
 
 const ChatSidebarContext = createContext<ChatSidebarContextType | null>(null)
@@ -102,9 +103,9 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
   const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set())
   // Pending message for dashboard-to-chat transition
   const [pendingMessage, setPendingMessageState] = useState<string | null>(null)
-  const [pendingAttachments, setPendingAttachmentsState] = useState<any[] | null>(null)
+  const [pendingAttachments, setPendingAttachmentsState] = useState<AttachmentInfo[] | null>(null)
 
-  const setPendingMessage = useCallback((message: string | null, attachments?: any[] | null) => {
+  const setPendingMessage = useCallback((message: string | null, attachments?: AttachmentInfo[] | null) => {
     setPendingMessageState(message)
     setPendingAttachmentsState(attachments ?? null)
   }, [])

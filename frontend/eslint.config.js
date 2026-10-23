@@ -42,8 +42,7 @@ export default tseslint.config(
         caughtErrors: 'none',
         ignoreRestSiblings: true,
       }],
-      // Pre-existing `any` usage (≈100 sites) is tracked as warnings, not errors.
-      '@typescript-eslint/no-explicit-any': 'warn',
+      '@typescript-eslint/no-explicit-any': 'error',
       'no-empty': ['error', { allowEmptyCatch: true }],
     },
   },

@@ -18,6 +18,7 @@ import {
   CloudProvider,
   CloudProviderType,
 } from '../api/client'
+import { getErrorMessage } from '../api/errors'
 import { useAuth } from '../contexts/AuthContext'
 
 // Provider icons mapping
@@ -35,7 +36,7 @@ const PROVIDER_ICONS: Record<CloudProviderType, string> = {
   email_outlook: '📨',
 }
 
-function formatRelativeTime(dateString: string | undefined, t: (key: string, opts?: any) => string): string {
+function formatRelativeTime(dateString: string | undefined, t: (key: string, opts?: Record<string, unknown>) => string): string {
   if (!dateString) return t('cloudSourcesPage.timeNever')
   const date = new Date(dateString)
   const now = new Date()
@@ -72,9 +73,9 @@ export default function CloudSourcesPage() {
       ])
       setDashboard(dashboardRes)
       setProviders(providersRes.providers)
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error fetching cloud sources data:', err)
-      setError(err.message || 'Failed to load cloud sources')
+      setError(getErrorMessage(err, 'Failed to load cloud sources'))
     } finally {
       setIsLoading(false)
     }
@@ -99,8 +100,8 @@ export default function CloudSourcesPage() {
         )
         // Redirect to OAuth provider
         window.location.href = authorization_url
-      } catch (err: any) {
-        setError(err.message || 'Failed to start OAuth flow')
+      } catch (err) {
+        setError(getErrorMessage(err, 'Failed to start OAuth flow'))
       }
     } else {
       // For non-OAuth providers, navigate to connection form

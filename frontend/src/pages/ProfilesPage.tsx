@@ -15,6 +15,7 @@ import {
   FolderPlusIcon,
 } from '@heroicons/react/24/outline'
 import { profilesApi, authApi, Profile, ProfileListResponse, ProfileAccessMatrix } from '../api/client'
+import { getErrorStatus } from '../api/errors'
 import { canManageProfiles, isOrgAdmin } from '../api/roles'
 import { useAuth } from '../contexts/AuthContext'
 import ServerFolderPicker from '../components/ServerFolderPicker'
@@ -74,10 +75,10 @@ export default function ProfilesPage() {
       const response: ProfileListResponse = await profilesApi.list()
       setProfiles(response.profiles)
       setActiveProfile(response.active_profile)
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error fetching profiles:', err)
       // Handle 403 by redirecting non-admins
-      if (err?.status === 403) {
+      if (getErrorStatus(err) === 403) {
         setError(t('profiles.managerAccess'))
       } else {
         setError(t('profiles.loadFailed', 'Failed to load profiles.'))

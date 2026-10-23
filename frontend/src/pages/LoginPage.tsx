@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { useTenant } from '../contexts/TenantContext'
 import { ExclamationCircleIcon, InformationCircleIcon } from '@heroicons/react/24/outline'
 import { ApiError } from '../api/client'
+import { getErrorMessage } from '../api/errors'
 import { useLocalizedNavigate, useLocalizedPath } from '../components/LocalizedLink'
 import TenantLogo from '../components/TenantLogo'
 import ThemeSwitcher from '../components/ThemeSwitcher'
@@ -76,20 +77,25 @@ export default function LoginPage() {
         await register(email, name, password, titlePrefix || undefined, titleSuffix || undefined)
       }
       navigate(redirectTarget, { replace: true })
-    } catch (err: any) {
+    } catch (err) {
+      // Errors from the auth context may carry a status without being an ApiError
+      const { status, errorId } = (typeof err === 'object' && err !== null ? err : {}) as {
+        status?: number
+        errorId?: string
+      }
       // Handle ApiError with user-friendly messages
       if (err instanceof ApiError) {
         setError(err.getUserMessage())
         setErrorId(err.errorId || null)
-      } else if (err?.status === 401) {
+      } else if (status === 401) {
         // Authentication failed - show specific message
         setError(t('login.invalidCredentials'))
-      } else if (err?.status >= 500) {
+      } else if (status !== undefined && status >= 500) {
         // Server error - show error ID if available
         setError(t('login.serverError'))
-        setErrorId(err?.errorId || null)
+        setErrorId(errorId || null)
       } else {
-        setError(err.message || t('login.authFailed'))
+        setError(getErrorMessage(err, t('login.authFailed')))
       }
     } finally {
       setIsLoading(false)

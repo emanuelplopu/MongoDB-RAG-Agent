@@ -15,6 +15,7 @@ import {
   UserCircleIcon,
 } from '@heroicons/react/24/outline'
 import { authApi, UserListItem, CreateUserRequest, UpdateUserRequest } from '../api/client'
+import { getErrorMessage } from '../api/errors'
 import { useAuth } from '../contexts/AuthContext'
 import { canManageUsers, isSuperAdmin } from '../api/roles'
 
@@ -56,8 +57,8 @@ export default function UserManagementPage() {
       const data = await authApi.listUsers()
       setUsers(data)
       setError(null)
-    } catch (err: any) {
-      setError(err.response?.data?.detail || t('users.loadFailed', 'Failed to load users'))
+    } catch (err) {
+      setError(getErrorMessage(err, t('users.loadFailed', 'Failed to load users')))
     } finally {
       setIsLoading(false)
     }
@@ -77,8 +78,8 @@ export default function UserManagementPage() {
       setShowCreateForm(false)
       setCreateForm({ email: '', name: '', password: '', is_admin: false, is_org_admin: false })
       await loadUsers()
-    } catch (err: any) {
-      setCreateError(err.response?.data?.detail || t('users.createFailed', 'Failed to create user'))
+    } catch (err) {
+      setCreateError(getErrorMessage(err, t('users.createFailed', 'Failed to create user')))
     } finally {
       setIsCreating(false)
     }
@@ -105,8 +106,8 @@ export default function UserManagementPage() {
       setEditingUser(null)
       setEditForm({})
       await loadUsers()
-    } catch (err: any) {
-      setUpdateError(err.response?.data?.detail || t('users.updateFailed', 'Failed to update user'))
+    } catch (err) {
+      setUpdateError(getErrorMessage(err, t('users.updateFailed', 'Failed to update user')))
     } finally {
       setIsUpdating(false)
     }
@@ -116,8 +117,8 @@ export default function UserManagementPage() {
     try {
       await authApi.setUserStatus(user.id, !user.is_active)
       await loadUsers()
-    } catch (err: any) {
-      setError(err.response?.data?.detail || t('users.statusFailed', 'Failed to update user status'))
+    } catch (err) {
+      setError(getErrorMessage(err, t('users.statusFailed', 'Failed to update user status')))
     }
   }
 
@@ -129,8 +130,8 @@ export default function UserManagementPage() {
       await authApi.deleteUser(deletingUser.id)
       setDeletingUser(null)
       await loadUsers()
-    } catch (err: any) {
-      setError(err.response?.data?.detail || t('users.deleteFailed', 'Failed to delete user'))
+    } catch (err) {
+      setError(getErrorMessage(err, t('users.deleteFailed', 'Failed to delete user')))
     } finally {
       setIsDeleting(false)
     }

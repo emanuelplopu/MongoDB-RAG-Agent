@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Tree, NodeRendererProps } from 'react-arborist'
+import { Tree, NodeApi, NodeRendererProps } from 'react-arborist'
 import {
   DocumentTextIcon,
   TrashIcon,
@@ -339,7 +339,7 @@ export default function DocumentsPage() {
   }, [currentPath, searchInput])
 
   // Handle folder selection from tree
-  const handleFolderSelect = (nodes: any[]) => {
+  const handleFolderSelect = (nodes: NodeApi<TreeNode>[]) => {
     if (nodes && nodes.length > 0 && nodes[0]?.id) {
       setCurrentPath(nodes[0].id)
     }
