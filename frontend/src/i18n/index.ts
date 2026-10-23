@@ -8,6 +8,16 @@ import de from './locales/de.json'
 export const supportedLanguages = ['en', 'de'] as const
 export type SupportedLanguage = typeof supportedLanguages[number]
 
+/**
+ * Remove the language segment from a router path: "/en/system/status" becomes
+ * "/system/status". Paths without a known language prefix are returned as is.
+ */
+export function stripLanguagePrefix(pathname: string): string {
+  const [, first, ...rest] = pathname.split('/')
+  if (!supportedLanguages.includes(first as SupportedLanguage)) return pathname
+  return '/' + rest.join('/')
+}
+
 export const languageNames: Record<SupportedLanguage, string> = {
   en: 'English',
   de: 'Deutsch',

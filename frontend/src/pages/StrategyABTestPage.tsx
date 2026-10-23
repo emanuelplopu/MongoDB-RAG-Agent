@@ -151,15 +151,19 @@ export default function StrategyABTestPage() {
     }
   }, [])
 
-  // Create session on mount
-  const createSession = useCallback(async () => {
+  // The backing chat session is created on the first run, not on mount, so
+  // merely opening this page no longer leaves an empty "A/B Test Session" chat.
+  const ensureSession = useCallback(async (): Promise<string | null> => {
+    if (sessionId) return sessionId
     try {
       const session = await sessionsApi.create({ title: 'A/B Test Session' })
       setSessionId(session.id)
+      return session.id
     } catch (err) {
       console.error('Error creating session:', err)
+      return null
     }
-  }, [])
+  }, [sessionId])
 
   useEffect(() => {
     if (!authLoading && (!user || !user.is_admin)) {
@@ -170,13 +174,14 @@ export default function StrategyABTestPage() {
   useEffect(() => {
     if (!authLoading && user?.is_admin) {
       fetchStrategies()
-      createSession()
     }
-  }, [authLoading, user, fetchStrategies, createSession])
+  }, [authLoading, user, fetchStrategies])
 
   // Run test with both strategies
   const runTest = async () => {
-    if (!query.trim() || !sessionId || !strategyA || !strategyB) return
+    if (!query.trim() || !strategyA || !strategyB) return
+    const activeSessionId = await ensureSession()
+    if (!activeSessionId) return
 
     // Reset results
     setResponseA({
@@ -200,7 +205,7 @@ export default function StrategyABTestPage() {
     // Run strategy A first
     const startA = performance.now()
     try {
-      const resultA = await sessionsApi.sendMessage(sessionId, query, {
+      const resultA = await sessionsApi.sendMessage(activeSessionId, query, {
         agent_mode: 'thinking',
         strategy_id: strategyA,
       })
@@ -225,7 +230,7 @@ export default function StrategyABTestPage() {
     // Run strategy B
     const startB = performance.now()
     try {
-      const resultB = await sessionsApi.sendMessage(sessionId, query, {
+      const resultB = await sessionsApi.sendMessage(activeSessionId, query, {
         agent_mode: 'thinking',
         strategy_id: strategyB,
       })
@@ -281,7 +286,7 @@ export default function StrategyABTestPage() {
 
   if (!user?.is_admin) return null
 
-  const canRun = query.trim() && strategyA && strategyB && strategyA !== strategyB && sessionId
+  const canRun = query.trim() && strategyA && strategyB && strategyA !== strategyB
   const canCompare = responseA?.content && responseB?.content && !responseA.isLoading && !responseB.isLoading
 
   return (

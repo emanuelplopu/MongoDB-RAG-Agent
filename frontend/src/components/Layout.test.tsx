@@ -878,6 +878,30 @@ describe('Layout', () => {
     expect(screen.getByRole('heading', { name: 'RecallHub' })).toBeInTheDocument()
   })
 
+  it('derives the header title from language-prefixed routes, including system sub-pages', () => {
+    const renderPrefixed = (path: string) =>
+      render(
+        <MemoryRouter initialEntries={[path]}>
+          <Routes>
+            <Route path="/:lang/*" element={<Layout />}>
+              <Route path="*" element={<div>Page Content</div>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      )
+
+    const search = renderPrefixed('/en/search')
+    expect(screen.getByRole('heading', { name: 'Search' })).toBeInTheDocument()
+    search.unmount()
+
+    const ingestion = renderPrefixed('/de/system/ingestion/failed')
+    expect(screen.getByRole('heading', { name: 'Ingestion' })).toBeInTheDocument()
+    ingestion.unmount()
+
+    renderPrefixed('/en/system')
+    expect(screen.getByRole('heading', { name: 'System' })).toBeInTheDocument()
+  })
+
   it('renders tenant icon images and falls back when the image fails', () => {
     mockStore.state.tenant.branding.iconUrl = 'https://example.com/icon.png'
 

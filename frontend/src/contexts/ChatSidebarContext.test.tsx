@@ -10,10 +10,16 @@ import { ChatSidebarProvider, useChatSidebar } from './ChatSidebarContext'
 import * as client from '../api/client'
 
 // Mock useNavigate and useLocation
-const { mockNavigate, mockLocation, mockPreferences } = vi.hoisted(() => ({
+const { mockNavigate, mockLocation, mockPreferences, mockAuth, mockTenantFeatures } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
   mockLocation: { pathname: '/chat' },
   mockPreferences: { defaultModel: '' },
+  mockAuth: {
+    user: { id: 'user-1', name: 'Test User', is_admin: false } as { id: string; name: string; is_admin: boolean } | null,
+    isLoading: false,
+    isAuthenticated: true,
+  },
+  mockTenantFeatures: { requireAuth: false },
 }))
 
 vi.mock('react-router-dom', async () => {
@@ -25,13 +31,14 @@ vi.mock('react-router-dom', async () => {
   }
 })
 
-// Mock AuthContext
+// Mock AuthContext (mutable so tests can simulate a guest)
 vi.mock('./AuthContext', () => ({
-  useAuth: () => ({
-    user: { id: 'user-1', name: 'Test User', is_admin: false },
-    isLoading: false,
-    isAuthenticated: true,
-  }),
+  useAuth: () => mockAuth,
+}))
+
+// Mock TenantContext (only the feature flag the provider reads)
+vi.mock('./TenantContext', () => ({
+  useTenant: () => ({ tenant: { features: mockTenantFeatures }, tenantId: 'recallhub', isLoading: false }),
 }))
 
 vi.mock('./UserPreferencesContext', () => ({
@@ -890,6 +897,38 @@ describe('ChatSidebarContext', () => {
       
       // The getPricing function returns default values when model not found
       // This is tested through the context value
+    })
+  })
+
+  describe('Guest loading', () => {
+    afterEach(() => {
+      mockAuth.user = { id: 'user-1', name: 'Test User', is_admin: false }
+      mockAuth.isAuthenticated = true
+      mockTenantFeatures.requireAuth = false
+    })
+
+    it('skips session and model loads for guests when the tenant enforces login', async () => {
+      mockAuth.user = null
+      mockAuth.isAuthenticated = false
+      mockTenantFeatures.requireAuth = true
+
+      renderWithProvider()
+
+      await waitFor(() => expect(screen.getByTestId('sessions-count')).toHaveTextContent('0'))
+      expect(client.sessionsApi.list).not.toHaveBeenCalled()
+      expect(client.systemApi.listLLMModels).not.toHaveBeenCalled()
+      expect(client.sessionsApi.getModelPricing).not.toHaveBeenCalled()
+    })
+
+    it('still loads for guests when the tenant allows anonymous use', async () => {
+      mockAuth.user = null
+      mockAuth.isAuthenticated = false
+      mockTenantFeatures.requireAuth = false
+
+      renderWithProvider()
+
+      await waitFor(() => expect(client.sessionsApi.list).toHaveBeenCalled())
+      expect(client.systemApi.listLLMModels).toHaveBeenCalled()
     })
   })
 })

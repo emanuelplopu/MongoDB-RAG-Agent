@@ -39,11 +39,11 @@ describe('ThemeSwitcher', () => {
   it('renders the resolved current icon and opens the theme menu', () => {
     render(<ThemeSwitcher compact={false} />)
 
-    expect(screen.getByLabelText('theme.switchTo:system')).toBeInTheDocument()
+    expect(screen.getByLabelText('theme.current:theme.system')).toBeInTheDocument()
     expect(screen.getByText('theme.system')).toBeInTheDocument()
     expect(screen.getByTestId('MoonIcon')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByLabelText('theme.switchTo:system'))
+    fireEvent.click(screen.getByLabelText('theme.current:theme.system'))
 
     expect(screen.getByText('theme.light')).toBeInTheDocument()
     expect(screen.getByText('theme.dark')).toBeInTheDocument()
@@ -53,11 +53,11 @@ describe('ThemeSwitcher', () => {
   it('changes theme and closes when an option or outside area is clicked', () => {
     render(<ThemeSwitcher />)
 
-    fireEvent.click(screen.getByLabelText('theme.switchTo:system'))
+    fireEvent.click(screen.getByLabelText('theme.current:theme.system'))
     fireEvent.click(screen.getByText('theme.light'))
     expect(themeState.setTheme).toHaveBeenCalledWith('light')
 
-    fireEvent.click(screen.getByLabelText('theme.switchTo:system'))
+    fireEvent.click(screen.getByLabelText('theme.current:theme.system'))
     expect(screen.getByText('theme.dark')).toBeInTheDocument()
 
     fireEvent.mouseDown(document.body)
@@ -71,7 +71,7 @@ describe('ThemeSwitcher', () => {
     render(<ThemeSwitcher />)
 
     expect(screen.getByTestId('MoonIcon')).toBeInTheDocument()
-    expect(screen.getByLabelText('theme.switchTo:dark')).toHaveAttribute('title', 'theme.dark')
+    expect(screen.getByLabelText('theme.current:theme.dark')).toHaveAttribute('title', 'theme.dark')
   })
 })
 
