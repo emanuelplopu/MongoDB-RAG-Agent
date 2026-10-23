@@ -129,10 +129,13 @@ def is_image_only_pdf(file_path: str, min_text_chars: int = 50, max_pages_to_che
 SUPPORTED_INGESTION_EXTENSIONS: frozenset[str] = frozenset({
     ".md", ".markdown", ".txt",  # Text formats
     ".pdf",  # PDF
-    ".docx", ".doc", ".wbk",  # Word (incl. backup)
+    ".docx", ".doc", ".wbk", ".dot", ".dotx",  # Word (incl. backup and templates)
+    ".rtf",  # Rich Text (letters, Muster templates)
     ".pptx", ".ppt",  # PowerPoint
-    ".xlsx", ".xls",  # Excel
-    ".html", ".htm",  # HTML
+    ".xlsx", ".xls",  # Excel (legacy .xls via xlrd)
+    ".html", ".htm", ".mht", ".mhtml",  # HTML and MHTML web archives
+    ".as", ".ass", ".ds", ".eb", ".do", ".dos", ".3", ".dss",  # DOS-era text system files (see LEGACY_TEXT_EXTENSIONS)
+    ".wvb", ".mtt",  # jurXpert "weiteres Vorbringen" text/RTF, gzip-packed Muster templates
     ".msg",  # Outlook email
     ".eml",  # RFC 5322 email
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif",  # Images
@@ -953,10 +956,10 @@ def prepare_image_for_docling(image_path: str) -> Tuple[str, Optional[str]]:
 
         with Image.open(image_path) as img:
             dpi = img.info.get("dpi")
-            bad_dpi = dpi is not None and (
-                not isinstance(dpi, tuple) or len(dpi) != 2
-                or any((not isinstance(v, (int, float))) or v <= 0 or v != v for v in dpi)
-            )
+            # TIFF DPI tags are PIL IFDRational values: coerce instead of rejecting the type
+            # (every TIFF used to be re-saved needlessly, docs/26)
+            values = [_dpi_number(v) for v in dpi] if isinstance(dpi, tuple) and len(dpi) == 2 else None
+            bad_dpi = dpi is not None and (values is None or any(v is None or v <= 0 or v != v for v in values))
             if img.format != "MPO" and not bad_dpi:
                 return image_path, None
             import tempfile
@@ -973,6 +976,231 @@ def prepare_image_for_docling(image_path: str) -> Tuple[str, Optional[str]]:
     except Exception as exc:  # noqa: BLE001 - let Docling report the real problem
         logger.debug(f"Image pre-check failed for {image_path}: {exc}")
         return image_path, None
+
+
+def _dpi_number(value: Any) -> Optional[float]:
+    """A DPI tag component as a float (``IFDRational`` included), or ``None`` when not numeric."""
+    try:
+        return float(value)
+    except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+        return None
+
+
+def image_frame_count(image_path: str) -> int:
+    """Number of frames (pages) of an image file; 1 for single-frame formats or on error."""
+    try:
+        from PIL import Image
+
+        with Image.open(image_path) as img:
+            return max(1, int(getattr(img, "n_frames", 1)))
+    except Exception as exc:  # noqa: BLE001 - the converter will report the real error
+        logger.debug(f"Could not count frames of {image_path}: {exc}")
+        return 1
+
+
+def rtf_code_page(raw: bytes) -> str:
+    """The Python codec of an RTF document's ``\\ansicpg`` code page (``cp1252`` when absent)."""
+    match = re.search(rb"\\ansicpg(\d+)", raw[:2048])
+    if match:
+        return f"cp{match.group(1).decode('ascii')}"
+    return "cp1252"
+
+
+def markdown_table(rows: List[List[Any]]) -> str:
+    """Render rows of cells as a Markdown table (first row = header); empty for no rows."""
+    if not rows:
+        return ""
+
+    def cell(value: Any) -> str:
+        text = "" if value is None else str(value)
+        return text.replace("\r", " ").replace("\n", " ").replace("|", "\\|").strip()
+
+    width = max(len(row) for row in rows)
+    lines = []
+    for index, row in enumerate(rows):
+        cells = [cell(v) for v in row] + [""] * (width - len(row))
+        lines.append("| " + " | ".join(cells) + " |")
+        if index == 0:
+            lines.append("|" + "---|" * width)
+    return "\n".join(lines)
+
+
+#: Files of the DOS-era text system behind the ``Pittner Archiv`` / ``M U S T E R`` folders of
+#: Austrian law practices (docs/26): cp437 letters inside ``\xe1`` markers, inline formatting
+#: bytes and HP PCL printer escapes. ``.dss`` is also Olympus dictation audio, detected by magic.
+LEGACY_TEXT_EXTENSIONS: frozenset[str] = frozenset({".as", ".ass", ".ds", ".eb", ".do", ".dos", ".3", ".dss"})
+_DSS_AUDIO_MAGIC = b"\x02dss"
+_APPLEDOUBLE_PREFIX = "._"  # macOS resource forks copied onto SMB shares; never documents
+
+
+def is_sidecar_file(filename: str) -> bool:
+    """Whether ``filename`` is a macOS AppleDouble resource fork (``._name``), never a document."""
+    return filename.startswith(_APPLEDOUBLE_PREFIX)
+
+
+def legacy_dos_text(raw: bytes) -> str:
+    """Readable text of a DOS word-processor file of the ``Pittner Archiv`` kind.
+
+    Rules derived from the files on a law firm's NAS (docs/26): non-ASCII letters are
+    cp437 bytes wrapped in ``\\xe1`` markers (``f\\xe1\\x81\\xe1r`` = ``für``), ``\\xa9``
+    joins hyphenated names, ``ESC`` starts an HP PCL printer command (parameterised ones
+    end with a capital letter), and every other byte above 0x7E or control byte except
+    tab, CR and LF is formatting and dropped.
+
+    Args:
+        raw: The file's bytes.
+
+    Returns:
+        The text with runs of blank lines collapsed; empty when nothing readable is left.
+    """
+    parts: List[str] = []
+    i, n = 0, len(raw)
+    while i < n:
+        b = raw[i]
+        if b == 0x1B:
+            j = i + 1
+            if j < n and 0x21 <= raw[j] <= 0x2F:  # parameterised PCL command: ends with A..Z
+                while j < n and j - i < 32 and not (0x41 <= raw[j] <= 0x5A):
+                    j += 1
+            i = j + 1
+            continue
+        if b == 0xE1 and i + 2 < n and raw[i + 2] == 0xE1:
+            parts.append(bytes([raw[i + 1]]).decode("cp437", errors="replace"))
+            i += 3
+            continue
+        if b == 0xA9:
+            parts.append("-")
+        elif b in (0x09, 0x0A, 0x0D) or 0x20 <= b <= 0x7E:
+            parts.append(chr(b))
+        i += 1
+    text = "".join(parts).replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def sniff_text_bytes(raw: bytes, prefer_legacy: bool = False) -> Tuple[str, str]:
+    """Classify a text-like file's bytes: ``("rtf"|"html"|"text"|"legacy", decoded text)``.
+
+    ``rtf`` and ``html`` return the raw text (the caller converts it), ``text`` the UTF-8
+    (BOM aware) or cp1252 decoding, ``legacy`` the :func:`legacy_dos_text` rendering. A file
+    is ``legacy`` when it carries printer escapes or ``\\xe1`` letter markers, when more
+    than 2 % of its bytes are control bytes, or when ``prefer_legacy`` is set (files of the
+    DOS text system that happen to be plain ASCII decode the same way).
+
+    Args:
+        raw: The file's bytes.
+        prefer_legacy: Treat anything that is not RTF or HTML as the DOS text format.
+
+    Returns:
+        The kind and the decoded text.
+    """
+    head = raw.lstrip()[:16]
+    if head.startswith(b"{\\rtf"):
+        return "rtf", raw.decode("latin-1")
+    if head[:1] == b"<":
+        return "html", decode_html_bytes(raw)
+    sample = raw[:8192]
+    controls = sum(1 for b in sample if (b < 0x20 and b not in (0x09, 0x0A, 0x0D)) or b == 0x7F)
+    legacy = (
+        prefer_legacy
+        or b"\x1b" in sample
+        or re.search(rb"\xe1[\x80-\xff]\xe1", sample) is not None
+        or (sample and controls / len(sample) > 0.02)
+    )
+    if legacy:
+        return "legacy", legacy_dos_text(raw)
+    try:
+        return "text", raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return "text", raw.decode("cp1252", errors="replace")
+
+
+#: Office template containers and the document content type Docling recognises them by.
+_OOXML_TEMPLATE_TYPES: Dict[str, Tuple[str, str]] = {
+    ".dotx": ("wordprocessingml.template.main+xml", "wordprocessingml.document.main+xml"),
+    ".xltx": ("spreadsheetml.template.main+xml", "spreadsheetml.sheet.main+xml"),
+    ".potx": ("presentationml.template.main+xml", "presentationml.presentation.main+xml"),
+}
+
+
+def ooxml_template_as_document(src: str, dst: str) -> None:
+    """Write the Office template ``src`` (.dotx/.xltx/.potx) to ``dst`` as the matching document.
+
+    A template is the same zip as the document except for the main part's content type in
+    ``[Content_Types].xml``, which Docling uses to recognise the format (a renamed copy is
+    rejected as an unknown format). Only that entry is rewritten.
+
+    Args:
+        src: The template file.
+        dst: Destination path (``.docx``/``.xlsx``/``.pptx``).
+    """
+    import zipfile
+
+    template_type, document_type = _OOXML_TEMPLATE_TYPES[os.path.splitext(src)[1].lower()]
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "[Content_Types].xml":
+                data = data.replace(template_type.encode("utf-8"), document_type.encode("utf-8"))
+            zout.writestr(item, data)
+
+
+def decode_text_payload(payload: bytes, declared: Optional[str]) -> str:
+    """Decode a MIME text payload: valid UTF-8 wins, then the declared charset, then cp1252.
+
+    Saved web pages often declare ``iso-8859-1`` in the MIME header while their bytes are
+    UTF-8 (the page's own ``<meta charset>``); decoding with the declared charset turns
+    every umlaut into ``Ã¤``.
+
+    Args:
+        payload: The decoded-transfer-encoding bytes of the part.
+        declared: The part's ``charset`` parameter, if any.
+
+    Returns:
+        The text.
+    """
+    try:
+        return payload.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    if declared:
+        try:
+            return payload.decode(declared)
+        except (UnicodeDecodeError, LookupError):
+            pass
+    return payload.decode("cp1252", errors="replace")
+
+
+_HTML_CHARSET_META = re.compile(r"<meta\b[^>]*charset[^>]*>", re.IGNORECASE)
+_HTML_CHARSET_VALUE = re.compile(rb"charset=[\"']?\s*([A-Za-z0-9_.:-]+)", re.IGNORECASE)
+
+
+def decode_html_bytes(raw: bytes) -> str:
+    """Decode an HTML file's bytes: valid UTF-8, else the page's ``<meta charset>``, else cp1252."""
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    match = _HTML_CHARSET_VALUE.search(raw[:4096])
+    if match:
+        try:
+            return raw.decode(match.group(1).decode("ascii"))
+        except (UnicodeDecodeError, LookupError):
+            pass
+    return raw.decode("cp1252", errors="replace")
+
+
+def html_as_utf8(html: str) -> str:
+    """Return ``html`` with its charset declaration replaced by ``<meta charset="utf-8">``.
+
+    The temporary files handed to Docling are written as UTF-8, but its HTML reader lets
+    the page's own ``<meta charset>`` / ``http-equiv`` tag win over the bytes, so a page
+    saved as windows-1252 came back as ``Ã¤`` mojibake. The tag is inserted at the top
+    (readers honour the first declaration).
+    """
+    cleaned = _HTML_CHARSET_META.sub("", html)
+    return '<meta charset="utf-8">' + cleaned
 
 
 def read_image_dimensions(image_path: str) -> Optional[Tuple[int, int, Optional[float]]]:
@@ -1681,6 +1909,8 @@ class DocumentIngestionPipeline:
             # Single-pass directory traversal - much faster than multiple glob calls
             for root, dirs, files in os.walk(folder):
                 for filename in files:
+                    if is_sidecar_file(filename):
+                        continue  # macOS "._name" resource forks next to the real files
                     ext = os.path.splitext(filename)[1].lower()
                     if ext in extensions:
                         all_files.append(os.path.join(root, filename))
@@ -1714,11 +1944,12 @@ class DocumentIngestionPipeline:
         TYPE_PRIORITY = {
             # Text files - fastest
             '.txt': 1, '.md': 1, '.markdown': 1,
+            '.as': 1, '.ass': 1, '.ds': 1, '.eb': 1, '.do': 1, '.dos': 1, '.3': 1, '.dss': 1, '.wvb': 1, '.mtt': 1,
             # HTML - also fast
-            '.html': 2, '.htm': 2,
+            '.html': 2, '.htm': 2, '.mht': 2, '.mhtml': 2,
             # Office documents - medium
             '.pdf': 3,
-            '.docx': 4, '.doc': 4, '.wbk': 4,
+            '.docx': 4, '.doc': 4, '.wbk': 4, '.dot': 4, '.dotx': 4, '.rtf': 4,
             '.xlsx': 5, '.xls': 5,
             '.pptx': 6, '.ppt': 6,
             '.msg': 4,  # Outlook email - similar priority to Office docs
@@ -1775,9 +2006,35 @@ class DocumentIngestionPipeline:
         """
         file_ext = os.path.splitext(file_path)[1].lower()
 
-        # Treat .wbk (Word backup) as .doc
-        if file_ext == '.wbk':
+        # Word backups (.wbk) and Word 97 templates (.dot) are the same OLE2 format as .doc
+        if file_ext in ('.wbk', '.dot'):
             file_ext = '.doc'
+
+        # Word 2007+ templates (.dotx): a .docx container under another name
+        if file_ext == '.dotx':
+            return self._read_renamed_office_file(file_path, '.docx')
+
+        # RTF letters and templates
+        if file_ext == '.rtf':
+            return self._read_rtf_file(file_path)
+
+        # MHTML web archives (saved web pages, some e-mail exports)
+        if file_ext in ('.mht', '.mhtml'):
+            return self._read_mhtml_file(file_path)
+
+        # Legacy Excel: Docling reads .xlsx only
+        if file_ext == '.xls':
+            return self._read_xls_file(file_path)
+
+        # DOS-era text system files (Pittner Archiv, M U S T E R), Olympus .dss dictations
+        if file_ext in LEGACY_TEXT_EXTENSIONS:
+            return self._read_legacy_text_file(file_path)
+
+        # jurXpert "weiteres Vorbringen" (.wvb: text or RTF) and gzip-packed templates (.mtt)
+        if file_ext == '.wvb':
+            return self._read_sniffed_text_file(file_path)
+        if file_ext == '.mtt':
+            return self._read_gzipped_text_file(file_path)
 
         # Outlook .msg files - extract email content
         if file_ext == '.msg':
@@ -1812,12 +2069,17 @@ class DocumentIngestionPipeline:
         # Image formats - convert via Docling with OCR
         image_formats = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.tif']
         if file_ext in image_formats:
+            # Multi-page TIFF scans: OCR every page, not only the first (docs/26)
+            if file_ext in ('.tif', '.tiff'):
+                frames = image_frame_count(file_path)
+                if frames > 1:
+                    return self._read_multipage_tiff(file_path, frames)
             try:
                 logger.info(
                     f"Processing image with OCR via Docling: "
                     f"{os.path.basename(file_path)}"
                 )
-                
+
                 convert_path, temp_copy = prepare_image_for_docling(file_path)
                 try:
                     converter = create_image_converter(image_path=convert_path)
@@ -1870,10 +2132,10 @@ class DocumentIngestionPipeline:
                     None
                 )
 
-        # Docling-supported formats (convert to markdown)
+        # Docling-supported formats (convert to markdown); legacy .xls is read above
         docling_formats = [
             '.pdf', '.docx', '.pptx', '.ppt',
-            '.xlsx', '.xls', '.html', '.htm',
+            '.xlsx', '.html', '.htm',
             '.md', '.markdown'  # Markdown files for HybridChunker
         ]
 
@@ -1920,6 +2182,313 @@ class DocumentIngestionPipeline:
                 # Try with different encoding
                 with open(file_path, 'r', encoding='latin-1') as f:
                     return (f.read(), None)
+
+    # -- Legacy and container formats (law-firm corpora, docs/26) ------------------------
+
+    def _read_rtf_file(self, file_path: str) -> tuple[str, Optional[Any]]:
+        """Plain text of an RTF file (letters and ``Muster`` templates of legal practices).
+
+        Uses ``striprtf``. RTF is 7-bit ASCII whose ``\\'xx`` escapes are bytes of the
+        document's ``\\ansicpg`` code page, so the file is read as latin-1 and the parser
+        decodes the escapes with that code page (``cp1252`` when none is declared).
+
+        Args:
+            file_path: Path to the .rtf file.
+
+        Returns:
+            Tuple of (text, None); an ``[Error: …]`` placeholder when it cannot be read.
+        """
+        basename = os.path.basename(file_path)
+        try:
+            from striprtf.striprtf import rtf_to_text
+        except ImportError:
+            logger.error(f"striprtf is not installed; cannot read RTF file {basename}")
+            return (f"[Error: Could not read file {basename} (no RTF reader installed)]", None)
+        try:
+            with open(file_path, "rb") as handle:
+                raw = handle.read()
+            text = rtf_to_text(raw.decode("latin-1"), encoding=rtf_code_page(raw), errors="replace")
+        except Exception as exc:  # noqa: BLE001 - one unreadable file must not stop the run
+            logger.error(f"Failed to read RTF {basename}: {exc}")
+            return (f"[Error: Could not read file {basename}]", None)
+        text = text.strip()
+        if not text:
+            logger.warning(f"RTF file has no text content: {basename}")
+            return (f"[Document: {basename} - no text content]", None)
+        logger.info(f"Extracted {len(text)} chars from RTF: {basename}")
+        return (text, None)
+
+    def _read_xls_file(self, file_path: str) -> tuple[str, Optional[Any]]:
+        """Legacy Excel (.xls) as one Markdown table per sheet (pandas + xlrd).
+
+        Files with an ``.xls`` name that are really HTML or XML exports (common with
+        bookkeeping software) are handed to Docling's HTML reader instead.
+
+        Args:
+            file_path: Path to the .xls file.
+
+        Returns:
+            Tuple of (markdown, None); an ``[Error: …]`` placeholder when it cannot be read.
+        """
+        basename = os.path.basename(file_path)
+        try:
+            with open(file_path, "rb") as handle:
+                head = handle.read(512).lstrip()
+        except OSError as exc:
+            logger.error(f"Failed to open {basename}: {exc}")
+            return (f"[Error: Could not read file {basename}]", None)
+        if head[:1] == b"<":
+            logger.info(f"{basename} is an HTML/XML export named .xls; reading it as HTML")
+            return self._read_renamed_office_file(file_path, ".html")
+        try:
+            import pandas as pd
+
+            sheets = pd.read_excel(file_path, sheet_name=None, header=None, engine="xlrd")
+        except ImportError as exc:
+            logger.error(f"xlrd/pandas not installed; cannot read legacy .xls {basename}: {exc}")
+            return (f"[Error: Could not read file {basename} (no .xls reader installed)]", None)
+        except Exception as exc:  # noqa: BLE001 - one unreadable file must not stop the run
+            logger.error(f"Failed to read legacy .xls {basename}: {exc}")
+            return (f"[Error: Could not read file {basename}]", None)
+        parts: List[str] = []
+        for sheet_name, frame in sheets.items():
+            frame = frame.dropna(how="all").dropna(axis=1, how="all")
+            if frame.empty:
+                continue
+            rows = frame.astype(object).where(frame.notna(), "").values.tolist()
+            parts.append(f"## {sheet_name}\n\n{markdown_table(rows)}")
+        if not parts:
+            logger.warning(f"Legacy .xls has no cell content: {basename}")
+            return (f"[Document: {basename} - no cell content]", None)
+        logger.info(f"Extracted {len(parts)} sheet(s) from legacy .xls: {basename}")
+        return ("\n\n".join(parts), None)
+
+    def _read_mhtml_file(self, file_path: str) -> tuple[str, Optional[Any]]:
+        """MHTML web archive (.mht): its HTML part is converted by Docling's HTML reader.
+
+        Args:
+            file_path: Path to the .mht/.mhtml file.
+
+        Returns:
+            Tuple of (markdown, DoclingDocument); an ``[Error: …]`` placeholder when unreadable.
+        """
+        import email
+        import email.policy
+        import tempfile
+
+        basename = os.path.basename(file_path)
+        try:
+            with open(file_path, "rb") as handle:
+                message = email.message_from_binary_file(handle, policy=email.policy.default)
+            html_part = next((p for p in message.walk() if p.get_content_type() == "text/html"), None)
+            if html_part is None:
+                text_part = next((p for p in message.walk() if p.get_content_type() == "text/plain"), None)
+                if text_part is None:
+                    logger.warning(f"MHTML archive has no HTML or text part: {basename}")
+                    return (f"[Document: {basename} - no readable part]", None)
+                payload = text_part.get_payload(decode=True) or b""
+                return (decode_text_payload(payload, text_part.get_content_charset()), None)
+            payload = html_part.get_payload(decode=True) or b""
+            html = decode_text_payload(payload, html_part.get_content_charset())
+        except Exception as exc:  # noqa: BLE001 - one unreadable file must not stop the run
+            logger.error(f"Failed to parse MHTML {basename}: {exc}")
+            return (f"[Error: Could not read file {basename}]", None)
+        fd, tmp = tempfile.mkstemp(suffix=".html", prefix="recallhub-mht-")
+        os.close(fd)
+        try:
+            with open(tmp, "w", encoding="utf-8") as out:
+                out.write(html_as_utf8(html))
+            converter = create_document_converter()
+            result = converter.convert(tmp)
+            logger.info(f"Converted MHTML archive via its HTML part: {basename}")
+            return (export_document_markdown(result.document), result.document)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Failed to convert the HTML part of {basename}: {exc}")
+            return (f"[Error: Could not read file {basename}]", None)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+
+    def _read_legacy_text_file(self, file_path: str) -> tuple[str, Optional[Any]]:
+        """Text of a DOS-era word-processor file (:data:`LEGACY_TEXT_EXTENSIONS`).
+
+        Olympus ``.dss`` dictation audio (same extension) is recognised by its magic and
+        stored as a placeholder; RTF content under these extensions goes to the RTF reader.
+
+        Args:
+            file_path: Path to the file.
+
+        Returns:
+            Tuple of (text, None).
+        """
+        basename = os.path.basename(file_path)
+        try:
+            with open(file_path, "rb") as handle:
+                raw = handle.read()
+        except OSError as exc:
+            logger.error(f"Failed to open {basename}: {exc}")
+            return (f"[Error: Could not read file {basename}]", None)
+        if raw.startswith(_DSS_AUDIO_MAGIC):
+            logger.info(f"Skipping Olympus DSS dictation (no DSS transcription): {basename}")
+            return (f"[Audio: {basename} - Olympus DSS dictation, not transcribed]", None)
+        return self._text_from_sniffed_bytes(raw, basename, prefer_legacy=True)
+
+    def _read_sniffed_text_file(self, file_path: str) -> tuple[str, Optional[Any]]:
+        """Text of a file that is plain text, RTF or HTML under a custom extension (``.wvb``)."""
+        basename = os.path.basename(file_path)
+        try:
+            with open(file_path, "rb") as handle:
+                raw = handle.read()
+        except OSError as exc:
+            logger.error(f"Failed to open {basename}: {exc}")
+            return (f"[Error: Could not read file {basename}]", None)
+        return self._text_from_sniffed_bytes(raw, basename)
+
+    def _read_gzipped_text_file(self, file_path: str) -> tuple[str, Optional[Any]]:
+        """Text of a gzip-packed template (``.mtt``): the packed bytes are sniffed like ``.wvb``."""
+        import gzip
+
+        basename = os.path.basename(file_path)
+        try:
+            with open(file_path, "rb") as handle:
+                raw = gzip.decompress(handle.read())
+        except (OSError, EOFError, gzip.BadGzipFile) as exc:
+            logger.error(f"Failed to unpack {basename}: {exc}")
+            return (f"[Error: Could not read file {basename}]", None)
+        return self._text_from_sniffed_bytes(raw, basename)
+
+    def _text_from_sniffed_bytes(
+        self, raw: bytes, basename: str, prefer_legacy: bool = False
+    ) -> tuple[str, Optional[Any]]:
+        """Dispatch sniffed bytes (:func:`sniff_text_bytes`) to the RTF, HTML or text path."""
+        import tempfile
+
+        kind, text = sniff_text_bytes(raw, prefer_legacy=prefer_legacy)
+        if kind == "rtf":
+            try:
+                from striprtf.striprtf import rtf_to_text
+
+                text = rtf_to_text(text, encoding=rtf_code_page(raw), errors="replace")
+            except ImportError:
+                logger.error(f"striprtf is not installed; cannot read RTF content of {basename}")
+                return (f"[Error: Could not read file {basename} (no RTF reader installed)]", None)
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"Failed to read RTF content of {basename}: {exc}")
+                return (f"[Error: Could not read file {basename}]", None)
+        elif kind == "html":
+            fd, tmp = tempfile.mkstemp(suffix=".html", prefix="recallhub-sniffed-")
+            os.close(fd)
+            try:
+                with open(tmp, "w", encoding="utf-8") as out:
+                    out.write(html_as_utf8(text))
+                result = create_document_converter().convert(tmp)
+                logger.info(f"Converted HTML content of {basename}")
+                return (export_document_markdown(result.document), result.document)
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"Failed to convert HTML content of {basename}: {exc}")
+                return (f"[Error: Could not read file {basename}]", None)
+            finally:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+        text = text.strip()
+        if not text:
+            logger.warning(f"No readable text in {basename}")
+            return (f"[Document: {basename} - no text content]", None)
+        logger.info(f"Extracted {len(text)} chars ({kind}) from {basename}")
+        return (text, None)
+
+    def _read_renamed_office_file(self, file_path: str, suffix: str) -> tuple[str, Optional[Any]]:
+        """Convert a file whose content is a Docling format under another extension.
+
+        Docling picks its reader from the file name and, for Office zips, from the main
+        part's content type (``.dotx`` templates are ``.docx`` containers, some ``.xls``
+        exports are HTML), so a temporary copy with the right suffix - and for templates
+        the document content type - is converted instead.
+
+        Args:
+            file_path: Path to the file.
+            suffix: Extension Docling should see, e.g. ``.docx``.
+
+        Returns:
+            Tuple of (markdown, DoclingDocument); an ``[Error: …]`` placeholder when unreadable.
+        """
+        import shutil
+        import tempfile
+
+        basename = os.path.basename(file_path)
+        fd, tmp = tempfile.mkstemp(suffix=suffix, prefix="recallhub-renamed-")
+        os.close(fd)
+        try:
+            if os.path.splitext(file_path)[1].lower() in _OOXML_TEMPLATE_TYPES:
+                ooxml_template_as_document(file_path, tmp)
+            else:
+                shutil.copyfile(file_path, tmp)
+            converter = create_document_converter()
+            result = converter.convert(tmp)
+            logger.info(f"Converted {basename} as {suffix}")
+            return (export_document_markdown(result.document), result.document)
+        except Exception as exc:  # noqa: BLE001 - one unreadable file must not stop the run
+            logger.error(f"Failed to convert {basename} as {suffix}: {exc}")
+            return (f"[Error: Could not read file {basename}]", None)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+
+    def _read_multipage_tiff(self, file_path: str, frames: int) -> tuple[str, Optional[Any]]:
+        """OCR every page of a multi-page TIFF scan; pages are separated by a rule.
+
+        Each frame is written to a temporary PNG (with the TIFF's DPI when it is usable)
+        and converted like a single image. The result carries no DoclingDocument, so the
+        chunker works from the Markdown.
+
+        Args:
+            file_path: Path to the .tif/.tiff file.
+            frames: Number of frames (from :func:`image_frame_count`).
+
+        Returns:
+            Tuple of (markdown, None).
+        """
+        import tempfile
+        from PIL import Image, ImageSequence
+
+        basename = os.path.basename(file_path)
+        logger.info(f"Processing multi-page TIFF with OCR via Docling: {basename} ({frames} pages)")
+        pages: List[str] = []
+        failed = 0
+        try:
+            with Image.open(file_path) as img:
+                dpi = img.info.get("dpi")
+                values = [_dpi_number(v) for v in dpi] if isinstance(dpi, tuple) and len(dpi) == 2 else None
+                save_dpi = tuple(values) if values and all(v and v > 0 for v in values) else None
+                for index, frame in enumerate(ImageSequence.Iterator(img), start=1):
+                    fd, tmp = tempfile.mkstemp(suffix=".png", prefix="recallhub-tiff-")
+                    os.close(fd)
+                    try:
+                        page = frame.convert("RGB") if frame.mode not in ("L", "RGB") else frame.copy()
+                        page.save(tmp, "PNG", dpi=save_dpi) if save_dpi else page.save(tmp, "PNG")
+                        converter = create_image_converter(image_path=tmp)
+                        result = converter.convert(tmp)
+                        text = export_document_markdown(result.document).strip()
+                    except Exception as exc:  # noqa: BLE001 - keep the other pages
+                        failed += 1
+                        logger.warning(f"OCR failed for page {index} of {basename}: {exc}")
+                        text = ""
+                    finally:
+                        if os.path.exists(tmp):
+                            os.remove(tmp)
+                    if text:
+                        pages.append(text)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Failed to read multi-page TIFF {basename}: {exc}")
+            return (f"[Image: {basename} - OCR failed: {exc}]", None)
+        if not pages:
+            logger.warning(f"OCR produced no text for any page of {basename}")
+            return (f"[Image: {basename} - OCR extracted minimal text]", None)
+        logger.info(
+            f"OCRed {len(pages)} of {frames} pages of {basename}"
+            + (f" ({failed} failed)" if failed else "")
+        )
+        return ("\n\n---\n\n".join(pages), None)
 
     def _read_doc_file(self, file_path: str) -> tuple[str, Optional[Any]]:
         """

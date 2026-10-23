@@ -33,3 +33,7 @@ python-dotenv>=1.0.1
 aiofiles>=24.1.0
 pyyaml>=6.0.0
 extract-msg>=0.48.0
+
+# Legacy formats of law-firm corpora (docs/26): RTF letters/templates, legacy .xls
+striprtf>=0.0.26
+xlrd>=2.0.1
