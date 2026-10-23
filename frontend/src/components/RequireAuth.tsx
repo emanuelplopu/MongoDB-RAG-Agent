@@ -3,7 +3,7 @@ import { Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../contexts/AuthContext'
 import { useTenant } from '../contexts/TenantContext'
-import { useLocalizedPath } from './LocalizedLink'
+import { useLocalizedPath } from '../hooks/useLocalizedNavigate'
 
 interface RequireAuthProps {
   children?: ReactNode

@@ -18,7 +18,7 @@ import {
 import { useAuth } from '../contexts/AuthContext'
 import { useChatSidebar } from '../contexts/ChatSidebarContext'
 import { useUserPreferences } from '../contexts/UserPreferencesContext'
-import { useLocalizedNavigate } from '../components/LocalizedLink'
+import { useLocalizedNavigate } from '../hooks/useLocalizedNavigate'
 import { useLocalStorage, STORAGE_KEYS } from '../hooks/useLocalStorage'
 
 // Agent mode configuration (same as ChatPageNew) – only non-translatable properties

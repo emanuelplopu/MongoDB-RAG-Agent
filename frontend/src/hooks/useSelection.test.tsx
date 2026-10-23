@@ -2,11 +2,8 @@ import { fireEvent, render, renderHook, screen } from '@testing-library/react'
 import { act } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
-import useSelection, {
-  BulkActionBar,
-  BulkActionButton,
-  SelectAllCheckbox,
-} from './useSelection'
+import useSelection from './useSelection'
+import { BulkActionBar, BulkActionButton, SelectAllCheckbox } from '../components/BulkSelection'
 
 interface Item {
   id: string

@@ -2,7 +2,8 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
 
-import { LocalizedLink, useLocalizedNavigate, useLocalizedPath } from './LocalizedLink'
+import { LocalizedLink } from './LocalizedLink'
+import { useLocalizedNavigate, useLocalizedPath } from '../hooks/useLocalizedNavigate'
 
 const navigateMock = vi.fn()
 

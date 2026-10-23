@@ -12,7 +12,7 @@ vi.mock('@heroicons/react/24/outline', () => {
   }
 })
 
-vi.mock('./LocalizedLink', () => ({
+vi.mock('../hooks/useLocalizedNavigate', () => ({
   useLocalizedNavigate: () => navigate,
 }))
 

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import HostStatsWidget, { formatBytes, formatUptime } from './HostStatsWidget'
+import HostStatsWidget from './HostStatsWidget'
+import { formatBytes, formatUptime } from './formatUnits'
 
 const tMock = (key: string) => key
 const hostStatsMock = vi.fn()

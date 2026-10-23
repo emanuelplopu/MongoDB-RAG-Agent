@@ -1,7 +1,8 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import { vi } from 'vitest'
 
-import { TenantProvider, applyRuntimeOverrides, useTenant } from './TenantContext'
+import { applyRuntimeOverrides, useTenant } from './TenantContext'
+import { TenantProvider } from './TenantProvider'
 
 const {
   getTenantConfigMock,

@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { vi } from 'vitest'
 
 import CopyButton, { CopyCodeButton, CopyIconButton } from './CopyButton'
-import { ToastProvider } from '../contexts/ToastContext'
+import { ToastProvider } from '../contexts/ToastProvider'
 
 describe('CopyButton', () => {
   beforeEach(() => {

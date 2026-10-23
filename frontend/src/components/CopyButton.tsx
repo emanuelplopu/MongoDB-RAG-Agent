@@ -211,8 +211,3 @@ export function CopyCodeButton({ code, className = '' }: { code: string; classNa
     </button>
   )
 }
-
-/**
- * Hooks index export
- */
-export { useClipboard } from '../hooks/useClipboard'

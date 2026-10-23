@@ -1,5 +1,5 @@
 import { XMarkIcon, ExclamationTriangleIcon, ExclamationCircleIcon } from '@heroicons/react/24/outline'
-import { useLocalizedNavigate } from './LocalizedLink'
+import { useLocalizedNavigate } from '../hooks/useLocalizedNavigate'
 
 export type WarningLevel = 'warning' | 'critical'
 

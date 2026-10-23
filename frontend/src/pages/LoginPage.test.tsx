@@ -47,7 +47,7 @@ vi.mock('react-router-dom', async () => {
   }
 })
 
-vi.mock('../components/LocalizedLink', () => ({
+vi.mock('../hooks/useLocalizedNavigate', () => ({
   useLocalizedNavigate: () => mockNavigate,
   useLocalizedPath: () => (path: string) => path,
 }))

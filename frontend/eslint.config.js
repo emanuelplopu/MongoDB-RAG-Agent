@@ -32,7 +32,7 @@ export default tseslint.config(
       "react-hooks/static-components": "warn",
       "react-hooks/refs": "warn",
       "react-hooks/purity": "warn",
-      'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+      'react-refresh/only-export-components': ['error', { allowConstantExport: true }],
       // Unused `catch (err)` bindings, `_`-prefixed placeholders and rest-sibling
       // destructuring (`({ node, ...props })`) are established patterns here.
       '@typescript-eslint/no-unused-vars': ['error', {

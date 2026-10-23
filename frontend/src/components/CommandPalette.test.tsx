@@ -52,7 +52,8 @@ vi.mock('../hooks/useLocalStorage', () => ({
   useLocalStorage: () => [['/recent-chat', '/recent-search']],
 }))
 
-import CommandPalette, { useCommandPalette } from './CommandPalette'
+import CommandPalette from './CommandPalette'
+import { useCommandPalette } from '../hooks/useCommandPalette'
 
 describe('CommandPalette', () => {
   beforeEach(() => {
