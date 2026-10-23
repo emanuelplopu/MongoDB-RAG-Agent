@@ -1,6 +1,6 @@
 # RecallHub host agent
 
-A small .NET 8 Windows service that samples the real host every 5 seconds into MongoDB
+A small .NET 10 Windows service that samples the real host every 5 seconds into MongoDB
 (`recallhub_telemetry.host_samples`): CPU, RAM, drives, disk and network I/O, CPU package power
 (Windows RAPL counters), GPU via `nvidia-smi`, per-container use via the Docker Engine pipe,
 Ollama models, backend `/health` latency and — with the opt-in PawnIO driver — CPU, board and

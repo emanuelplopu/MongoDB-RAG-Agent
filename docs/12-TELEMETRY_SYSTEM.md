@@ -238,7 +238,7 @@ Windows host                                   Docker (Linux containers)
 
 The API runs in a Linux container. On Docker Desktop its `psutil` sees the WSL2 VM (its CPU, its
 RAM, its uptime), no GPU is attached to it, and CPU temperature/power are not reachable at all.
-The **host agent** (`installer/host-agent`, .NET 8, Windows service) reads the real host instead.
+The **host agent** (`installer/host-agent`, .NET 10, Windows service) reads the real host instead.
 The machine-stats widget shows its latest sample (badge **Host**) and falls back to the container
 view (badge **VM view**, with a caveat) when no sample is younger than `HOST_AGENT_STALE_SECONDS`.
 

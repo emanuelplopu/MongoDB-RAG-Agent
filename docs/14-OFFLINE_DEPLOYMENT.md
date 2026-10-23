@@ -84,6 +84,8 @@ The `recallhub` database is always included — it holds the shared authenticati
 
 Hyper-V capable hardware required (most modern PCs). Docker Desktop uses the Hyper-V backend; WSL2 is not required.
 
+No .NET runtime needs to be installed on the target machine: the desktop tray app (`RecallHubTray.exe`) and the telemetry host agent (`RecallHubHostAgent.exe`) are self-contained .NET 10 builds that carry their runtime inside the exe. Only the machine that runs `installer/build.ps1` needs the .NET 10 SDK. The embedded browser still needs the Microsoft Edge WebView2 Runtime, which ships with Windows 11 (installable on Windows 10).
+
 ## Quick Start (New Machine)
 
 ```powershell
@@ -136,7 +138,7 @@ The installer runs in 3 phases:
 ### Phase 4: Desktop App + verification
 
 - Writes the tray config (`Write-TrayConfig.ps1`): tenant branding (`app.name` = `Quellex` / `RecallHub`) and the `network` section (`hostname`, `advertise`) for the LAN name
-- Copies the newest `RecallHubTray.exe` from `installer\tray-app\bin\publish` or `bin\Release\net8.0-windows\win-x64\publish`, plus `icon.ico` and the tenant icon (`quellex.ico`)
+- Copies the newest `RecallHubTray.exe` from `installer\tray-app\bin\publish` or `bin\Release\net10.0-windows\win-x64\publish`, plus `icon.ico` and the tenant icon (`quellex.ico`)
 - Creates desktop / Start Menu shortcuts named after the tenant (`Quellex.lnk`), the `recallhub://` protocol handler and the HKCU Run entry
 - When running elevated, creates the Windows Firewall rules for network access (`Configure-LanAccess.ps1`: TCP 443/80 for the TLS gateway, UDP 5353/5355 for the name announcer); otherwise prints the command to run later
 - Polls the tenant frontend and backend; only then marks `install_complete: true` (exit code 2 otherwise). Also probes the gateway port (443 for Quellex)

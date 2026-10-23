@@ -32,7 +32,7 @@
 .NOTES
     Requirements:
     - Docker Desktop running
-    - .NET 8 SDK (for tray app)
+    - .NET 10 SDK (for tray app and host agent)
     - Inno Setup 6+ (for installer)
     - PowerShell 5.1+
 #>
@@ -204,16 +204,16 @@ function Test-Requirements {
         $allMet = $false
     }
     else {
-        # Verify .NET 8 SDK is available (required for WebView2 and tray app)
+        # Verify the .NET 10 SDK is available (tray app and host agent target net10.0-windows)
         $dotnetSdks = dotnet --list-sdks 2>&1
-        $hasNet8 = $dotnetSdks | Where-Object { $_ -match '^8\.' }
-        if ($hasNet8) {
-            Write-Success ".NET 8 SDK is available"
+        $hasNet10 = $dotnetSdks | Where-Object { $_ -match '^10\.' }
+        if ($hasNet10) {
+            Write-Success ".NET 10 SDK is available"
         }
         else {
-            Write-BuildError ".NET 8 SDK is required for tray app (WebView2 dependency)"
+            Write-BuildError ".NET 10 SDK is required for the tray app and the host agent"
             Write-Host "    Installed SDKs: $dotnetSdks"
-            Write-Host "    Please install .NET 8 SDK from: https://dotnet.microsoft.com/download/dotnet/8.0"
+            Write-Host "    Please install the .NET 10 SDK from: https://dotnet.microsoft.com/download/dotnet/10.0"
             $allMet = $false
         }
     }
@@ -413,7 +413,7 @@ function Build-TrayApp {
         Write-Success "Built tray application (with WebView2 support)"
         
         # Copy to output
-        $publishDir = Join-Path $trayAppDir "bin\Release\net8.0-windows\win-x64\publish"
+        $publishDir = Join-Path $trayAppDir "bin\Release\net10.0-windows\win-x64\publish"
         if (Test-Path $publishDir) {
             Copy-Item "$publishDir\*" -Destination $OUTPUT_DIR -Recurse -Force
             Write-Success "Copied tray application to output"
@@ -447,7 +447,7 @@ function Build-HostAgent {
     try {
         dotnet publish -c Release -r win-x64 --self-contained true 2>&1 | ForEach-Object { if ($Debug) { Write-Host "    $_" -ForegroundColor Gray } }
         if ($LASTEXITCODE -ne 0) { throw "Host agent publish failed" }
-        $publishDir = Join-Path $agentDir "bin\Release\net8.0-windows\win-x64\publish"
+        $publishDir = Join-Path $agentDir "bin\Release\net10.0-windows\win-x64\publish"
         if (-not (Test-Path $publishDir)) { throw "Publish output directory not found: $publishDir" }
         New-Item -ItemType Directory -Force -Path $agentOut | Out-Null
         Copy-Item "$publishDir\*" -Destination $agentOut -Recurse -Force

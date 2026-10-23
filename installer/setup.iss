@@ -69,7 +69,7 @@ Name: "startupicon"; Description: "Start RecallHub when Windows starts"; GroupDe
 
 [Files]
 ; Tray application
-Source: "tray-app\bin\Release\net8.0-windows\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
+Source: "tray-app\bin\Release\net10.0-windows\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
 ; PowerShell scripts
 Source: "scripts\*"; DestDir: "{app}\scripts"; Flags: ignoreversion recursesubdirs

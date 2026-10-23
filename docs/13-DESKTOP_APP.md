@@ -10,7 +10,7 @@ All data stays local — no cloud, no tracking, no external dependencies.
 
 ### Components
 
-1. **RecallHubTray.exe** — .NET 8 WinForms system tray application (self-contained, single-file publish)
+1. **RecallHubTray.exe** — .NET 10 WinForms system tray application (self-contained, single-file publish)
 2. **WebView2** — Embedded Chromium browser (Microsoft.Web.WebView2 v1.0.2792.45) rendering the React frontend
 3. **ServiceManager** — Docker Compose orchestration (start/stop/health/restart)
 4. **SplashScreen** — Startup progress UI shown while services initialize
@@ -217,7 +217,7 @@ cd installer/tray-app
 dotnet build -c Release
 ```
 
-Output: `bin/Release/net8.0-windows/RecallHubTray.exe`
+Output: `bin/Release/net10.0-windows/RecallHubTray.exe`
 
 ### Publish (self-contained single-file)
 
@@ -226,7 +226,7 @@ cd installer/tray-app
 dotnet publish -c Release
 ```
 
-Output: `bin/Release/net8.0-windows/win-x64/publish/RecallHubTray.exe`
+Output: `bin/Release/net10.0-windows/win-x64/publish/RecallHubTray.exe`
 
 The csproj sets `IncludeNativeLibrariesForSelfExtract=true`: `WebView2Loader.dll` and the WinForms native DLLs are embedded in the single exe. Without it they are written next to the exe, and because `INSTALL.ps1` deploys only `RecallHubTray.exe`, the app fails with "Browser Initialization Error" (`DllNotFoundException`). Check `%LocalAppData%\RecallHub\logs\tray-app.log` for the logged exception.
 
@@ -242,9 +242,9 @@ to Windows' own DNS client; the firewall rules for the process come from
 
 ### Project Configuration (RecallHubTray.csproj)
 
-- Target: `net8.0-windows` (WinForms)
+- Target: `net10.0-windows` (WinForms)
 - Output: `WinExe` (no console window)
-- Self-contained: `true` (includes .NET runtime)
+- Self-contained: `true` (bundles the .NET 10 runtime; nothing to install on the target machine)
 - RuntimeIdentifier: `win-x64`
 - PublishSingleFile: `true`
 - Namespace: `RecallHub.TrayApp`
@@ -253,12 +253,13 @@ to Windows' own DNS client; the firewall rules for the process come from
 
 | Package | Version | Purpose |
 |---------|---------|---------|
-| Microsoft.Web.WebView2 | 1.0.2792.45 | Embedded Chromium browser |
-| System.Text.Json | 8.0.0 | Config file parsing |
+| Microsoft.Web.WebView2 | 1.0.4258.31 | Embedded Chromium browser |
+| System.ServiceProcess.ServiceController | 10.0.13 | Host agent service status in the tray menu |
+| System.Text.Json | .NET 10 shared framework (no package reference) | Config file parsing |
 
 ### Requirements
 
-- .NET 8 SDK (build time)
+- .NET 10 SDK (build time)
 - WebView2 Runtime (included with Windows 11; installable on Windows 10)
 - Docker Desktop (runtime)
 
