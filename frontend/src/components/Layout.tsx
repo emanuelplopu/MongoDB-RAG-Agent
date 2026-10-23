@@ -50,6 +50,7 @@ import { LocalizedLink, useLocalizedNavigate } from './LocalizedLink'
 import { useChatSidebar } from '../contexts/ChatSidebarContext'
 import { useAuth } from '../contexts/AuthContext'
 import { useTenant } from '../contexts/TenantContext'
+import { stripLanguagePrefix } from '../i18n'
 import { ChatSession, indexesApi, profilesApi, ProfileListResponse } from '../api/client'
 import { canManageProfiles, canManageUsers, isSuperAdmin } from '../api/roles'
 import SidebarWarningToast, { SidebarWarning } from './SidebarWarningToast'
@@ -255,12 +256,19 @@ export default function Layout() {
   // Check if we're on the dashboard page
   const isOnDashboardPage = /\/dashboard(\/|$)/.test(location.pathname)
 
-  // Get page title for non-chat pages
+  // Get page title for non-chat pages. Routes carry a language prefix
+  // (/en/search), menu hrefs do not (/search), so strip it before matching and
+  // prefer the longest href so /system/ingestion/failed reads "Ingestion".
   const getPageTitle = () => {
     if (isOnDashboardPage) return tenant.branding.appName
     if (isOnChatPage) return t('nav.chat')
-    const item = baseMenuItems.find(n => !n.exact && location.pathname.startsWith(n.href))
-    return item ? t(item.nameKey) : t('nav.chat')
+    const path = stripLanguagePrefix(location.pathname)
+    const item = [...baseMenuItems, ...systemMenuItems]
+      .filter(n => path === n.href || path.startsWith(n.href + '/'))
+      .sort((a, b) => b.href.length - a.href.length)[0]
+    if (item) return t(item.nameKey)
+    if (path === '/system' || path.startsWith('/system/')) return t('nav.system')
+    return t('nav.chat')
   }
 
   // Filter menu items based on user roles and tenant features. Profiles are the

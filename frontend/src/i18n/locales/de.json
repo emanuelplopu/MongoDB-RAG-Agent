@@ -89,7 +89,8 @@
     "light": "Hell",
     "dark": "Dunkel",
     "system": "System",
-    "switchTo": "Zu {{mode}}-Modus wechseln"
+    "switchTo": "Zu {{mode}}-Modus wechseln",
+    "current": "Design: {{mode}}"
   },
   "language": {
     "english": "English",

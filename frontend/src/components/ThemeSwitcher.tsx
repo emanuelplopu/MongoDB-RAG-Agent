@@ -50,7 +50,9 @@ export default function ThemeSwitcher({ compact = true }: ThemeSwitcherProps) {
             : 'gap-2 px-3 py-2 hover:bg-surface-variant dark:hover:bg-gray-700'
         }`}
         title={t(`theme.${theme}`)}
-        aria-label={t('theme.switchTo', { mode: theme })}
+        aria-label={t('theme.current', { mode: t(`theme.${theme}`) })}
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
       >
         <CurrentIcon className="h-5 w-5 text-secondary dark:text-gray-400" />
         {!compact && (
@@ -67,6 +69,7 @@ export default function ThemeSwitcher({ compact = true }: ThemeSwitcherProps) {
             return (
               <button
                 key={option.value}
+                aria-label={t('theme.switchTo', { mode: t(option.labelKey) })}
                 onClick={() => {
                   setTheme(option.value)
                   setIsOpen(false)

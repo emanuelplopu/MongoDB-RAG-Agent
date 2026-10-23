@@ -8,21 +8,35 @@ import {
   BeakerIcon,
 } from '@heroicons/react/24/outline'
 import { useAuth } from '../contexts/AuthContext'
+import { useTenant } from '../contexts/TenantContext'
+import { TenantFeatures } from '../tenants/types'
 import { isOrgAdmin } from '../api/roles'
 import { useTranslation } from 'react-i18next'
 
-// System page now serves as a hub to the 4 specialized pages
-const systemPages = [
+interface SystemPageCard {
+  key: string
+  href: string
+  icon: typeof ChartBarIcon
+  color: string
+  /** Tenant feature flag that must be on for the card (and its route) to exist. */
+  feature?: keyof TenantFeatures
+}
+
+// System page now serves as a hub to the specialized pages
+const systemPages: SystemPageCard[] = [
   { key: 'status', href: '/system/status', icon: ChartBarIcon, color: 'bg-blue-500' },
   { key: 'indexes', href: '/system/indexes', icon: MagnifyingGlassCircleIcon, color: 'bg-green-500' },
   { key: 'ingestion', href: '/system/ingestion', icon: ArrowPathIcon, color: 'bg-purple-500' },
   { key: 'config', href: '/system/config', icon: WrenchScrewdriverIcon, color: 'bg-orange-500' },
-  { key: 'benchmark', href: '/system/benchmark', icon: BeakerIcon, color: 'bg-cyan-500' },
+  { key: 'benchmark', href: '/system/benchmark', icon: BeakerIcon, color: 'bg-cyan-500', feature: 'showEmbeddingBenchmark' },
 ]
 
 export default function SystemPage() {
   const navigate = useNavigate()
   const { t } = useTranslation()
+  const { tenant } = useTenant()
+  // Same gate as the FeatureGuard around the routes in App.tsx
+  const visiblePages = systemPages.filter(page => !page.feature || tenant.features[page.feature])
   const { user, isLoading: authLoading } = useAuth()
   
   // Superadmins get the hub; organisation admins go straight to user management
@@ -63,7 +77,7 @@ export default function SystemPage() {
 
       {/* Page Grid */}
       <div className="grid gap-6 md:grid-cols-2">
-        {systemPages.map((page) => (
+        {visiblePages.map((page) => (
           <button
             key={page.key}
             onClick={() => navigate(page.href)}

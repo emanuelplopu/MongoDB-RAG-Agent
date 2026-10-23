@@ -10,6 +10,7 @@ import {
   ApiError,
 } from '../api/client'
 import { useAuth } from './AuthContext'
+import { useTenant } from './TenantContext'
 import { useUserPreferences } from './UserPreferencesContext'
 
 // Local storage keys
@@ -82,6 +83,7 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
   const location = useLocation()
   const { user, isLoading: isAuthLoading } = useAuth()
+  const { tenant } = useTenant()
   const { preferences } = useUserPreferences()
 
   // State
@@ -165,13 +167,17 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
     }
   }, [user?.is_admin])
 
+  const requireAuth = tenant.features.requireAuth
+  const userId = user?.id
   useEffect(() => {
-    // Only load sessions after auth is done loading
-    if (!isAuthLoading) {
-      loadSessions()
-      loadModels()
-    }
-  }, [loadSessions, loadModels, isAuthLoading, user?.id])
+    // Only load sessions after auth is done loading. When the tenant enforces
+    // login, a guest (login page, expired session) would only collect 401s,
+    // so skip the calls; tenants that allow anonymous use still load.
+    if (isAuthLoading) return
+    if (!userId && requireAuth) return
+    loadSessions()
+    loadModels()
+  }, [loadSessions, loadModels, isAuthLoading, userId, requireAuth])
 
   // Create new session
   const handleNewChat = useCallback(async (folderId?: string) => {

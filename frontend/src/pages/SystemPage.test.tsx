@@ -25,6 +25,14 @@ vi.mock('../contexts/AuthContext', () => ({
   AuthProvider: ({ children }: { children: React.ReactNode }) => children,
 }))
 
+// Mock the tenant feature flags the hub filters its cards by
+const { mockFeatures } = vi.hoisted(() => ({
+  mockFeatures: { showEmbeddingBenchmark: true },
+}))
+vi.mock('../contexts/TenantContext', () => ({
+  useTenant: () => ({ tenant: { features: mockFeatures }, tenantId: 'recallhub', isLoading: false }),
+}))
+
 // Wrapper with router context
 const renderWithRouter = (ui: React.ReactElement) => {
   return render(
@@ -92,5 +100,23 @@ describe('SystemPage', () => {
       const dbElements = screen.queryAllByText(/database|documents|chunks/i)
       expect(dbElements.length).toBeGreaterThanOrEqual(0)
     })
+  })
+
+  it('shows the embedding benchmark card when the tenant enables it', async () => {
+    mockFeatures.showEmbeddingBenchmark = true
+    renderWithRouter(<SystemPage />)
+
+    // Card name and description both mention the benchmark
+    expect((await screen.findAllByText(/benchmark/i)).length).toBeGreaterThan(0)
+  })
+
+  it('hides the embedding benchmark card when the tenant feature is off', async () => {
+    mockFeatures.showEmbeddingBenchmark = false
+    renderWithRouter(<SystemPage />)
+
+    // The other hub cards still render (status card), the gated one does not
+    expect((await screen.findAllByText(/status/i)).length).toBeGreaterThan(0)
+    expect(screen.queryAllByText(/benchmark/i)).toHaveLength(0)
+    mockFeatures.showEmbeddingBenchmark = true
   })
 })

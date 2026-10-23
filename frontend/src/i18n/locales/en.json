@@ -89,7 +89,8 @@
     "light": "Light",
     "dark": "Dark",
     "system": "System",
-    "switchTo": "Switch to {{mode}} mode"
+    "switchTo": "Switch to {{mode}} mode",
+    "current": "Theme: {{mode}}"
   },
   "language": {
     "english": "English",
