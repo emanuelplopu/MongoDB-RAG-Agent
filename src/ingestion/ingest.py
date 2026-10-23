@@ -1099,7 +1099,7 @@ def sniff_text_bytes(raw: bytes, prefer_legacy: bool = False) -> Tuple[str, str]
     if head.startswith(b"{\\rtf"):
         return "rtf", raw.decode("latin-1")
     if head[:1] == b"<":
-        return "html", raw.decode("utf-8", errors="replace")
+        return "html", decode_html_bytes(raw)
     sample = raw[:8192]
     controls = sum(1 for b in sample if (b < 0x20 and b not in (0x09, 0x0A, 0x0D)) or b == 0x7F)
     legacy = (
@@ -1170,6 +1170,37 @@ def decode_text_payload(payload: bytes, declared: Optional[str]) -> str:
         except (UnicodeDecodeError, LookupError):
             pass
     return payload.decode("cp1252", errors="replace")
+
+
+_HTML_CHARSET_META = re.compile(r"<meta\b[^>]*charset[^>]*>", re.IGNORECASE)
+_HTML_CHARSET_VALUE = re.compile(rb"charset=[\"']?\s*([A-Za-z0-9_.:-]+)", re.IGNORECASE)
+
+
+def decode_html_bytes(raw: bytes) -> str:
+    """Decode an HTML file's bytes: valid UTF-8, else the page's ``<meta charset>``, else cp1252."""
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    match = _HTML_CHARSET_VALUE.search(raw[:4096])
+    if match:
+        try:
+            return raw.decode(match.group(1).decode("ascii"))
+        except (UnicodeDecodeError, LookupError):
+            pass
+    return raw.decode("cp1252", errors="replace")
+
+
+def html_as_utf8(html: str) -> str:
+    """Return ``html`` with its charset declaration replaced by ``<meta charset="utf-8">``.
+
+    The temporary files handed to Docling are written as UTF-8, but its HTML reader lets
+    the page's own ``<meta charset>`` / ``http-equiv`` tag win over the bytes, so a page
+    saved as windows-1252 came back as ``Ã¤`` mojibake. The tag is inserted at the top
+    (readers honour the first declaration).
+    """
+    cleaned = _HTML_CHARSET_META.sub("", html)
+    return '<meta charset="utf-8">' + cleaned
 
 
 def read_image_dimensions(image_path: str) -> Optional[Tuple[int, int, Optional[float]]]:
@@ -2266,7 +2297,7 @@ class DocumentIngestionPipeline:
         os.close(fd)
         try:
             with open(tmp, "w", encoding="utf-8") as out:
-                out.write(html)
+                out.write(html_as_utf8(html))
             converter = create_document_converter()
             result = converter.convert(tmp)
             logger.info(f"Converted MHTML archive via its HTML part: {basename}")
@@ -2349,7 +2380,7 @@ class DocumentIngestionPipeline:
             os.close(fd)
             try:
                 with open(tmp, "w", encoding="utf-8") as out:
-                    out.write(text)
+                    out.write(html_as_utf8(text))
                 result = create_document_converter().convert(tmp)
                 logger.info(f"Converted HTML content of {basename}")
                 return (export_document_markdown(result.document), result.document)

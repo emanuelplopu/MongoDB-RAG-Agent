@@ -38,7 +38,7 @@ def stub_converter(monkeypatch):
     class _Converter:
         def convert(self, path):
             calls.append(path)
-            return _Result(f"converted:{Path(path).suffix}:{Path(path).read_bytes()[:20]!r}")
+            return _Result(f"converted:{Path(path).suffix}:{Path(path).read_bytes()!r}")
 
     monkeypatch.setattr(ingest, "create_document_converter", lambda *a, **k: _Converter())
     monkeypatch.setattr(ingest, "create_image_converter", lambda *a, **k: _Converter())
@@ -246,6 +246,24 @@ def test_mhtml_with_latin1_header_but_utf8_bytes_is_not_mojibake(pipeline, tmp_p
     path.write_bytes(raw)
     text, _ = pipeline._read_mhtml_file(str(path))
     assert "\\xc3\\xa4" in text and "\\xc3\\x83" not in text  # ä written as UTF-8, not re-encoded mojibake
+
+
+def test_html_handed_to_docling_declares_utf8(pipeline, tmp_path: Path, stub_converter) -> None:
+    page = (
+        '<html><head><meta http-equiv="Content-Type" content="text/html; charset=windows-1252">'
+        "<title>Verträge</title></head><body>Muster</body></html>"
+    )
+    assert ingest.html_as_utf8(page).startswith('<meta charset="utf-8"><html><head><title>')
+    assert "windows-1252" not in ingest.html_as_utf8(page)
+    packed = tmp_path / "W.mtt"
+    packed.write_bytes(gzip.compress(page.encode("cp1252")))
+    text, _ = pipeline._read_document(str(packed))
+    assert 'charset="utf-8"' in text
+    assert "windows-1252" not in text
+    assert "\\xc3\\xa4" in text  # the cp1252 ä, decoded via the page's meta tag, re-encoded as UTF-8
+    assert ingest.decode_html_bytes("<p>ä</p>".encode("utf-8")) == "<p>ä</p>"
+    assert ingest.decode_html_bytes(b'<meta charset="iso-8859-15"><p>\xe4</p>') == '<meta charset="iso-8859-15"><p>ä</p>'
+    assert ingest.decode_html_bytes(b"<p>\xe4</p>") == "<p>ä</p>"
 
 
 def test_dot_goes_to_antiword_like_doc(pipeline, tmp_path: Path, monkeypatch) -> None:
