@@ -30,6 +30,8 @@ dependencies = [
     "cryptography>=42.0.0",  # For credential encryption
     "email-validator>=2.0.0",
     "psutil>=5.9.0",  # GPU stress and benchmark telemetry (host CPU, RAM, processes)
+    "striprtf>=0.0.26",
+    "xlrd>=2.0.1",
 ]
 
 [build-system]

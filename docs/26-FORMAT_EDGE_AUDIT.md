@@ -152,4 +152,36 @@ Tests: `backend/tests/test_image_only_pdf_ocr.py`.
    transcription for `.mp4`/`.mov` once the audio path is fixed.
 
 Raw per-file results, extracted text samples and the manifest live in
-`C:\RecallHub-Verify\bench\format-edge-2026-10-18\` (outside the repo; confidential, not committed).
+`C:\RecallHub-Verify\bench\format-edge-2018-10-18\` (outside the repo; confidential, not committed).
+
+## Follow-up 2026-10-23: every content-bearing type on the NAS is now read
+
+A full census of the four shares (416,625 files) before the first complete ingest, and the
+readers added for it (`src/ingestion/ingest.py`, tests in
+`backend/tests/test_legacy_format_readers.py`):
+
+| extension | files | format found | reader |
+|---|---|---|---|
+| `.rtf` | 7,652 | RTF (`\ansicpg1252`), a few AppleDouble `._` forks | `striprtf` with the declared code page (`_read_rtf_file`) |
+| `.dot` | 2,504 | Word 97 templates (OLE2) | antiword, like `.doc` / `.wbk` |
+| `.dotx` | 66 | Word 2007+ templates (`.docx` container) | Docling via a temporary `.docx` copy (`_read_renamed_office_file`) |
+| `.xls` | 830 | legacy Excel (OLE2); some exports are really HTML | pandas + `xlrd` → one Markdown table per sheet; HTML exports go to Docling (`_read_xls_file`) |
+| `.mht` | 285 | MHTML archives (ADVOKAT Online: Meldeamt, Grundbuch) | HTML part → Docling (`_read_mhtml_file`) |
+| `.tif` / `.tiff` | 242 | scans, some multi-page | every page OCRed (`_read_multipage_tiff`); DPI tags (`IFDRational`) no longer force a re-save |
+| `.as .ass .ds .eb .do .dos .3` | ~2,200 | 1990s DOS text system (`Pittner Archiv`, `M U S T E R`): cp437 letters inside `\xe1` markers, HP PCL escapes, format bytes | heuristic decoder `legacy_dos_text()` |
+| `.dss` | 121 | mostly the same text format; some Olympus DSS dictation audio (magic `\x02dss`) | text decoder; audio stored as a placeholder (no DSS transcription) |
+| `.wvb` | 90 | jurXpert "weiteres Vorbringen": cp1252 text or RTF | byte sniffing (`sniff_text_bytes`) → text / RTF |
+| `.mtt` | 331 | gzip-packed HTML index pages of MANZ `Muster` | gunzip + sniffing → Docling HTML |
+
+Not indexed, by design (no document content): `.dra` 1,882 (Dragon NaturallySpeaking
+dictation containers, OLE stream `Dragon Speech`; the dictated text is in the neighbouring
+`.doc`/`.docx`), `.dat` 5,503 (ERV transfer records of `ERVKopien`, quote-delimited protocol
+lines), `.db` 2,368 (`Thumbs.db` caches), `.herunterladen` 76 (JavaScript of saved web pages),
+`.zip`/`.cab`/`.lnk`/`.tmp`/`.idx`/`.js`/`.css`, and `.mp4` (video, see item 7). macOS
+AppleDouble forks (`._name`, present next to Mac-copied files of every type) are skipped in
+both discovery paths (`is_sidecar_file`). The API's file-queue glob patterns are now derived
+from `SUPPORTED_INGESTION_EXTENSIONS` (`_supported_file_patterns()` in
+`backend/routers/ingestion.py`); the hand-written list had already drifted (no `.tif`).
+
+Items 3, 5 and 6 above are therefore done; item 2 is enabled for the diejuristin ingest
+(`MSG_EXTRACT_ATTACHMENTS=true` in the live `.env`); items 4 and 7 (audio/video) stay open.

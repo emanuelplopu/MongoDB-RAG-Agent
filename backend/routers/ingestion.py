@@ -287,6 +287,17 @@ async def graceful_shutdown_handler(db):
             logger.info(f"Marked {marked} job(s) as interrupted during shutdown")
 
 
+def _supported_file_patterns() -> List[str]:
+    """Glob patterns of every extension the pipeline reads (``SUPPORTED_INGESTION_EXTENSIONS``).
+
+    Derived from the pipeline's canonical set so the API's file queue and counts never
+    drift from what a run actually processes (the old hand-written list lacked ``.tif``).
+    """
+    from src.ingestion.ingest import SUPPORTED_INGESTION_EXTENSIONS
+
+    return [f"*{ext}" for ext in sorted(SUPPORTED_INGESTION_EXTENSIONS)]
+
+
 def _find_files_sync(folders: List[str], patterns: List[str]) -> List[str]:
     """
     Synchronous helper to find files - runs in thread pool.
@@ -311,6 +322,8 @@ def _find_files_sync(folders: List[str], patterns: List[str]) -> List[str]:
         # Single-pass directory traversal
         for root, dirs, files in os.walk(folder):
             for filename in files:
+                if filename.startswith("._"):
+                    continue
                 ext = os.path.splitext(filename)[1].lower()
                 if ext in extensions:
                     all_files.append(os.path.join(root, filename))
@@ -399,17 +412,8 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
             job_state["discovery_progress"] = dp
     
     try:
-        patterns = [
-            "*.md", "*.markdown", "*.txt",
-            "*.pdf", "*.docx", "*.doc", "*.wbk",
-            "*.pptx", "*.ppt", "*.xlsx", "*.xls",
-            "*.html", "*.htm",
-            "*.msg", "*.eml",
-            "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.bmp",
-            "*.mp3", "*.wav", "*.m4a", "*.flac",
-            "*.mp4", "*.avi", "*.mkv", "*.mov", "*.webm",
-        ]
-        
+        patterns = _supported_file_patterns()
+
         # Update phase to discovering
         if job_state is not None:
             job_state["phase"] = "discovering"
@@ -1709,17 +1713,8 @@ async def get_pending_files(
         if not documents_folders:
             return {"files": [], "total": 0, "is_running": False}
         
-        # Supported file patterns
-        patterns = [
-            "*.md", "*.markdown", "*.txt",
-            "*.pdf", "*.docx", "*.doc", "*.wbk",
-            "*.pptx", "*.ppt", "*.xlsx", "*.xls",
-            "*.html", "*.htm",
-            "*.msg", "*.eml",
-            "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.bmp",
-            "*.mp3", "*.wav", "*.m4a", "*.flac",
-            "*.mp4", "*.avi", "*.mkv", "*.mov", "*.webm",
-        ]
+        # Supported file patterns (the pipeline's canonical set)
+        patterns = _supported_file_patterns()
         
         # Run glob in thread pool to avoid blocking event loop
         loop = asyncio.get_running_loop()
