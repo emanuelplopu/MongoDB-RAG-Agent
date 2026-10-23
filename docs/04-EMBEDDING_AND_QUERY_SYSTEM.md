@@ -329,10 +329,15 @@ model is a Docker volume, not an image, so both are opt-in:
 Notes:
 
 - EmbeddingGemma expects task prefixes (`task: search result | query: ` for
-  queries, `title: none | text: ` for documents). The benchmark/checks apply
-  them automatically (`detect_task_prefixes`); the ingestion and query paths
-  do not yet, so a production switch needs the shared embedding client
-  described in `docs/system-validation/EMBEDDINGGEMMA2_EVALUATION_2026-10-10.md`.
+  queries, `title: none | text: ` for documents). The query path applies the
+  model family's query prefix automatically (`backend/services/query_embedding.py`,
+  shared by the search and chat routers and the federated search; override or
+  disable it with `EMBEDDING_QUERY_PREFIX`). Documents are embedded without a
+  prefix on purpose: on the synthetic gold set the query prefix alone lifted
+  semantic Hit@1 from 17 % to 27 %, while prefixing the documents as well gave
+  nothing and would cost a re-ingestion
+  (`docs/system-validation/SEMANTIC_SEARCH_REGRESSION_2026-10-23.md`). The
+  benchmark/checks still apply both prefixes (`detect_task_prefixes`).
 - llama.cpp ignores the OpenAI `dimensions` parameter; Matryoshka truncation
   is done client-side (`truncate_renorm`).
 - Image embedding works through `/v1/embeddings` with

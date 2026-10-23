@@ -50,32 +50,10 @@ logger = logging.getLogger(__name__)
 # Task prefixes
 # ---------------------------------------------------------------------------
 
-# Model family substring -> (query prefix, document prefix). Order matters:
-# the first matching key wins. Prefixes come from each model's card.
-KNOWN_TASK_PREFIXES: Dict[str, Tuple[str, str]] = {
-    "embeddinggemma": ("task: search result | query: ", "title: none | text: "),
-    "nomic-embed": ("search_query: ", "search_document: "),
-    "multilingual-e5": ("query: ", "passage: "),
-    "e5-": ("query: ", "passage: "),
-    "bge-m3": ("", ""),
-    "bge-": ("Represent this sentence for searching relevant passages: ", ""),
-}
-
-
-def detect_task_prefixes(model: str) -> Tuple[str, str]:
-    """Return the ``(query_prefix, document_prefix)`` a model family expects.
-
-    Args:
-        model: Model identifier as configured for the provider (tags allowed).
-
-    Returns:
-        A tuple of prefixes; both empty when the family is unknown or needs none.
-    """
-    name = (model or "").lower()
-    for key, prefixes in KNOWN_TASK_PREFIXES.items():
-        if key in name:
-            return prefixes
-    return "", ""
+# The model-family prefix table and its detector live in
+# backend/services/query_embedding.py, where the production query path applies
+# the query prefix; re-exported here for the checks, the benchmark and their tests.
+from backend.services.query_embedding import KNOWN_TASK_PREFIXES, detect_task_prefixes  # noqa: E402,F401
 
 
 # ---------------------------------------------------------------------------

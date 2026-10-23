@@ -33,7 +33,7 @@ If docs and code disagree, trust the current code first, then fix the docs.
 - Main settings surface: `backend/core/config.py`
 - Security middleware and auth rules: `backend/core/security.py`, `backend/routers/auth.py`
 - DB manager: `backend/core/database.py`
-- Search endpoints: `backend/routers/search.py`
+- Search endpoints: `backend/routers/search.py` (query embeddings go through `backend/services/query_embedding.py`, which applies the model family's query prefix, e.g. for EmbeddingGemma; `EMBEDDING_QUERY_PREFIX` overrides or disables it)
 - Chat/session APIs: `backend/routers/chat.py`, `backend/routers/sessions.py`
 - Federated/orchestrated agent (legacy): `backend/agent/orchestrator.py`, `backend/agent/strategies/` (plural, legacy `BaseStrategy` registry)
 - Strategy OS runtime: `backend/agent/strategy/` (singular), `backend/agent/strategy/nodes/`, `backend/agent/strategy/strategy_runner.py`, `backend/agent/strategy/spec_store.py`

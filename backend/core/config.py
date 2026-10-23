@@ -65,7 +65,15 @@ class BackendSettings(BaseSettings):
     embedding_model: str = Field(default="text-embedding-3-small")
     embedding_base_url: str = Field(default="https://api.openai.com/v1")
     embedding_dimension: int = Field(default=1536)
-    
+    embedding_query_prefix: Optional[str] = Field(
+        default=None,
+        description=(
+            "Prefix put in front of search queries before embedding (documents are never "
+            "prefixed). Unset: chosen from the model family, e.g. EmbeddingGemma gets "
+            "'task: search result | query: '; empty string: no prefix; other value: used verbatim."
+        ),
+    )
+
     # Search Settings
     default_match_count: int = Field(default=10)
     max_match_count: int = Field(default=50)
