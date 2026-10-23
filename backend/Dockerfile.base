@@ -12,7 +12,7 @@
 # Then use Dockerfile.fast for quick code-only rebuilds
 #
 # VERSION: Update this when changing dependencies
-ARG BASE_VERSION=1.1.0
+ARG BASE_VERSION=1.2.0
 
 FROM python:3.11-slim AS builder
 
@@ -122,7 +122,7 @@ RUN docling-tools models download -o /opt/docling-models layout tableformer rapi
 RUN mkdir -p /app/projects /app/data /app/documents /app/src /app/backend
 
 # Label for version tracking
-ARG BASE_VERSION=1.1.0
+ARG BASE_VERSION=1.2.0
 LABEL recallhub.base.version="${BASE_VERSION}" \
       recallhub.base.description="Pre-built base image with ML deps + Playwright"
 

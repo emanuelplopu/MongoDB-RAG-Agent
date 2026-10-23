@@ -504,7 +504,7 @@ if ($IncludeDockerImages) {
             @{ Image = "recallhub-frontend:latest";           File = "frontend.tar" },
             @{ Image = "recallhub-frontend-quellex:latest";   File = "frontend-quellex.tar" },
             @{ Image = "mongodb/mongodb-atlas-local:8.0";     File = "mongodb-atlas-local.tar" },
-            @{ Image = "caddy:2.10-alpine";                   File = "caddy.tar" }
+            @{ Image = "caddy:2.11-alpine";                   File = "caddy.tar" }
         )
 
         foreach ($img in $requiredImages) {

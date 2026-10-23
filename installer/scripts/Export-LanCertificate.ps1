@@ -81,7 +81,7 @@ if ($containers -contains $container) {
 if (-not $exported) {
     $volumes = @(docker volume ls --format "{{.Name}}" 2>$null)
     if ($volumes -contains $volume) {
-        $pem = docker run --rm -v "${volume}:/data:ro" caddy:2.10-alpine cat $certInContainer 2>$null
+        $pem = docker run --rm -v "${volume}:/data:ro" caddy:2.11-alpine cat $certInContainer 2>$null
         if ($LASTEXITCODE -eq 0 -and $pem) {
             [IO.File]::WriteAllText($tempPem, (($pem -join "`n") + "`n"))
             $exported = $true

@@ -2,34 +2,38 @@
 name = "recallhub"
 version = "0.8.8"
 description = "RecallHub - Intelligent Knowledge Base Search with MongoDB Atlas Vector Search"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-    "pydantic>=2.10.0",
-    "pydantic-settings>=2.7.0",
-    "pydantic-ai>=0.1.0",
-    "pymongo>=4.10.0",
-    "motor>=3.6.0",
-    "openai>=1.58.0",
-    "litellm>=1.55.0",
-    "docling>=2.137.0,<3",
-    "docling-core>=2.101.0,<3",
-    "transformers>=4.47.0",
-    "rich>=13.9.0",
-    "typer>=0.12.0",  # quellexctl CLI (backend/cli)
+    "pydantic>=2.14.0",
+    "pydantic-settings>=2.15.0",
+    "pydantic-ai>=2.55.0",
+    "pymongo>=4.18.0",
+    "motor>=3.7.0",
+    "openai>=3.28.0",
+    "litellm>=1.83.0",
+    "docling>=2.142.0,<3",
+    "docling-core>=2.104.0,<3",
+    "transformers>=5.19.0",
+    "rich>=14.0.0",
+    "typer>=0.19.0",  # quellexctl CLI (backend/cli)
     "python-dotenv>=1.0.1",
     "aiofiles>=24.1.0",
-    "openai-whisper>=20240930",
+    "openai-whisper>=20250625",
     "pydub>=0.25.0",  # For audio chunking in transcription
+    "torch>=2.14.0",
+    "torchaudio>=2.11.0",
+    "onnxruntime>=1.31.0",  # RapidOCR inference backend (mirrors backend/requirements-ml-heavy.txt)
+    "extract-msg>=0.48.0",  # Outlook .msg ingestion (mirrors backend/requirements-api.txt)
     "pyyaml>=6.0.0",
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.32.0",
-    "httpx>=0.27.0",
+    "fastapi>=0.143.0",
+    "uvicorn[standard]>=0.54.0",
+    "httpx>=0.28.0",
     "passlib[bcrypt]>=1.7.4",
-    "bcrypt>=4.0.0",
-    "python-jose[cryptography]>=3.3.0",
-    "cryptography>=42.0.0",  # For credential encryption
+    "bcrypt>=5.0.0",
+    "python-jose[cryptography]>=3.5.0",
+    "cryptography>=46.0.0",  # For credential encryption
     "email-validator>=2.0.0",
-    "psutil>=5.9.0",  # GPU stress and benchmark telemetry (host CPU, RAM, processes)
+    "psutil>=7.0.0",  # GPU stress and benchmark telemetry (host CPU, RAM, processes)
 ]
 
 [build-system]
@@ -38,12 +42,12 @@ build-backend = "setuptools.build_meta"
 
 [dependency-groups]
 dev = [
-    "pytest>=8.3.0",
-    "pytest-asyncio>=0.24.0",
-    "pytest-cov>=4.1.0",
-    "httpx>=0.27.0",
-    "black>=24.10.0",
-    "ruff>=0.8.0",
+    "pytest>=9.0.0",
+    "pytest-asyncio>=1.3.0",
+    "pytest-cov>=7.0.0",
+    "httpx>=0.28.0",
+    "black>=25.12.0",
+    "ruff>=0.14.0",
 ]
 # Synthetic law-firm corpus generator (backend/evaluation/synthetic_corpus): PDF rendering.
 synthetic = [

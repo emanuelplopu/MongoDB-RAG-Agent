@@ -10,7 +10,9 @@
 #   docker build -f backend/Dockerfile.worker -t recallhub-ingestion-worker:latest .
 
 # Use the pre-built base image (same as backend)
-FROM recallhub-backend-base:latest
+# Override with --build-arg BASE_IMAGE=recallhub-backend-base:<tag> to build on a side-tagged base
+ARG BASE_IMAGE=recallhub-backend-base:latest
+FROM ${BASE_IMAGE}
 
 # ============================================
 # APPLICATION CODE ONLY - Ultra Fast Layer

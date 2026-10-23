@@ -11,7 +11,7 @@
 # -----------------------------------------------------------------------------
 # Stage 1: Build
 # -----------------------------------------------------------------------------
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 
@@ -45,7 +45,7 @@ RUN find dist -name "*.map" -delete
 # -----------------------------------------------------------------------------
 # Stage 2: Production Runtime (nginx)
 # -----------------------------------------------------------------------------
-FROM nginx:1.25-alpine-slim AS runtime
+FROM nginx:1.30-alpine-slim AS runtime
 
 # Security: Create non-root user
 RUN addgroup -g 101 -S nginx || true \

@@ -1,26 +1,13 @@
-# Heavy ML dependencies - CHANGE RARELY
-# These take 10-15 minutes to install
-# Sorted by install time (slowest first)
-#
-# IMPORTANT: Only modify this file when you need to change ML/AI capabilities
-# Changes here will trigger a full rebuild of the ML layer (~10-15 min)
-
-# PyTorch ecosystem (pulled by whisper, transformers)
-torch>=2.0.0
-torchaudio>=2.0.0
-
-# Whisper for audio transcription
-openai-whisper>=20240930
-
-# Transformers for NLP
-transformers>=4.47.0
-
-# Docling for document parsing (pulls many deps)
-docling>=2.137.0,<3
-docling-core>=2.101.0,<3
-
-# ONNX Runtime for RapidOCR (CPU inference)
-onnxruntime>=1.18.0
-
-# Audio processing
+# Heavy ML dependencies (installed first by backend/Dockerfile.base so the
+# layer is reused across code-only rebuilds). Floors reflect the versions
+# verified in production on 2026-10-23; pip resolves to the newest compatible
+# release at build time. Docling pins transformers to <6 and excludes a few
+# broken 5.x releases itself.
+torch>=2.14.0
+torchaudio>=2.11.0
+openai-whisper>=20250625
+transformers>=5.19.0
+docling>=2.142.0,<3
+docling-core>=2.104.0,<3
+onnxruntime>=1.31.0
 pydub>=0.25.0

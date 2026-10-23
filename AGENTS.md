@@ -161,6 +161,8 @@ Only rebuild the shared base image when dependency layers change:
 
 Do not use `docker compose build --no-cache backend` for normal code changes. It defeats the repo's layered build strategy and is dramatically slower.
 
+To verify a dependency change without touching the live stack, build the base under a side tag and pass `--build-arg BASE_IMAGE=recallhub-backend-base:<tag>` to `Dockerfile.fast` / `Dockerfile.worker` (details in `docs/15-DOCKER_BUILD_GUIDE.md`). The `build-backend.ps1` switches rebuild `latest` and restart the containers. The requirement files carry floors only, so every base build floats to that day's PyPI releases; raise the floors to the verified versions and bump `ARG BASE_VERSION` when the dependency layer changes.
+
 For frontend-only Docker changes, rebuild the correct tenant service instead:
 
 ```powershell

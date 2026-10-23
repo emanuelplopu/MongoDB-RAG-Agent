@@ -41,7 +41,7 @@ other PC  --https://quellex.local-->  Windows host
    |                                    |-- RecallHubTray.exe  : mDNS/LLMNR answer "quellex.local -> 192.168.x.y"
    |                                    |-- Windows Firewall   : TCP 443/80, UDP 5353/5355 (Configure-LanAccess.ps1)
    +--TCP 443------------------------>  Docker Desktop
-                                        |-- rag-gateway-quellex (caddy:2.10-alpine, tls internal, HTTP->HTTPS)
+                                        |-- rag-gateway-quellex (caddy:2.11-alpine, tls internal, HTTP->HTTPS)
                                         |-- rag-frontend-quellex (nginx, 127.0.0.1:11081)  -> /api proxied to
                                         |-- rag-backend-quellex  (FastAPI, REQUIRE_AUTH=true, 127.0.0.1:11001)
                                         +-- rag-mongodb          (127.0.0.1:11017)
