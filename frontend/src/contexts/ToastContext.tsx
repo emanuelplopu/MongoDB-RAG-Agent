@@ -123,7 +123,7 @@ function ToastContainer({ toasts, onRemove }: { toasts: Toast[]; onRemove: (id: 
   if (toasts.length === 0) return null
 
   return (
-    <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 max-w-sm w-full pointer-events-none">
+    <div className="fixed bottom-4 right-4 z-100 flex flex-col gap-2 max-w-sm w-full pointer-events-none">
       {toasts.map(toast => (
         <ToastItem key={toast.id} toast={toast} onRemove={onRemove} />
       ))}
@@ -172,11 +172,11 @@ function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: (id: string) =
 
   return (
     <div
-      className={`pointer-events-auto flex items-start gap-3 p-4 rounded-xl border shadow-lg backdrop-blur-sm animate-slide-in-right ${bgClass} ${borderClass}`}
+      className={`pointer-events-auto flex items-start gap-3 p-4 rounded-xl border shadow-lg backdrop-blur-xs animate-slide-in-right ${bgClass} ${borderClass}`}
       role="alert"
       aria-live="polite"
     >
-      <Icon className={`h-5 w-5 flex-shrink-0 ${iconClass}`} />
+      <Icon className={`h-5 w-5 shrink-0 ${iconClass}`} />
       <div className="flex-1 min-w-0">
         <p className={`text-sm font-medium ${textClass}`}>{toast.message}</p>
         {toast.description && (
@@ -196,7 +196,7 @@ function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: (id: string) =
       </div>
       <button
         onClick={() => onRemove(toast.id)}
-        className={`flex-shrink-0 p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors ${iconClass}`}
+        className={`shrink-0 p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors ${iconClass}`}
         aria-label="Dismiss"
       >
         <XMarkIcon className="h-4 w-4" />

@@ -135,7 +135,7 @@ export default function SearchFilters({
   }
 
   return (
-    <div className={`bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 ${className}`}>
+    <div className={`bg-white dark:bg-gray-800 rounded-2xl shadow-xs border border-gray-200 dark:border-gray-700 ${className}`}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
         <div className="flex items-center gap-2">
@@ -214,7 +214,7 @@ export default function SearchFilters({
                           type="checkbox"
                           checked={isChecked}
                           onChange={() => handleCheckboxChange(group.id, option.id)}
-                          className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-primary focus:ring-primary"
+                          className="w-4 h-4 rounded-sm border-gray-300 dark:border-gray-600 text-primary focus:ring-primary"
                         />
                         <span className={`flex-1 text-sm ${isChecked ? 'text-gray-900 dark:text-gray-100' : 'text-gray-600 dark:text-gray-400'}`}>
                           {option.label}
@@ -262,7 +262,7 @@ export default function SearchFilters({
                           type="date"
                           value={((groupValue as { from?: string; to?: string })?.from) || ''}
                           onChange={(e) => handleDateChange(group.id, 'from', e.target.value)}
-                          className="flex-1 px-2 py-1.5 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                          className="flex-1 px-2 py-1.5 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-primary"
                           placeholder="From"
                         />
                         <span className="text-gray-400">to</span>
@@ -270,7 +270,7 @@ export default function SearchFilters({
                           type="date"
                           value={((groupValue as { from?: string; to?: string })?.to) || ''}
                           onChange={(e) => handleDateChange(group.id, 'to', e.target.value)}
-                          className="flex-1 px-2 py-1.5 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                          className="flex-1 px-2 py-1.5 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-primary"
                           placeholder="To"
                         />
                       </div>

@@ -48,7 +48,7 @@ function MockInterface() {
     <div className="quellex-glass-surface rounded-xl overflow-hidden quellex-card-shadow hover:quellex-card-hover-shadow transition-all duration-500 w-full max-w-lg relative">
       {/* Watermark */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
-        <span className="text-primary-900/[0.12] dark:text-white/[0.12] text-3xl font-serif-display font-bold tracking-[0.25em] rotate-[-18deg] select-none uppercase">
+        <span className="text-primary-900/12 dark:text-white/12 text-3xl font-serif-display font-bold tracking-[0.25em] rotate-[-18deg] select-none uppercase">
           {t('quellexLanding.watermark')}
         </span>
       </div>
@@ -85,11 +85,11 @@ function MockInterface() {
       <div className="border-t border-surface-variant/15 dark:border-gray-700/15 p-4 bg-surface-variant/10 dark:bg-gray-800/30">
         <p className="text-xs font-medium text-quellex-gold mb-2">Vorschau — Urteil OGH 3Ob42/24k</p>
         <div className="space-y-1.5">
-          <div className="h-2 bg-surface-variant/30 dark:bg-gray-600/30 rounded w-full" />
-          <div className="h-2 bg-surface-variant/30 dark:bg-gray-600/30 rounded w-11/12" />
-          <div className="h-2 rounded w-9/12" style={{ background: 'hsl(43 65% 52% / 0.2)' }} />
-          <div className="h-2 bg-surface-variant/30 dark:bg-gray-600/30 rounded w-10/12" />
-          <div className="h-2 bg-surface-variant/30 dark:bg-gray-600/30 rounded w-7/12" />
+          <div className="h-2 bg-surface-variant/30 dark:bg-gray-600/30 rounded-sm w-full" />
+          <div className="h-2 bg-surface-variant/30 dark:bg-gray-600/30 rounded-sm w-11/12" />
+          <div className="h-2 rounded-sm w-9/12" style={{ background: 'hsl(43 65% 52% / 0.2)' }} />
+          <div className="h-2 bg-surface-variant/30 dark:bg-gray-600/30 rounded-sm w-10/12" />
+          <div className="h-2 bg-surface-variant/30 dark:bg-gray-600/30 rounded-sm w-7/12" />
         </div>
         <p className="text-xs text-quellex-teal mt-2">Quellenangabe: Seite 12, Abs. 3</p>
       </div>
@@ -190,7 +190,7 @@ function SnippetMockup() {
               <span className="text-xs text-quellex-teal ml-auto">{r.page}</span>
             </div>
             <p className="text-xs text-secondary dark:text-gray-400 leading-relaxed">„...{r.snippet}"</p>
-            <div className="h-1.5 rounded mt-2 w-8/12" style={{ background: 'hsl(43 65% 52% / 0.2)' }} />
+            <div className="h-1.5 rounded-sm mt-2 w-8/12" style={{ background: 'hsl(43 65% 52% / 0.2)' }} />
           </div>
         ))}
       </div>
@@ -215,11 +215,11 @@ function OcrMockup() {
               <span className="text-xs text-secondary dark:text-gray-400">{t('quellexLanding.ocrFilename')}</span>
             </div>
             <div className="space-y-2 opacity-50">
-              <div className="h-2 bg-surface-variant/50 dark:bg-gray-600/50 rounded w-full" />
-              <div className="h-2 bg-surface-variant/50 dark:bg-gray-600/50 rounded w-11/12" />
-              <div className="h-2 bg-surface-variant/50 dark:bg-gray-600/50 rounded w-9/12" />
-              <div className="h-2 bg-surface-variant/40 dark:bg-gray-600/40 rounded w-full" />
-              <div className="h-2 bg-surface-variant/40 dark:bg-gray-600/40 rounded w-7/12" />
+              <div className="h-2 bg-surface-variant/50 dark:bg-gray-600/50 rounded-sm w-full" />
+              <div className="h-2 bg-surface-variant/50 dark:bg-gray-600/50 rounded-sm w-11/12" />
+              <div className="h-2 bg-surface-variant/50 dark:bg-gray-600/50 rounded-sm w-9/12" />
+              <div className="h-2 bg-surface-variant/40 dark:bg-gray-600/40 rounded-sm w-full" />
+              <div className="h-2 bg-surface-variant/40 dark:bg-gray-600/40 rounded-sm w-7/12" />
             </div>
           </div>
           {/* Arrow */}
@@ -236,8 +236,8 @@ function OcrMockup() {
               <p className="text-xs text-secondary dark:text-gray-400 leading-relaxed">
                 Kaufvertrag über die Liegenschaft EZ 1247, KG Innere Stadt...
               </p>
-              <div className="h-1.5 rounded w-10/12" style={{ background: 'hsl(43 65% 52% / 0.2)' }} />
-              <div className="h-1.5 rounded w-6/12" style={{ background: 'hsl(43 65% 52% / 0.15)' }} />
+              <div className="h-1.5 rounded-sm w-10/12" style={{ background: 'hsl(43 65% 52% / 0.2)' }} />
+              <div className="h-1.5 rounded-sm w-6/12" style={{ background: 'hsl(43 65% 52% / 0.15)' }} />
             </div>
           </div>
         </div>
@@ -318,7 +318,7 @@ function TeamSection() {
                 src={member.photo}
                 alt={member.name}
                 loading="lazy"
-                className="w-full object-cover object-top aspect-[3/4] lg:aspect-[4/5] lg:max-h-[45vh] group-hover:scale-[1.04] transition-transform duration-700 ease-out"
+                className="w-full object-cover object-top aspect-3/4 lg:aspect-4/5 lg:max-h-[45vh] group-hover:scale-[1.04] transition-transform duration-700 ease-out"
               />
               {/* Hover bio overlay */}
               <div className="absolute inset-x-3 bottom-3 right-14 opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 transition-all duration-400 ease-out pointer-events-none group-hover:pointer-events-auto">
@@ -331,7 +331,7 @@ function TeamSection() {
                 href={member.linkedin}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="absolute bottom-[3%] right-[3%] w-10 h-10 rounded-xl bg-background/80 dark:bg-gray-900/80 backdrop-blur-sm border border-surface-variant/20 dark:border-gray-600/20 flex items-center justify-center hover:border-quellex-gold transition-all duration-300 quellex-card-shadow z-20"
+                className="absolute bottom-[3%] right-[3%] w-10 h-10 rounded-xl bg-background/80 dark:bg-gray-900/80 backdrop-blur-xs border border-surface-variant/20 dark:border-gray-600/20 flex items-center justify-center hover:border-quellex-gold transition-all duration-300 quellex-card-shadow z-20"
               >
                 <img src={`${ASSETS}/linkedin-logo.png`} alt="LinkedIn" className="w-6 h-6" />
               </a>

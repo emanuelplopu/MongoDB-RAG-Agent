@@ -216,10 +216,10 @@ export default function DashboardPage() {
                       <img
                         src={attachment.data_url}
                         alt={attachment.filename}
-                        className="w-10 h-10 object-cover rounded"
+                        className="w-10 h-10 object-cover rounded-sm"
                       />
                     ) : (
-                      <div className="w-10 h-10 flex items-center justify-center bg-surface-variant dark:bg-gray-500 rounded">
+                      <div className="w-10 h-10 flex items-center justify-center bg-surface-variant dark:bg-gray-500 rounded-sm">
                         <DocumentTextIcon className="h-5 w-5 text-secondary" />
                       </div>
                     )}
@@ -264,7 +264,7 @@ export default function DashboardPage() {
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  className="flex h-10 w-10 items-center justify-center rounded-xl hover:bg-surface-variant dark:hover:bg-gray-700 text-secondary hover:text-primary transition-colors flex-shrink-0"
+                  className="flex h-10 w-10 items-center justify-center rounded-xl hover:bg-surface-variant dark:hover:bg-gray-700 text-secondary hover:text-primary transition-colors shrink-0"
                   title={t('chatPage.attachFiles')}
                 >
                   <PaperClipIcon className="h-5 w-5" />
@@ -278,7 +278,7 @@ export default function DashboardPage() {
                   onKeyDown={handleKeyDown}
                   placeholder={t('dashboard.askAnything')}
                   rows={1}
-                  className="flex-1 resize-none bg-transparent px-3 py-2 text-primary-900 dark:text-gray-100 placeholder:text-secondary dark:placeholder:text-gray-500 focus:outline-none max-h-52"
+                  className="flex-1 resize-none bg-transparent px-3 py-2 text-primary-900 dark:text-gray-100 placeholder:text-secondary dark:placeholder:text-gray-500 focus:outline-hidden max-h-52"
                   disabled={isSubmitting}
                 />
 
@@ -286,7 +286,7 @@ export default function DashboardPage() {
                 <button
                   type="submit"
                   disabled={!input.trim() || isSubmitting}
-                  className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-white transition-all hover:bg-primary-700 disabled:bg-secondary disabled:cursor-not-allowed flex-shrink-0"
+                  className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-white transition-all hover:bg-primary-700 disabled:bg-secondary disabled:cursor-not-allowed shrink-0"
                 >
                   {isSubmitting ? (
                     <ArrowPathIcon className="h-5 w-5 animate-spin" />

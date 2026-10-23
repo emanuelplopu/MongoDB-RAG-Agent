@@ -55,7 +55,7 @@ export default function AnomalyList({ anomalies, formatTime }: AnomalyListProps)
         return (
           <li key={`${a.kind}-${a.title}`} className="rounded-xl border border-gray-200 p-3 dark:border-gray-700">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <Icon className="h-5 w-5 flex-shrink-0" style={{ color: style.color }} aria-hidden="true" />
+              <Icon className="h-5 w-5 shrink-0" style={{ color: style.color }} aria-hidden="true" />
               <span className="text-xs font-semibold uppercase tracking-wide text-gray-600 dark:text-gray-300">
                 {t(`telemetry.severity.${a.severity}`)}
               </span>

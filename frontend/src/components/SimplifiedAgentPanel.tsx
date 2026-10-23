@@ -116,9 +116,9 @@ export default function SimplifiedAgentPanel({ trace }: SimplifiedAgentPanelProp
                   className="flex items-center gap-2 text-xs text-primary-800 dark:text-gray-300"
                 >
                   {search.success ? (
-                    <CheckCircleIcon className="h-3 w-3 text-green-500 flex-shrink-0" />
+                    <CheckCircleIcon className="h-3 w-3 text-green-500 shrink-0" />
                   ) : (
-                    <XCircleIcon className="h-3 w-3 text-red-500 flex-shrink-0" />
+                    <XCircleIcon className="h-3 w-3 text-red-500 shrink-0" />
                   )}
                   <span>{search.label}</span>
                   <span className="text-[10px] text-secondary dark:text-gray-500">
@@ -140,16 +140,16 @@ export default function SimplifiedAgentPanel({ trace }: SimplifiedAgentPanelProp
                 return (
                   <div
                     key={idx}
-                    className="p-2 rounded bg-gray-50 dark:bg-gray-800 text-xs"
+                    className="p-2 rounded-sm bg-gray-50 dark:bg-gray-800 text-xs"
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <DocumentTextIcon className="h-3 w-3 text-primary-500 flex-shrink-0" />
+                        <DocumentTextIcon className="h-3 w-3 text-primary-500 shrink-0" />
                         <span className="font-medium text-primary-700 dark:text-primary-300 truncate">
                           {doc.title}
                         </span>
                       </div>
-                      <span className={`text-[10px] flex-shrink-0 ml-2 ${rel.className}`}>
+                      <span className={`text-[10px] shrink-0 ml-2 ${rel.className}`}>
                         {rel.label}
                       </span>
                     </div>
@@ -183,7 +183,7 @@ export default function SimplifiedAgentPanel({ trace }: SimplifiedAgentPanelProp
                   key={idx}
                   className="flex items-center gap-1.5 text-xs"
                 >
-                  <GlobeAltIcon className="h-3 w-3 text-primary-500 flex-shrink-0" />
+                  <GlobeAltIcon className="h-3 w-3 text-primary-500 shrink-0" />
                   <a
                     href={link.url}
                     target="_blank"

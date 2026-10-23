@@ -226,7 +226,7 @@ export default function TelemetryHistoryPage() {
 
       {history && history.agent_samples === 0 && (
         <div className="flex items-start gap-2 rounded-2xl bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
-          <ExclamationTriangleIcon className="h-5 w-5 flex-shrink-0" aria-hidden="true" />
+          <ExclamationTriangleIcon className="h-5 w-5 shrink-0" aria-hidden="true" />
           {t('telemetry.noAgent')}
         </div>
       )}
@@ -310,7 +310,7 @@ export default function TelemetryHistoryPage() {
                 <tbody>
                   {history.jobs.map(j => (
                     <tr key={j.job_id} className="border-t border-gray-100 dark:border-gray-700" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                      <td className="max-w-[12rem] truncate px-2 py-1.5 font-mono text-xs" title={j.job_id}>{j.job_id}</td>
+                      <td className="max-w-48 truncate px-2 py-1.5 font-mono text-xs" title={j.job_id}>{j.job_id}</td>
                       <td className="px-2 py-1.5">{j.status ?? '—'}</td>
                       <td className="px-2 py-1.5">{j.tenant ?? '—'}</td>
                       <td className="whitespace-nowrap px-2 py-1.5">{fmt.iso(j.first_ts)}</td>

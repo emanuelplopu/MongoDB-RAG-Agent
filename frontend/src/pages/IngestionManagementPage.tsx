@@ -141,7 +141,7 @@ function IngestEstimateLine({ profileKeys, incremental }: { profileKeys: string[
   return (
     <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-900/40 px-3 py-2">
       <div className="flex items-center gap-2 flex-wrap">
-        <ClockIcon className="h-4 w-4 text-blue-600 dark:text-blue-300 flex-shrink-0" />
+        <ClockIcon className="h-4 w-4 text-blue-600 dark:text-blue-300 shrink-0" />
         {loading && (
           <span className="text-xs text-blue-700 dark:text-blue-300">{t('ingestion.estimate.loading')}</span>
         )}
@@ -159,7 +159,7 @@ function IngestEstimateLine({ profileKeys, incremental }: { profileKeys: string[
               })}
             </span>
             {estimate.isRough && (
-              <span className="text-[10px] uppercase tracking-wide bg-blue-200 dark:bg-blue-800 text-blue-800 dark:text-blue-200 px-1.5 py-0.5 rounded">
+              <span className="text-[10px] uppercase tracking-wide bg-blue-200 dark:bg-blue-800 text-blue-800 dark:text-blue-200 px-1.5 py-0.5 rounded-sm">
                 {t('ingestion.estimate.rough')}
               </span>
             )}
@@ -989,7 +989,7 @@ export default function IngestionManagementPage() {
               </div>
               
               <label className="flex items-center gap-2">
-                <input type="checkbox" checked={incremental} onChange={e => setIncremental(e.target.checked)} className="rounded" />
+                <input type="checkbox" checked={incremental} onChange={e => setIncremental(e.target.checked)} className="rounded-sm" />
                 <span className="text-sm text-primary-900 dark:text-gray-200">{t('ingestion.incremental')}</span>
               </label>
               
@@ -1003,7 +1003,7 @@ export default function IngestionManagementPage() {
                 {/* Info message when retry filters are active without incremental */}
                 {!incremental && (retryImageOnlyPdfs || retryTimeouts || retryErrors || retryNoChunks) && (
                   <div className="mb-2 p-2 rounded-lg bg-blue-50 dark:bg-blue-900/30 text-xs text-blue-700 dark:text-blue-300 flex items-start gap-2">
-                    <InformationCircleIcon className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                    <InformationCircleIcon className="h-4 w-4 shrink-0 mt-0.5" />
                     <span>{t('ingestion.filters.retryModeInfo', 'Retry mode: Only files matching the selected retry filters will be processed.')}</span>
                   </div>
                 )}
@@ -1017,7 +1017,7 @@ export default function IngestionManagementPage() {
                         type="checkbox" 
                         checked={retryImageOnlyPdfs} 
                         onChange={e => setRetryImageOnlyPdfs(e.target.checked)} 
-                        className="rounded text-amber-500" 
+                        className="rounded-sm text-amber-500" 
                       />
                       <span className="text-xs text-primary-900 dark:text-gray-200">{t('ingestion.filters.retryImagePdfs', 'Retry Image-Only PDFs')}</span>
                     </label>
@@ -1026,7 +1026,7 @@ export default function IngestionManagementPage() {
                         type="checkbox" 
                         checked={retryTimeouts} 
                         onChange={e => setRetryTimeouts(e.target.checked)} 
-                        className="rounded text-amber-500" 
+                        className="rounded-sm text-amber-500" 
                       />
                       <span className="text-xs text-primary-900 dark:text-gray-200">{t('ingestion.filters.retryTimeouts', 'Retry Timeouts')}</span>
                     </label>
@@ -1035,7 +1035,7 @@ export default function IngestionManagementPage() {
                         type="checkbox" 
                         checked={retryErrors} 
                         onChange={e => setRetryErrors(e.target.checked)} 
-                        className="rounded text-amber-500" 
+                        className="rounded-sm text-amber-500" 
                       />
                       <span className="text-xs text-primary-900 dark:text-gray-200">{t('ingestion.filters.retryErrors', 'Retry Errors')}</span>
                     </label>
@@ -1044,7 +1044,7 @@ export default function IngestionManagementPage() {
                         type="checkbox" 
                         checked={retryNoChunks} 
                         onChange={e => setRetryNoChunks(e.target.checked)} 
-                        className="rounded text-amber-500" 
+                        className="rounded-sm text-amber-500" 
                       />
                       <span className="text-xs text-primary-900 dark:text-gray-200">{t('ingestion.filters.retryNoChunks', 'Retry No-Chunks')}</span>
                     </label>
@@ -1059,7 +1059,7 @@ export default function IngestionManagementPage() {
                       type="checkbox" 
                       checked={skipImageOnlyPdfs} 
                       onChange={e => setSkipImageOnlyPdfs(e.target.checked)} 
-                      className="rounded text-red-500" 
+                      className="rounded-sm text-red-500" 
                     />
                     <span className="text-xs text-primary-900 dark:text-gray-200">{t('ingestion.filters.skipImagePdfs', 'Skip Image-Only PDFs')}</span>
                   </label>
@@ -1109,7 +1109,7 @@ export default function IngestionManagementPage() {
                       {activeFilters.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1">
                           {activeFilters.map((filter, idx) => (
-                            <span key={idx} className="px-1.5 py-0.5 rounded text-[10px] bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
+                            <span key={idx} className="px-1.5 py-0.5 rounded-sm text-[10px] bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
                               {filter}
                             </span>
                           ))}
@@ -1294,7 +1294,7 @@ export default function IngestionManagementPage() {
               <p className="text-gray-500">{t('ingestion.noLogs')}</p>
             ) : (
               logs.slice(-100).map((log, i) => (
-                <div key={i} className="group flex gap-2 hover:bg-gray-800 px-1 rounded">
+                <div key={i} className="group flex gap-2 hover:bg-gray-800 px-1 rounded-sm">
                   <span className="text-gray-500 shrink-0">{new Date(log.timestamp).toLocaleTimeString()}</span>
                   <span className={`shrink-0 ${log.level === 'ERROR' ? 'text-red-400' : log.level === 'WARNING' ? 'text-yellow-400' : 'text-blue-400'}`}>
                     [{log.level}]
@@ -1302,7 +1302,7 @@ export default function IngestionManagementPage() {
                   <span className="text-gray-300 flex-1">{log.message}</span>
                   <button 
                     onClick={() => copyToClipboard(log.message)}
-                    className="opacity-0 group-hover:opacity-100 p-0.5 text-gray-400 hover:text-white rounded shrink-0"
+                    className="opacity-0 group-hover:opacity-100 p-0.5 text-gray-400 hover:text-white rounded-sm shrink-0"
                     title="Copy log entry"
                   >
                     <ClipboardIcon className="h-3 w-3" />
@@ -1320,11 +1320,11 @@ export default function IngestionManagementPage() {
           <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 max-w-md w-full mx-4 shadow-xl">
             <div className="flex items-start gap-4">
               {confirmModal.destructive ? (
-                <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+                <div className="shrink-0 w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
                   <ExclamationCircleIcon className="h-6 w-6 text-red-600 dark:text-red-400" />
                 </div>
               ) : (
-                <div className="flex-shrink-0 w-10 h-10 rounded-full bg-primary-100 dark:bg-primary-900/30 flex items-center justify-center">
+                <div className="shrink-0 w-10 h-10 rounded-full bg-primary-100 dark:bg-primary-900/30 flex items-center justify-center">
                   <InformationCircleIcon className="h-6 w-6 text-primary dark:text-primary-400" />
                 </div>
               )}

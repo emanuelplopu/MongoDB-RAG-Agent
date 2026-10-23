@@ -668,18 +668,18 @@ export default function ChatPage() {
       {currentSession ? (
         <>
           {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 premium-header-bar flex-shrink-0">
+          <div className="flex items-center justify-between px-4 py-3 premium-header-bar shrink-0">
             <div className="flex items-center gap-2 min-w-0">
               {/* Mobile sidebar toggle */}
               <button
-                className="p-1.5 text-secondary dark:text-gray-400 hover:text-primary transition-colors lg:hidden flex-shrink-0"
+                className="p-1.5 text-secondary dark:text-gray-400 hover:text-primary transition-colors lg:hidden shrink-0"
                 onClick={() => window.dispatchEvent(new Event('open-mobile-sidebar'))}
               >
                 <Bars3Icon className="h-5 w-5" />
               </button>
               {/* Desktop sidebar toggle */}
               <button
-                className="hidden lg:block p-1.5 text-secondary dark:text-gray-400 hover:text-primary transition-colors flex-shrink-0"
+                className="hidden lg:block p-1.5 text-secondary dark:text-gray-400 hover:text-primary transition-colors shrink-0"
                 onClick={() => window.dispatchEvent(new Event('toggle-desktop-sidebar'))}
               >
                 <Bars3Icon className="h-5 w-5" />
@@ -861,7 +861,7 @@ export default function ChatPage() {
                       {/* Detailed explanation */}
                       <div className="mt-2 mx-2 p-2 bg-surface-variant dark:bg-gray-700 rounded-lg">
                         <div className="flex items-start gap-2">
-                          <InformationCircleIcon className="h-4 w-4 text-primary flex-shrink-0 mt-0.5" />
+                          <InformationCircleIcon className="h-4 w-4 text-primary shrink-0 mt-0.5" />
                           <div className="text-[10px] text-secondary dark:text-gray-400">
                             <strong className="text-primary-700 dark:text-primary-300">{t('chatPage.currentMode')} {t(`chatPage.modes.${agentMode}.label`)}</strong>
                             <p className="mt-1">{t(`chatPage.modes.${agentMode}.details`)}</p>
@@ -963,7 +963,7 @@ export default function ChatPage() {
                     onClick={() => setViewMode('admin')}
                     className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
                       effectiveView === 'admin'
-                        ? 'bg-white dark:bg-gray-700 text-primary-700 dark:text-primary-300 shadow-sm'
+                        ? 'bg-white dark:bg-gray-700 text-primary-700 dark:text-primary-300 shadow-xs'
                         : 'text-secondary dark:text-gray-400 hover:text-primary-600 dark:hover:text-gray-300'
                     }`}
                   >
@@ -973,7 +973,7 @@ export default function ChatPage() {
                     onClick={() => setViewMode('user')}
                     className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
                       effectiveView === 'user'
-                        ? 'bg-white dark:bg-gray-700 text-primary-700 dark:text-primary-300 shadow-sm'
+                        ? 'bg-white dark:bg-gray-700 text-primary-700 dark:text-primary-300 shadow-xs'
                         : 'text-secondary dark:text-gray-400 hover:text-primary-600 dark:hover:text-gray-300'
                     }`}
                   >
@@ -1010,7 +1010,7 @@ export default function ChatPage() {
               ))}
               {isLoading && (
                 <div className="flex gap-4">
-                  <div className="w-8 h-8 rounded-full bg-primary-100 dark:bg-primary-900 flex items-center justify-center flex-shrink-0">
+                  <div className="w-8 h-8 rounded-full bg-primary-100 dark:bg-primary-900 flex items-center justify-center shrink-0">
                     <SparklesIcon className="h-5 w-5 text-primary" />
                   </div>
                   <div className="flex-1">
@@ -1122,7 +1122,7 @@ export default function ChatPage() {
 
           {/* Regenerate button - shown after last assistant message */}
           {canRegenerate && (
-            <div className="px-6 py-2 flex-shrink-0">
+            <div className="px-6 py-2 shrink-0">
               <div className="premium-divider mb-2" />
               <div className="max-w-3xl mx-auto flex justify-center">
                 <button
@@ -1137,13 +1137,13 @@ export default function ChatPage() {
           )}
 
           {/* Input */}
-          <div className="px-6 py-4 flex-shrink-0">
+          <div className="px-6 py-4 shrink-0">
             <div className="premium-divider mb-4" />
             {/* Error Message */}
             {error && (
               <div className="max-w-3xl mx-auto mb-3">
                 <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 text-sm">
-                  <ExclamationCircleIcon className="h-5 w-5 flex-shrink-0" />
+                  <ExclamationCircleIcon className="h-5 w-5 shrink-0" />
                   <span className="flex-1">{error}</span>
                   {lastFailedMessage && (
                     <button
@@ -1176,10 +1176,10 @@ export default function ChatPage() {
                         <img
                           src={attachment.data_url}
                           alt={attachment.filename}
-                          className="w-10 h-10 object-cover rounded"
+                          className="w-10 h-10 object-cover rounded-sm"
                         />
                       ) : (
-                        <div className="w-10 h-10 flex items-center justify-center bg-surface-variant dark:bg-gray-500 rounded">
+                        <div className="w-10 h-10 flex items-center justify-center bg-surface-variant dark:bg-gray-500 rounded-sm">
                           <DocumentTextIcon className="h-5 w-5 text-secondary" />
                         </div>
                       )}
@@ -1221,7 +1221,7 @@ export default function ChatPage() {
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  className="flex h-10 w-10 items-center justify-center rounded-xl hover:bg-surface dark:hover:bg-gray-600 text-secondary hover:text-primary transition-colors flex-shrink-0"
+                  className="flex h-10 w-10 items-center justify-center rounded-xl hover:bg-surface dark:hover:bg-gray-600 text-secondary hover:text-primary transition-colors shrink-0"
                   title={t('chatPage.attachFiles')}
                 >
                   <PaperClipIcon className="h-5 w-5" />
@@ -1233,13 +1233,13 @@ export default function ChatPage() {
                   onKeyDown={handleKeyDown}
                   placeholder={t('chatPage.messagePlaceholder')}
                   rows={1}
-                  className="flex-1 resize-none bg-transparent px-3 py-2 text-primary-900 dark:text-gray-100 placeholder:text-secondary dark:placeholder:text-gray-500 focus:outline-none max-h-52"
+                  className="flex-1 resize-none bg-transparent px-3 py-2 text-primary-900 dark:text-gray-100 placeholder:text-secondary dark:placeholder:text-gray-500 focus:outline-hidden max-h-52"
                   disabled={isLoading}
                 />
                 <button
                   type="submit"
                   disabled={!input.trim() || isLoading}
-                  className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-white transition-all hover:bg-primary-700 disabled:bg-secondary disabled:cursor-not-allowed flex-shrink-0"
+                  className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-white transition-all hover:bg-primary-700 disabled:bg-secondary disabled:cursor-not-allowed shrink-0"
                 >
                   <PaperAirplaneIcon className="h-5 w-5" />
                 </button>
@@ -1355,7 +1355,7 @@ function MessageBubble({ message, viewMode }: { message: SessionMessage; viewMod
 
   return (
     <div className={`flex gap-4 ${isUser ? 'flex-row-reverse' : ''} group min-w-0`}>
-      <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
         isUser 
           ? 'bg-primary text-white' 
           : 'bg-primary-100 dark:bg-primary-900'
@@ -1415,9 +1415,9 @@ function MessageBubble({ message, viewMode }: { message: SessionMessage; viewMod
             </div>
           )}
           {isUser ? (
-            <p className="whitespace-pre-wrap break-words">{message.content}</p>
+            <p className="whitespace-pre-wrap wrap-break-word">{message.content}</p>
           ) : (
-            <div className="prose prose-sm max-w-none dark:prose-invert overflow-hidden break-words">
+            <div className="prose prose-sm max-w-none dark:prose-invert overflow-hidden wrap-break-word">
               {processedContent ? (
                 <MarkdownRenderer content={processedContent} />
               ) : (
@@ -1474,7 +1474,7 @@ function MessageBubble({ message, viewMode }: { message: SessionMessage; viewMod
                     </div>
                     
                     {/* Query sent to search */}
-                    <div className="bg-gray-100 dark:bg-gray-700/50 rounded px-2 py-1">
+                    <div className="bg-gray-100 dark:bg-gray-700/50 rounded-sm px-2 py-1">
                       <span className="text-[10px] text-secondary dark:text-gray-500 font-medium">{t('chatPage.query')} </span>
                       <span className="text-primary-900 dark:text-gray-200">
                         {op.query.length > 100 ? op.query.substring(0, 100) + '...' : op.query}
@@ -1504,7 +1504,7 @@ function MessageBubble({ message, viewMode }: { message: SessionMessage; viewMod
                       <div className="space-y-1 border-t border-gray-200 dark:border-gray-700 pt-1 mt-1">
                         <span className="text-[10px] text-secondary dark:text-gray-500 font-medium">{t('chatPage.topResults')}</span>
                         {op.top_results.slice(0, 3).map((result, ridx) => (
-                          <div key={ridx} className="bg-gray-50 dark:bg-gray-800 rounded px-2 py-1">
+                          <div key={ridx} className="bg-gray-50 dark:bg-gray-800 rounded-sm px-2 py-1">
                             <div className="flex items-center justify-between">
                               <span className="text-[10px] font-medium text-primary-700 dark:text-primary-300 truncate max-w-[150px]">
                                 {result.title}
@@ -1560,7 +1560,7 @@ function MessageBubble({ message, viewMode }: { message: SessionMessage; viewMod
                     
                     {/* Tool Input Parameters */}
                     {tool.tool_input && Object.keys(tool.tool_input).length > 0 && (
-                      <div className="bg-gray-100 dark:bg-gray-700/50 rounded px-2 py-1">
+                      <div className="bg-gray-100 dark:bg-gray-700/50 rounded-sm px-2 py-1">
                         <span className="text-[10px] text-secondary dark:text-gray-500 font-medium">{t('chatPage.input')} </span>
                         <span className="text-primary-900 dark:text-gray-200 text-[10px]">
                           {(() => {
@@ -1630,10 +1630,10 @@ function MessageBubble({ message, viewMode }: { message: SessionMessage; viewMod
               const badge = (
                 <span
                   key={idx}
-                  className={`inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[9px] bg-primary-50 dark:bg-gray-600 ${docId ? 'hover:bg-primary-100 dark:hover:bg-gray-500 cursor-pointer' : 'opacity-60'} transition-colors`}
+                  className={`inline-flex items-center gap-0.5 px-1 py-0.5 rounded-sm text-[9px] bg-primary-50 dark:bg-gray-600 ${docId ? 'hover:bg-primary-100 dark:hover:bg-gray-500 cursor-pointer' : 'opacity-60'} transition-colors`}
                   title={source.excerpt}
                 >
-                  <DocumentTextIcon className="h-2 w-2 text-primary-500 flex-shrink-0" />
+                  <DocumentTextIcon className="h-2 w-2 text-primary-500 shrink-0" />
                   <span className="text-primary-600 dark:text-primary-300 truncate max-w-[80px]">{source.title}</span>
                   {viewMode === 'admin' && <span className="text-secondary dark:text-gray-400 ml-0.5">{Math.round(source.relevance * 100)}%</span>}
                 </span>

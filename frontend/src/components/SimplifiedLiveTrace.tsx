@@ -111,7 +111,7 @@ export default function SimplifiedLiveTrace({ liveTrace, elapsedTime, onStop }: 
       {/* Current phase + elapsed time */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="relative h-5 w-5 flex-shrink-0">
+          <div className="relative h-5 w-5 shrink-0">
             <div className="absolute inset-0 rounded-full border-2 border-primary/20" />
             <div className="absolute inset-0 rounded-full border-2 border-primary border-t-transparent animate-spin" />
           </div>
@@ -129,7 +129,7 @@ export default function SimplifiedLiveTrace({ liveTrace, elapsedTime, onStop }: 
         {/* Analyze step - intent summary */}
         {analyzeStep && analyzeStep.reasoning && (
           <div className="flex items-start gap-2 text-xs">
-            <CheckCircleIcon className="h-3.5 w-3.5 text-green-500 flex-shrink-0 mt-0.5" />
+            <CheckCircleIcon className="h-3.5 w-3.5 text-green-500 shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
               <span className="text-secondary dark:text-gray-400 font-medium">
                 {t('userView.liveTrace.understood')}:
@@ -144,7 +144,7 @@ export default function SimplifiedLiveTrace({ liveTrace, elapsedTime, onStop }: 
         {/* Plan step - planned searches, one line each */}
         {plannedTasks.length > 0 && (
           <div className="flex items-start gap-2 text-xs">
-            <CheckCircleIcon className="h-3.5 w-3.5 text-green-500 flex-shrink-0 mt-0.5" />
+            <CheckCircleIcon className="h-3.5 w-3.5 text-green-500 shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
               <span className="text-secondary dark:text-gray-400 font-medium">
                 {t('userView.liveTrace.willSearch')}:
@@ -166,7 +166,7 @@ export default function SimplifiedLiveTrace({ liveTrace, elapsedTime, onStop }: 
           const label = describe(step.task_id, step.task_type, planned?.query ?? step.input)
           return (
             <div key={`worker-${idx}`} className="flex items-start gap-2 text-xs">
-              <CheckCircleIcon className="h-3.5 w-3.5 text-green-500 flex-shrink-0 mt-0.5" />
+              <CheckCircleIcon className="h-3.5 w-3.5 text-green-500 shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
                 <span className="text-primary-800 dark:text-gray-300 font-medium">{label}</span>
                 <span className="text-secondary dark:text-gray-400">
@@ -186,7 +186,7 @@ export default function SimplifiedLiveTrace({ liveTrace, elapsedTime, onStop }: 
               const label = describe(task.id, task.type, task.query)
               return (
                 <div key={`pending-${idx}`} className="flex items-start gap-2 text-xs">
-                  <div className="relative h-3.5 w-3.5 flex-shrink-0 mt-0.5">
+                  <div className="relative h-3.5 w-3.5 shrink-0 mt-0.5">
                     <div className="absolute inset-0 rounded-full border-2 border-primary/20" />
                     <div className="absolute inset-0 rounded-full border-2 border-primary border-t-transparent animate-spin" />
                   </div>
@@ -204,7 +204,7 @@ export default function SimplifiedLiveTrace({ liveTrace, elapsedTime, onStop }: 
         {/* Summary line during synthesize/evaluate */}
         {(isSynthesize || isEvaluate) && visibleWorkerSteps.length > 0 && (
           <div className="flex items-start gap-2 text-xs pt-1 border-t border-gray-200 dark:border-gray-600">
-            <MagnifyingGlassIcon className="h-3.5 w-3.5 text-primary flex-shrink-0 mt-0.5" />
+            <MagnifyingGlassIcon className="h-3.5 w-3.5 text-primary shrink-0 mt-0.5" />
             <span className="text-secondary dark:text-gray-400">
               {t('userView.liveTrace.totalFound', {
                 count: totalDocsFound,

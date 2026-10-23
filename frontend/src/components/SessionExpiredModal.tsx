@@ -64,7 +64,7 @@ export default function SessionExpiredModal({
     >
       {/* Backdrop */}
       <div 
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/50 backdrop-blur-xs"
         onClick={() => {}} // Prevent closing by clicking backdrop
       />
 
@@ -99,7 +99,7 @@ export default function SessionExpiredModal({
           <button
             type="button"
             disabled={isLoading}
-            className="w-full inline-flex justify-center items-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-primary-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="w-full inline-flex justify-center items-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-white shadow-xs hover:bg-primary-600 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             onClick={handleLoginAgain}
           >
             <ArrowRightOnRectangleIcon className="h-5 w-5" />
@@ -109,7 +109,7 @@ export default function SessionExpiredModal({
           {allowGuest && (
             <button
               type="button"
-              className="w-full inline-flex justify-center items-center gap-2 rounded-xl bg-gray-100 dark:bg-gray-700 px-4 py-3 text-sm font-semibold text-gray-900 dark:text-gray-100 shadow-sm hover:bg-gray-200 dark:hover:bg-gray-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-300 transition-colors"
+              className="w-full inline-flex justify-center items-center gap-2 rounded-xl bg-gray-100 dark:bg-gray-700 px-4 py-3 text-sm font-semibold text-gray-900 dark:text-gray-100 shadow-xs hover:bg-gray-200 dark:hover:bg-gray-600 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-300 transition-colors"
               onClick={handleContinueAsGuest}
             >
               <UserIcon className="h-5 w-5" />

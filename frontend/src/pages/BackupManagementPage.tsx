@@ -378,14 +378,14 @@ export default function BackupManagementPage() {
       {/* Messages */}
       {error && (
         <div className="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-center gap-2 text-red-700 dark:text-red-400">
-          <ExclamationTriangleIcon className="h-5 w-5 flex-shrink-0" />
+          <ExclamationTriangleIcon className="h-5 w-5 shrink-0" />
           {error}
         </div>
       )}
       
       {successMessage && (
         <div className="mb-4 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg flex items-center gap-2 text-green-700 dark:text-green-400">
-          <CheckCircleIcon className="h-5 w-5 flex-shrink-0" />
+          <CheckCircleIcon className="h-5 w-5 shrink-0" />
           {successMessage}
         </div>
       )}
@@ -458,7 +458,7 @@ export default function BackupManagementPage() {
                       {Object.entries(storageStats.backups_by_type).map(([type, count]) => (
                         <span
                           key={type}
-                          className={`px-2 py-1 rounded text-xs font-medium ${getBackupTypeColor(type as BackupType)}`}
+                          className={`px-2 py-1 rounded-sm text-xs font-medium ${getBackupTypeColor(type as BackupType)}`}
                         >
                           {getBackupTypeLabel(type as BackupType)}: {count}
                         </span>
@@ -469,8 +469,8 @@ export default function BackupManagementPage() {
               </div>
             ) : (
               <div className="animate-pulse space-y-3">
-                <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded" />
-                <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded" />
+                <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded-sm" />
+                <div className="h-8 bg-gray-200 dark:bg-gray-700 rounded-sm" />
               </div>
             )}
           </div>
@@ -542,7 +542,7 @@ export default function BackupManagementPage() {
                       type="checkbox"
                       checked={includeEmbeddings}
                       onChange={(e) => setIncludeEmbeddings(e.target.checked)}
-                      className="rounded border-gray-300 dark:border-gray-600"
+                      className="rounded-sm border-gray-300 dark:border-gray-600"
                     />
                     <span className="text-sm text-secondary dark:text-gray-300">Include embeddings</span>
                   </label>
@@ -551,7 +551,7 @@ export default function BackupManagementPage() {
                       type="checkbox"
                       checked={includeSystemCollections}
                       onChange={(e) => setIncludeSystemCollections(e.target.checked)}
-                      className="rounded border-gray-300 dark:border-gray-600"
+                      className="rounded-sm border-gray-300 dark:border-gray-600"
                     />
                     <span className="text-sm text-secondary dark:text-gray-300">Include system data (users, sessions)</span>
                   </label>
@@ -605,7 +605,7 @@ export default function BackupManagementPage() {
                     type="checkbox"
                     checked={configForm.auto_backup_after_ingestion ?? config.auto_backup_after_ingestion}
                     onChange={(e) => setConfigForm(prev => ({ ...prev, auto_backup_after_ingestion: e.target.checked }))}
-                    className="rounded border-gray-300 dark:border-gray-600"
+                    className="rounded-sm border-gray-300 dark:border-gray-600"
                   />
                 </label>
                 
@@ -645,7 +645,7 @@ export default function BackupManagementPage() {
                     type="checkbox"
                     checked={configForm.compression_enabled ?? config.compression_enabled}
                     onChange={(e) => setConfigForm(prev => ({ ...prev, compression_enabled: e.target.checked }))}
-                    className="rounded border-gray-300 dark:border-gray-600"
+                    className="rounded-sm border-gray-300 dark:border-gray-600"
                   />
                 </label>
                 
@@ -657,7 +657,7 @@ export default function BackupManagementPage() {
                     type="checkbox"
                     checked={configForm.include_embeddings ?? config.include_embeddings}
                     onChange={(e) => setConfigForm(prev => ({ ...prev, include_embeddings: e.target.checked }))}
-                    className="rounded border-gray-300 dark:border-gray-600"
+                    className="rounded-sm border-gray-300 dark:border-gray-600"
                   />
                 </label>
                 
@@ -745,7 +745,7 @@ export default function BackupManagementPage() {
                     <div className="p-4 flex items-center gap-4">
                       <button
                         onClick={() => toggleRow(backup.backup_id)}
-                        className="flex-shrink-0 p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded"
+                        className="shrink-0 p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-sm"
                       >
                         {expandedRows.has(backup.backup_id) ? (
                           <ChevronUpIcon className="h-5 w-5 text-gray-500" />
@@ -754,13 +754,13 @@ export default function BackupManagementPage() {
                         )}
                       </button>
                       
-                      <div className="flex-shrink-0">
+                      <div className="shrink-0">
                         {getStatusIcon(backup.status)}
                       </div>
                       
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
-                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${getBackupTypeColor(backup.backup_type)}`}>
+                          <span className={`px-2 py-0.5 rounded-sm text-xs font-medium ${getBackupTypeColor(backup.backup_type)}`}>
                             {getBackupTypeLabel(backup.backup_type)}
                           </span>
                           <span className="text-sm text-secondary dark:text-gray-400 truncate">
@@ -886,7 +886,7 @@ export default function BackupManagementPage() {
               
               <div className="mb-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
                 <div className="flex items-start gap-2 text-yellow-700 dark:text-yellow-400">
-                  <ExclamationTriangleIcon className="h-5 w-5 flex-shrink-0 mt-0.5" />
+                  <ExclamationTriangleIcon className="h-5 w-5 shrink-0 mt-0.5" />
                   <div className="text-sm">
                     <p className="font-medium mb-1">{t('backup.restore.warning', 'Warning')}</p>
                     <p>This will restore data from backup. Existing data may be affected depending on restore mode.</p>
@@ -921,7 +921,7 @@ export default function BackupManagementPage() {
                       type="checkbox"
                       checked={skipUsers}
                       onChange={(e) => setSkipUsers(e.target.checked)}
-                      className="rounded border-gray-300 dark:border-gray-600"
+                      className="rounded-sm border-gray-300 dark:border-gray-600"
                     />
                     <span className="text-sm text-secondary dark:text-gray-300">Skip users collection</span>
                   </label>
@@ -930,7 +930,7 @@ export default function BackupManagementPage() {
                       type="checkbox"
                       checked={skipSessions}
                       onChange={(e) => setSkipSessions(e.target.checked)}
-                      className="rounded border-gray-300 dark:border-gray-600"
+                      className="rounded-sm border-gray-300 dark:border-gray-600"
                     />
                     <span className="text-sm text-secondary dark:text-gray-300">Skip chat sessions</span>
                   </label>

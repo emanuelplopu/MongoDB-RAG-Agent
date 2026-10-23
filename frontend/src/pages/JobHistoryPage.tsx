@@ -433,7 +433,7 @@ export default function JobHistoryPage() {
                   className="p-4 flex items-center gap-4 cursor-pointer"
                   onClick={() => toggleJob(job.job_id)}
                 >
-                  <div className="flex-shrink-0">
+                  <div className="shrink-0">
                     {expandedJob === job.job_id ? (
                       <ChevronDownIcon className="h-5 w-5 text-gray-400" />
                     ) : (
@@ -441,7 +441,7 @@ export default function JobHistoryPage() {
                     )}
                   </div>
                   
-                  <div className="flex-shrink-0">
+                  <div className="shrink-0">
                     {getStatusIcon(job.status)}
                   </div>
                   
@@ -533,37 +533,37 @@ export default function JobHistoryPage() {
                       {/* Overview Tab */}
                       {activeTab[job.job_id] === 'overview' && jobDetails[job.job_id] && (
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                          <div className="bg-white dark:bg-gray-800 rounded p-3">
+                          <div className="bg-white dark:bg-gray-800 rounded-sm p-3">
                             <div className="text-xs text-gray-500">Total Files</div>
                             <div className="text-lg font-semibold">{jobDetails[job.job_id].stats_summary?.total_files || 0}</div>
                           </div>
-                          <div className="bg-white dark:bg-gray-800 rounded p-3">
+                          <div className="bg-white dark:bg-gray-800 rounded-sm p-3">
                             <div className="text-xs text-gray-500">Successful</div>
                             <div className="text-lg font-semibold text-green-600">{jobDetails[job.job_id].stats_summary?.successful || 0}</div>
                           </div>
-                          <div className="bg-white dark:bg-gray-800 rounded p-3">
+                          <div className="bg-white dark:bg-gray-800 rounded-sm p-3">
                             <div className="text-xs text-gray-500">Failed</div>
                             <div className="text-lg font-semibold text-red-600">{jobDetails[job.job_id].stats_summary?.failed || 0}</div>
                           </div>
-                          <div className="bg-white dark:bg-gray-800 rounded p-3">
+                          <div className="bg-white dark:bg-gray-800 rounded-sm p-3">
                             <div className="text-xs text-gray-500">Avg Time</div>
                             <div className="text-lg font-semibold">
                               {((jobDetails[job.job_id].stats_summary?.avg_processing_time_ms || 0) / 1000).toFixed(1)}s
                             </div>
                           </div>
-                          <div className="bg-white dark:bg-gray-800 rounded p-3">
+                          <div className="bg-white dark:bg-gray-800 rounded-sm p-3">
                             <div className="text-xs text-gray-500">Total Chunks</div>
                             <div className="text-lg font-semibold">{jobDetails[job.job_id].stats_summary?.total_chunks || 0}</div>
                           </div>
-                          <div className="bg-white dark:bg-gray-800 rounded p-3">
+                          <div className="bg-white dark:bg-gray-800 rounded-sm p-3">
                             <div className="text-xs text-gray-500">Total Size</div>
                             <div className="text-lg font-semibold">{formatBytes(jobDetails[job.job_id].stats_summary?.total_size_bytes || 0)}</div>
                           </div>
-                          <div className="bg-white dark:bg-gray-800 rounded p-3 col-span-2">
+                          <div className="bg-white dark:bg-gray-800 rounded-sm p-3 col-span-2">
                             <div className="text-xs text-gray-500 mb-1">Failed by Type</div>
                             <div className="flex gap-2 flex-wrap">
                               {Object.entries(jobDetails[job.job_id].failed_by_type || {}).map(([type, count]) => (
-                                <span key={type} className="text-xs bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 px-2 py-1 rounded">
+                                <span key={type} className="text-xs bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 px-2 py-1 rounded-sm">
                                   {type}: {count}
                                 </span>
                               ))}
@@ -584,7 +584,7 @@ export default function JobHistoryPage() {
                             <div className="text-gray-500 text-sm">No stats available</div>
                           ) : (
                             jobStats[job.job_id].map(stat => (
-                              <div key={stat._id} className="bg-white dark:bg-gray-800 rounded p-3 flex items-center gap-3">
+                              <div key={stat._id} className="bg-white dark:bg-gray-800 rounded-sm p-3 flex items-center gap-3">
                                 <div className={`w-2 h-2 rounded-full ${stat.success ? 'bg-green-500' : 'bg-red-500'}`} />
                                 <div className="flex-1 min-w-0">
                                   <div className="text-sm font-medium truncate">{stat.file_name}</div>
@@ -593,7 +593,7 @@ export default function JobHistoryPage() {
                                   </div>
                                 </div>
                                 {stat.error_type && (
-                                  <span className="text-xs bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 px-2 py-0.5 rounded">
+                                  <span className="text-xs bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 px-2 py-0.5 rounded-sm">
                                     {stat.error_type}
                                   </span>
                                 )}
@@ -652,20 +652,20 @@ export default function JobHistoryPage() {
                             </div>
                           ) : (
                             jobFailed[job.job_id].map(doc => (
-                              <div key={doc._id} className="bg-white dark:bg-gray-800 rounded p-3">
+                              <div key={doc._id} className="bg-white dark:bg-gray-800 rounded-sm p-3">
                                 <div className="flex items-start gap-2">
-                                  <XCircleIcon className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
+                                  <XCircleIcon className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
                                   <div className="flex-1 min-w-0">
                                     <div className="font-medium text-sm truncate">{doc.file_name}</div>
                                     <div className="text-xs text-gray-500 truncate">{doc.file_path}</div>
                                     <div className="mt-1 text-xs">
-                                      <span className="bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 px-2 py-0.5 rounded mr-2">
+                                      <span className="bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 px-2 py-0.5 rounded-sm mr-2">
                                         {doc.error_type}
                                       </span>
                                       <span className="text-gray-500">{formatDate(doc.failed_at)}</span>
                                     </div>
                                     {doc.error_message && (
-                                      <div className="mt-1 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 p-2 rounded">
+                                      <div className="mt-1 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 p-2 rounded-sm">
                                         {doc.error_message}
                                       </div>
                                     )}

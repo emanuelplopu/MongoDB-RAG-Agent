@@ -95,7 +95,7 @@ function EntryRenderer({ entry }: { entry: DebugActivityEntry }) {
   if (entry.type === 'llm_call' || entry.type === 'llm') {
     return (
       <div className="flex items-center gap-3 py-1.5">
-        <span className="inline-flex items-center rounded bg-blue-100 dark:bg-blue-900/30 px-1.5 py-0.5 text-xs font-medium text-blue-800 dark:text-blue-300">
+        <span className="inline-flex items-center rounded-sm bg-blue-100 dark:bg-blue-900/30 px-1.5 py-0.5 text-xs font-medium text-blue-800 dark:text-blue-300">
           LLM
         </span>
         <span className="text-xs text-primary-600 dark:text-gray-400">{entry.phase || ''}</span>
@@ -113,7 +113,7 @@ function EntryRenderer({ entry }: { entry: DebugActivityEntry }) {
   if (entry.type === 'search') {
     return (
       <div className="flex items-center gap-3 py-1.5">
-        <span className="inline-flex items-center rounded bg-purple-100 dark:bg-purple-900/30 px-1.5 py-0.5 text-xs font-medium text-purple-800 dark:text-purple-300">
+        <span className="inline-flex items-center rounded-sm bg-purple-100 dark:bg-purple-900/30 px-1.5 py-0.5 text-xs font-medium text-purple-800 dark:text-purple-300">
           Search
         </span>
         <span className="text-xs text-primary-600 dark:text-gray-400 truncate max-w-[200px]">
@@ -132,7 +132,7 @@ function EntryRenderer({ entry }: { entry: DebugActivityEntry }) {
   if (entry.type === 'error') {
     return (
       <div className="flex items-center gap-3 py-1.5">
-        <span className="inline-flex items-center rounded bg-red-100 dark:bg-red-900/30 px-1.5 py-0.5 text-xs font-medium text-red-800 dark:text-red-300">
+        <span className="inline-flex items-center rounded-sm bg-red-100 dark:bg-red-900/30 px-1.5 py-0.5 text-xs font-medium text-red-800 dark:text-red-300">
           Error
         </span>
         <span className="text-xs text-red-700 dark:text-red-400">{entry.error || entry.phase || ''}</span>
@@ -143,7 +143,7 @@ function EntryRenderer({ entry }: { entry: DebugActivityEntry }) {
   // Generic/phase transition
   return (
     <div className="flex items-center gap-3 py-1.5">
-      <span className="inline-flex items-center rounded bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 text-xs font-medium text-gray-700 dark:text-gray-300">
+      <span className="inline-flex items-center rounded-sm bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 text-xs font-medium text-gray-700 dark:text-gray-300">
         {entry.type}
       </span>
       <span className="text-xs text-primary-600 dark:text-gray-400">{entry.phase || ''}</span>

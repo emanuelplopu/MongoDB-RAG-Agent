@@ -49,7 +49,7 @@ const CompareModal: React.FC<CompareModalProps> = ({ template, onClose }) => {
   }
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div ref={modalRef} className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
         <div className="p-6 border-b dark:border-gray-700">
           <div className="flex justify-between items-center">
@@ -69,7 +69,7 @@ const CompareModal: React.FC<CompareModalProps> = ({ template, onClose }) => {
               <select 
                 value={versionA} 
                 onChange={(e) => setVersionA(Number(e.target.value))}
-                className="border rounded px-3 py-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                className="border rounded-sm px-3 py-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
               >
                 {template.versions.map(v => (
                   <option key={v.version} value={v.version}>v{v.version}</option>
@@ -82,7 +82,7 @@ const CompareModal: React.FC<CompareModalProps> = ({ template, onClose }) => {
               <select 
                 value={versionB} 
                 onChange={(e) => setVersionB(Number(e.target.value))}
-                className="border rounded px-3 py-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                className="border rounded-sm px-3 py-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
               >
                 {template.versions.map(v => (
                   <option key={v.version} value={v.version}>v{v.version}</option>
@@ -92,7 +92,7 @@ const CompareModal: React.FC<CompareModalProps> = ({ template, onClose }) => {
             <button
               onClick={handleCompare}
               disabled={loading || versionA === versionB}
-              className="mt-6 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+              className="mt-6 px-4 py-2 bg-blue-600 text-white rounded-sm hover:bg-blue-700 disabled:opacity-50"
             >
               {loading ? t('prompts.comparing') : t('prompts.compare')}
             </button>
@@ -127,7 +127,7 @@ const CompareModal: React.FC<CompareModalProps> = ({ template, onClose }) => {
                     successMessage={t('prompts.diffCopied')}
                   />
                 </div>
-                <pre className="bg-gray-100 dark:bg-gray-900 p-4 rounded text-sm overflow-x-auto font-mono whitespace-pre-wrap">
+                <pre className="bg-gray-100 dark:bg-gray-900 p-4 rounded-sm text-sm overflow-x-auto font-mono whitespace-pre-wrap">
                   {comparison.prompt_diff || t('prompts.noChanges')}
                 </pre>
               </div>
@@ -186,7 +186,7 @@ const TestModal: React.FC<TestModalProps> = ({ template, onClose }) => {
   }
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div ref={modalRef} className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-hidden">
         <div className="p-6 border-b dark:border-gray-700">
           <div className="flex justify-between items-center">
@@ -205,7 +205,7 @@ const TestModal: React.FC<TestModalProps> = ({ template, onClose }) => {
             <select 
               value={selectedVersion ?? template.active_version}
               onChange={(e) => setSelectedVersion(Number(e.target.value))}
-              className="border rounded px-3 py-2 w-full dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              className="border rounded-sm px-3 py-2 w-full dark:bg-gray-700 dark:border-gray-600 dark:text-white"
             >
               {template.versions.map(v => (
                 <option key={v.version} value={v.version}>
@@ -221,7 +221,7 @@ const TestModal: React.FC<TestModalProps> = ({ template, onClose }) => {
               value={testMessage}
               onChange={(e) => setTestMessage(e.target.value)}
               rows={4}
-              className="w-full border rounded px-3 py-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              className="w-full border rounded-sm px-3 py-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
               placeholder={t('prompts.testMessagePlaceholder')}
             />
           </div>
@@ -229,14 +229,14 @@ const TestModal: React.FC<TestModalProps> = ({ template, onClose }) => {
           <button
             onClick={handleTest}
             disabled={loading || !testMessage.trim()}
-            className="w-full px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+            className="w-full px-4 py-2 bg-green-600 text-white rounded-sm hover:bg-green-700 disabled:opacity-50"
           >
             {loading ? t('prompts.testing') : t('prompts.runTest')}
           </button>
 
           {result && (
             <div className="space-y-3 mt-4">
-              <div className={`p-3 rounded ${result.success ? 'bg-green-100 dark:bg-green-900' : 'bg-red-100 dark:bg-red-900'}`}>
+              <div className={`p-3 rounded-sm ${result.success ? 'bg-green-100 dark:bg-green-900' : 'bg-red-100 dark:bg-red-900'}`}>
                 <span className="font-medium">{result.success ? `✓ ${t('prompts.testSuccess')}` : `✗ ${t('prompts.testFailed')}`}</span>
                 {result.error && <span className="ml-2 text-red-600">{result.error}</span>}
               </div>
@@ -246,7 +246,7 @@ const TestModal: React.FC<TestModalProps> = ({ template, onClose }) => {
                   <h4 className="font-medium text-gray-900 dark:text-white mb-2">{t('prompts.toolCalls')}</h4>
                   <div className="space-y-2">
                     {result.tool_calls.map((tc, i) => (
-                      <div key={i} className="bg-blue-50 dark:bg-blue-900 p-3 rounded">
+                      <div key={i} className="bg-blue-50 dark:bg-blue-900 p-3 rounded-sm">
                         <div className="flex items-center justify-between">
                           <span className="font-mono font-medium">{tc.name}</span>
                           <CopyIconButton text={tc.arguments} size="xs" />
@@ -268,7 +268,7 @@ const TestModal: React.FC<TestModalProps> = ({ template, onClose }) => {
                       successMessage={t('prompts.responseCopied')}
                     />
                   </div>
-                  <div className="bg-gray-100 dark:bg-gray-900 p-3 rounded">
+                  <div className="bg-gray-100 dark:bg-gray-900 p-3 rounded-sm">
                     <p className="text-gray-800 dark:text-gray-200 whitespace-pre-wrap">{result.response}</p>
                   </div>
                 </div>
@@ -379,7 +379,7 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ template, onSave, onActivate,
           <select
             value={selectedVersion ?? ''}
             onChange={(e) => handleVersionChange(Number(e.target.value))}
-            className="border rounded px-3 py-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+            className="border rounded-sm px-3 py-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
           >
             {template.versions.map(v => (
               <option key={v.version} value={v.version}>
@@ -389,13 +389,13 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ template, onSave, onActivate,
           </select>
           <button
             onClick={() => setShowCompare(true)}
-            className="px-3 py-2 border rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:border-gray-600 dark:text-white"
+            className="px-3 py-2 border rounded-sm hover:bg-gray-100 dark:hover:bg-gray-700 dark:border-gray-600 dark:text-white"
           >
             {t('prompts.compare')}
           </button>
           <button
             onClick={() => setShowTest(true)}
-            className="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+            className="px-3 py-2 bg-green-600 text-white rounded-sm hover:bg-green-700"
           >
             {t('common.test')}
           </button>
@@ -419,7 +419,7 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ template, onSave, onActivate,
             value={systemPrompt}
             onChange={(e) => setSystemPrompt(e.target.value)}
             rows={15}
-            className="w-full border rounded px-3 py-2 font-mono text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+            className="w-full border rounded-sm px-3 py-2 font-mono text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-white"
           />
         </div>
 
@@ -431,7 +431,7 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ template, onSave, onActivate,
           </div>
           <div className="space-y-2">
             {tools.map((tool, idx) => (
-              <div key={idx} className="border rounded p-3 dark:border-gray-600">
+              <div key={idx} className="border rounded-sm p-3 dark:border-gray-600">
                 <div className="flex items-center justify-between">
                   <span className="font-mono font-medium dark:text-white">{tool.name}</span>
                   <div className="flex items-center gap-2">
@@ -448,7 +448,7 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ template, onSave, onActivate,
                           newTools[idx] = { ...tool, enabled: e.target.checked }
                           setTools(newTools)
                         }}
-                        className="rounded"
+                        className="rounded-sm"
                       />
                       <span className="dark:text-gray-300">{t('common.enabled')}</span>
                     </label>
@@ -468,7 +468,7 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ template, onSave, onActivate,
             type="text"
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            className="w-full border rounded px-3 py-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+            className="w-full border rounded-sm px-3 py-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
             placeholder={t('prompts.describeChanges')}
           />
         </div>

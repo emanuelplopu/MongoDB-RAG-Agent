@@ -196,7 +196,7 @@ export default function SearchSuggestions({
           onFocus={onOpen}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
-          className="w-full pl-10 pr-10 py-2.5 bg-surface-variant dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl text-primary-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+          className="w-full pl-10 pr-10 py-2.5 bg-surface-variant dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl text-primary-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-hidden focus:ring-2 focus:ring-primary focus:border-transparent"
         />
         {query && (
           <button
@@ -250,7 +250,7 @@ export default function SearchSuggestions({
                         }
                       `}
                     >
-                      {Icon && <Icon className="h-4 w-4 flex-shrink-0 text-gray-400" />}
+                      {Icon && <Icon className="h-4 w-4 shrink-0 text-gray-400" />}
                       <span className="flex-1 truncate">
                         {highlightQuery(suggestion.text, query)}
                       </span>

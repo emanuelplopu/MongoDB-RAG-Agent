@@ -154,7 +154,7 @@ export default function FolderPicker({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-100 p-4">
       <div className="bg-surface dark:bg-gray-800 rounded-2xl shadow-xl max-w-3xl w-full max-h-[80vh] flex flex-col">
         {/* Header */}
         <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
@@ -232,7 +232,7 @@ export default function FolderPicker({
                         {allowMultiple && (
                           <button
                             onClick={() => handleFolderSelect(folder)}
-                            className={`flex-shrink-0 w-5 h-5 rounded border ${
+                            className={`shrink-0 w-5 h-5 rounded border ${
                               isSelected
                                 ? 'bg-primary border-primary text-white'
                                 : 'border-gray-300 dark:border-gray-600'
@@ -263,14 +263,14 @@ export default function FolderPicker({
                               {formatDate(folder.modified_at)}
                             </span>
                           )}
-                          <ChevronRightIcon className="h-5 w-5 text-gray-400 flex-shrink-0" />
+                          <ChevronRightIcon className="h-5 w-5 text-gray-400 shrink-0" />
                         </button>
 
                         {/* Select button for single mode */}
                         {!allowMultiple && (
                           <button
                             onClick={() => handleFolderSelect(folder)}
-                            className="flex-shrink-0 px-3 py-1.5 rounded-lg text-sm bg-primary text-white hover:bg-primary-700"
+                            className="shrink-0 px-3 py-1.5 rounded-lg text-sm bg-primary text-white hover:bg-primary-700"
                           >
                             Select
                           </button>

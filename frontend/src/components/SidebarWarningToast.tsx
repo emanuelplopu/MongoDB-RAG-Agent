@@ -89,7 +89,7 @@ export default function SidebarWarningToast({ warnings, onDismiss }: SidebarWarn
             </button>
 
             <div className="flex items-start gap-2 pr-5">
-              <Icon className={`h-4 w-4 flex-shrink-0 mt-0.5 ${styles.icon}`} />
+              <Icon className={`h-4 w-4 shrink-0 mt-0.5 ${styles.icon}`} />
               <div className="flex-1 min-w-0">
                 <p className={`text-xs leading-snug ${styles.text}`}>
                   {warning.message}

@@ -109,7 +109,7 @@ export default function ServerFolderPicker({ onSelect, onClose, initialPath }: S
           </code>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-2 min-h-[12rem]">
+        <div className="flex-1 overflow-y-auto p-2 min-h-48">
           {isLoading ? (
             <div className="flex items-center justify-center py-10">
               <ArrowPathIcon className="h-6 w-6 animate-spin text-primary" />
@@ -128,12 +128,12 @@ export default function ServerFolderPicker({ onSelect, onClose, initialPath }: S
                     disabled={!entry.exists}
                     className="w-full flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-primary-900 dark:text-gray-200 hover:bg-surface-variant dark:hover:bg-gray-700 disabled:opacity-50"
                   >
-                    <FolderIcon className="h-5 w-5 text-secondary dark:text-gray-400 flex-shrink-0" />
+                    <FolderIcon className="h-5 w-5 text-secondary dark:text-gray-400 shrink-0" />
                     <span className="truncate flex-1" title={entry.path}>{entry.name}</span>
                     {!entry.exists && (
                       <span className="text-xs text-red-600 dark:text-red-400">{t('profiles.folderNotMounted', 'not mounted')}</span>
                     )}
-                    <ChevronRightIcon className="h-4 w-4 text-secondary dark:text-gray-500 flex-shrink-0" />
+                    <ChevronRightIcon className="h-4 w-4 text-secondary dark:text-gray-500 shrink-0" />
                   </button>
                 </li>
               ))}

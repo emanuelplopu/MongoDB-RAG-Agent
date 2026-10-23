@@ -28,7 +28,7 @@ export function Skeleton({
   animate = true,
 }: SkeletonProps) {
   const variantClasses = {
-    text: 'rounded',
+    text: 'rounded-sm',
     circular: 'rounded-full',
     rectangular: 'rounded-none',
     rounded: 'rounded-xl',
@@ -44,7 +44,7 @@ export function Skeleton({
       className={`
         bg-gray-200 dark:bg-gray-700
         ${variantClasses[variant]}
-        ${animate ? 'animate-shimmer bg-gradient-to-r from-gray-200 via-gray-100 to-gray-200 dark:from-gray-700 dark:via-gray-600 dark:to-gray-700 bg-[length:200%_100%]' : ''}
+        ${animate ? 'animate-shimmer bg-linear-to-r from-gray-200 via-gray-100 to-gray-200 dark:from-gray-700 dark:via-gray-600 dark:to-gray-700 bg-size-[200%_100%]' : ''}
         ${className}
       `}
       style={style}

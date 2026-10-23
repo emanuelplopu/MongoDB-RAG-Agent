@@ -108,7 +108,7 @@ export default function SupportRequestButton({ sessionId }: SupportRequestButton
         >
           {/* Backdrop */}
           <div
-            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            className="absolute inset-0 bg-black/50 backdrop-blur-xs"
             onClick={handleClose}
           />
 
@@ -145,7 +145,7 @@ export default function SupportRequestButton({ sessionId }: SupportRequestButton
               <textarea
                 readOnly
                 value={isLoadingDiagnostic ? t('support.loading') : diagnosticText}
-                className="w-full h-40 p-3 text-xs font-mono bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-700 dark:text-gray-300 resize-none focus:outline-none"
+                className="w-full h-40 p-3 text-xs font-mono bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-700 dark:text-gray-300 resize-none focus:outline-hidden"
                 rows={10}
               />
             </div>
@@ -159,7 +159,7 @@ export default function SupportRequestButton({ sessionId }: SupportRequestButton
                 value={userDescription}
                 onChange={(e) => setUserDescription(e.target.value)}
                 placeholder={t('support.descriptionPlaceholder')}
-                className="w-full h-24 p-3 text-sm bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 resize-none focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+                className="w-full h-24 p-3 text-sm bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 resize-none focus:outline-hidden focus:ring-2 focus:ring-primary/50 focus:border-primary"
                 rows={4}
               />
             </div>

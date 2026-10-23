@@ -204,7 +204,7 @@ const ModelVersionSelector: React.FC<ModelVersionSelectorProps> = ({
   }
 
   return (
-    <div className={`bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 ${className}`}>
+    <div className={`bg-white dark:bg-gray-800 rounded-xl shadow-xs border border-gray-200 dark:border-gray-700 ${className}`}>
       {/* Header */}
       <div className="p-4 border-b border-gray-200 dark:border-gray-700">
         <div className="flex items-center justify-between mb-4">
@@ -271,7 +271,7 @@ const ModelVersionSelector: React.FC<ModelVersionSelectorProps> = ({
               id="show-deprecated"
               checked={showDeprecated}
               onChange={(e) => setShowDeprecated(e.target.checked)}
-              className="rounded border-gray-300 text-primary focus:ring-primary"
+              className="rounded-sm border-gray-300 text-primary focus:ring-primary"
             />
             <label htmlFor="show-deprecated" className="text-sm text-gray-700 dark:text-gray-300">
               Show Deprecated
@@ -287,7 +287,7 @@ const ModelVersionSelector: React.FC<ModelVersionSelectorProps> = ({
           <select
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value as any)}
-            className="px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            className="px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
           >
             <option value="release_date">Sort by Release Date</option>
             <option value="cost">Sort by Cost</option>

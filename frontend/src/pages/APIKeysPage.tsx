@@ -131,12 +131,12 @@ export default function APIKeysPage() {
               <strong>{t('apiKeys.keyWarning')}</strong>
             </p>
             <div className="flex items-center gap-2">
-              <code className="flex-1 bg-white dark:bg-gray-800 px-4 py-2 rounded font-mono text-sm border border-green-300 dark:border-green-700">
+              <code className="flex-1 bg-white dark:bg-gray-800 px-4 py-2 rounded-sm font-mono text-sm border border-green-300 dark:border-green-700">
                 {createdKey.key}
               </code>
               <button
                 onClick={() => copyToClipboard(createdKey.key)}
-                className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+                className="px-4 py-2 bg-green-600 text-white rounded-sm hover:bg-green-700 transition-colors"
               >
                 {copied ? t('apiKeys.keyCopied') : t('apiKeys.copyKey')}
               </button>
@@ -175,7 +175,7 @@ export default function APIKeysPage() {
           <p className="text-sm text-blue-700 dark:text-blue-300 mb-2">
             {t('apiKeys.howToUseDesc')}
           </p>
-          <pre className="bg-gray-800 text-gray-100 p-3 rounded text-xs overflow-x-auto">
+          <pre className="bg-gray-800 text-gray-100 p-3 rounded-sm text-xs overflow-x-auto">
 {`curl -X POST "${window.location.origin}/api/v1/search/hybrid" \\
   -H "X-API-Key: rag_your_api_key_here" \\
   -H "Content-Type: application/json" \\
@@ -184,7 +184,7 @@ export default function APIKeysPage() {
         </div>
 
         {/* Keys Table */}
-        <div className="bg-surface dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+        <div className="bg-surface dark:bg-gray-800 rounded-lg shadow-sm overflow-hidden">
           <table className="min-w-full divide-y divide-surface-variant dark:divide-gray-700">
             <thead className="bg-surface-variant dark:bg-gray-700">
               <tr>
@@ -236,7 +236,7 @@ export default function APIKeysPage() {
                       )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <code className="text-sm text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded">
+                      <code className="text-sm text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded-sm">
                         {key.key_prefix}
                       </code>
                     </td>
@@ -278,7 +278,7 @@ export default function APIKeysPage() {
 
         {/* Create Modal */}
         {showCreateModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 w-full max-w-md">
               <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">
                 {t('apiKeys.createNew')}

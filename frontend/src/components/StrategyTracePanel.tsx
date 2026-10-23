@@ -177,7 +177,7 @@ export default function StrategyTracePanel({ trace, liveNodes }: StrategyTracePa
           <ChevronRightIcon className="h-3 w-3" />
         )}
         <Squares2X2Icon className="h-3 w-3" />
-        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${headerBadge.cls}`}>
+        <span className={`text-[10px] px-1.5 py-0.5 rounded-sm font-medium ${headerBadge.cls}`}>
           {headerBadge.label}
         </span>
         <span className="font-medium truncate max-w-[160px]">
@@ -209,14 +209,14 @@ export default function StrategyTracePanel({ trace, liveNodes }: StrategyTracePa
           {(trace.fallback_reason || trace.fast_path_eligible) && (
             <div className="flex flex-wrap items-center gap-2 text-[10px] text-secondary dark:text-gray-500">
               {trace.fast_path_eligible && (
-                <span className="px-1.5 py-0.5 rounded bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300">
+                <span className="px-1.5 py-0.5 rounded-sm bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300">
                   {t('strategyPanel.fastPathEligible', {
                     defaultValue: 'Fast-path eligible',
                   })}
                 </span>
               )}
               {trace.fallback_reason && (
-                <span className="px-1.5 py-0.5 rounded bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300">
+                <span className="px-1.5 py-0.5 rounded-sm bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300">
                   {t('strategyPanel.fallbackReason', { defaultValue: 'Fallback' })}:{' '}
                   {trace.fallback_reason}
                 </span>
@@ -344,7 +344,7 @@ export default function StrategyTracePanel({ trace, liveNodes }: StrategyTracePa
                         }`}
                       >
                         <div className="flex items-center gap-2">
-                          <span className={`h-2 w-2 rounded-full ${styles.dot} flex-shrink-0`} />
+                          <span className={`h-2 w-2 rounded-full ${styles.dot} shrink-0`} />
                           <span className="font-medium text-primary-900 dark:text-gray-100 truncate max-w-[160px]">
                             {node.node_type}
                           </span>
@@ -361,7 +361,7 @@ export default function StrategyTracePanel({ trace, liveNodes }: StrategyTracePa
 
                         {/* Duration bar */}
                         <div className="flex items-center gap-2">
-                          <div className="flex-1 h-1.5 rounded bg-gray-100 dark:bg-gray-800 overflow-hidden">
+                          <div className="flex-1 h-1.5 rounded-sm bg-gray-100 dark:bg-gray-800 overflow-hidden">
                             <div
                               className={`h-full ${styles.dot} ${
                                 isLive && isLast ? 'animate-pulse' : ''
@@ -369,12 +369,12 @@ export default function StrategyTracePanel({ trace, liveNodes }: StrategyTracePa
                               style={{ width: `${widthPct}%` }}
                             />
                           </div>
-                          <span className="text-[10px] text-secondary dark:text-gray-500 flex items-center gap-1 flex-shrink-0">
+                          <span className="text-[10px] text-secondary dark:text-gray-500 flex items-center gap-1 shrink-0">
                             <ClockIcon className="h-3 w-3" />
                             {duration.toFixed(0)}ms
                           </span>
                           {tokens > 0 && (
-                            <span className="text-[10px] text-secondary dark:text-gray-500 flex-shrink-0">
+                            <span className="text-[10px] text-secondary dark:text-gray-500 shrink-0">
                               {tokens.toLocaleString()}{' '}
                               {t('strategyPanel.tokensShort', { defaultValue: 'tok' })}
                             </span>
@@ -411,7 +411,7 @@ export default function StrategyTracePanel({ trace, liveNodes }: StrategyTracePa
 
               {expandedSections.budget && (
                 <div className="pl-4 space-y-1.5">
-                  <div className="h-2 rounded bg-gray-100 dark:bg-gray-800 overflow-hidden">
+                  <div className="h-2 rounded-sm bg-gray-100 dark:bg-gray-800 overflow-hidden">
                     <div
                       className="h-full bg-primary-500 dark:bg-primary-400"
                       style={{
@@ -446,7 +446,7 @@ export default function StrategyTracePanel({ trace, liveNodes }: StrategyTracePa
                           key={idx}
                           className="text-[10px] text-gray-600 dark:text-gray-400 flex items-center gap-2"
                         >
-                          <span className="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-mono">
+                          <span className="px-1 py-0.5 rounded-sm bg-gray-100 dark:bg-gray-800 font-mono">
                             {item.kind}
                           </span>
                           <span className="text-secondary dark:text-gray-500">

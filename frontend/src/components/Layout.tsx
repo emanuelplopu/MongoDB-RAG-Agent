@@ -365,7 +365,7 @@ export default function Layout() {
   const SidebarContent = () => (
     <div className="flex flex-col h-full min-h-0">
       {/* Top Section - ChatGPT-style header */}
-      <div className="p-3 flex-shrink-0 space-y-1">
+      <div className="p-3 shrink-0 space-y-1">
         {isSelectMode ? (
           /* Select Mode Actions - unchanged */
           <div className="space-y-2">
@@ -457,7 +457,7 @@ export default function Layout() {
             <div className="flex items-center gap-1">
               <LocalizedLink
                 to="/dashboard"
-                className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors flex-shrink-0"
+                className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors shrink-0"
                 title={t('sidebar.home')}
               >
                 <TenantIcon className="h-7 w-7" />
@@ -471,14 +471,14 @@ export default function Layout() {
               </button>
               <button
                 onClick={toggleSelectMode}
-                className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-secondary dark:text-gray-400 flex-shrink-0"
+                className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-secondary dark:text-gray-400 shrink-0"
                 title={t('sidebar.editChats')}
               >
                 <PencilIcon className="h-4 w-4" />
               </button>
               <button
                 onClick={() => setDesktopSidebarCollapsed(true)}
-                className="hidden lg:flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-secondary dark:text-gray-400 flex-shrink-0"
+                className="hidden lg:flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-secondary dark:text-gray-400 shrink-0"
                 title={t('sidebar.collapse')}
               >
                 <ChevronDoubleLeftIcon className="h-4 w-4" />
@@ -511,7 +511,7 @@ export default function Layout() {
                   value={chatSearchQuery}
                   onChange={(e) => setChatSearchQuery(e.target.value)}
                   placeholder={t('sidebar.searchChats')}
-                  className="w-full text-sm bg-surface-variant dark:bg-gray-700 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary dark:text-gray-200 placeholder:text-secondary dark:placeholder:text-gray-500"
+                  className="w-full text-sm bg-surface-variant dark:bg-gray-700 rounded-lg px-3 py-1.5 focus:outline-hidden focus:ring-1 focus:ring-primary dark:text-gray-200 placeholder:text-secondary dark:placeholder:text-gray-500"
                   autoFocus
                 />
                 {chatSearchQuery && (
@@ -537,7 +537,7 @@ export default function Layout() {
               {user?.is_admin && (
                 <LocalizedLink
                   to="/system/ingestion"
-                  className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-secondary dark:text-gray-400 flex-shrink-0"
+                  className="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-surface-variant dark:hover:bg-gray-700 transition-colors text-secondary dark:text-gray-400 shrink-0"
                   title={t('sidebar.datenimport')}
                 >
                   <ArrowUpTrayIcon className="h-5 w-5" />
@@ -573,7 +573,7 @@ export default function Layout() {
                 if (e.key === 'Escape') setShowNewFolder(false)
               }}
               placeholder={t('sidebar.folderName')}
-              className="flex-1 text-sm bg-transparent border-b border-primary focus:outline-none dark:text-gray-200"
+              className="flex-1 text-sm bg-transparent border-b border-primary focus:outline-hidden dark:text-gray-200"
               autoFocus
             />
             <button onClick={handleCreateFolder} className="p-1">
@@ -613,7 +613,7 @@ export default function Layout() {
                     e.stopPropagation()
                     handleNewChat(folder.id)
                   }}
-                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-surface dark:hover:bg-gray-700 rounded"
+                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-surface dark:hover:bg-gray-700 rounded-sm"
                 >
                   <PlusIcon className="h-3 w-3 text-secondary" />
                 </button>
@@ -624,7 +624,7 @@ export default function Layout() {
                       handleDeleteFolder(folder.id)
                     }
                   }}
-                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-surface dark:hover:bg-gray-700 rounded"
+                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-surface dark:hover:bg-gray-700 rounded-sm"
                 >
                   <TrashIcon className="h-3 w-3 text-red-500" />
                 </button>
@@ -739,7 +739,7 @@ export default function Layout() {
       </div>
 
       {/* Bottom Sticky Section - User Menu */}
-      <div className="flex-shrink-0 border-t border-surface-variant dark:border-gray-700 p-3" ref={userMenuRef}>
+      <div className="shrink-0 border-t border-surface-variant dark:border-gray-700 p-3" ref={userMenuRef}>
         {/* User Menu Dropdown (appears above the button) */}
         {userMenuOpen && (
           <div
@@ -1018,7 +1018,7 @@ export default function Layout() {
       <div className={`transition-all duration-300 ${desktopSidebarVisible ? 'lg:pl-72' : 'lg:pl-14'}`}>
         {/* Desktop Header Bar - hidden on chat page (merged into ChatPageNew header) */}
         {!isOnChatPage && (
-        <div className="sticky top-0 z-30 flex h-14 items-center gap-x-4 bg-surface/95 dark:bg-gray-800/95 px-4 shadow-sm backdrop-blur">
+        <div className="sticky top-0 z-30 flex h-14 items-center gap-x-4 bg-surface/95 dark:bg-gray-800/95 px-4 shadow-xs backdrop-blur-sm">
           {/* Mobile menu button */}
           <button
             type="button"
@@ -1223,10 +1223,10 @@ function SessionItem({
           checked={isSelected}
           onChange={onToggleSelect}
           onClick={(e) => e.stopPropagation()}
-          className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          className="h-4 w-4 rounded-sm border-gray-300 text-primary-600 focus:ring-primary-500"
         />
       ) : (
-        <ChatBubbleLeftRightIcon className="h-4 w-4 flex-shrink-0 text-secondary" />
+        <ChatBubbleLeftRightIcon className="h-4 w-4 shrink-0 text-secondary" />
       )}
       {isEditing ? (
         <input
@@ -1238,7 +1238,7 @@ function SessionItem({
             if (e.key === 'Escape') onEditCancel()
           }}
           onBlur={onEditSave}
-          className="flex-1 text-sm bg-transparent border-b border-primary focus:outline-none"
+          className="flex-1 text-sm bg-transparent border-b border-primary focus:outline-hidden"
           autoFocus
           onClick={(e) => e.stopPropagation()}
         />
@@ -1246,7 +1246,7 @@ function SessionItem({
         <span className="flex-1 text-sm truncate">{session.title || t('chat.newChat')}</span>
       )}
       {session.is_pinned && (
-        <StarIconSolid className="h-3 w-3 text-primary flex-shrink-0" />
+        <StarIconSolid className="h-3 w-3 text-primary shrink-0" />
       )}
     </div>
   )

@@ -1016,7 +1016,7 @@ export default function EmbeddingBenchmarkPage() {
         <button
           onClick={mode === 'checks' ? runChecks : runBenchmark}
           disabled={!canRun}
-          className="flex items-center gap-3 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-500 px-8 py-4 text-white font-medium transition-all hover:from-cyan-600 hover:to-blue-600 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+          className="flex items-center gap-3 rounded-xl bg-linear-to-r from-cyan-500 to-blue-500 px-8 py-4 text-white font-medium transition-all hover:from-cyan-600 hover:to-blue-600 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
         >
           {isRunning ? (
             <>

@@ -645,7 +645,7 @@ export default function EmailCloudConfigPage() {
               {t('emailConfigPage.personalDb')}
             </h2>
             <p className="text-sm text-secondary dark:text-gray-400 mt-1">
-              <code className="bg-surface-variant dark:bg-gray-700 px-2 py-0.5 rounded text-xs font-mono">{userDatabase}</code>
+              <code className="bg-surface-variant dark:bg-gray-700 px-2 py-0.5 rounded-sm text-xs font-mono">{userDatabase}</code>
               {user?.name && <span className="ml-2">({user.name})</span>}
             </p>
           </div>
@@ -927,7 +927,7 @@ export default function EmailCloudConfigPage() {
                         type="checkbox"
                         checked={configForm[field.name] === 'true' || (field.default === true && configForm[field.name] === undefined)}
                         onChange={e => setConfigForm({ ...configForm, [field.name]: e.target.checked ? 'true' : 'false' })}
-                        className="rounded border-gray-300"
+                        className="rounded-sm border-gray-300"
                       />
                       <span className="text-sm text-secondary dark:text-gray-400">{t('emailConfigPage.enableCheckbox')}</span>
                     </label>

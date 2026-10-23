@@ -132,7 +132,7 @@ function FolderNode({ node, style, dragHandle }: NodeRendererProps<TreeNode>) {
       onClick={() => node.select()}
     >
       <span
-        className="flex-shrink-0 cursor-pointer"
+        className="shrink-0 cursor-pointer"
         onClick={(e) => {
           e.stopPropagation()
           node.toggle()
@@ -148,7 +148,7 @@ function FolderNode({ node, style, dragHandle }: NodeRendererProps<TreeNode>) {
         {node.data.name}
       </span>
       {node.data.documentCount !== undefined && node.data.documentCount > 0 && (
-        <span className="text-xs text-secondary dark:text-gray-500 bg-surface-variant dark:bg-gray-700 px-1.5 py-0.5 rounded">
+        <span className="text-xs text-secondary dark:text-gray-500 bg-surface-variant dark:bg-gray-700 px-1.5 py-0.5 rounded-sm">
           {node.data.documentCount}
         </span>
       )}
@@ -433,13 +433,13 @@ export default function DocumentsPage() {
     <div className="flex h-[calc(100vh-8rem)] gap-4">
       {/* Left Sidebar - Folder Tree */}
       {!sidebarCollapsed && (
-        <div className="w-64 flex-shrink-0 flex flex-col bg-surface dark:bg-gray-800 rounded-2xl shadow-elevation-1 overflow-hidden">
+        <div className="w-64 shrink-0 flex flex-col bg-surface dark:bg-gray-800 rounded-2xl shadow-elevation-1 overflow-hidden">
           {/* Sidebar Header */}
           <div className="p-3 premium-header-bar flex items-center justify-between">
             <h3 className="text-sm font-semibold text-primary-900 dark:text-gray-200">{t('documentsPage.folders')}</h3>
             <button
               onClick={() => setSidebarCollapsed(true)}
-              className="p-1 rounded hover:bg-surface-variant dark:hover:bg-gray-700"
+              className="p-1 rounded-sm hover:bg-surface-variant dark:hover:bg-gray-700"
             >
               <ChevronLeftIcon className="h-4 w-4 text-secondary" />
             </button>
@@ -538,7 +538,7 @@ export default function DocumentsPage() {
               {searchInput && (
                 <button
                   onClick={() => setSearchInput('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-surface dark:hover:bg-gray-600 rounded"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-surface dark:hover:bg-gray-600 rounded-sm"
                 >
                   <XMarkIcon className="h-4 w-4 text-secondary" />
                 </button>
@@ -573,14 +573,14 @@ export default function DocumentsPage() {
             <div className="flex items-center gap-1 bg-surface-variant dark:bg-gray-700 rounded-lg p-1">
               <button
                 onClick={() => setViewMode('list')}
-                className={`p-1.5 rounded transition-colors ${viewMode === 'list' ? 'bg-white dark:bg-gray-600 shadow-sm' : ''}`}
+                className={`p-1.5 rounded-sm transition-colors ${viewMode === 'list' ? 'bg-white dark:bg-gray-600 shadow-xs' : ''}`}
                 title="List view"
               >
                 <ListBulletIcon className="h-4 w-4 text-primary-900 dark:text-gray-200" />
               </button>
               <button
                 onClick={() => setViewMode('grid')}
-                className={`p-1.5 rounded transition-colors ${viewMode === 'grid' ? 'bg-white dark:bg-gray-600 shadow-sm' : ''}`}
+                className={`p-1.5 rounded-sm transition-colors ${viewMode === 'grid' ? 'bg-white dark:bg-gray-600 shadow-xs' : ''}`}
                 title="Grid view"
               >
                 <Squares2X2Icon className="h-4 w-4 text-primary-900 dark:text-gray-200" />

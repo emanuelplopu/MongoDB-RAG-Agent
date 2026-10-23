@@ -177,7 +177,7 @@ export default function ChatPage() {
                 <Link
                   key={index}
                   to={`/documents/${source.documentId}`}
-                  className="rounded-xl bg-white dark:bg-gray-700 px-3 py-2 text-xs shadow-sm hover:shadow-md hover:bg-primary-50 dark:hover:bg-gray-600 transition-all cursor-pointer"
+                  className="rounded-xl bg-white dark:bg-gray-700 px-3 py-2 text-xs shadow-xs hover:shadow-md hover:bg-primary-50 dark:hover:bg-gray-600 transition-all cursor-pointer"
                   title={`${source.excerpt}\n\nClick to view document details`}
                 >
                   <span className="font-medium text-primary-700 dark:text-primary-300 hover:underline">
@@ -190,7 +190,7 @@ export default function ChatPage() {
               ) : (
                 <div
                   key={index}
-                  className="rounded-xl bg-white dark:bg-gray-700 px-3 py-2 text-xs shadow-sm"
+                  className="rounded-xl bg-white dark:bg-gray-700 px-3 py-2 text-xs shadow-xs"
                   title={source.excerpt}
                 >
                   <span className="font-medium text-primary-700 dark:text-primary-300">
@@ -215,7 +215,7 @@ export default function ChatPage() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder="Ask a question about your documents..."
-              className="w-full rounded-2xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-800 px-4 py-3 pr-12 text-primary-900 dark:text-gray-200 placeholder:text-secondary dark:placeholder:text-gray-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              className="w-full rounded-2xl border border-surface-variant dark:border-gray-600 bg-white dark:bg-gray-800 px-4 py-3 pr-12 text-primary-900 dark:text-gray-200 placeholder:text-secondary dark:placeholder:text-gray-500 focus:border-primary focus:outline-hidden focus:ring-2 focus:ring-primary/20"
               disabled={isLoading}
             />
           </div>

@@ -233,7 +233,7 @@ export default function TimeSeriesChart({
 
       <div
         ref={wrapRef}
-        className="relative outline-none focus-visible:ring-2 focus-visible:ring-primary/50 rounded"
+        className="relative outline-hidden focus-visible:ring-2 focus-visible:ring-primary/50 rounded-sm"
         tabIndex={visible.length ? 0 : -1}
         onKeyDown={onKeyDown}
         onBlur={() => onHoverIndex(null)}
@@ -302,7 +302,7 @@ export default function TimeSeriesChart({
         {hoverT !== null && visible.length > 0 && (
           <div
             role="status"
-            className="pointer-events-none absolute top-1 z-10 min-w-[9rem] rounded-lg border border-gray-200 bg-white/95 px-2.5 py-1.5 text-xs shadow-md dark:border-gray-700 dark:bg-gray-900/95"
+            className="pointer-events-none absolute top-1 z-10 min-w-36 rounded-lg border border-gray-200 bg-white/95 px-2.5 py-1.5 text-xs shadow-md dark:border-gray-700 dark:bg-gray-900/95"
             style={tooltipLeft ? { right: width - x(hoverT) + 10 } : { left: x(hoverT) + 10 }}
           >
             <div style={{ color: 'var(--viz-text-secondary)' }}>{formatTime(hoverT, 0)}</div>

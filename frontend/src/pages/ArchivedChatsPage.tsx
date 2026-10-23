@@ -136,7 +136,7 @@ export default function ArchivedChatsPage() {
         )}
 
         {/* Actions bar */}
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-4 bg-surface dark:bg-gray-800 p-4 rounded-lg shadow">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-4 bg-surface dark:bg-gray-800 p-4 rounded-lg shadow-sm">
           <div className="flex items-center gap-3">
             <button
               onClick={loadArchivedSessions}
@@ -189,7 +189,7 @@ export default function ArchivedChatsPage() {
         </div>
 
         {/* Sessions list */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm overflow-hidden">
           {loading ? (
             <div className="flex justify-center py-12">
               <div className="animate-spin h-8 w-8 border-2 border-primary border-t-transparent rounded-full" />
@@ -213,7 +213,7 @@ export default function ArchivedChatsPage() {
                     type="checkbox"
                     checked={selectedIds.has(session.id)}
                     onChange={() => toggleSelection(session.id)}
-                    className="h-5 w-5 rounded border-gray-300 text-primary focus:ring-primary"
+                    className="h-5 w-5 rounded-sm border-gray-300 text-primary focus:ring-primary"
                   />
                   
                   <div className="flex-1 min-w-0">
