@@ -79,6 +79,25 @@ def test_api_patterns_are_derived_from_the_pipeline_set() -> None:
     assert {p[1:] for p in patterns} == set(ingest.SUPPORTED_INGESTION_EXTENSIONS)
 
 
+def test_discovery_sizes_files_during_the_walk(tmp_path: Path, monkeypatch) -> None:
+    """Sizes come from the walk; no per-file getsize afterwards (that cost ~20 min on 400K NAS files)."""
+    (tmp_path / "sub").mkdir()
+    small = tmp_path / "sub" / "brief.txt"
+    small.write_text("x")
+    big = tmp_path / "scan.pdf"
+    with big.open("wb") as handle:
+        handle.truncate(6 * 1024 * 1024)  # > 5 MB: processed last
+    (tmp_path / "notes.md").write_text("y")
+    walked = dict(ingest.walk_document_files(str(tmp_path), ingest.SUPPORTED_INGESTION_EXTENSIONS))
+    assert walked[str(small)] == 1 and walked[str(big)] == 6 * 1024 * 1024
+    monkeypatch.setattr(ingest.os.path, "getsize", lambda p: (_ for _ in ()).throw(AssertionError(f"getsize called for {p}")))
+    monkeypatch.setattr(ingest, "get_file_size_safe", lambda p: (_ for _ in ()).throw(AssertionError(f"get_file_size_safe called for {p}")))
+    p = ingest.DocumentIngestionPipeline.__new__(ingest.DocumentIngestionPipeline)
+    p.documents_folders = [str(tmp_path)]
+    ordered = [os.path.basename(f) for f in p._find_document_files()]
+    assert ordered == ["brief.txt", "notes.md", "scan.pdf"]
+
+
 def test_discovery_skips_appledouble_sidecars(tmp_path: Path) -> None:
     (tmp_path / "Brief.rtf").write_bytes(b"{\\rtf1 x}")
     (tmp_path / "._Brief.rtf").write_bytes(b"\x00\x05\x16\x07")

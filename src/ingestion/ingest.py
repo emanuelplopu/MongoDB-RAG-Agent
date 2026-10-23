@@ -12,7 +12,7 @@ import logging
 import glob
 import hashlib
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Set, Tuple, Callable, Awaitable
+from typing import List, Dict, Any, Iterator, Optional, Set, Tuple, Callable, Awaitable
 from datetime import datetime
 import argparse
 from dataclasses import dataclass
@@ -1038,6 +1038,50 @@ def is_sidecar_file(filename: str) -> bool:
     return filename.startswith(_APPLEDOUBLE_PREFIX)
 
 
+def walk_document_files(folder: str, extensions: frozenset) -> Iterator[Tuple[str, int]]:
+    """Yield ``(path, size)`` for every supported file below ``folder`` in one pass.
+
+    Uses ``os.scandir`` and takes each file's size right after its directory was listed:
+    on CIFS/SMB mounts the kernel fills the attribute cache from the directory query, so
+    that ``stat`` is answered locally, while sizing the files after the whole walk (as the
+    pipeline did until 2026-10-24) sent one network round trip per file, ~20 min for 400K
+    files on every start and resume. AppleDouble ``._`` forks and symlinks are skipped;
+    unreadable directories are logged and skipped.
+
+    Args:
+        folder: Root directory (an existing path).
+        extensions: Lower-case extensions to include, with the dot.
+
+    Yields:
+        The file path and its size in bytes (0 when it cannot be read).
+    """
+    stack = [folder]
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                            continue
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                    except OSError:
+                        continue
+                    if is_sidecar_file(entry.name):
+                        continue
+                    if os.path.splitext(entry.name)[1].lower() not in extensions:
+                        continue
+                    try:
+                        size = entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        size = 0
+                    yield entry.path, size
+        except OSError as exc:
+            logger.warning(f"Cannot list {current}: {exc}")
+
+
 def legacy_dos_text(raw: bytes) -> str:
     """Readable text of a DOS word-processor file of the ``Pittner Archiv`` kind.
 
@@ -1899,32 +1943,30 @@ class DocumentIngestionPipeline:
         # Supported extensions (shared with the pre-ingestion estimator).
         extensions = SUPPORTED_INGESTION_EXTENSIONS
 
-        all_files = []
-        
+        all_files: List[str] = []
+        sizes: Dict[str, int] = {}
+
         for folder in self.documents_folders:
             if not os.path.exists(folder):
                 logger.warning(f"Documents folder not found: {folder}")
                 continue
-            
-            # Single-pass directory traversal - much faster than multiple glob calls
-            for root, dirs, files in os.walk(folder):
-                for filename in files:
-                    if is_sidecar_file(filename):
-                        continue  # macOS "._name" resource forks next to the real files
-                    ext = os.path.splitext(filename)[1].lower()
-                    if ext in extensions:
-                        all_files.append(os.path.join(root, filename))
-        
+
+            # Single pass with the sizes taken while each directory listing is fresh
+            # (see walk_document_files); sizing afterwards cost ~20 min for 400K files
+            for path, size in walk_document_files(folder, extensions):
+                all_files.append(path)
+                sizes[path] = size
+
         if not all_files:
             logger.error(f"No document files found in folders: {self.documents_folders}")
             return []
-        
+
         # Sort files for optimal processing order
-        all_files = self._sort_files_for_processing(all_files)
-        
+        all_files = self._sort_files_for_processing(all_files, sizes)
+
         return all_files
-    
-    def _sort_files_for_processing(self, files: List[str]) -> List[str]:
+
+    def _sort_files_for_processing(self, files: List[str], sizes: Optional[Dict[str, int]] = None) -> List[str]:
         """
         Sort files for optimal processing order:
         1. Small text files first (fastest)
@@ -1936,7 +1978,9 @@ class DocumentIngestionPipeline:
         
         Args:
             files: List of file paths
-            
+            sizes: File sizes in bytes collected during discovery; files missing from it
+                are sized with one ``stat`` each (slow on network shares).
+
         Returns:
             Sorted list of file paths
         """
@@ -1963,27 +2007,31 @@ class DocumentIngestionPipeline:
         }
         
         SIZE_THRESHOLD = 5 * 1024 * 1024  # 5MB
-        
+        known_sizes = sizes or {}
+
+        def file_size(file_path: str) -> int:
+            size = known_sizes.get(file_path)
+            if size is None:
+                size = get_file_size_safe(file_path)
+            return size
+
         def get_sort_key(file_path: str) -> tuple:
             """Return (is_large, type_priority, size, filename) for sorting."""
             ext = os.path.splitext(file_path)[1].lower()
             type_priority = TYPE_PRIORITY.get(ext, 100)  # Unknown types last
-            
-            try:
-                size = os.path.getsize(file_path)
-            except OSError:
-                size = 0
-            
+            size = file_size(file_path)
             is_large = size > SIZE_THRESHOLD
-            
+
             # Sort by: is_large (False first), type_priority, size, filename
             return (is_large, type_priority, size, os.path.basename(file_path).lower())
-        
-        sorted_files = sorted(files, key=get_sort_key)
-        
-        # Log the processing order summary
-        small_count = sum(1 for f in sorted_files if os.path.getsize(f) <= SIZE_THRESHOLD)
-        large_count = len(sorted_files) - small_count
+
+        keyed = [(get_sort_key(f), f) for f in files]
+        keyed.sort(key=lambda item: item[0])
+        sorted_files = [f for _, f in keyed]
+
+        # Log the processing order summary (from the keys: no second stat per file)
+        large_count = sum(1 for key, _ in keyed if key[0])
+        small_count = len(sorted_files) - large_count
         
         if large_count > 0:
             logger.info(
