@@ -27,7 +27,11 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
   const [isSidebarLoading, setIsSidebarLoading] = useState(true)
   const [models, setModels] = useState<LLMModel[]>([])
   const [modelPricing, setModelPricing] = useState<ModelPricingInfo[]>([])
-  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set())
+  // Collapsed folders start from the persisted set (lazy initializer instead of a mount effect)
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => {
+    const saved = localStorage.getItem(STORAGE_KEYS.COLLAPSED_FOLDERS)
+    return saved ? new Set<string>(JSON.parse(saved)) : new Set<string>()
+  })
   const [editingTitle, setEditingTitle] = useState<string | null>(null)
   const [editingTitleValue, setEditingTitleValue] = useState('')
   const [showNewFolder, setShowNewFolder] = useState(false)
@@ -43,14 +47,6 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
   const setPendingMessage = useCallback((message: string | null, attachments?: AttachmentInfo[] | null) => {
     setPendingMessageState(message)
     setPendingAttachmentsState(attachments ?? null)
-  }, [])
-
-  // Load collapsed folders from localStorage
-  useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.COLLAPSED_FOLDERS)
-    if (saved) {
-      setCollapsedFolders(new Set(JSON.parse(saved)))
-    }
   }, [])
 
   // Save collapsed folders to localStorage
@@ -104,10 +100,14 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     // Only load sessions after auth is done loading
     if (!isAuthLoading) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- sidebar load once auth is known; loadSessions flips the loading flag before awaiting the API
       loadSessions()
       loadModels()
     }
   }, [loadSessions, loadModels, isAuthLoading, user?.id])
+
+  // Session handlers compare against the id only, so they do not change identity on every session update
+  const currentSessionId = currentSession?.id
 
   // Create new session
   const handleNewChat = useCallback(async (folderId?: string) => {
@@ -148,7 +148,7 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
     try {
       await sessionsApi.delete(sessionId)
       setSessions(prev => prev.filter(s => s.id !== sessionId))
-      if (currentSession?.id === sessionId) {
+      if (currentSessionId === sessionId) {
         setCurrentSession(null)
       }
       localStorage.removeItem(STORAGE_KEYS.DRAFT + sessionId)
@@ -156,7 +156,7 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
       console.error('Failed to delete session:', err)
     }
     setContextMenu(null)
-  }, [currentSession?.id])
+  }, [currentSessionId])
 
   // Pin/unpin session
   const handleTogglePin = useCallback(async (sessionId: string, isPinned: boolean) => {
@@ -165,14 +165,14 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
       setSessions(prev => prev.map(s =>
         s.id === sessionId ? { ...s, is_pinned: !isPinned } : s
       ))
-      if (currentSession?.id === sessionId) {
+      if (currentSessionId === sessionId) {
         setCurrentSession(prev => prev ? { ...prev, is_pinned: !isPinned } : null)
       }
     } catch (err) {
       console.error('Failed to toggle pin:', err)
     }
     setContextMenu(null)
-  }, [currentSession?.id])
+  }, [currentSessionId])
 
   // Update session title
   const handleUpdateTitle = useCallback(async (sessionId: string) => {
@@ -185,14 +185,14 @@ export function ChatSidebarProvider({ children }: { children: ReactNode }) {
       setSessions(prev => prev.map(s =>
         s.id === sessionId ? { ...s, title: editingTitleValue.trim() } : s
       ))
-      if (currentSession?.id === sessionId) {
+      if (currentSessionId === sessionId) {
         setCurrentSession(prev => prev ? { ...prev, title: editingTitleValue.trim() } : null)
       }
     } catch (err) {
       console.error('Failed to update title:', err)
     }
     setEditingTitle(null)
-  }, [editingTitleValue, currentSession?.id])
+  }, [editingTitleValue, currentSessionId])
 
   // Create folder
   const handleCreateFolder = useCallback(async () => {

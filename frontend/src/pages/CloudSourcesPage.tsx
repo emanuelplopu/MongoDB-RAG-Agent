@@ -83,6 +83,7 @@ export default function CloudSourcesPage() {
   
   useEffect(() => {
     if (!authLoading && user) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- data load once auth is known; fetchData clears the error state before awaiting the API
       fetchData()
     }
   }, [authLoading, user, fetchData])
@@ -99,7 +100,7 @@ export default function CloudSourcesPage() {
           displayName
         )
         // Redirect to OAuth provider
-        window.location.href = authorization_url
+        window.location.assign(authorization_url)
       } catch (err) {
         setError(getErrorMessage(err, 'Failed to start OAuth flow'))
       }

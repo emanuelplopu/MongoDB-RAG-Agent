@@ -3,7 +3,7 @@
  * Shows recent searches, popular queries, and AI-powered suggestions
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import {
   ClockIcon,
   MagnifyingGlassIcon,
@@ -66,60 +66,78 @@ export default function SearchSuggestions({
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
-  // Build suggestions list
-  const suggestions: SearchSuggestion[] = []
+  // Build suggestions list (memoized so the keyboard handler keeps a stable dependency)
+  const suggestions = useMemo<SearchSuggestion[]>(() => {
+    const list: SearchSuggestion[] = []
 
-  // Add recent searches (filtered by query)
-  const filteredRecent = recentSearches
-    .filter(s => !query || s.toLowerCase().includes(query.toLowerCase()))
-    .slice(0, maxRecent)
-  
-  filteredRecent.forEach((text, i) => {
-    suggestions.push({
-      id: `recent-${i}`,
-      text,
-      type: 'recent',
-      icon: ClockIcon,
-    })
-  })
-
-  // Add popular suggestions (filtered by query)
-  if (showTrending && popularSuggestions.length > 0) {
-    const filteredPopular = popularSuggestions
+    // Add recent searches (filtered by query)
+    const filteredRecent = recentSearches
       .filter(s => !query || s.toLowerCase().includes(query.toLowerCase()))
-      .filter(s => !filteredRecent.includes(s))
-      .slice(0, 3)
-    
-    filteredPopular.forEach((text, i) => {
-      suggestions.push({
-        id: `popular-${i}`,
+      .slice(0, maxRecent)
+
+    filteredRecent.forEach((text, i) => {
+      list.push({
+        id: `recent-${i}`,
         text,
-        type: 'popular',
-        icon: ArrowTrendingUpIcon,
+        type: 'recent',
+        icon: ClockIcon,
       })
     })
-  }
 
-  // Add AI suggestions based on query (simple autocomplete)
-  if (query.length >= 2) {
-    const aiSuggestions = generateSuggestions(query)
-      .filter(s => !suggestions.some(existing => existing.text === s))
-      .slice(0, 3)
-    
-    aiSuggestions.forEach((text, i) => {
-      suggestions.push({
-        id: `suggestion-${i}`,
-        text,
-        type: 'suggestion',
-        icon: LightBulbIcon,
+    // Add popular suggestions (filtered by query)
+    if (showTrending && popularSuggestions.length > 0) {
+      const filteredPopular = popularSuggestions
+        .filter(s => !query || s.toLowerCase().includes(query.toLowerCase()))
+        .filter(s => !filteredRecent.includes(s))
+        .slice(0, 3)
+
+      filteredPopular.forEach((text, i) => {
+        list.push({
+          id: `popular-${i}`,
+          text,
+          type: 'popular',
+          icon: ArrowTrendingUpIcon,
+        })
       })
-    })
-  }
+    }
 
-  // Reset highlight when suggestions change
-  useEffect(() => {
+    // Add AI suggestions based on query (simple autocomplete)
+    if (query.length >= 2) {
+      const aiSuggestions = generateSuggestions(query)
+        .filter(s => !list.some(existing => existing.text === s))
+        .slice(0, 3)
+
+      aiSuggestions.forEach((text, i) => {
+        list.push({
+          id: `suggestion-${i}`,
+          text,
+          type: 'suggestion',
+          icon: LightBulbIcon,
+        })
+      })
+    }
+
+    return list
+  }, [recentSearches, query, maxRecent, showTrending, popularSuggestions])
+
+  // Reset the highlight when the suggestion list changes. State is adjusted during
+  // render (react.dev: "Storing information from previous renders") instead of in an
+  // effect, so the stale index never reaches the screen.
+  const [prevSuggestionCount, setPrevSuggestionCount] = useState(suggestions.length)
+  if (prevSuggestionCount !== suggestions.length) {
+    setPrevSuggestionCount(suggestions.length)
     setHighlightedIndex(-1)
-  }, [suggestions.length])
+  }
+
+  // Handle selection
+  const handleSelect = useCallback((text: string) => {
+    // Add to recent searches
+    const newRecent = [text, ...recentSearches.filter(s => s !== text)].slice(0, 10)
+    setRecentSearches(newRecent)
+
+    onSelect(text)
+    onClose()
+  }, [recentSearches, setRecentSearches, onSelect, onClose])
 
   // Handle keyboard navigation
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -154,17 +172,7 @@ export default function SearchSuggestions({
         onClose()
         break
     }
-  }, [isOpen, highlightedIndex, suggestions, query, onOpen, onClose])
-
-  // Handle selection
-  const handleSelect = (text: string) => {
-    // Add to recent searches
-    const newRecent = [text, ...recentSearches.filter(s => s !== text)].slice(0, 10)
-    setRecentSearches(newRecent)
-    
-    onSelect(text)
-    onClose()
-  }
+  }, [isOpen, highlightedIndex, suggestions, query, onOpen, onClose, handleSelect])
 
   // Handle removing a recent search
   const handleRemoveRecent = (text: string, e: React.MouseEvent) => {

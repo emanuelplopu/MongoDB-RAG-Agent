@@ -57,6 +57,7 @@ function ActiveRequestRow({ request }: { request: DebugActiveRequest }) {
   const [elapsed, setElapsed] = useState(request.elapsed_ms)
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- restarts the local timer from the server-reported elapsed time on every poll
     setElapsed(request.elapsed_ms)
     const interval = setInterval(() => {
       setElapsed(prev => prev + 1000)
@@ -262,7 +263,7 @@ export default function LiveDebugPage() {
   const [activeRequests, setActiveRequests] = useState<DebugActiveRequest[]>([])
   const [recentActivity, setRecentActivity] = useState<DebugActivityItem[]>([])
   const [expandedRequest, setExpandedRequest] = useState<string | null>(null)
-  const [lastRefresh, setLastRefresh] = useState(Date.now())
+  const [lastRefresh, setLastRefresh] = useState(() => Date.now())
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -296,6 +297,7 @@ export default function LiveDebugPage() {
 
   // Poll every 5 seconds
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- first poll; fetchAll updates state synchronously only in its catch/finally paths
     fetchAll()
     intervalRef.current = setInterval(fetchAll, 5000)
     return () => {

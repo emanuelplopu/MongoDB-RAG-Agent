@@ -106,6 +106,7 @@ export default function FolderPicker({
   )
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- folder listing load; fetchFolder flips the loading flag before awaiting the API
     fetchFolder(initialFolderId)
   }, [initialFolderId, fetchFolder])
 

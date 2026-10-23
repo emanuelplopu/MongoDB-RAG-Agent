@@ -19,17 +19,18 @@ export default function StatusPage() {
   
   const [dashboard, setDashboard] = useState<StatusDashboard | null>(null)
   const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  
+  // Translation key of the current error (translated at render time, so it follows the language)
+  const [errorKey, setErrorKey] = useState<string | null>(null)
+
   const fetchData = useCallback(async () => {
     setIsLoading(true)
-    setError(null)
+    setErrorKey(null)
     try {
       const data = await statusApi.getDashboard()
       setDashboard(data)
     } catch (err) {
       console.error('Error fetching status:', err)
-      setError(t('status.failedToLoad'))
+      setErrorKey('status.failedToLoad')
     } finally {
       setIsLoading(false)
     }
@@ -43,6 +44,7 @@ export default function StatusPage() {
   
   useEffect(() => {
     if (!authLoading && user?.is_admin) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- data load once auth is known; fetchData flips the loading flag before awaiting the API
       fetchData()
     }
   }, [authLoading, user, fetchData])
@@ -91,8 +93,8 @@ export default function StatusPage() {
         </button>
       </div>
 
-      {error && (
-        <div className="rounded-2xl bg-red-50 dark:bg-red-900/30 p-4 text-red-700 dark:text-red-400">{error}</div>
+      {errorKey && (
+        <div className="rounded-2xl bg-red-50 dark:bg-red-900/30 p-4 text-red-700 dark:text-red-400">{t(errorKey)}</div>
       )}
 
       {dashboard && (

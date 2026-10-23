@@ -134,7 +134,7 @@ export default function StrategyTracePanel({ trace, liveNodes }: StrategyTracePa
     return max || 1
   }, [nodes])
 
-  const adaptiveScores = trace.adaptive_scores ?? []
+  const adaptiveScores = useMemo(() => trace.adaptive_scores ?? [], [trace.adaptive_scores])
   const hasAdaptiveScores = adaptiveScores.length > 0
   const budget: ContextBudgetSummary | null = trace.context_budget ?? null
 

@@ -317,6 +317,7 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ template, onSave, onActivate,
     if (template) {
       const activeVersion = template.versions.find(v => v.version === template.active_version)
       if (activeVersion) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- loads the editor fields from the selected template's active version
         setSystemPrompt(activeVersion.system_prompt)
         setTools(activeVersion.tools)
         setSelectedVersion(activeVersion.version)
@@ -540,7 +541,9 @@ const PromptManagementPage: React.FC = () => {
   }, [selectedTemplate, t])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial load; loadTemplates settles the loading flag synchronously on failure
     loadTemplates()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once on mount; loadTemplates is called again explicitly after saves and depends on the selection
   }, [])
 
   const handleSave = async (data: { system_prompt: string; tools: ToolSchema[]; notes: string }) => {

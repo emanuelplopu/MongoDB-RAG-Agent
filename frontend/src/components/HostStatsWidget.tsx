@@ -125,6 +125,7 @@ export default function HostStatsWidget() {
   // Poll while mounted and visible to a superadmin.
   useEffect(() => {
     if (!isSuper || dismissed) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- first poll; fetchStats updates state synchronously only when a request is already in flight
     fetchStats()
     const timer = setInterval(fetchStats, POLL_INTERVAL_MS)
     return () => clearInterval(timer)

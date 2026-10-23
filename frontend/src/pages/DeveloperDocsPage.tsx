@@ -1,5 +1,5 @@
 import { getAuthHeaders } from '../api/client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 
 interface ApiEndpoint {
@@ -31,11 +31,7 @@ export default function DeveloperDocsPage() {
   const [selectedTag, setSelectedTag] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
 
-  useEffect(() => {
-    fetchOpenApiSpec()
-  }, [])
-
-  const fetchOpenApiSpec = async () => {
+  const fetchOpenApiSpec = useCallback(async () => {
     try {
       setError(null)
       const response = await fetch(`${API_BASE_URL}/openapi.json`, { headers: getAuthHeaders() })
@@ -82,7 +78,12 @@ export default function DeveloperDocsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial load; fetchOpenApiSpec clears the error state before awaiting the spec
+    fetchOpenApiSpec()
+  }, [fetchOpenApiSpec])
 
   const getMethodColor = (method: string) => {
     switch (method) {

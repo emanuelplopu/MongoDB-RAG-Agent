@@ -107,9 +107,11 @@ function ProviderCard({
     } else {
       onUpdate(null)
     }
-  }, [providerType, model, baseUrl, apiKey, truncateDim])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onUpdate is an inline parent callback; depending on it would re-run on every parent render
+  }, [providerType, model, baseUrl, apiKey, truncateDim, index])
 
   // Set default URL when provider type changes
+  /* eslint-disable react-hooks/set-state-in-effect -- resets the URL and model fields when the provider type changes */
   useEffect(() => {
     if (providerType === 'ollama' && availableProviders?.ollama?.url) {
       setBaseUrl(availableProviders.ollama.url)
@@ -120,6 +122,7 @@ function ProviderCard({
     }
     setModel('')
   }, [providerType, availableProviders])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const providerInfo = PROVIDER_TYPES.find((p) => p.id === providerType)
   const Icon = providerInfo?.icon || BeakerIcon
@@ -492,6 +495,7 @@ export default function EmbeddingBenchmarkPage() {
 
   useEffect(() => {
     if (!authLoading && user?.is_admin) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- provider load once auth is known
       loadProviders()
     }
   }, [authLoading, user, loadProviders])
@@ -629,7 +633,7 @@ export default function EmbeddingBenchmarkPage() {
   }
 
   // Load history
-  const loadHistory = async () => {
+  const loadHistory = useCallback(async () => {
     setLoadingHistory(true)
     try {
       if (mode === 'checks') {
@@ -644,13 +648,14 @@ export default function EmbeddingBenchmarkPage() {
     } finally {
       setLoadingHistory(false)
     }
-  }
+  }, [mode])
 
   useEffect(() => {
     if (showHistory) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- history load when the panel opens or the mode changes; loadHistory flips its loading flag before awaiting the API
       loadHistory()
     }
-  }, [showHistory, mode])
+  }, [showHistory, loadHistory])
 
   // Check if we can run
   const validProviderCount = providers.filter((p) => p !== null).length

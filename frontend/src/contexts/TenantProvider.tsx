@@ -21,8 +21,10 @@ function resolveTenantId(): string {
   return 'recallhub'
 }
 
+/** Fixed per build, so it is resolved once at module load. */
+const buildTimeTenantId = resolveTenantId()
+
 export function TenantProvider({ children }: { children: ReactNode }) {
-  const buildTimeTenantId = resolveTenantId()
   const [tenant, setTenant] = useState<TenantConfig>(() => getTenantConfig(buildTimeTenantId))
   const [tenantId, setTenantId] = useState(buildTimeTenantId)
   const [isLoading, setIsLoading] = useState(true)

@@ -44,6 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Check for existing session on mount
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial token validation; without a token it settles the loading flag synchronously
     validateAuth(true)
   }, [validateAuth])
 

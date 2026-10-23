@@ -89,6 +89,7 @@ export default function TelemetryHistoryPage() {
 
   useEffect(() => {
     if (!superAdmin) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- history load on mount and range change; load flips the loading flag before awaiting the API
     load()
     try {
       localStorage.setItem(RANGE_KEY, String(hours))

@@ -31,14 +31,9 @@ export default function ThemeSwitcher({ compact = true }: ThemeSwitcherProps) {
     { value: 'system', icon: ComputerDesktopIcon, labelKey: 'theme.system' },
   ]
 
-  // Get the current display icon based on theme setting
-  const getCurrentIcon = () => {
-    if (theme === 'system') {
-      return resolvedTheme === 'dark' ? MoonIcon : SunIcon
-    }
-    return theme === 'dark' ? MoonIcon : SunIcon
-  }
-  const CurrentIcon = getCurrentIcon()
+  // Pick the display icon from the resolved appearance (a static component, not one created per render)
+  const effectiveTheme = theme === 'system' ? resolvedTheme : theme
+  const CurrentIcon = effectiveTheme === 'dark' ? MoonIcon : SunIcon
 
   return (
     <div className="relative" ref={menuRef}>

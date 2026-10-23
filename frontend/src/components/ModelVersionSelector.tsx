@@ -5,7 +5,7 @@
  * with detailed information about capabilities, pricing, and compatibility.
  */
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import {
   MagnifyingGlassIcon, 
   ArrowsRightLeftIcon,
@@ -39,7 +39,6 @@ const ModelVersionSelector: React.FC<ModelVersionSelectorProps> = ({
   className = ''
 }) => {
   const [models, setModels] = useState<ModelVersion[]>([])
-  const [filteredModels, setFilteredModels] = useState<ModelVersion[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
@@ -51,16 +50,6 @@ const ModelVersionSelector: React.FC<ModelVersionSelectorProps> = ({
   const [switching, setSwitching] = useState(false)
   const [switchSuccess, setSwitchSuccess] = useState<string | null>(null)
   const [switchError, setSwitchError] = useState<string | null>(null)
-
-  // Load models on mount
-  useEffect(() => {
-    loadModels()
-  }, [])
-
-  // Filter models when search term or filters change
-  useEffect(() => {
-    filterModels()
-  }, [models, searchTerm, selectedProvider, selectedType, showDeprecated, sortBy])
 
   const loadModels = async () => {
     try {
@@ -90,7 +79,15 @@ const ModelVersionSelector: React.FC<ModelVersionSelectorProps> = ({
     }
   }
 
-  const filterModels = () => {
+  // Load models on mount
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial load; loadModels flips the loading flag before awaiting the API
+    loadModels()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once on mount; sorting and the deprecated toggle are applied client-side in filteredModels
+  }, [])
+
+  // Filter and sort the loaded models whenever the search term or a filter changes
+  const filteredModels = useMemo(() => {
     let filtered = [...models]
     
     // Apply search filter
@@ -133,9 +130,9 @@ const ModelVersionSelector: React.FC<ModelVersionSelectorProps> = ({
         return a.name.localeCompare(b.name)
       }
     })
-    
-    setFilteredModels(filtered)
-  }
+
+    return filtered
+  }, [models, searchTerm, selectedProvider, selectedType, showDeprecated, sortBy])
 
   const handleSwitchModel = async (modelType: 'orchestrator' | 'worker' | 'embedding', modelId: string) => {
     if (!onModelChange) return

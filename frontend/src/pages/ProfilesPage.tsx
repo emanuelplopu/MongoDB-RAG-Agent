@@ -96,7 +96,9 @@ export default function ProfilesPage() {
   }, [isAuthLoading, user, navigate])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial load; fetchProfiles flips the loading flag before awaiting the API
     fetchProfiles()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once on mount; fetchProfiles is called again explicitly after every mutation
   }, [])
 
   // Fetch access matrix for admins
@@ -118,8 +120,10 @@ export default function ProfilesPage() {
 
   useEffect(() => {
     if (showAccessMatrix && user?.is_admin) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- matrix load when the panel opens; fetchAccessMatrix flips its loading flag before awaiting the API
       fetchAccessMatrix()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-runs only when the panel opens or the role changes; fetchAccessMatrix is called again explicitly after toggles
   }, [showAccessMatrix, user?.is_admin])
 
   const handleToggleAccess = async (userId: string, profileKey: string, currentlyHasAccess: boolean) => {

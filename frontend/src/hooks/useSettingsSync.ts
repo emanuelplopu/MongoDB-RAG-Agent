@@ -62,18 +62,6 @@ export function useSettingsSync() {
   const pendingUpdatesRef = useRef<UserPreferencesSync>({})
   const isMountedRef = useRef(true)
 
-  useEffect(() => {
-    isMountedRef.current = true
-    return () => {
-      isMountedRef.current = false
-      // Flush any pending updates before unmount
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current)
-        flushToDb()
-      }
-    }
-  }, [])
-
   /**
    * Pull preferences from DB and merge into localStorage.
    * Returns the merged preferences so callers can apply them.
@@ -119,6 +107,18 @@ export function useSettingsSync() {
       pendingUpdatesRef.current = { ...updates, ...pendingUpdatesRef.current }
     }
   }, [])
+
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+      // Flush any pending updates before unmount
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current)
+        flushToDb()
+      }
+    }
+  }, [flushToDb])
 
   /**
    * Queue a partial preference update. Writes to localStorage immediately,

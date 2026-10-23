@@ -34,7 +34,9 @@ export default function ServerFolderPicker({ onSelect, onClose, initialPath }: S
   // hook hands out a new function per render (test mocks do); otherwise the
   // initial-load effect below would fire on every render.
   const tRef = useRef(t)
-  tRef.current = t
+  useEffect(() => {
+    tRef.current = t
+  })
 
   const load = useCallback(async (path: string | null) => {
     setIsLoading(true)
@@ -51,6 +53,7 @@ export default function ServerFolderPicker({ onSelect, onClose, initialPath }: S
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- listing load for the initial path; load flips the loading flag before awaiting the API
     load(initialPath ?? null)
   }, [initialPath, load])
 

@@ -188,6 +188,7 @@ export default function BackupManagementPage() {
   }, [filterType, filterProfile])
   
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data load on mount and filter change; loadData flips the loading flag before awaiting the API
     loadData()
   }, [loadData])
   

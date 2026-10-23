@@ -201,6 +201,7 @@ export default function Layout() {
 
   useEffect(() => {
     if (isAuthenticated && !isAuthLoading) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- profile list load once auth is known
       fetchProfiles()
     }
   }, [isAuthenticated, isAuthLoading, fetchProfiles])
@@ -350,6 +351,7 @@ export default function Layout() {
   }, [isAuthenticated, user?.is_admin, dismissedWarnings, t])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- index check whenever auth, role, dismissals or language change
     checkIndexes()
   }, [checkIndexes])
 
@@ -364,7 +366,9 @@ export default function Layout() {
     navigate('/login')
   }
 
-  const SidebarContent = () => (
+  // Rendered in both the mobile drawer and the desktop column; a JSX value rather than
+  // an inline component, so React keeps the subtree (and its DOM) across re-renders.
+  const sidebarContent = (
     <div className="flex flex-col h-full min-h-0">
       {/* Top Section - ChatGPT-style header */}
       <div className="p-3 shrink-0 space-y-1">
@@ -935,7 +939,7 @@ export default function Layout() {
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <SidebarContent />
+        {sidebarContent}
       </div>
 
       {/* Desktop sidebar - collapsible */}
@@ -950,7 +954,7 @@ export default function Layout() {
         <div className={`flex grow flex-col bg-surface dark:bg-gray-800 shadow-elevation-1 transition-all duration-300 min-h-0 ${
           desktopSidebarVisible ? 'w-72 opacity-100' : 'w-0 opacity-0 overflow-hidden pointer-events-none absolute'
         }`}>
-          <SidebarContent />
+          {sidebarContent}
         </div>
 
         {/* Collapsed icon column */}

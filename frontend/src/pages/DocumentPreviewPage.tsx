@@ -138,6 +138,7 @@ export default function DocumentPreviewPage() {
     }
 
     fetchDocument()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetches when the routed document changes; `t` only formats the failure message
   }, [documentId])
 
   const handleOpenExplorer = async () => {

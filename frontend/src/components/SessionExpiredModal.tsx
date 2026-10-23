@@ -26,6 +26,7 @@ export default function SessionExpiredModal({
   // Handle open/close animation
   useEffect(() => {
     if (isOpen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- two-phase mount/animate transition driven by the isOpen prop
       setIsVisible(true)
       // Small delay for animation
       requestAnimationFrame(() => {

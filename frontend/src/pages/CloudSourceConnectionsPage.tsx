@@ -138,10 +138,12 @@ export default function CloudSourceConnectionsPage() {
 
   useEffect(() => {
     if (!authLoading && user) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- connection load once auth is known; fetchConnections clears the error state before awaiting the API
       fetchConnections()
     }
   }, [authLoading, user, fetchConnections])
 
+  /* eslint-disable react-hooks/set-state-in-effect -- loads the routed connection, or clears the selection when none is routed */
   useEffect(() => {
     if (connectionId) {
       fetchConnectionDetails(connectionId)
@@ -150,6 +152,7 @@ export default function CloudSourceConnectionsPage() {
       setSyncConfigs([])
     }
   }, [connectionId, fetchConnectionDetails])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const handleTestConnection = async () => {
     if (!selectedConnection) return

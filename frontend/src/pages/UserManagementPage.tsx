@@ -65,7 +65,9 @@ export default function UserManagementPage() {
   }
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial load; loadUsers flips the loading flag before awaiting the API
     loadUsers()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once on mount; loadUsers is called again explicitly after every mutation
   }, [])
 
   const handleCreateUser = async (e: React.FormEvent) => {
