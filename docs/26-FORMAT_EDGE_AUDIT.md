@@ -152,7 +152,7 @@ Tests: `backend/tests/test_image_only_pdf_ocr.py`.
    transcription for `.mp4`/`.mov` once the audio path is fixed.
 
 Raw per-file results, extracted text samples and the manifest live in
-`C:\RecallHub-Verify\bench\format-edge-2018-10-18\` (outside the repo; confidential, not committed).
+`C:\RecallHub-Verify\bench\format-edge-2026-10-18\` (outside the repo; confidential, not committed).
 
 ## Follow-up 2026-10-23: every content-bearing type on the NAS is now read
 
