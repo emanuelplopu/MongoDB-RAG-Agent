@@ -133,9 +133,10 @@ export default function MarkdownRenderer({
 }: MarkdownRendererProps) {
   const navigate = useNavigate()
 
+  // react-markdown 10 has no className prop; the wrapper carries the classes.
   return (
+    <div className={`prose prose-sm max-w-none dark:prose-invert overflow-x-auto ${className}`}>
     <ReactMarkdown
-      className={`prose prose-sm max-w-none dark:prose-invert overflow-x-auto ${className}`}
       components={{
         // Code blocks with copy button
         code({ className, children }) {
@@ -259,5 +260,6 @@ export default function MarkdownRenderer({
     >
       {content}
     </ReactMarkdown>
+    </div>
   )
 }
