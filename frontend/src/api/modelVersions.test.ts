@@ -35,7 +35,7 @@ describe('modelVersionsApi', () => {
   })
 
   it('configures the axios client and auth interceptors', async () => {
-    const modelVersionsApi = await loadModule()
+    await loadModule()
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     expect(create).toHaveBeenCalledWith({
