@@ -94,7 +94,7 @@ export function useEscapeKey(handler: () => void, enabled: boolean = true): void
 /**
  * Hook for trapping focus within a container (useful for modals)
  */
-export function useFocusTrap(containerRef: React.RefObject<HTMLElement>, enabled: boolean = true): void {
+export function useFocusTrap(containerRef: React.RefObject<HTMLElement | null>, enabled: boolean = true): void {
   useEffect(() => {
     if (!enabled || !containerRef.current) return
 

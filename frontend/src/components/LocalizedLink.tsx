@@ -1,5 +1,5 @@
 import { Link as RouterLink, LinkProps as RouterLinkProps, useNavigate } from 'react-router-dom'
-import { forwardRef, useCallback } from 'react'
+import { Ref, useCallback } from 'react'
 import { useLanguage } from '../contexts/LanguageContext'
 import { supportedLanguages, SupportedLanguage } from '../i18n'
 
@@ -38,18 +38,16 @@ export function useLocalizedNavigate() {
 // Localized Link component
 interface LocalizedLinkProps extends Omit<RouterLinkProps, 'to'> {
   to: string
+  /** React 19: `ref` is an ordinary prop, no forwardRef needed. */
+  ref?: Ref<HTMLAnchorElement>
 }
 
-export const LocalizedLink = forwardRef<HTMLAnchorElement, LocalizedLinkProps>(
-  ({ to, children, ...props }, ref) => {
-    const getLocalizedPath = useLocalizedPath()
-    
-    return (
-      <RouterLink ref={ref} to={getLocalizedPath(to)} {...props}>
-        {children}
-      </RouterLink>
-    )
-  }
-)
+export function LocalizedLink({ to, children, ref, ...props }: LocalizedLinkProps) {
+  const getLocalizedPath = useLocalizedPath()
 
-LocalizedLink.displayName = 'LocalizedLink'
+  return (
+    <RouterLink ref={ref} to={getLocalizedPath(to)} {...props}>
+      {children}
+    </RouterLink>
+  )
+}
