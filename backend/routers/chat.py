@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from backend.models.schemas import ChatRequest, ChatResponse, SearchType
 from backend.core.config import settings
+from backend.services.query_embedding import embed_query
 from backend.tools.browser_tool import browse_url, BrowserToolResult
 from backend.agent.tool_gate import ToolGate
 from backend.services.activity_logger import ActivityLogger, NullActivityLogger
@@ -23,20 +24,8 @@ _conversations: dict = {}
 
 
 async def get_embedding(text: str) -> list:
-    """Generate embedding for text."""
-    from openai import AsyncOpenAI
-    
-    client = AsyncOpenAI(
-        api_key=settings.embedding_api_key,
-        base_url=settings.embedding_base_url
-    )
-    
-    response = await client.embeddings.create(
-        model=settings.embedding_model,
-        input=text
-    )
-    
-    return response.data[0].embedding
+    """Embed a search query with the configured model (query prefix applied)."""
+    return await embed_query(text)
 
 
 from dataclasses import dataclass, field

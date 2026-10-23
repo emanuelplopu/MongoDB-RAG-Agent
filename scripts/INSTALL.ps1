@@ -565,7 +565,7 @@ if (-not $SkipDesktopApp) {
         $altPath = Join-Path $altPath "tray-app"
         $altPath = Join-Path $altPath "bin"
         $altPath = Join-Path $altPath "Release"
-        $altPath = Join-Path $altPath "net8.0-windows"
+        $altPath = Join-Path $altPath "net10.0-windows"
         $altPath = Join-Path $altPath "win-x64"
         $altPath = Join-Path $altPath "publish"
         $altPath = Join-Path $altPath "RecallHubTray.exe"

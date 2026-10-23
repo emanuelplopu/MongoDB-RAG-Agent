@@ -88,7 +88,7 @@ if (-not $SourceDir) {
     $candidates = @(
         (Join-Path $PSScriptRoot "..\host-agent"),                                         # installer output layout
         (Join-Path $PSScriptRoot "..\output\host-agent"),                                  # installer\scripts in the repo after build.ps1
-        (Join-Path $PSScriptRoot "..\host-agent\bin\Release\net8.0-windows\win-x64\publish") # dotnet publish in the repo
+        (Join-Path $PSScriptRoot "..\host-agent\bin\Release\net10.0-windows\win-x64\publish") # dotnet publish in the repo
     )
     $SourceDir = $candidates | Where-Object { Test-Path (Join-Path $_ $ExeName) } | Select-Object -First 1
 }

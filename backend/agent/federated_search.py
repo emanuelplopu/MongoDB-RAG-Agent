@@ -26,6 +26,7 @@ from backend.agent.strategy.models import (
     OmittedResultEntry,
 )
 from backend.core.config import settings
+from backend.services.query_embedding import create_embedding_client, embed_query
 
 if TYPE_CHECKING:
     from backend.agent.strategies.base import BaseStrategy
@@ -84,21 +85,11 @@ class FederatedSearch:
         return self._existing_databases
     
     async def get_embedding(self, text: str) -> List[float]:
-        """Generate embedding for text using configured embedding model."""
-        from openai import AsyncOpenAI
-        
+        """Embed a search query with the configured model (query prefix applied)."""
         if self._embedding_client is None:
-            self._embedding_client = AsyncOpenAI(
-                api_key=settings.embedding_api_key,
-                base_url=settings.embedding_base_url
-            )
-        
-        response = await self._embedding_client.embeddings.create(
-            model=settings.embedding_model,
-            input=text
-        )
-        return response.data[0].embedding
-    
+            self._embedding_client = create_embedding_client()
+        return await embed_query(text, client=self._embedding_client)
+
     def get_accessible_sources(
         self,
         user_id: str,
