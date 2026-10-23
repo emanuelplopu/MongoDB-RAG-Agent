@@ -13,6 +13,7 @@ import {
   RemoteFolder,
   RemoteFile,
 } from '../api/client'
+import { getErrorMessage } from '../api/errors'
 
 interface FolderPickerProps {
   connectionId: string
@@ -95,8 +96,8 @@ export default function FolderPicker({
           }
           setBreadcrumbs(crumbs)
         }
-      } catch (err: any) {
-        setError(err.message || 'Failed to load folder contents')
+      } catch (err) {
+        setError(getErrorMessage(err, 'Failed to load folder contents'))
       } finally {
         setIsLoading(false)
       }
@@ -105,6 +106,7 @@ export default function FolderPicker({
   )
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- folder listing load; fetchFolder flips the loading flag before awaiting the API
     fetchFolder(initialFolderId)
   }, [initialFolderId, fetchFolder])
 

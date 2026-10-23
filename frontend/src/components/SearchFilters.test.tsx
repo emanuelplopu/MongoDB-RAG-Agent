@@ -1,12 +1,9 @@
 import { act, fireEvent, render, renderHook, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-import SearchFilters, {
-  ActiveFilters,
-  exampleFilterGroups,
-  useSearchFilters,
-  type FilterGroup,
-} from './SearchFilters'
+import SearchFilters, { ActiveFilters, type FilterGroup } from './SearchFilters'
+import { exampleFilterGroups } from './searchFilterExamples'
+import { useSearchFilters } from '../hooks/useSearchFilters'
 
 const groups: FilterGroup[] = [
   {

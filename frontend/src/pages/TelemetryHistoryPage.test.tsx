@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import TelemetryHistoryPage, { bucketGrid } from './TelemetryHistoryPage'
+import TelemetryHistoryPage from './TelemetryHistoryPage'
+import { bucketGrid } from '../components/telemetry/format'
 
 const navigateMock = vi.fn()
 const historyMock = vi.fn()

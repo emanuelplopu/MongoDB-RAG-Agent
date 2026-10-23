@@ -21,18 +21,14 @@ export default tseslint.config(
       'react-refresh': reactRefresh,
     },
     rules: {
+      // eslint-plugin-react-hooks 7 "recommended" includes the React Compiler
+      // rules; every rule is an error. Where an effect legitimately sets state
+      // (data loaders, animation state machines, prop-driven resets) the site
+      // carries an inline `eslint-disable` with its reason, and
+      // `--report-unused-disable-directives` in the lint script keeps those
+      // directives honest.
       ...reactHooks.configs.recommended.rules,
-      // eslint-plugin-react-hooks 7 enables the React Compiler rules in
-      // "recommended". This app does not use the compiler; the rules that
-      // fire on existing code (72 sites on 2026-10-23) are warnings so new
-      // regressions in the other compiler rules still fail the script.
-      "react-hooks/set-state-in-effect": "warn",
-      "react-hooks/immutability": "warn",
-      "react-hooks/preserve-manual-memoization": "warn",
-      "react-hooks/static-components": "warn",
-      "react-hooks/refs": "warn",
-      "react-hooks/purity": "warn",
-      'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+      'react-refresh/only-export-components': ['error', { allowConstantExport: true }],
       // Unused `catch (err)` bindings, `_`-prefixed placeholders and rest-sibling
       // destructuring (`({ node, ...props })`) are established patterns here.
       '@typescript-eslint/no-unused-vars': ['error', {
@@ -42,8 +38,7 @@ export default tseslint.config(
         caughtErrors: 'none',
         ignoreRestSiblings: true,
       }],
-      // Pre-existing `any` usage (≈100 sites) is tracked as warnings, not errors.
-      '@typescript-eslint/no-explicit-any': 'warn',
+      '@typescript-eslint/no-explicit-any': 'error',
       'no-empty': ['error', { allowEmptyCatch: true }],
     },
   },

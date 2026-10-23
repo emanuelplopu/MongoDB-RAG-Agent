@@ -105,6 +105,7 @@ function IngestEstimateLine({ profileKeys, incremental }: { profileKeys: string[
 
   useEffect(() => {
     if (profileKeys.length === 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clears the estimate when no profile is selected
       setEstimate(null)
       setError(false)
       return
@@ -306,6 +307,7 @@ export default function IngestionManagementPage() {
   
   useEffect(() => {
     if (!authLoading && user?.is_admin) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- data load once auth is known; fetchData settles the loading flag synchronously on failure
       fetchData()
     }
   }, [authLoading, user, fetchData])
@@ -343,35 +345,7 @@ export default function IngestionManagementPage() {
     }
   }, [])
   
-  // Auto-expand logs and start streaming when ingestion starts running
-  useEffect(() => {
-    if (ingestionStatus?.status === 'running' && !showLogs) {
-      setShowLogs(true)
-      if (!isStreaming) {
-        startLogStreaming()
-      }
-    }
-  }, [ingestionStatus?.status])
-  
-  // Start events streaming when ingestion is running
-  useEffect(() => {
-    if ((ingestionStatus?.status === 'running' || ingestionStatus?.status === 'paused') && !isEventsStreaming) {
-      startEventsStreaming()
-    } else if (ingestionStatus?.status !== 'running' && ingestionStatus?.status !== 'paused' && isEventsStreaming) {
-      stopEventsStreaming()
-    }
-  }, [ingestionStatus?.status])
-  
-  if (authLoading || isLoading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <ArrowPathIcon className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    )
-  }
-  
-  if (!user?.is_admin) return null
-
+  // SSE log/event streams (declared before the effects that start them)
   const startLogStreaming = () => {
     if (eventSourceRef.current) eventSourceRef.current.close()
     const url = ingestionApi.getLogsStreamUrl()
@@ -416,6 +390,40 @@ export default function IngestionManagementPage() {
     setIsEventsStreaming(false)
     setStreamEvent(null)
   }
+
+  // Auto-expand logs and start streaming when ingestion starts running
+  useEffect(() => {
+    if (ingestionStatus?.status === 'running' && !showLogs) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- opens the log panel and its stream when a run starts
+      setShowLogs(true)
+      if (!isStreaming) {
+        startLogStreaming()
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to the run status only; showLogs/isStreaming are guards so a user who closed the panel is not overruled
+  }, [ingestionStatus?.status])
+
+  // Start events streaming when ingestion is running
+  /* eslint-disable react-hooks/set-state-in-effect -- opens or closes the event stream as the run status changes */
+  useEffect(() => {
+    if ((ingestionStatus?.status === 'running' || ingestionStatus?.status === 'paused') && !isEventsStreaming) {
+      startEventsStreaming()
+    } else if (ingestionStatus?.status !== 'running' && ingestionStatus?.status !== 'paused' && isEventsStreaming) {
+      stopEventsStreaming()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to the run status only; isEventsStreaming is a guard against double subscriptions
+  }, [ingestionStatus?.status])
+  /* eslint-enable react-hooks/set-state-in-effect */
+  
+  if (authLoading || isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <ArrowPathIcon className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    )
+  }
+  
+  if (!user?.is_admin) return null
 
   const handleAddToQueue = async () => {
     if (selectedProfiles.length === 0 || isOperationPending || actionCooldown) return

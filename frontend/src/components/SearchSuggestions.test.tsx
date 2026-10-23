@@ -20,7 +20,8 @@ vi.mock('../hooks/useLocalStorage', async () => {
   }
 })
 
-import SearchSuggestions, { useSearchSuggestions } from './SearchSuggestions'
+import SearchSuggestions from './SearchSuggestions'
+import { useSearchSuggestions } from '../hooks/useSearchSuggestions'
 
 describe('SearchSuggestions', () => {
   beforeEach(() => {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
-import TimeSeriesChart, { nearestIndex, niceStep, ChartSeries } from './TimeSeriesChart'
+import TimeSeriesChart, { ChartSeries } from './TimeSeriesChart'
+import { nearestIndex, niceStep } from './chartMath'
 
 const T0 = Date.UTC(2026, 9, 18, 10, 0, 0)
 const times = [0, 1, 2, 3, 4].map(i => T0 + i * 60_000)

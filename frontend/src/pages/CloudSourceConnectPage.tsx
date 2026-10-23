@@ -16,6 +16,7 @@ import {
   CloudProvider,
   CloudProviderType,
 } from '../api/client'
+import { getErrorMessage } from '../api/errors'
 import { useAuth } from '../contexts/AuthContext'
 
 // Provider icons mapping
@@ -204,8 +205,8 @@ export default function CloudSourceConnectPage() {
           initialData[field.name] = ''
         })
         setFormData(initialData)
-      } catch (err: any) {
-        setError(err.message || 'Failed to load provider details')
+      } catch (err) {
+        setError(getErrorMessage(err, 'Failed to load provider details'))
       } finally {
         setIsLoading(false)
       }
@@ -246,8 +247,8 @@ export default function CloudSourceConnectPage() {
       } else {
         setTestResult(testRes)
       }
-    } catch (err: any) {
-      setError(err.message || 'Failed to create connection')
+    } catch (err) {
+      setError(getErrorMessage(err, 'Failed to create connection'))
     } finally {
       setIsSubmitting(false)
     }

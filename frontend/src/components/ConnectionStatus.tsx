@@ -65,6 +65,7 @@ export default function ConnectionStatus({
 
   // Initial check and interval
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- first health check; checkConnection sets the "checking" status before awaiting the request
     checkConnection()
     const interval = setInterval(checkConnection, checkInterval)
     return () => clearInterval(interval)

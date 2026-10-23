@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AgentPerformanceConfig, AttachmentInfo, IngestionPerformanceConfig } from './client'
 import {
   ApiError,
   apiKeysApi,
@@ -26,6 +27,14 @@ import {
   supportApi,
   systemApi,
 } from './client'
+
+const attachment: AttachmentInfo = {
+  filename: 'a.txt',
+  content_type: 'text/plain',
+  size_bytes: 3,
+  data_url: 'data:text/plain;base64,Zm9v',
+  token_estimate: 1,
+}
 
 const axiosMock = vi.hoisted(() => {
   const dataFor = (method: string, args: unknown[]) => ({ ok: true, method, args })
@@ -190,9 +199,9 @@ describe('api client broad wrapper coverage', () => {
       () => systemApi.testTool({ tool_name: 'search', parameters: { query: 'hello' } }),
       () => systemApi.switchModelVersions({ orchestrator_model: 'gpt-5.2' }),
       () => systemApi.getAgentPerformanceConfig(),
-      () => systemApi.saveAgentPerformanceConfig({} as any),
+      () => systemApi.saveAgentPerformanceConfig({} as AgentPerformanceConfig),
       () => systemApi.getIngestionPerformanceConfig(),
-      () => systemApi.saveIngestionPerformanceConfig({} as any),
+      () => systemApi.saveIngestionPerformanceConfig({} as IngestionPerformanceConfig),
       () => systemApi.testModelCapability('openai/gpt-5.2', 'worker'),
       () => systemApi.getModelCapabilities(),
       () => systemApi.approveModel('openai/gpt-5.2', 'orchestrator', true),
@@ -202,7 +211,7 @@ describe('api client broad wrapper coverage', () => {
       () => sessionsApi.update('session-1', { title: 'Updated', is_pinned: true }),
       () => sessionsApi.delete('session-1'),
       () => sessionsApi.sendMessage('session-1', 'hello', { agent_mode: 'auto', strategy_id: 'balanced', language: 'en' }),
-      () => sessionsApi.estimateTokens([{ filename: 'a.txt', content_type: 'text/plain', size_bytes: 3, content: 'foo' } as any]),
+      () => sessionsApi.estimateTokens([attachment]),
       () => sessionsApi.clearMessages('session-1'),
       () => sessionsApi.listFolders(),
       () => sessionsApi.createFolder('Project', '#fff'),
@@ -262,7 +271,7 @@ describe('api client broad wrapper coverage', () => {
       () => localLlmApi.pullModel('ollama', 'llama3', 'http://localhost:11434'),
       () => localLlmApi.getPullStatus('ollama'),
       () => localLlmApi.getOfflineConfig(),
-      () => localLlmApi.saveOfflineConfig(config as any),
+      () => localLlmApi.saveOfflineConfig(config),
       () => localLlmApi.testModel('ollama', 'llama3', 'chat', 'http://localhost:11434'),
       () => localLlmApi.compareModels(),
       () => localLlmApi.scanNetwork({ custom_ips: ['127.0.0.1'], ports: [11434] }),
@@ -503,7 +512,7 @@ describe('api client broad wrapper coverage', () => {
       'session-1',
       'hello',
       {
-        attachments: [{ filename: 'a.txt', content_type: 'text/plain', size_bytes: 3, content: 'foo' } as any],
+        attachments: [attachment],
         agent_mode: 'auto',
         strategy_id: 'balanced',
         language: 'en',

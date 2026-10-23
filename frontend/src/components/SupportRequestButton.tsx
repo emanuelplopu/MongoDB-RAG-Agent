@@ -25,6 +25,7 @@ export default function SupportRequestButton({ sessionId }: SupportRequestButton
   // Handle open/close animation
   useEffect(() => {
     if (isOpen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- two-phase mount/animate transition driven by the isOpen state
       setIsVisible(true)
       requestAnimationFrame(() => {
         setIsAnimating(true)

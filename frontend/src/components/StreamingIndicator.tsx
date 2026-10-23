@@ -35,6 +35,7 @@ export default function StreamingIndicator({
   useEffect(() => {
     if (isStreaming) {
       startTimeRef.current = Date.now()
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- restarts the elapsed-time counter when streaming begins
       setElapsedTime(0)
       
       intervalRef.current = setInterval(() => {

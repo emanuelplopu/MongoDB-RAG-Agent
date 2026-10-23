@@ -1,7 +1,19 @@
-import axios, { AxiosError, AxiosInstance, AxiosResponse } from 'axios'
+import axios, { AxiosError, AxiosInstance, AxiosResponse, InternalAxiosRequestConfig } from 'axios'
 
 // API base URL - uses Vite proxy in development, nginx proxy in production
 const API_BASE = '/api/v1'
+
+/** Request config plus the retry counter the response interceptor keeps on it. */
+type RetryableRequestConfig = InternalAxiosRequestConfig & { _retryCount?: number }
+
+/** Error body returned by the backend's exception handlers (all fields optional). */
+interface ApiErrorPayload {
+  message?: string
+  detail?: unknown
+  error?: string
+  error_id?: string
+  technical_details?: ApiError['technicalDetails']
+}
 
 // Auth token storage key
 const AUTH_TOKEN_KEY = 'auth_token'
@@ -26,9 +38,9 @@ export class ApiError extends Error {
   }
 
   constructor(
-    message: string, 
-    status: number, 
-    code: string, 
+    message: string,
+    status: number,
+    code: string,
     details?: unknown,
     errorId?: string,
     technicalDetails?: ApiError['technicalDetails']
@@ -41,6 +53,7 @@ export class ApiError extends Error {
     this.errorId = errorId
     this.technicalDetails = technicalDetails
   }
+
 
   /**
    * Get a user-friendly error message suitable for display.
@@ -111,14 +124,14 @@ const api: AxiosInstance = axios.create({
 api.interceptors.response.use(
   (response: AxiosResponse) => response,
   async (error: AxiosError) => {
-    const config = error.config
-    
+    const config = error.config as RetryableRequestConfig | undefined
+
     // Handle network errors with retry
     if (!error.response && config) {
-      const retryCount = (config as any)._retryCount || 0
-      
+      const retryCount = config._retryCount || 0
+
       if (retryCount < MAX_RETRIES) {
-        (config as any)._retryCount = retryCount + 1
+        config._retryCount = retryCount + 1
         console.warn(`[API] Network error, retrying (${retryCount + 1}/${MAX_RETRIES})...`)
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * (retryCount + 1)))
         return api.request(config)
@@ -135,10 +148,12 @@ api.interceptors.response.use(
     // Handle HTTP errors
     if (error.response) {
       const { status, data } = error.response
-      const message = (data as any)?.message || (data as any)?.detail || 'An error occurred'
-      const code = (data as any)?.error || `HTTP_${status}`
-      const errorId = (data as any)?.error_id
-      const technicalDetails = (data as any)?.technical_details
+      const payload = (data ?? undefined) as ApiErrorPayload | undefined
+      const detail = typeof payload?.detail === 'string' ? payload.detail : undefined
+      const message = payload?.message || detail || 'An error occurred'
+      const code = payload?.error || `HTTP_${status}`
+      const errorId = payload?.error_id
+      const technicalDetails = payload?.technical_details
       
       // Log error for debugging (in development)
       if (import.meta.env.DEV) {
@@ -1271,7 +1286,7 @@ export const documentsApi = {
     sortBy: SortField = 'modified',
     sortOrder: SortOrder = 'desc'
   ): Promise<DocumentListResponse> => {
-    const params: Record<string, any> = { page, page_size: pageSize }
+    const params: Record<string, string | number | boolean> = { page, page_size: pageSize }
     if (folder) params.folder = folder
     if (search) params.search = search
     if (exactFolder) params.exact_folder = true
@@ -1561,14 +1576,7 @@ export const systemApi = {
     return response.data
   },
 
-  switchModelVersions: async (switchRequest: {
-    orchestrator_model?: string
-    orchestrator_provider?: string
-    worker_model?: string
-    worker_provider?: string
-    embedding_model?: string
-    embedding_provider?: string
-  }): Promise<any> => {
+  switchModelVersions: async (switchRequest: ModelSwitchRequest): Promise<ModelSwitchResponse> => {
     const response = await api.post('/model-versions/switch', switchRequest)
     return response.data
   },
@@ -1606,10 +1614,36 @@ export const systemApi = {
     return response.data
   },
 
-  approveModel: async (modelId: string, role: 'orchestrator' | 'worker', approved: boolean): Promise<any> => {
+  approveModel: async (modelId: string, role: 'orchestrator' | 'worker', approved: boolean): Promise<ModelApprovalResult> => {
     const response = await api.post(`/system/models/${encodeURIComponent(modelId)}/approve?role=${role}&approved=${approved}`)
     return response.data
   }
+}
+
+/** Body of `POST /model-versions/switch`. */
+export interface ModelSwitchRequest {
+  orchestrator_model?: string
+  orchestrator_provider?: string
+  worker_model?: string
+  worker_provider?: string
+  embedding_model?: string
+  embedding_provider?: string
+}
+
+/** Result of `POST /model-versions/switch`. */
+export interface ModelSwitchResponse {
+  success: boolean
+  message: string
+  updates: Partial<ModelSwitchRequest>
+  warnings: string[]
+}
+
+/** Result of `POST /system/models/{id}/approve`. */
+export interface ModelApprovalResult {
+  model_id: string
+  role: 'orchestrator' | 'worker'
+  approved: boolean
+  source: string
 }
 
 // ============== Chat Sessions API ==============
@@ -1892,10 +1926,24 @@ export const sessionsApi = {
     return response.data
   },
 
-  exportSession: async (sessionId: string): Promise<any> => {
+  exportSession: async (sessionId: string): Promise<SessionExport> => {
     const response = await api.get(`/sessions/${sessionId}/export`)
     return response.data
   },
+}
+
+/** Payload of `GET /sessions/{id}/export` (downloaded as JSON by the UI). */
+export interface SessionExport {
+  exported_at: string
+  session: {
+    id: string
+    title: string
+    model: string
+    created_at: string
+    updated_at: string
+    messages: { role: string; content: string; timestamp: string | null }[]
+    stats: SessionStats | null
+  }
 }
 
 // ============== Auth Types ==============
@@ -2216,11 +2264,18 @@ export interface OptimizationSuggestion {
   estimated_impact: string
 }
 
+/** Host/database capacity figures reported with the index dashboard (every group optional). */
+export interface ResourceAllocation {
+  cpu?: { cores?: number; usage_percent?: number; recommended_workers?: number }
+  memory?: { total_gb?: number; available_gb?: number; recommended_cache_mb?: number }
+  mongodb?: { connection_pool_size?: number; recommended_pool_size?: number }
+}
+
 export interface IndexDashboard {
   indexes: IndexMetrics[]
   performance: SearchPerformance
   suggestions: OptimizationSuggestion[]
-  resource_allocation: Record<string, unknown>
+  resource_allocation: ResourceAllocation
 }
 
 // ============== Ingestion Queue Types ==============

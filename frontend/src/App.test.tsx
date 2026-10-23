@@ -48,40 +48,47 @@ let tenantState: { tenant: { features: { startPage: 'landing' | 'login'; require
 
 // Mock contexts
 vi.mock('./contexts/AuthContext', () => ({
-  AuthProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   useAuth: () => authState,
+}))
+vi.mock('./contexts/AuthProvider', () => ({
+  AuthProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }))
 
 vi.mock('./contexts/TenantContext', () => ({
-  TenantProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   useTenant: () => tenantState,
 }))
 
 vi.mock('./contexts/SettingsSyncContext', () => ({
-  SettingsSyncProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   useOptionalSettingsSync: () => null,
   SETTINGS_SYNCED_EVENT: 'settings:synced',
 }))
+vi.mock('./contexts/SettingsSyncProvider', () => ({
+  SettingsSyncProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}))
 
 vi.mock('./contexts/ThemeContext', () => ({
-  ThemeProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   useTheme: () => ({ theme: 'system', setTheme: () => {}, applyTheme: () => {}, resolvedTheme: 'light' }),
+}))
+vi.mock('./contexts/ThemeProvider', () => ({
+  ThemeProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }))
 
 vi.mock('./contexts/LanguageContext', () => ({
-  LanguageProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   useLanguage: () => ({ language: 'en', setLanguage: vi.fn(), applyLanguage: vi.fn(), supportedLanguages: ['en', 'de'] }),
 }))
+vi.mock('./contexts/LanguageProvider', () => ({
+  LanguageProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}))
 
-vi.mock('./contexts/UserPreferencesContext', () => ({
+vi.mock('./contexts/UserPreferencesProvider', () => ({
   UserPreferencesProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }))
 
-vi.mock('./contexts/ToastContext', () => ({
+vi.mock('./contexts/ToastProvider', () => ({
   ToastProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }))
 
-vi.mock('./contexts/ChatSidebarContext', () => ({
+vi.mock('./contexts/ChatSidebarProvider', () => ({
   ChatSidebarProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }))
 

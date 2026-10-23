@@ -36,8 +36,6 @@ const CONTAINER_ROLES: Array<{ role: string; match: RegExp; slot: SeriesSlot }> 
 const RANGE_KEY = 'recallhub_telemetry_range'
 const REFRESH_MS = 30_000
 
-export { bucketGrid }
-
 /** Values of `points` aligned to `grid` by bucket start (null where a bucket has no point). */
 function align<T extends { t: string }>(grid: number[], points: T[], pick: (p: T) => number | null): Array<number | null> {
   const byTime = new Map(points.map(p => [Date.parse(p.t), p]))
@@ -91,6 +89,7 @@ export default function TelemetryHistoryPage() {
 
   useEffect(() => {
     if (!superAdmin) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- history load on mount and range change; load flips the loading flag before awaiting the API
     load()
     try {
       localStorage.setItem(RANGE_KEY, String(hours))

@@ -145,6 +145,7 @@ export default function JobHistoryPage() {
 
   useEffect(() => {
     if (!authLoading && user?.is_admin) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- job load once auth is known and on page change; fetchJobs flips the loading flag before awaiting the API
       fetchJobs()
     }
   }, [authLoading, user, fetchJobs])

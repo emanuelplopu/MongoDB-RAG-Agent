@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Tree, NodeRendererProps } from 'react-arborist'
+import { Tree, NodeApi, NodeRendererProps } from 'react-arborist'
 import {
   DocumentTextIcon,
   TrashIcon,
@@ -235,10 +235,12 @@ export default function DocumentsPage() {
   }, [page, pageSize, currentPath, searchTerm, sortBy, sortOrder])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial folder load; fetchFolders flips its loading flag before awaiting the API
     fetchFolders()
-  }, [])
+  }, [fetchFolders])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- document load on every page/filter change; fetchDocuments flips the loading flag before awaiting the API
     fetchDocuments()
   }, [fetchDocuments])
 
@@ -328,18 +330,17 @@ export default function DocumentsPage() {
     return t('documentsPage.chunksCount', { count: chunks })
   }
 
-  // Reset page when filter changes (but not on initial load)
-  const [initialLoad, setInitialLoad] = useState(true)
-  useEffect(() => {
-    if (initialLoad) {
-      setInitialLoad(false)
-      return
-    }
+  // Reset the page when the folder or search filter changes. Adjusting state during
+  // render (react.dev: "Storing information from previous renders") skips the mount
+  // run naturally and lets fetchDocuments see page 1 together with the new filter.
+  const [prevFilter, setPrevFilter] = useState({ currentPath, searchInput })
+  if (prevFilter.currentPath !== currentPath || prevFilter.searchInput !== searchInput) {
+    setPrevFilter({ currentPath, searchInput })
     setPage(1)
-  }, [currentPath, searchInput])
+  }
 
   // Handle folder selection from tree
-  const handleFolderSelect = (nodes: any[]) => {
+  const handleFolderSelect = (nodes: NodeApi<TreeNode>[]) => {
     if (nodes && nodes.length > 0 && nodes[0]?.id) {
       setCurrentPath(nodes[0].id)
     }

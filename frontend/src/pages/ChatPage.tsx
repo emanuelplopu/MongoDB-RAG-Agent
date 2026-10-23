@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import { PaperAirplaneIcon, DocumentTextIcon } from '@heroicons/react/24/solid'
@@ -18,7 +18,6 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [conversationId, setConversationId] = useState<string | undefined>()
   const [lastResponse, setLastResponse] = useState<ChatResponse | null>(null)
-  const [sourcesWithIds, setSourcesWithIds] = useState<SourceWithId[]>([])
   const [documentsCache, setDocumentsCache] = useState<Document[]>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -43,17 +42,16 @@ export default function ChatPage() {
     fetchDocuments()
   }, [])
 
-  // Match sources with document IDs when response changes
-  useEffect(() => {
+  // Match sources with document IDs (derived from the last response and the cache)
+  const sourcesWithIds = useMemo<SourceWithId[]>(() => {
     if (!lastResponse?.sources || documentsCache.length === 0) {
-      setSourcesWithIds([])
-      return
+      return []
     }
 
-    const enrichedSources: SourceWithId[] = lastResponse.sources.map(source => {
+    return lastResponse.sources.map(source => {
       // Try to find matching document by title or source path
       const matchingDoc = documentsCache.find(
-        doc => doc.title === source.title || 
+        doc => doc.title === source.title ||
                doc.source === source.source ||
                doc.title.toLowerCase() === source.title.toLowerCase()
       )
@@ -62,8 +60,6 @@ export default function ChatPage() {
         documentId: matchingDoc?.id
       }
     })
-
-    setSourcesWithIds(enrichedSources)
   }, [lastResponse, documentsCache])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -108,7 +104,6 @@ export default function ChatPage() {
     setMessages([])
     setConversationId(undefined)
     setLastResponse(null)
-    setSourcesWithIds([])
   }
 
   return (

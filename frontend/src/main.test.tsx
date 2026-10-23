@@ -12,7 +12,7 @@ vi.mock('./App', () => ({
   default: () => <div>App Shell</div>,
 }))
 
-vi.mock('./contexts/TenantContext', () => ({
+vi.mock('./contexts/TenantProvider', () => ({
   TenantProvider: ({ children }: { children: ReactNode }) => (
     <div data-testid="tenant-provider">{children}</div>
   ),

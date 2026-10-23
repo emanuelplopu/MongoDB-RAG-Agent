@@ -30,9 +30,12 @@ import {
   LLMModel, EmbeddingModel, LLMProviderConfigResponse, LLMProviderConfigRequest,
   ProviderModelInfo, FetchModelsResponse, ProviderTestResponse,
   AgentTool, ToolTestResponse, IngestionPerformanceConfig,
-  ModelTestResult, ModelCapability
+  ModelTestResult, ModelCapability, ModelSwitchRequest
 } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
+
+/** Tabs of the configuration page. */
+type ConfigTab = 'offline' | 'network' | 'models' | 'profiles' | 'search' | 'llm' | 'tools' | 'agent' | 'ingestion'
 
 // Preset network ranges for common VPN and local networks
 const NETWORK_PRESETS = [
@@ -64,7 +67,7 @@ export default function ConfigurationPage() {
   const [isSaving, setIsSaving] = useState(false)
   const [isPulling, setIsPulling] = useState<string | null>(null)
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
-  const [activeTab, setActiveTab] = useState<'offline' | 'network' | 'models' | 'profiles' | 'search' | 'llm' | 'tools' | 'agent' | 'ingestion'>('llm')
+  const [activeTab, setActiveTab] = useState<ConfigTab>('llm')
     
     // Search settings state
     const [configOptions, setConfigOptions] = useState<ConfigOptions | null>(null)
@@ -734,7 +737,7 @@ export default function ConfigurationPage() {
   // Handle model version switching
   const handleModelChange = async (modelType: 'orchestrator' | 'worker' | 'embedding', modelId: string) => {
     try {
-      const switchRequest: any = {}
+      const switchRequest: ModelSwitchRequest = {}
       
       switch (modelType) {
         case 'orchestrator':
@@ -761,8 +764,8 @@ export default function ConfigurationPage() {
       } else {
         setMessage({ type: 'error', text: result.message || `Failed to switch ${modelType} model` })
       }
-    } catch (err: any) {
-      setMessage({ type: 'error', text: `Error switching ${modelType} model: ${err.message}` })
+    } catch (err) {
+      setMessage({ type: 'error', text: `Error switching ${modelType} model: ${err instanceof Error ? err.message : String(err)}` })
     }
   }
 
@@ -792,7 +795,7 @@ export default function ConfigurationPage() {
 
       {/* Tabs */}
       <div className="flex gap-2 border-b border-gray-200 dark:border-gray-700 overflow-x-auto">
-        {[
+        {([
           { id: 'llm', label: t('config.tabs.llm'), icon: BoltIcon },
           { id: 'tools', label: t('config.tabs.tools'), icon: WrenchScrewdriverIcon },
           { id: 'agent', label: t('config.tabs.agent'), icon: CpuChipIcon },
@@ -801,11 +804,11 @@ export default function ConfigurationPage() {
           { id: 'network', label: t('config.tabs.network'), icon: GlobeAltIcon },
           { id: 'models', label: t('config.tabs.models'), icon: CpuChipIcon },
           { id: 'profiles', label: t('config.tabs.profiles'), icon: Cog6ToothIcon },
-                    { id: 'search', label: t('config.tabs.search'), icon: MagnifyingGlassIcon },
-        ].map(tab => (
+          { id: 'search', label: t('config.tabs.search'), icon: MagnifyingGlassIcon },
+        ] satisfies { id: ConfigTab; label: string; icon: typeof BoltIcon }[]).map(tab => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id as any)}
+            onClick={() => setActiveTab(tab.id)}
             className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
               activeTab === tab.id
                 ? 'border-primary text-primary'
@@ -1365,7 +1368,7 @@ export default function ConfigurationPage() {
                     onClick={() => setCapFilter(f)}
                     className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${capFilter === f ? 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-800 dark:text-indigo-200' : 'text-secondary dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
                   >
-                    {t(`config.modelCapabilities.filter${f.charAt(0).toUpperCase() + f.slice(1)}` as any)}
+                    {t(`config.modelCapabilities.filter${f.charAt(0).toUpperCase() + f.slice(1)}`)}
                   </button>
                 ))}
               </div>

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ExclamationTriangleIcon, ArrowRightOnRectangleIcon, UserIcon } from '@heroicons/react/24/outline'
-import { useLocalizedNavigate } from './LocalizedLink'
+import { useLocalizedNavigate } from '../hooks/useLocalizedNavigate'
 
 interface SessionExpiredModalProps {
   isOpen: boolean
@@ -26,6 +26,7 @@ export default function SessionExpiredModal({
   // Handle open/close animation
   useEffect(() => {
     if (isOpen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- two-phase mount/animate transition driven by the isOpen prop
       setIsVisible(true)
       // Small delay for animation
       requestAnimationFrame(() => {

@@ -28,9 +28,9 @@ import {
   SettingsSelect,
   SettingsSlider,
   SettingsToggle,
-  useUserPreferences,
-  UserPreferencesProvider,
-} from './UserPreferencesContext'
+} from '../components/SettingsControls'
+import { useUserPreferences } from './UserPreferencesContext'
+import { UserPreferencesProvider } from './UserPreferencesProvider'
 
 function Harness() {
   const {

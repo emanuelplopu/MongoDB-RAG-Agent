@@ -9,7 +9,7 @@ vi.mock('react-i18next', () => ({
   }),
 }))
 
-vi.mock('./LocalizedLink', () => ({
+vi.mock('../hooks/useLocalizedNavigate', () => ({
   useLocalizedNavigate: () => navigate,
 }))
 

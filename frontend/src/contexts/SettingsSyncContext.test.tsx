@@ -24,10 +24,10 @@ vi.mock('../hooks/useSettingsSync', () => ({
 
 import {
   SETTINGS_SYNCED_EVENT,
-  SettingsSyncProvider,
   useOptionalSettingsSync,
   useSettingsSyncContext,
 } from './SettingsSyncContext'
+import { SettingsSyncProvider } from './SettingsSyncProvider'
 
 function Consumer() {
   const context = useSettingsSyncContext()

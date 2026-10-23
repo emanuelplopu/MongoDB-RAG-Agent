@@ -17,22 +17,13 @@ import { useAuth } from '../contexts/AuthContext'
 import { isSuperAdmin } from '../api/roles'
 import { systemApi, HostStats, HostActivityState } from '../api/client'
 import { LocalizedLink } from './LocalizedLink'
+import { formatBytes, formatUptime } from './formatUnits'
 
 /** How often the widget re-polls the host-stats endpoint (ms). */
 const POLL_INTERVAL_MS = 4000
 
 /** localStorage key remembering whether the widget is minimised to a chip. */
 const COLLAPSED_KEY = 'recallhub_hoststats_collapsed'
-
-/** Format a byte count as a compact human string (base 1024). */
-export function formatBytes(bytes: number | null | undefined): string {
-  if (bytes == null || !Number.isFinite(bytes)) return '—'
-  if (bytes <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
-  const exponent = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)))
-  const value = bytes / Math.pow(1024, exponent)
-  return `${value.toFixed(value >= 100 || exponent === 0 ? 0 : 1)} ${units[exponent]}`
-}
 
 /** Format a percentage (0-100) with no decimals. */
 function formatPercent(pct: number | null | undefined): string {
@@ -47,19 +38,6 @@ function formatTemp(celsius: number | null | undefined): string {
 /** Format a power draw in watts. */
 function formatWatts(watts: number | null | undefined): string {
   return watts == null || !Number.isFinite(watts) ? '—' : `${watts.toFixed(0)} W`
-}
-
-/** Humanise an uptime in seconds, e.g. "2d 11h" or "36m". */
-export function formatUptime(seconds: number | null | undefined): string {
-  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '—'
-  const total = Math.floor(seconds)
-  const days = Math.floor(total / 86400)
-  const hours = Math.floor((total % 86400) / 3600)
-  const minutes = Math.floor((total % 3600) / 60)
-  if (days > 0) return `${days}d ${hours}h`
-  if (hours > 0) return `${hours}h ${minutes}m`
-  if (minutes > 0) return `${minutes}m`
-  return `${total}s`
 }
 
 /** "rag-backend-quellex" -> "backend-quellex" (the compose prefix is noise in a tiny card). */
@@ -147,6 +125,7 @@ export default function HostStatsWidget() {
   // Poll while mounted and visible to a superadmin.
   useEffect(() => {
     if (!isSuper || dismissed) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- first poll; fetchStats updates state synchronously only when a request is already in flight
     fetchStats()
     const timer = setInterval(fetchStats, POLL_INTERVAL_MS)
     return () => clearInterval(timer)

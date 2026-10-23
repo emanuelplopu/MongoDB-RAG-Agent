@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { vi } from 'vitest'
 
-import { ToastProvider, useToast } from './ToastContext'
+import { useToast } from './ToastContext'
+import { ToastProvider } from './ToastProvider'
 
 function ToastHarness() {
   const { success, error, warning, info, clearToasts } = useToast()

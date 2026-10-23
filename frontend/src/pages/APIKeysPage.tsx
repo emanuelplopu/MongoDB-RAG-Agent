@@ -18,10 +18,6 @@ export default function APIKeysPage() {
   const [createdKey, setCreatedKey] = useState<APIKeyCreatedResponse | null>(null)
   const [copied, setCopied] = useState(false)
 
-  useEffect(() => {
-    loadKeys()
-  }, [])
-
   const loadKeys = async () => {
     try {
       setLoading(true)
@@ -35,6 +31,12 @@ export default function APIKeysPage() {
       setLoading(false)
     }
   }
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial load; loadKeys flips the loading flag before awaiting the API
+    loadKeys()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once on mount; loadKeys is called again explicitly after create/revoke
+  }, [])
 
   const handleCreateKey = async () => {
     if (!newKeyName.trim()) return

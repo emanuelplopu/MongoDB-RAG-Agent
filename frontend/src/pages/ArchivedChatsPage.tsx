@@ -11,10 +11,6 @@ export default function ArchivedChatsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [operating, setOperating] = useState(false)
 
-  useEffect(() => {
-    loadArchivedSessions()
-  }, [])
-
   const loadArchivedSessions = async () => {
     try {
       setLoading(true)
@@ -28,6 +24,12 @@ export default function ArchivedChatsPage() {
       setLoading(false)
     }
   }
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial load; loadArchivedSessions flips the loading flag before awaiting the API
+    loadArchivedSessions()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once on mount; loadArchivedSessions is called again explicitly after restore/delete
+  }, [])
 
   const toggleSelection = (id: string) => {
     setSelectedIds(prev => {

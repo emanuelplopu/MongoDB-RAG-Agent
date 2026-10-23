@@ -4,6 +4,11 @@ import FederatedAgentPanel from './FederatedAgentPanel'
 import SimplifiedAgentPanel from './SimplifiedAgentPanel'
 import SimplifiedLiveTrace from './SimplifiedLiveTrace'
 import SimplifiedThinkingPanel from './SimplifiedThinkingPanel'
+import type { AgentThinking, FederatedAgentTrace } from '../api/client'
+
+// The panels read only part of a trace, so the fixtures below stay partial.
+const asTrace = (fixture: object) => fixture as FederatedAgentTrace
+const asThinking = (fixture: object) => fixture as AgentThinking
 
 const tMock = (key: string, options?: Record<string, unknown>) => {
   if (key.startsWith('userView.phases.')) {
@@ -116,7 +121,7 @@ const federatedTrace = {
 
 describe('FederatedAgentPanel', () => {
   it('renders the expanded trace with orchestrator, worker, and source details', () => {
-    render(<FederatedAgentPanel trace={federatedTrace as any} />)
+    render(<FederatedAgentPanel trace={asTrace(federatedTrace)} />)
 
     fireEvent.click(screen.getByRole('button', { name: /agentPanel.header/i }))
     fireEvent.click(screen.getByRole('button', { name: /agentPanel.orchestratorSteps/i }))
@@ -169,7 +174,7 @@ describe('SimplifiedAgentPanel', () => {
       },
     }
 
-    render(<SimplifiedAgentPanel trace={trace as any} />)
+    render(<SimplifiedAgentPanel trace={asTrace(trace)} />)
 
     fireEvent.click(screen.getByRole('button', { name: /userView.researchSummary/i }))
 
@@ -306,7 +311,7 @@ describe('SimplifiedLiveTrace', () => {
 describe('SimplifiedThinkingPanel', () => {
   it('renders nothing when there are no searches or tool calls', () => {
     const { container } = render(
-      <SimplifiedThinkingPanel thinking={{ search: { operations: [], total_results: 0 }, tool_calls: [] } as any} />
+      <SimplifiedThinkingPanel thinking={asThinking({ search: { operations: [], total_results: 0 }, tool_calls: [] })} />
     )
 
     expect(container).toBeEmptyDOMElement()
@@ -316,7 +321,7 @@ describe('SimplifiedThinkingPanel', () => {
     render(
       <SimplifiedThinkingPanel
         thinking={
-          {
+          asThinking({
             search: {
               total_results: 3,
               operations: [
@@ -335,7 +340,7 @@ describe('SimplifiedThinkingPanel', () => {
               { tool_name: 'web_search', success: true },
               { tool_name: 'unknown_tool', success: false },
             ],
-          } as any
+          })
         }
       />
     )

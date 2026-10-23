@@ -76,6 +76,7 @@ export default function StrategiesPage() {
 
   useEffect(() => {
     if (!authLoading && user?.is_admin) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- data load once auth is known and on time-window change; fetchData flips the loading flag before awaiting the API
       fetchData()
     }
   }, [authLoading, user, fetchData])

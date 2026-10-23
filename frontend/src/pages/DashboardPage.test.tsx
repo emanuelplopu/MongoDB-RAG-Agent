@@ -74,7 +74,7 @@ vi.mock('../contexts/UserPreferencesContext', () => ({
   useUserPreferences: () => preferencesState,
 }))
 
-vi.mock('../components/LocalizedLink', () => ({
+vi.mock('../hooks/useLocalizedNavigate', () => ({
   useLocalizedNavigate: () => localizedNavigateMock,
 }))
 

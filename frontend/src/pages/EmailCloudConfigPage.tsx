@@ -179,12 +179,13 @@ export default function EmailCloudConfigPage() {
   const { t } = useTranslation()
   
   // Generate user-specific database name from user's name
+  const userName = user?.name
   const userDatabase = useMemo(() => {
-    if (!user?.name) {
+    if (!userName) {
       return 'user_rag_default'
     }
-    return generateUserDatabaseName(user.name)
-  }, [user?.name])
+    return generateUserDatabaseName(userName)
+  }, [userName])
   
   // State
   const [emailProviders, setEmailProviders] = useState<EmailProvider[]>([])
@@ -231,11 +232,6 @@ export default function EmailCloudConfigPage() {
     }
   }, [])
   
-  // Load data on mount
-  useEffect(() => {
-    loadData()
-  }, [])
-  
   // Show success message with auto-dismiss
   const showSuccess = useCallback((message: string) => {
     setSuccessMessage(message)
@@ -244,6 +240,39 @@ export default function EmailCloudConfigPage() {
     }
     successTimeoutRef.current = setTimeout(() => setSuccessMessage(null), 4000)
   }, [])
+
+  const checkDatabaseStatus = useCallback(async (dbName: string) => {
+    setCheckingDatabase(true)
+    try {
+      const status = await fetchJSON<DatabaseStatus>(`${API_BASE}/system/database/check/${dbName}`)
+      setDatabaseStatus(status)
+    } catch (err) {
+      console.error('Failed to check database:', err)
+    } finally {
+      setCheckingDatabase(false)
+    }
+  }, [])
+
+  const loadConfiguredSources = useCallback(async () => {
+    try {
+      // Get active profile (for cloud sources association only)
+      const profileResp = await fetchJSON<{ key: string; profile: { database: string } }>(`${API_BASE}/profiles/active`)
+      const profileKey = profileResp.key
+      setActiveProfileKey(profileKey)
+
+      // Check the user-specific database status (not profile database)
+      await checkDatabaseStatus(userDatabase)
+
+      // Get cloud sources for profile
+      const sourcesResp = await fetchJSON<{ cloud_sources: CloudSourceAssociation[] }>(
+        `${API_BASE}/profiles/${profileKey}/cloud-sources`
+      )
+      setConfiguredSources(sourcesResp.cloud_sources || [])
+    } catch {
+      // Ignore errors - profile might not have cloud sources
+      setConfiguredSources([])
+    }
+  }, [userDatabase, checkDatabaseStatus])
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -278,40 +307,14 @@ export default function EmailCloudConfigPage() {
     } finally {
       setLoading(false)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only loader: it deliberately keeps the loadConfiguredSources of the first render (and its database name) so the page does not reload when the user object changes
   }, [])
 
-  const loadConfiguredSources = useCallback(async () => {
-    try {
-      // Get active profile (for cloud sources association only)
-      const profileResp = await fetchJSON<{ key: string; profile: { database: string } }>(`${API_BASE}/profiles/active`)
-      const profileKey = profileResp.key
-      setActiveProfileKey(profileKey)
-      
-      // Check the user-specific database status (not profile database)
-      await checkDatabaseStatus(userDatabase)
-      
-      // Get cloud sources for profile
-      const sourcesResp = await fetchJSON<{ cloud_sources: CloudSourceAssociation[] }>(
-        `${API_BASE}/profiles/${profileKey}/cloud-sources`
-      )
-      setConfiguredSources(sourcesResp.cloud_sources || [])
-    } catch {
-      // Ignore errors - profile might not have cloud sources
-      setConfiguredSources([])
-    }
-  }, [userDatabase])
-
-  const checkDatabaseStatus = async (dbName: string) => {
-    setCheckingDatabase(true)
-    try {
-      const status = await fetchJSON<DatabaseStatus>(`${API_BASE}/system/database/check/${dbName}`)
-      setDatabaseStatus(status)
-    } catch (err) {
-      console.error('Failed to check database:', err)
-    } finally {
-      setCheckingDatabase(false)
-    }
-  }
+  // Load data on mount
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial load; loadData flips the loading flag before awaiting the API
+    loadData()
+  }, [loadData])
 
   const testMongoConnection = useCallback(async () => {
     setTestingMongo(true)
@@ -355,7 +358,7 @@ export default function EmailCloudConfigPage() {
     } finally {
       setCreatingDatabase(false)
     }
-  }, [userDatabase, showSuccess])
+  }, [userDatabase, showSuccess, checkDatabaseStatus])
 
   const openConfigModal = useCallback((_type: 'email' | 'cloud', provider: EmailProvider | CloudStorageProvider, existingSource?: CloudSourceAssociation) => {
     setSelectedProvider(provider)

@@ -83,6 +83,7 @@ export default function FilePreviewModal({ isOpen, onClose, fileUrl, filename, f
   // Fetch and process content for text-based and convertible types
   useEffect(() => {
     if (!isOpen) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resets the preview and starts loading when the modal opens or the file changes
     setLoading(true)
     setError(null)
     setRenderedContent('')

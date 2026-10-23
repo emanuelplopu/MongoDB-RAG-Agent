@@ -52,7 +52,7 @@ export interface ModelVersion {
   is_deprecated: boolean
   is_experimental: boolean
   parameter_mapping: Record<string, string>
-  default_parameters: Record<string, any>
+  default_parameters: Record<string, unknown>
 }
 
 export interface ModelListResponse {
@@ -74,7 +74,7 @@ export interface ModelSwitchRequest {
 
 export interface ModelCompatibilityCheck {
   model_id: string
-  parameters: Record<string, any>
+  parameters: Record<string, unknown>
 }
 
 export interface CompatibilityResult {
@@ -153,7 +153,7 @@ export const modelVersionsApi = {
    */
   checkModelCompatibility: async (
     modelId: string,
-    parameters: Record<string, any>
+    parameters: Record<string, unknown>
   ): Promise<CompatibilityResult> => {
     const response = await api.post('/model-versions/check-compatibility', {
       model_id: modelId,

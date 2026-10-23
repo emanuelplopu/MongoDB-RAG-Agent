@@ -274,6 +274,9 @@ vi.mock('../contexts/ToastContext', () => ({
 
 vi.mock('./CommandPalette', () => ({
   default: ({ isOpen }: { isOpen: boolean }) => isOpen ? <div>Palette open</div> : null,
+}))
+
+vi.mock('../hooks/useCommandPalette', () => ({
   useCommandPalette: () => ({
     isOpen: false,
     open: vi.fn(),
@@ -318,6 +321,9 @@ vi.mock('./LocalizedLink', () => ({
       {children}
     </a>
   ),
+}))
+
+vi.mock('../hooks/useLocalizedNavigate', () => ({
   useLocalizedNavigate: () => mockFns.navigate,
 }))
 

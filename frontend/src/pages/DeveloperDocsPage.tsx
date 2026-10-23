@@ -1,5 +1,5 @@
 import { getAuthHeaders } from '../api/client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 
 interface ApiEndpoint {
@@ -14,6 +14,13 @@ interface ApiTag {
   endpoints: ApiEndpoint[]
 }
 
+/** The parts of an OpenAPI operation object this page reads. */
+interface OpenApiOperation {
+  tags?: string[]
+  summary?: string
+  description?: string
+}
+
 const API_BASE_URL = import.meta.env.VITE_API_URL || ''
 
 export default function DeveloperDocsPage() {
@@ -24,11 +31,7 @@ export default function DeveloperDocsPage() {
   const [selectedTag, setSelectedTag] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
 
-  useEffect(() => {
-    fetchOpenApiSpec()
-  }, [])
-
-  const fetchOpenApiSpec = async () => {
+  const fetchOpenApiSpec = useCallback(async () => {
     try {
       setError(null)
       const response = await fetch(`${API_BASE_URL}/openapi.json`, { headers: getAuthHeaders() })
@@ -45,7 +48,7 @@ export default function DeveloperDocsPage() {
       const tagMap: Record<string, ApiEndpoint[]> = {}
       
       for (const [path, methods] of Object.entries(spec.paths || {})) {
-        for (const [method, details] of Object.entries(methods as Record<string, any>)) {
+        for (const [method, details] of Object.entries(methods as Record<string, OpenApiOperation>)) {
           if (method === 'parameters') continue
           
           const tags = details.tags || ['Other']
@@ -75,7 +78,12 @@ export default function DeveloperDocsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial load; fetchOpenApiSpec clears the error state before awaiting the spec
+    fetchOpenApiSpec()
+  }, [fetchOpenApiSpec])
 
   const getMethodColor = (method: string) => {
     switch (method) {

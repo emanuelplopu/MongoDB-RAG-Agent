@@ -5,8 +5,8 @@
  * with detailed information about capabilities, pricing, and compatibility.
  */
 
-import React, { useState, useEffect } from 'react'
-import { 
+import React, { useState, useEffect, useMemo } from 'react'
+import {
   MagnifyingGlassIcon, 
   ArrowsRightLeftIcon,
   InformationCircleIcon,
@@ -17,6 +17,9 @@ import {
   XMarkIcon
 } from '@heroicons/react/24/outline'
 import { modelVersionsApi, ModelVersion, ModelListResponse } from '../api/modelVersions'
+
+/** Sort orders offered by the list's `<select>`. */
+type ModelSortKey = 'release_date' | 'cost' | 'name'
 
 interface ModelVersionSelectorProps {
   currentOrchestrator?: string
@@ -36,28 +39,17 @@ const ModelVersionSelector: React.FC<ModelVersionSelectorProps> = ({
   className = ''
 }) => {
   const [models, setModels] = useState<ModelVersion[]>([])
-  const [filteredModels, setFilteredModels] = useState<ModelVersion[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedProvider, setSelectedProvider] = useState<string>('all')
   const [selectedType, setSelectedType] = useState<string>('all')
   const [showDeprecated, setShowDeprecated] = useState(false)
-  const [sortBy, setSortBy] = useState<'release_date' | 'cost' | 'name'>('release_date')
+  const [sortBy, setSortBy] = useState<ModelSortKey>('release_date')
   
   const [switching, setSwitching] = useState(false)
   const [switchSuccess, setSwitchSuccess] = useState<string | null>(null)
   const [switchError, setSwitchError] = useState<string | null>(null)
-
-  // Load models on mount
-  useEffect(() => {
-    loadModels()
-  }, [])
-
-  // Filter models when search term or filters change
-  useEffect(() => {
-    filterModels()
-  }, [models, searchTerm, selectedProvider, selectedType, showDeprecated, sortBy])
 
   const loadModels = async () => {
     try {
@@ -69,19 +61,33 @@ const ModelVersionSelector: React.FC<ModelVersionSelectorProps> = ({
         limit: 100
       })
       setModels(response.models)
-    } catch (err: any) {
-      const isNetworkError = err.message === 'Network Error' || err.code === 'ERR_NETWORK' || !err.response
+    } catch (err) {
+      // modelVersionsApi uses its own axios instance, so raw AxiosErrors arrive here
+      const axiosErr = (typeof err === 'object' && err !== null ? err : {}) as {
+        message?: string
+        code?: string
+        response?: { data?: { detail?: string } }
+      }
+      const isNetworkError = axiosErr.message === 'Network Error' || axiosErr.code === 'ERR_NETWORK' || !axiosErr.response
       if (isNetworkError) {
         setError('Cannot connect to the backend server. Please ensure the backend is running and try again.')
       } else {
-        setError(err.response?.data?.detail || err.message || 'Failed to load models')
+        setError(axiosErr.response?.data?.detail || axiosErr.message || 'Failed to load models')
       }
     } finally {
       setLoading(false)
     }
   }
 
-  const filterModels = () => {
+  // Load models on mount
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial load; loadModels flips the loading flag before awaiting the API
+    loadModels()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once on mount; sorting and the deprecated toggle are applied client-side in filteredModels
+  }, [])
+
+  // Filter and sort the loaded models whenever the search term or a filter changes
+  const filteredModels = useMemo(() => {
     let filtered = [...models]
     
     // Apply search filter
@@ -124,9 +130,9 @@ const ModelVersionSelector: React.FC<ModelVersionSelectorProps> = ({
         return a.name.localeCompare(b.name)
       }
     })
-    
-    setFilteredModels(filtered)
-  }
+
+    return filtered
+  }, [models, searchTerm, selectedProvider, selectedType, showDeprecated, sortBy])
 
   const handleSwitchModel = async (modelType: 'orchestrator' | 'worker' | 'embedding', modelId: string) => {
     if (!onModelChange) return
@@ -141,8 +147,8 @@ const ModelVersionSelector: React.FC<ModelVersionSelectorProps> = ({
       
       setSwitchSuccess(`Successfully switched ${modelType} to ${modelId}`)
       setTimeout(() => setSwitchSuccess(null), 3000)
-    } catch (err: any) {
-      setSwitchError(err.message || `Failed to switch ${modelType} model`)
+    } catch (err) {
+      setSwitchError(err instanceof Error && err.message ? err.message : `Failed to switch ${modelType} model`)
     } finally {
       setSwitching(false)
     }
@@ -286,7 +292,7 @@ const ModelVersionSelector: React.FC<ModelVersionSelectorProps> = ({
           
           <select
             value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as any)}
+            onChange={(e) => setSortBy(e.target.value as ModelSortKey)}
             className="px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
           >
             <option value="release_date">Sort by Release Date</option>

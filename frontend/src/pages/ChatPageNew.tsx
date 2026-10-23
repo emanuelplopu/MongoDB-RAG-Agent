@@ -138,26 +138,26 @@ export default function ChatPage() {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // Effects below key off the session id so a title/pin update does not re-run them
+  const currentSessionId = currentSession?.id
+
   // Load draft from localStorage when session changes
   useEffect(() => {
-    if (currentSession) {
-      const draft = localStorage.getItem(STORAGE_KEYS.CHAT_DRAFT + currentSession.id)
-      if (draft) {
-        setInput(draft)
-      } else {
-        setInput('')
-      }
+    if (currentSessionId) {
+      const draft = localStorage.getItem(STORAGE_KEYS.CHAT_DRAFT + currentSessionId)
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- restores the per-session draft from localStorage
+      setInput(draft || '')
     }
-  }, [currentSession?.id])
+  }, [currentSessionId])
 
   // Save draft to localStorage on input change
   useEffect(() => {
-    if (currentSession && input) {
-      localStorage.setItem(STORAGE_KEYS.CHAT_DRAFT + currentSession.id, input)
-    } else if (currentSession) {
-      localStorage.removeItem(STORAGE_KEYS.CHAT_DRAFT + currentSession.id)
+    if (currentSessionId && input) {
+      localStorage.setItem(STORAGE_KEYS.CHAT_DRAFT + currentSessionId, input)
+    } else if (currentSessionId) {
+      localStorage.removeItem(STORAGE_KEYS.CHAT_DRAFT + currentSessionId)
     }
-  }, [input, currentSession?.id])
+  }, [input, currentSessionId])
 
   // Scroll to bottom when messages change
   const scrollToBottom = useCallback(() => {
@@ -170,10 +170,10 @@ export default function ChatPage() {
 
   // Focus input when session changes
   useEffect(() => {
-    if (currentSession) {
+    if (currentSessionId) {
       inputRef.current?.focus()
     }
-  }, [currentSession?.id])
+  }, [currentSessionId])
 
   // Close dropdowns with Escape key
   const closeAllDropdowns = useCallback(() => {
@@ -210,16 +210,18 @@ export default function ChatPage() {
   })
 
   // Track elapsed time during streaming
+  const liveTraceStart = liveTrace?.startTime
   useEffect(() => {
-    if (liveTrace) {
+    if (liveTraceStart !== undefined) {
       const interval = setInterval(() => {
-        setElapsedTime(Math.floor((Date.now() - liveTrace.startTime) / 1000))
+        setElapsedTime(Math.floor((Date.now() - liveTraceStart) / 1000))
       }, 1000)
       return () => clearInterval(interval)
     } else {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- resets the timer when streaming ends
       setElapsedTime(0)
     }
-  }, [liveTrace?.startTime])
+  }, [liveTraceStart])
 
   // Load model capabilities for admin users
   useEffect(() => {
@@ -231,12 +233,15 @@ export default function ChatPage() {
   }, [user])
 
   // Sync session-level model overrides when session changes
+  const sessionOrchestratorOverride = currentSession?.orchestrator_model
+  const sessionWorkerOverride = currentSession?.worker_model
   useEffect(() => {
-    if (currentSession) {
-      setSessionOrchestratorModel(currentSession.orchestrator_model || null)
-      setSessionWorkerModel(currentSession.worker_model || null)
+    if (currentSessionId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- adopts the session's stored model overrides when the session changes
+      setSessionOrchestratorModel(sessionOrchestratorOverride || null)
+      setSessionWorkerModel(sessionWorkerOverride || null)
     }
-  }, [currentSession?.id, currentSession?.orchestrator_model, currentSession?.worker_model])
+  }, [currentSessionId, sessionOrchestratorOverride, sessionWorkerOverride])
 
   // Filtered approved models for dropdowns
   const approvedOrchestrators = useMemo(
@@ -565,7 +570,7 @@ export default function ChatPage() {
         setIsLoading(false)
       }
     }
-  }, [currentSession, isLoading, agentMode, useStreaming, user?.is_admin])
+  }, [currentSession, isLoading, agentMode, useStreaming, user?.is_admin, i18n.language, preferences.defaultModel, setCurrentSession, setSessions, t])
 
   // Form submit handler
   const handleSubmit = (e: React.FormEvent) => {
@@ -1279,7 +1284,8 @@ export default function ChatPage() {
 function MessageBubble({ message, viewMode }: { message: SessionMessage; viewMode: 'admin' | 'user' }) {
   const isUser = message.role === 'user'
   const [documentIds, setDocumentIds] = useState<Record<string, string>>({})
-  const [loadingDocs, setLoadingDocs] = useState(false)
+  // In-flight guard for the source lookups; never rendered, so a ref rather than state
+  const loadingDocsRef = useRef(false)
   const [showThinking, setShowThinking] = useState(false)
   const [copied, setCopied] = useState(false)
   const toast = useToast()
@@ -1306,12 +1312,12 @@ function MessageBubble({ message, viewMode }: { message: SessionMessage; viewMod
       toast.success(t('chatPage.copiedToClipboard'))
       setTimeout(() => setCopied(false), 2000)
     }
-  }, [message.content, toast])
+  }, [message.content, toast, t])
 
   // Lookup document IDs for sources - load all at once
   useEffect(() => {
-    if (message.sources && message.sources.length > 0 && !loadingDocs) {
-      setLoadingDocs(true)
+    if (message.sources && message.sources.length > 0 && !loadingDocsRef.current) {
+      loadingDocsRef.current = true
       const loadDocIds = async () => {
         const newIds: Record<string, string> = {}
         await Promise.all(
@@ -1327,7 +1333,7 @@ function MessageBubble({ message, viewMode }: { message: SessionMessage; viewMod
           })
         )
         setDocumentIds(prev => ({ ...prev, ...newIds }))
-        setLoadingDocs(false)
+        loadingDocsRef.current = false
       }
       loadDocIds()
     }

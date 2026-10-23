@@ -2,7 +2,8 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { vi } from 'vitest'
 
-import { LanguageProvider, useLanguage, useLocalizedPath } from './LanguageContext'
+import { useLanguage, useLocalizedPath } from './LanguageContext'
+import { LanguageProvider } from './LanguageProvider'
 
 const changeLanguageMock = vi.fn()
 const syncPreferenceMock = vi.fn()

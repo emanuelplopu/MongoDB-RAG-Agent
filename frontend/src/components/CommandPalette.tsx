@@ -136,9 +136,10 @@ export default function CommandPalette({ isOpen, onClose }: CommandPaletteProps)
   useEscapeKey(onClose, isOpen)
   useFocusTrap(containerRef, isOpen)
 
-  // Focus input when opened
+  // Reset and focus the input when opened
   useEffect(() => {
     if (isOpen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clears the previous query when the palette opens; the focus call needs the effect anyway
       setQuery('')
       setSelectedIndex(0)
       setTimeout(() => inputRef.current?.focus(), 50)
@@ -182,10 +183,14 @@ export default function CommandPalette({ isOpen, onClose }: CommandPaletteProps)
     })
   }, [allItems, query])
 
-  // Reset selection when filtered items change
-  useEffect(() => {
+  // Reset the selection when the filtered list changes. State is adjusted during
+  // render (react.dev: "Storing information from previous renders") instead of in an
+  // effect, so the stale index never reaches the screen.
+  const [prevItemCount, setPrevItemCount] = useState(filteredItems.length)
+  if (prevItemCount !== filteredItems.length) {
+    setPrevItemCount(filteredItems.length)
     setSelectedIndex(0)
-  }, [filteredItems.length])
+  }
 
   // Keyboard navigation
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -334,30 +339,4 @@ export default function CommandPalette({ isOpen, onClose }: CommandPaletteProps)
       </div>
     </div>
   )
-}
-
-/**
- * Hook to manage command palette state with Ctrl+K shortcut
- */
-export function useCommandPalette() {
-  const [isOpen, setIsOpen] = useState(false)
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-        e.preventDefault()
-        setIsOpen(prev => !prev)
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [])
-
-  return {
-    isOpen,
-    open: () => setIsOpen(true),
-    close: () => setIsOpen(false),
-    toggle: () => setIsOpen(prev => !prev),
-  }
 }
