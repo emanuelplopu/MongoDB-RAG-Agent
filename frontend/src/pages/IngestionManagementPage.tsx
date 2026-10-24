@@ -34,21 +34,9 @@ import {
   Profile, IngestionStreamEvent, FileRegistryStats, IngestEstimate
 } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
+import { formatDuration, formatPercent } from '../utils/format'
 
 // ---- Pre-ingestion estimate helpers ----
-
-function formatEstDuration(seconds: number): string {
-  if (!seconds || seconds < 1) return '<1s'
-  if (seconds < 90) return `~${Math.round(seconds)}s`
-  const minutes = seconds / 60
-  if (minutes < 90) return `~${Math.round(minutes)}m`
-  const hours = Math.floor(minutes / 60)
-  const rem = Math.round(minutes - hours * 60)
-  if (hours < 24) return rem ? `~${hours}h ${rem}m` : `~${hours}h`
-  const days = Math.floor(hours / 24)
-  const rh = hours % 24
-  return rh ? `~${days}d ${rh}h` : `~${days}d`
-}
 
 function formatEstCost(usd: number): string {
   if (!usd) return '$0'
@@ -154,7 +142,7 @@ function IngestEstimateLine({ profileKeys, incremental }: { profileKeys: string[
               {t('ingestion.estimate.summary', {
                 files: estimate.fileCount.toLocaleString(),
                 size: estimate.sizeGb.toFixed(2),
-                time: formatEstDuration(estimate.timeSeconds),
+                time: formatDuration(estimate.timeSeconds, true),
                 cost: formatEstCost(estimate.costUsd),
               })}
             </span>
@@ -614,13 +602,6 @@ export default function IngestionManagementPage() {
     })
   }
 
-  const formatTime = (seconds: number) => {
-    if (seconds < 60) return `${Math.round(seconds)}s`
-    const mins = Math.floor(seconds / 60)
-    const secs = Math.round(seconds % 60)
-    return `${mins}m ${secs}s`
-  }
-
   const formatRate = (rate: number) => {
     if (rate < 1) return `${(rate * 60).toFixed(1)}/hour`
     return `${rate.toFixed(1)}/min`
@@ -815,9 +796,9 @@ export default function IngestionManagementPage() {
                 {ingestionStatus.status.charAt(0).toUpperCase() + ingestionStatus.status.slice(1)}
               </span>
               <span className="text-secondary dark:text-gray-400">
-                Elapsed: {formatTime(streamEvent?.metrics?.elapsed_seconds || ingestionStatus.elapsed_seconds)}
-                {(streamEvent?.metrics?.estimated_remaining_seconds || ingestionStatus.estimated_remaining_seconds) && 
-                  ` • ETA: ${formatTime(streamEvent?.metrics?.estimated_remaining_seconds || ingestionStatus.estimated_remaining_seconds || 0)}`}
+                Elapsed: {formatDuration(streamEvent?.metrics?.elapsed_seconds || ingestionStatus.elapsed_seconds)}
+                {(streamEvent?.metrics?.estimated_remaining_seconds || ingestionStatus.estimated_remaining_seconds) &&
+                  ` • ETA: ${formatDuration(streamEvent?.metrics?.estimated_remaining_seconds || ingestionStatus.estimated_remaining_seconds || 0)}`}
               </span>
             </div>
             
@@ -831,6 +812,7 @@ export default function IngestionManagementPage() {
                 <p className="text-secondary dark:text-gray-400">{t('ingestion.progress')}</p>
                 <p className="font-medium text-primary-900 dark:text-gray-200">
                   {streamEvent?.progress?.processed_files || ingestionStatus.processed_files} / {streamEvent?.progress?.total_files || ingestionStatus.total_files}
+                  {' '}({formatPercent(streamEvent?.progress?.progress_percent || ingestionStatus.progress_percent)})
                 </p>
               </div>
               <div>

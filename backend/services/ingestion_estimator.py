@@ -155,7 +155,10 @@ def _embedding_cost_per_million(model: str) -> Optional[float]:
 
 
 def human_duration(seconds: float) -> str:
-    """Render a duration as a short human string (e.g. ``~2 h 15 m``)."""
+    """Render a duration as a short human string (e.g. ``~2 h 15 m``, ``~9 d 6 h``, ``~2 w 3 d``).
+
+    Weeks start at 14 days, so a nine-day run still reads ``~9 d`` rather than ``~1 w``.
+    """
     seconds = max(0.0, float(seconds))
     if seconds < 1:
         return "<1 s"
@@ -173,7 +176,11 @@ def human_duration(seconds: float) -> str:
         return f"~{hours} h {rem_minutes} m" if rem_minutes else f"~{hours} h"
     days = hours // 24
     rem_hours = hours % 24
-    return f"~{days} d {rem_hours} h" if rem_hours else f"~{days} d"
+    if days < 14:
+        return f"~{days} d {rem_hours} h" if rem_hours else f"~{days} d"
+    weeks = days // 7
+    rem_days = days % 7
+    return f"~{weeks} w {rem_days} d" if rem_days else f"~{weeks} w"
 
 
 @dataclass

@@ -18,6 +18,7 @@ from backend.models.schemas import (
     IngestionRunSummary, IngestionRunsResponse, FileClassification
 )
 from backend.core.config import settings
+from src.ingestion.progress import progress_percent_label
 from backend.core.ingestion_jobs import (
     API_OWNED, INTERRUPTED_STATUS, RUNNER_API, TENANT_FIELD, reached_files, resume_config
 )
@@ -1143,7 +1144,9 @@ async def run_ingestion(
                     job_state["processing_rate"] = round(current / elapsed_minutes, 2)
             
             # Update phase message with current progress
-            job_state["phase_message"] = f"Processing file {current} of {total}..."
+            job_state["phase_message"] = (
+                f"Processing file {current} of {total} ({progress_percent_label(current, total)})..."
+            )
             
             # Accumulate chunks incrementally
             if chunks_in_file > 0:

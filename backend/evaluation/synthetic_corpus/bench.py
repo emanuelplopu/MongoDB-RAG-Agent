@@ -325,7 +325,7 @@ def parse_ingest_log(text: str) -> list[dict[str, Any]]:
             continue
         ts = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S,%f").timestamp()
         msg = m.group(3)
-        fm = re.match(r"Processing file (\d+)/(\d+): (.*)$", msg)
+        fm = re.match(r"Processing file (\d+)/(\d+)(?: \([^)]*\))?: (.*)$", msg)
         if fm:
             if cur is not None:
                 cur["next_start"] = ts

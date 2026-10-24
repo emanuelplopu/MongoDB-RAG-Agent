@@ -1857,6 +1857,8 @@ describe('large workflow page coverage smoke tests', () => {
 
     renderRoute(<IngestionManagementPage />)
     expect(await screen.findByText(/filtering/i)).toBeInTheDocument()
+    // The file count carries the percent so a huge corpus is readable at a glance
+    expect(screen.getByText(/6 \/ 12 \(50\.0%\)/)).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /Resume/i }))
     await waitFor(() => expect(apiMocks.ingestionApi.resume).toHaveBeenCalled())

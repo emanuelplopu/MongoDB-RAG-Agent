@@ -31,6 +31,7 @@ from backend.services.activity_events import (
 )
 from backend.services.telemetry_store import SHARED_TENANT
 from src.ingestion import telemetry_hooks
+from src.ingestion.progress import progress_percent_label
 
 # Import backup service for post-ingestion backups
 try:
@@ -542,7 +543,7 @@ class IngestionWorker:
                 # Transition to processing phase on first file
                 if current == 1 and job_state["phase"] != "processing":
                     job_state["phase"] = "processing"
-                    job_state["phase_message"] = f"Processing files (0/{total})..."
+                    job_state["phase_message"] = f"Processing files (0/{total}, {progress_percent_label(0, total)})..."
                     job_state["first_file_time"] = datetime.now().isoformat()
                     job_state["discovery_progress"]["files_to_process"] = total
                     self._emit_job(job_id, phase="processing", files=total)
@@ -555,7 +556,9 @@ class IngestionWorker:
                 job_state["processed_files"] = current
                 job_state["total_files"] = total
                 job_state["progress_percent"] = (current / total * 100) if total > 0 else 0
-                job_state["phase_message"] = f"Processing files ({current}/{total})..."
+                job_state["phase_message"] = (
+                    f"Processing files ({current}/{total}, {progress_percent_label(current, total)})..."
+                )
                 
                 # Calculate processing rate (files per minute)
                 if job_state.get("first_file_time") and current > 0:

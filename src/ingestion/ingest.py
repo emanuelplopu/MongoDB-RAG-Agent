@@ -36,6 +36,7 @@ from src.ingestion.chunker import ChunkingConfig, create_chunker, DocumentChunk
 from src.ingestion.embedder import create_embedder
 from src.ingestion.ocr_repair import repair_docling_document, repair_ocr_text
 from src.ingestion import telemetry_hooks
+from src.ingestion.progress import progress_percent_label
 from src.settings import load_settings
 from src.profile import get_profile_manager
 
@@ -3733,7 +3734,10 @@ class DocumentIngestionPipeline:
                         progress_callback(i + 1, len(document_files), file_path, 0)
                     continue
                 
-                logger.info(f"Processing file {i+1}/{len(document_files)}: {file_path}")
+                logger.info(
+                    f"Processing file {i+1}/{len(document_files)} "
+                    f"({progress_percent_label(i + 1, len(document_files))}): {file_path}"
+                )
                 
                 result = await self._ingest_single_document(file_path, content_hash)
                 results.append(result)
@@ -3933,7 +3937,11 @@ class DocumentIngestionPipeline:
                             return
                     
                     size_mb = file_size / (1024 * 1024)
-                    logger.info(f"Processing file ({processed_count+1}/{total_files}): {file_path} ({size_mb:.1f}MB, timeout={timeout_seconds:.0f}s)")
+                    logger.info(
+                        f"Processing file ({processed_count+1}/{total_files}, "
+                        f"{progress_percent_label(processed_count + 1, total_files)}): {file_path} "
+                        f"({size_mb:.1f}MB, timeout={timeout_seconds:.0f}s)"
+                    )
                     
                     # Process with timeout - this is the key improvement
                     result = await asyncio.wait_for(

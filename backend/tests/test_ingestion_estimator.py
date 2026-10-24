@@ -280,6 +280,9 @@ def test_human_duration_formatting():
     assert human_duration(600).endswith("m")  # 10 minutes
     assert "h" in human_duration(3 * 3600 + 900)  # 3h15m
     assert "d" in human_duration(2 * 86400 + 3600)  # 2d1h
+    assert human_duration(9 * 86400 + 6 * 3600) == "~9 d 6 h"  # days up to 13 d
+    assert human_duration(14 * 86400) == "~2 w"
+    assert human_duration(17 * 86400 + 3600) == "~2 w 3 d"
 
 
 # --------------------------------------------------------------------------- endpoint tests

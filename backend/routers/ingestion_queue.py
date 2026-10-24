@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from backend.core.config import settings
 from backend.routers.auth import require_admin, UserResponse
+from src.ingestion.progress import progress_percent_label
 
 logger = logging.getLogger(__name__)
 
@@ -592,7 +593,9 @@ async def _run_ingestion_job(job: Dict[str, Any], db) -> None:
             job_state["processed_files"] = current
             job_state["total_files"] = total
             job_state["progress_percent"] = (current / total * 100) if total > 0 else 0
-            job_state["phase_message"] = f"Processing files ({current}/{total})..."
+            job_state["phase_message"] = (
+                f"Processing files ({current}/{total}, {progress_percent_label(current, total)})..."
+            )
             
             # Calculate processing rate
             if job_state.get("first_file_time") and current > 0:

@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../contexts/AuthContext'
+import { formatDuration } from '../utils/format'
 import {
   ClockIcon,
   CheckCircleIcon,
@@ -236,15 +237,6 @@ export default function JobHistoryPage() {
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text)
-  }
-
-  const formatDuration = (seconds: number | null): string => {
-    if (seconds === null) return '-'
-    if (seconds < 60) return `${seconds.toFixed(0)}s`
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`
-    const hours = Math.floor(seconds / 3600)
-    const mins = Math.floor((seconds % 3600) / 60)
-    return `${hours}h ${mins}m`
   }
 
   const formatBytes = (bytes: number): string => {

@@ -58,7 +58,7 @@ def test_parse_ingest_log_stage_timings() -> None:
         "2026-10-11 09:47:12,520 - src.ingestion.embedder - INFO - Generating embeddings for 3 chunks",
         "2026-10-11 09:47:13,020 - src.ingestion.ingest - INFO - Generated embeddings for 3 chunks",
         "2026-10-11 09:47:13,100 - src.ingestion.ingest - INFO - Saved document to MongoDB with ID: x",
-        "2026-10-11 09:47:13,200 - src.ingestion.ingest - INFO - Processing file 2/2: /app/m/A/b.eml",
+        "2026-10-11 09:47:13,200 - src.ingestion.ingest - INFO - Processing file 2/2 (100.0%): /app/m/A/b.eml",
         "2026-10-11 09:47:13,300 - src.ingestion.ingest - INFO - Successfully extracted email: b.eml",
         "2026-10-11 09:47:13,310 - src.ingestion.ingest - INFO - Created 1 chunks",
         "2026-10-11 09:47:13,700 - src.ingestion.ingest - INFO - Saved document to MongoDB with ID: y",
