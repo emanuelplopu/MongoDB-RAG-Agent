@@ -29,6 +29,7 @@ from backend.core.ingestion_jobs import (
 from backend.services.activity_events import (
     ActivityEventRecorder, get_activity_recorder, set_activity_recorder
 )
+from backend.services.ingestion_counters import apply_stats_counts
 from backend.services.telemetry_store import SHARED_TENANT
 from src.ingestion import telemetry_hooks
 
@@ -118,6 +119,7 @@ class IngestionWorker:
             "max_concurrent_files": 2,
             "embedding_batch_size": 100,
             "thread_pool_workers": 4,
+            "process_isolation_enabled": True,
             "file_processing_timeout": 300,
             "job_poll_interval": 1.0,
         }
@@ -223,6 +225,7 @@ class IngestionWorker:
                     "max_concurrent_files": config_doc.get("max_concurrent_files", 2),
                     "embedding_batch_size": config_doc.get("embedding_batch_size", 100),
                     "thread_pool_workers": config_doc.get("thread_pool_workers", 4),
+                    "process_isolation_enabled": bool(config_doc.get("process_isolation_enabled", True)),
                     "file_processing_timeout": config_doc.get("file_processing_timeout", 300),
                     "job_poll_interval": config_doc.get("job_poll_interval_seconds", 1.0),
                 })
@@ -393,6 +396,11 @@ class IngestionWorker:
             "current_file": None,
             "progress_percent": 0.0,
             "errors": [],
+            # Per-outcome counters, updated from the per-file stats as they are written
+            "image_only_pdfs": 0,
+            "no_chunks_files": 0,
+            "timeout_files": 0,
+            "error_files": 0,
             # Phase tracking
             "phase": "initializing",
             "phase_message": "Starting ingestion...",
@@ -562,12 +570,19 @@ class IngestionWorker:
                     job_state[FILES_STARTED_FIELD] = datetime.now().isoformat()
                 asyncio.create_task(progress_callback(current, total, current_file, chunks_in_file))
             
+            def stats_callback(counts: dict) -> None:
+                # Status counters follow the per-file stats as they are written (persisted at once)
+                apply_stats_counts(job_state, counts)
+                asyncio.create_task(self._update_job_progress(job_id, job_state))
+
             # Run ingestion with configured concurrency
             results = await pipeline.ingest_documents(
                 progress_callback=sync_progress_callback,
                 incremental=config.get("incremental", True),
                 max_concurrent_files=self.config.get("max_concurrent_files", 1),
                 thread_pool_workers=self.config.get("thread_pool_workers"),
+                process_isolation=self.config.get("process_isolation_enabled"),
+                stats_callback=stats_callback,
             )
             
             # Update phase: finalizing
@@ -771,6 +786,13 @@ class IngestionWorker:
                     "progress.image_count": state.get("image_count", 0),
                     "progress.audio_count": state.get("audio_count", 0),
                     "progress.video_count": state.get("video_count", 0),
+                    "progress.failed_files": state.get("failed_files", 0),
+                    "progress.duplicates_skipped": state.get("duplicates_skipped", 0),
+                    # Per-outcome counters (read top-level by the runs list and the status API)
+                    "image_only_pdfs": state.get("image_only_pdfs", 0),
+                    "no_chunks_files": state.get("no_chunks_files", 0),
+                    "timeout_files": state.get("timeout_files", 0),
+                    "error_files": state.get("error_files", 0),
                     # Phase tracking fields
                     "phase": state.get("phase"),
                     "phase_message": state.get("phase_message"),
