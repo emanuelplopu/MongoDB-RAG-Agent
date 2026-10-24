@@ -214,6 +214,9 @@ class DoclingHybridChunker:
 
                 current_pos = end_char
 
+            document_chunks = split_oversized_chunks(
+                document_chunks, self.config.max_tokens, lambda t: len(self.tokenizer.encode(t))
+            )
             logger.info(f"Created {len(document_chunks)} chunks using HybridChunker")
             return document_chunks
 
@@ -291,6 +294,78 @@ class DoclingHybridChunker:
 
         logger.info(f"Created {len(chunks)} chunks using simple fallback")
         return chunks
+
+
+#: A chunk above this many times ``max_tokens`` is cut into windows (the HybridChunker
+#: emits a whole table as one chunk when it cannot split it: Firmenbuch extracts gave
+#: 8,000-token chunks that the embedding server rejected together with their batch).
+OVERSIZE_FACTOR = 4
+#: Window size of the cut pieces, as a multiple of ``max_tokens``.
+WINDOW_FACTOR = 3
+#: Characters per token assumed when a counter is not given.
+CHARS_PER_TOKEN = 3
+WINDOW_OVERLAP_CHARS = 200
+
+
+def split_oversized_chunks(chunks: List[DocumentChunk], max_tokens: int, count_tokens=None) -> List[DocumentChunk]:
+    """Cut chunks longer than ``OVERSIZE_FACTOR * max_tokens`` tokens into overlapping windows.
+
+    Args:
+        chunks: Chunks in document order.
+        max_tokens: The chunker's token target (the embedding model's window is larger).
+        count_tokens: Optional token counter; ``len(text) / CHARS_PER_TOKEN`` when omitted.
+
+    Returns:
+        The chunks with oversized ones replaced by their windows, indices renumbered and
+        ``total_chunks`` updated; untouched when nothing is oversized.
+    """
+    counter = count_tokens or (lambda text: len(text) // CHARS_PER_TOKEN)
+    limit = OVERSIZE_FACTOR * max_tokens
+    window_chars = WINDOW_FACTOR * max_tokens * CHARS_PER_TOKEN
+    result: List[DocumentChunk] = []
+    changed = False
+    for chunk in chunks:
+        tokens = chunk.token_count if chunk.token_count is not None else counter(chunk.content)
+        if tokens <= limit:
+            result.append(chunk)
+            continue
+        changed = True
+        text = chunk.content
+        pieces = []
+        start = 0
+        while start < len(text):
+            end = min(len(text), start + window_chars)
+            if end < len(text):
+                cut = text.rfind("\n", start + window_chars // 2, end)
+                if cut > start:
+                    end = cut
+            pieces.append(text[start:end].strip())
+            if end >= len(text):
+                break
+            start = max(end - WINDOW_OVERLAP_CHARS, start + 1)
+        pieces = [p for p in pieces if p]
+        logger.warning(
+            f"Chunk {chunk.index} of {chunk.metadata.get('source', '?')} has ~{tokens} tokens; "
+            f"split into {len(pieces)} windows of <= {window_chars} chars"
+        )
+        offset = chunk.start_char
+        for part, piece in enumerate(pieces, start=1):
+            result.append(DocumentChunk(
+                content=piece,
+                index=0,
+                start_char=offset,
+                end_char=offset + len(piece),
+                metadata={**chunk.metadata, "split_part": part, "split_parts": len(pieces)},
+                token_count=counter(piece),
+            ))
+            offset += len(piece)
+    if not changed:
+        return chunks
+    for index, chunk in enumerate(result):
+        chunk.index = index
+        chunk.metadata["total_chunks"] = len(result)
+        chunk.metadata["token_count"] = chunk.token_count
+    return result
 
 
 def create_chunker(config: ChunkingConfig):
