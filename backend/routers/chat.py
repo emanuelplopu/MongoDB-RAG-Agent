@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from backend.models.schemas import ChatRequest, ChatResponse, SearchType
 from backend.core.config import settings
+from backend.core.llm_providers import LLMConfig, LLMProvider
 from backend.services.query_embedding import embed_query
 from backend.tools.browser_tool import browse_url, BrowserToolResult
 from backend.agent.tool_gate import ToolGate
@@ -26,6 +27,36 @@ _conversations: dict = {}
 async def get_embedding(text: str) -> list:
     """Embed a search query with the configured model (query prefix applied)."""
     return await embed_query(text)
+
+
+def resolve_chat_model(model: Optional[str] = None) -> tuple[str, str]:
+    """Build the LiteLLM model string for the legacy chat route.
+
+    ``LLM_MODEL`` holds a bare model name (``gemma4:12b``); LiteLLM needs the
+    ``provider/model`` form for everything but OpenAI, so the name is prefixed
+    from ``LLM_PROVIDER`` through the shared :class:`LLMConfig` mapping the
+    orchestrator and Strategy OS paths use. A model that already carries a
+    LiteLLM prefix (``ollama/gemma4:12b``, ``anthropic/claude-haiku-4.5``)
+    and a provider LiteLLM has no prefix for (``openrouter``) pass through
+    unchanged, which keeps the OpenAI-compatible configurations as they were.
+
+    Args:
+        model: Model name to resolve; defaults to ``settings.llm_model``.
+
+    Returns:
+        ``(litellm_model, provider)`` with the provider name in lower case.
+    """
+    raw_model = model or settings.llm_model
+    model_name, provider = settings.resolve_model_provider(raw_model, settings.llm_provider)
+    provider = (provider or "").lower()
+    if model_name != raw_model:
+        # Explicit ``provider/`` prefix: already in LiteLLM form.
+        return raw_model, provider
+    try:
+        provider_enum = LLMProvider(provider)
+    except ValueError:
+        return raw_model, provider
+    return LLMConfig(provider=provider_enum, model=model_name).get_litellm_model(), provider
 
 
 from dataclasses import dataclass, field
@@ -342,8 +373,9 @@ async def generate_response(message: str, context: str, conversation_history: li
     if activity_logger is None:
         activity_logger = NullActivityLogger()
     
-    # Use provided model or default
-    llm_model = model or settings.llm_model
+    # Resolve the LiteLLM model string from the configured provider
+    # ("gemma4:12b" + LLM_PROVIDER=ollama -> "ollama/gemma4:12b")
+    llm_model, llm_provider = resolve_chat_model(model)
     
     search_thinking = None
     all_context_parts = []
@@ -477,7 +509,7 @@ Remember: You have access to the user's company documents. Search them! Multiple
             
             # Log LLM request
             activity_logger.log_llm_request(
-                model=llm_model, provider="openai",
+                model=llm_model, provider=llm_provider or "openai",
                 messages=messages,
                 temperature=0.7,
                 max_tokens=llm_params.get("max_tokens", llm_params.get("max_completion_tokens", 0)),
