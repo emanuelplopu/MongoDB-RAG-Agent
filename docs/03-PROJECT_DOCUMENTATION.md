@@ -545,6 +545,8 @@ Backup system configuration.
 | DELETE | `/conversations/{id}` | Delete conversation |
 | GET | `/conversations` | List all conversations |
 
+`POST /` resolves the LiteLLM model string from `LLM_PROVIDER` + `LLM_MODEL` through the shared `LLMConfig.get_litellm_model()` mapping (`backend/core/llm_providers.py`), so `LLM_PROVIDER=ollama` with `LLM_MODEL=gemma4:12b` calls `ollama/gemma4:12b` at `OLLAMA_BASE_URL`; names that already carry a LiteLLM prefix and OpenAI models pass through unchanged (`resolve_chat_model` in `backend/routers/chat.py`).
+
 ### 4.2 Search Endpoints (`/api/v1/search`)
 
 | Method | Endpoint | Description |
