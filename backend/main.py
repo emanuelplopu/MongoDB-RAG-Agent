@@ -41,7 +41,7 @@ from backend.routers.cloud_sources import (
     providers_router as cloud_providers,
     cache_router as cloud_cache,
 )
-from backend.routers.system import load_config_from_db, load_llm_config_from_db
+from backend.routers.system import load_config_from_db, load_ingestion_config_from_db, load_llm_config_from_db
 from backend.routers.ingestion import check_and_resume_interrupted_jobs, graceful_shutdown_handler
 from backend.routers.prompts import initialize_default_templates
 from backend.services.backup_service import BackupService
@@ -202,7 +202,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
             logger.info("Loaded LLM provider configuration from database")
     except Exception as e:
         logger.warning(f"Failed to load LLM provider config: {e}")
-    
+
+    # Load the saved ingestion performance config (concurrency, per-file timeouts, accelerator)
+    # before any job resumes: the per-file timeout is global state the pipeline reads per file,
+    # and without this call a restart silently fell back to the 120 s default
+    try:
+        if await load_ingestion_config_from_db(db_manager):
+            logger.info("Loaded ingestion performance config from database")
+    except Exception as e:
+        logger.warning(f"Failed to load ingestion performance config: {e}")
+
     # Check for and resume interrupted ingestion jobs
     try:
         resumed_job = await check_and_resume_interrupted_jobs(db_manager)
