@@ -18,6 +18,7 @@ import argparse
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 import functools
+import itertools
 import threading
 
 from pymongo import AsyncMongoClient
@@ -407,6 +408,8 @@ def update_accelerator_config(
         _accelerator_config.enable_ocr_acceleration = enable_ocr_acceleration
     if torch_dtype is not None:
         _accelerator_config.torch_dtype = torch_dtype
+    if device is not None or cuda_device_id is not None:
+        invalidate_gpu_slots()  # the slot -> device split follows the (new) device
     
     logger.info(
         f"Updated accelerator config: device={_accelerator_config.device}, "
@@ -497,8 +500,243 @@ def docling_num_threads(pool_workers: Optional[int] = None) -> int:
     return max(1, min(MAX_DOCLING_THREADS, available_cpu_count() // max(1, pool)))
 
 
+# ---------------------------------------------------------------------------
+# GPU conversion slots
+# ---------------------------------------------------------------------------
+#
+# Every pool thread keeps its own Docling converter (see _cached_converter), so a thread
+# converting on the GPU holds its own copy of the layout and TableFormer models in VRAM
+# (about 1.2 GB per converter; docs/04, "Parallel conversions"). The pool threads are
+# therefore numbered as conversion slots: the first INGEST_GPU_SLOTS slots build their
+# converters on the GPU, the remaining ones on the CPU. OCR (Tesseract, a CPU process
+# either way) keeps the whole pool, while only a few model copies share the card with
+# the embedder and the chat model. The cap is lowered to what the free VRAM holds when
+# the pool is configured, and a slot that still runs out of GPU memory moves to the CPU
+# (convert_with_cpu_fallback). Worker processes - one per file slot in process-isolated
+# runs - take the same slot -> device assignment through assign_conversion_slot(index).
+
+DEFAULT_GPU_SLOTS = 4
+DEFAULT_GPU_SLOT_VRAM_MB = 1200
+_gpu_slots_in_force: Optional[int] = None  # resolved when the pool is configured
+_slot_counter = itertools.count()  # restarted for every new pool
+_slot_local = threading.local()
+
+
+def configured_gpu_slots() -> Optional[int]:
+    """``INGEST_GPU_SLOTS`` as set: ``None`` when unset or empty (automatic), else an int >= 0."""
+    raw = os.getenv("INGEST_GPU_SLOTS")
+    if raw is None or raw.strip() == "":
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(f"Ignoring non-numeric INGEST_GPU_SLOTS={raw!r}")
+        return None
+    if value < 0:
+        logger.warning(f"Ignoring negative INGEST_GPU_SLOTS={raw!r}")
+        return None
+    return value
+
+
+def gpu_slot_vram_bytes() -> int:
+    """VRAM one GPU converter is assumed to need: ``INGEST_GPU_SLOT_VRAM_MB`` (default 1200) in bytes."""
+    return (_positive_int_env("INGEST_GPU_SLOT_VRAM_MB") or DEFAULT_GPU_SLOT_VRAM_MB) * 1024 * 1024
+
+
+def cuda_free_memory_bytes() -> Optional[int]:
+    """Free bytes on the configured CUDA device; ``None`` when CUDA is not usable."""
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+        free, _total = torch.cuda.mem_get_info(_accelerator_config.cuda_device_id)
+        return int(free)
+    except Exception as exc:  # noqa: BLE001 - a failed query must not stop the run
+        logger.warning(f"Could not read the free GPU memory ({exc}); GPU slots are not capped by VRAM")
+        return None
+
+
+def resolve_gpu_slots(
+    pool_workers: int,
+    configured: Optional[int] = None,
+    free_vram_bytes: Optional[int] = None,
+) -> int:
+    """GPU conversion slots for a pool of ``pool_workers`` threads.
+
+    ``INGEST_GPU_SLOTS`` sets the request (DEFAULT_GPU_SLOTS when unset; ``0`` keeps every
+    conversion on the CPU). It is capped by the pool size and, on CUDA, by the free VRAM
+    at one :func:`gpu_slot_vram_bytes` per slot, with a WARNING when it is lowered. Without
+    a CUDA device the result is 0: ``cpu`` and ``mps`` apply to every slot unchanged.
+
+    Args:
+        pool_workers: Threads in the pool.
+        configured: The request, in place of ``INGEST_GPU_SLOTS`` (tests).
+        free_vram_bytes: Free GPU memory, in place of the torch query (tests).
+
+    Returns:
+        0..``pool_workers``.
+    """
+    requested = configured_gpu_slots() if configured is None else int(configured)
+    device = get_effective_device()
+    if device != "cuda":
+        if requested:
+            logger.info(f"INGEST_GPU_SLOTS={requested} ignored: conversions run on {device}, not CUDA")
+        return 0
+    if requested is None:
+        requested = DEFAULT_GPU_SLOTS
+    slots = max(0, min(requested, max(1, int(pool_workers))))
+    if slots == 0:
+        return 0
+    free = cuda_free_memory_bytes() if free_vram_bytes is None else int(free_vram_bytes)
+    if free is None:
+        return slots
+    per_slot = gpu_slot_vram_bytes()
+    fits = max(0, free // per_slot)
+    if fits < slots:
+        logger.warning(
+            f"Free GPU memory {free / 2**30:.1f} GiB holds {fits} converter(s) of "
+            f"{per_slot / 2**20:.0f} MiB; lowering the GPU conversion slots from {slots} to {fits}"
+            + (" - every conversion runs on the CPU" if fits == 0 else "")
+        )
+        slots = fits
+    return slots
+
+
+def gpu_slots_in_force() -> int:
+    """GPU slots of the pool in force, resolved for the default pool size when no pool exists yet."""
+    global _gpu_slots_in_force
+    if _gpu_slots_in_force is None:
+        _gpu_slots_in_force = resolve_gpu_slots(_pool_workers_in_force or default_thread_pool_workers())
+    return _gpu_slots_in_force
+
+
+def invalidate_gpu_slots() -> None:
+    """Resolve the GPU slot count anew on its next use (the accelerator config or device changed)."""
+    global _gpu_slots_in_force
+    _gpu_slots_in_force = None
+
+
+def _reset_conversion_slots(gpu_slots: int) -> None:
+    """Number the slots of a new pool from 0 and record its GPU slot count."""
+    global _slot_counter, _gpu_slots_in_force
+    _slot_counter = itertools.count()
+    _gpu_slots_in_force = gpu_slots
+
+
+def current_conversion_slot() -> int:
+    """This thread's conversion slot: pool threads claim theirs when they start, other threads on first use."""
+    slot = getattr(_slot_local, "slot", None)
+    if slot is None:
+        slot = next(_slot_counter)
+        _slot_local.slot = slot
+    return slot
+
+
+def assign_conversion_slot(slot: int) -> None:
+    """Pin the calling thread (e.g. the main thread of a conversion worker process) to slot ``slot``.
+
+    Clears a CPU demotion of the thread and its cached converters, so its next conversion
+    builds the converter for the slot's device.
+    """
+    _slot_local.slot = int(slot)
+    _slot_local.device_override = None
+    clear_converter_cache()
+
+
+def slot_device(slot: int, gpu_slots: Optional[int] = None) -> str:
+    """Device of conversion slot ``slot``: ``cuda`` for the first ``gpu_slots`` slots, else ``cpu``.
+
+    Args:
+        slot: Slot number, 0-based.
+        gpu_slots: GPU slot count; the pool's (:func:`gpu_slots_in_force`) when omitted.
+
+    Returns:
+        ``cuda`` or ``cpu``; the configured or detected device itself when that is not CUDA.
+    """
+    device = get_effective_device()
+    if device != "cuda":
+        return device
+    limit = gpu_slots_in_force() if gpu_slots is None else int(gpu_slots)
+    return "cuda" if 0 <= int(slot) < limit else "cpu"
+
+
+def conversion_device() -> str:
+    """Device this thread converts on: its slot's device, or ``cpu`` after a GPU out-of-memory demotion."""
+    override = getattr(_slot_local, "device_override", None)
+    if override:
+        return override
+    return slot_device(current_conversion_slot())
+
+
+def demote_conversion_slot_to_cpu(reason: str = "") -> None:
+    """Move this thread's conversions to the CPU (until its pool is replaced) and free its GPU converters."""
+    slot = current_conversion_slot()
+    _slot_local.device_override = "cpu"
+    clear_converter_cache()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:  # noqa: BLE001 - freeing the allocator cache is best effort
+        pass
+    logger.warning(
+        f"Conversion slot {slot} moved to the CPU after a GPU out-of-memory error"
+        + (f": {reason}" if reason else "")
+    )
+
+
+_CUDA_OOM_MARKERS = (
+    "CUDA out of memory",
+    "CUDA error: out of memory",
+    "CUBLAS_STATUS_ALLOC_FAILED",
+    "CUDNN_STATUS_ALLOC_FAILED",
+    "CUBLAS_STATUS_NOT_INITIALIZED",
+)
+
+
+def is_cuda_out_of_memory(exc: BaseException) -> bool:
+    """Whether ``exc`` (or an exception chained into it) is a CUDA out-of-memory error."""
+    current: Optional[BaseException] = exc
+    for _ in range(8):
+        if current is None:
+            return False
+        if type(current).__name__ == "OutOfMemoryError":
+            return True
+        text = str(current)
+        if any(marker in text for marker in _CUDA_OOM_MARKERS):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def convert_with_cpu_fallback(make_converter: Callable[[], Any], path: str) -> Any:
+    """``make_converter().convert(path)``; a CUDA out-of-memory error moves this slot to the CPU and retries once.
+
+    The VRAM a slot was sized for can be gone by the time it converts (the chat model or
+    another process took it), so the slot gives up the GPU instead of failing the file,
+    and every later file on this thread converts on the CPU until the pool is replaced.
+
+    Args:
+        make_converter: Returns the (thread-cached) converter; called again after the demotion.
+        path: File to convert.
+
+    Returns:
+        Docling's ``ConversionResult``.
+    """
+    try:
+        return make_converter().convert(path)
+    except Exception as exc:  # noqa: BLE001 - only the GPU memory case is handled here
+        if conversion_device() != "cuda" or not is_cuda_out_of_memory(exc):
+            raise
+        text = str(exc).strip()
+        demote_conversion_slot_to_cpu(text.splitlines()[0][:200] if text else "")
+        return make_converter().convert(path)
+
+
 def docling_accelerator_options(device: Optional[str] = None, num_threads: Optional[int] = None):
-    """Docling ``AcceleratorOptions`` for ``device`` (the effective device when omitted).
+    """Docling ``AcceleratorOptions`` for ``device`` (this thread's conversion device when omitted).
 
     Always a real options object: a plain dict assigned to
     ``pipeline_options.accelerator_options`` is not coerced by pydantic, and Docling
@@ -515,7 +753,7 @@ def docling_accelerator_options(device: Optional[str] = None, num_threads: Optio
     """
     from docling.datamodel.accelerator_options import AcceleratorOptions
 
-    device = device or get_effective_device()
+    device = device or conversion_device()
     if device == "cuda" and _accelerator_config.cuda_device_id > 0:
         device = f"cuda:{_accelerator_config.cuda_device_id}"
     return AcceleratorOptions(device=device, num_threads=num_threads or docling_num_threads())
@@ -1502,9 +1740,35 @@ def clear_converter_cache() -> None:
     _converter_cache_local.converters = {}
 
 
+_detected_device: Optional[str] = None
+_device_detection_lock = threading.Lock()
+
+
 def detect_available_device() -> str:
+    """The best available device (``cuda``, ``mps`` or ``cpu``), probed and logged once per process.
+
+    The probe used to run - and log "No GPU detected, using CPU" - for every converter
+    build, i.e. once per pool thread and configuration (85 times in three hours of one
+    ingestion run). :func:`reset_device_detection` forgets the result (tests).
     """
-    Detect the best available device for processing.
+    global _detected_device
+    if _detected_device is None:
+        with _device_detection_lock:
+            if _detected_device is None:
+                _detected_device = _probe_available_device()
+    return _detected_device
+
+
+def reset_device_detection() -> None:
+    """Forget the probed device and the resolved GPU slot count (tests, or after a driver change)."""
+    global _detected_device
+    _detected_device = None
+    invalidate_gpu_slots()
+
+
+def _probe_available_device() -> str:
+    """
+    Detect the best available device for processing (uncached; see :func:`detect_available_device`).
     
     Returns:
         Device string: "cuda", "mps", or "cpu"
@@ -1564,7 +1828,7 @@ def create_document_converter(ocr_config: Optional[OcrConfig] = None):
     """
     ocr_config = ocr_config or resolve_ocr_config()
     key = (
-        "pdf", ocr_config, get_effective_device(), _accelerator_config.enable_ocr_acceleration,
+        "pdf", ocr_config, conversion_device(), _accelerator_config.enable_ocr_acceleration,
         docling_num_threads(),  # a resized pool rebuilds the converters with the new thread count
     )
     return _cached_converter(key, lambda: _build_document_converter(ocr_config))
@@ -1576,8 +1840,9 @@ def _build_document_converter(ocr_config: OcrConfig):
         from docling.datamodel.pipeline_options import PdfPipelineOptions
         from docling.datamodel.base_models import InputFormat
 
-        # Get effective device
-        device = get_effective_device()
+        # This thread's device: its conversion slot's (GPU for the first INGEST_GPU_SLOTS slots)
+        device = conversion_device()
+        slot = current_conversion_slot()
         cfg = _accelerator_config
 
         # Configure pipeline options for PDF processing
@@ -1587,11 +1852,13 @@ def _build_document_converter(ocr_config: OcrConfig):
         pipeline_options.accelerator_options = docling_accelerator_options(device)
         if device in ["cuda", "mps"]:
             logger.info(
-                f"Docling converter using GPU acceleration: {pipeline_options.accelerator_options.device}"
+                f"Docling converter of slot {slot} using GPU acceleration: "
+                f"{pipeline_options.accelerator_options.device}"
             )
         else:
             logger.info(
-                f"Docling converter using CPU ({pipeline_options.accelerator_options.num_threads} threads per model)"
+                f"Docling converter of slot {slot} using CPU "
+                f"({pipeline_options.accelerator_options.num_threads} threads per model)"
             )
 
         # Enable OCR with acceleration if configured
@@ -1651,7 +1918,7 @@ def create_image_converter(ocr_config: Optional[OcrConfig] = None, image_path: O
         dims = read_image_dimensions(image_path)
         if dims is not None:
             scale = ocr_config.image_scale(*dims)
-    key = ("image", ocr_config, get_effective_device(), docling_num_threads())
+    key = ("image", ocr_config, conversion_device(), docling_num_threads())
     converter = _cached_converter(key, lambda: _build_image_converter(ocr_config, None))
     if scale is not None:
         set_image_ocr_scale(converter, scale)
@@ -1712,7 +1979,7 @@ def _build_image_converter(ocr_config: OcrConfig, scale: Optional[float]):
     pipeline_options.do_table_structure = table_structure_enabled()
 
     # Accelerator: always a real AcceleratorOptions (see docling_accelerator_options)
-    pipeline_options.accelerator_options = docling_accelerator_options(get_effective_device())
+    pipeline_options.accelerator_options = docling_accelerator_options(conversion_device())
 
     apply_ocr_options(pipeline_options, ocr_config, scale=scale)
 
@@ -1793,7 +2060,9 @@ class DocumentIngestionPipeline:
         the worker takes one at a time), so a run reconfigures an idle pool. The Tesseract
         thread limit (``OCR_OMP_THREAD_LIMIT``) follows the new size unless pinned, and
         converters built for the old size are rebuilt on their next use (their cache key
-        carries the Docling thread count).
+        carries the Docling thread count). The new pool's threads are numbered as
+        conversion slots from 0; the first :func:`resolve_gpu_slots` of them convert on
+        the GPU (the free VRAM is checked here), the others on the CPU.
 
         Args:
             workers: Requested pool size; clamped to 1..MAX_THREAD_POOL_WORKERS.
@@ -1806,7 +2075,13 @@ class DocumentIngestionPipeline:
         if cls._executor is not None and cls._executor_workers == workers:
             return cls._executor
         previous = cls._executor
-        cls._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ingest_")
+        gpu_slots = resolve_gpu_slots(workers)
+        _reset_conversion_slots(gpu_slots)
+        cls._executor = ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="ingest_",
+            initializer=current_conversion_slot,  # each new thread claims the next slot
+        )
         cls._executor_workers = workers
         _pool_workers_in_force = workers
         if previous is not None:
@@ -1818,7 +2093,8 @@ class DocumentIngestionPipeline:
         else:
             tesseract_threads = configure_tesseract_threads(workers)
         logger.info(
-            f"Ingestion thread pool: {workers} workers; Docling threads per model: "
+            f"Ingestion thread pool: {workers} workers; GPU conversion slots: {gpu_slots} "
+            f"({workers - gpu_slots} on the CPU); Docling threads per model: "
             f"{docling_num_threads(workers)}; Tesseract OpenMP threads per process: "
             f"{tesseract_threads if tesseract_threads else 'unlimited'}"
         )
@@ -2130,8 +2406,9 @@ class DocumentIngestionPipeline:
 
                 convert_path, temp_copy = prepare_image_for_docling(file_path)
                 try:
-                    converter = create_image_converter(image_path=convert_path)
-                    result = converter.convert(convert_path)
+                    result = convert_with_cpu_fallback(
+                        lambda: create_image_converter(image_path=convert_path), convert_path
+                    )
                 finally:
                     if temp_copy and os.path.exists(temp_copy):
                         os.remove(temp_copy)
@@ -2195,8 +2472,7 @@ class DocumentIngestionPipeline:
                     f"{os.path.basename(file_path)}"
                 )
 
-                converter = create_document_converter()
-                result = converter.convert(file_path)
+                result = convert_with_cpu_fallback(create_document_converter, file_path)
 
                 # Export to markdown for consistent processing
                 markdown_content = export_document_markdown(result.document)
@@ -2471,8 +2747,7 @@ class DocumentIngestionPipeline:
                 ooxml_template_as_document(file_path, tmp)
             else:
                 shutil.copyfile(file_path, tmp)
-            converter = create_document_converter()
-            result = converter.convert(tmp)
+            result = convert_with_cpu_fallback(create_document_converter, tmp)
             logger.info(f"Converted {basename} as {suffix}")
             return (export_document_markdown(result.document), result.document)
         except Exception as exc:  # noqa: BLE001 - one unreadable file must not stop the run
@@ -2514,8 +2789,7 @@ class DocumentIngestionPipeline:
                     try:
                         page = frame.convert("RGB") if frame.mode not in ("L", "RGB") else frame.copy()
                         page.save(tmp, "PNG", dpi=save_dpi) if save_dpi else page.save(tmp, "PNG")
-                        converter = create_image_converter(image_path=tmp)
-                        result = converter.convert(tmp)
+                        result = convert_with_cpu_fallback(lambda: create_image_converter(image_path=tmp), tmp)
                         text = export_document_markdown(result.document).strip()
                     except Exception as exc:  # noqa: BLE001 - keep the other pages
                         failed += 1

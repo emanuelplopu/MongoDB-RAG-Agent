@@ -1867,12 +1867,16 @@ async def get_ingestion_accelerator_config(request: Request):
     - CUDA device ID for multi-GPU systems
     - OCR acceleration status
     - Detected available device
+    - GPU conversion slots: the configured request (INGEST_GPU_SLOTS, null = automatic)
+      and the count in force for the current conversion pool (0 = every conversion on the CPU)
     """
     try:
         from src.ingestion.ingest import (
-            get_accelerator_config, 
+            configured_gpu_slots,
+            get_accelerator_config,
             get_effective_device,
-            detect_available_device
+            detect_available_device,
+            gpu_slots_in_force,
         )
         cfg = get_accelerator_config()
         return {
@@ -1881,7 +1885,9 @@ async def get_ingestion_accelerator_config(request: Request):
             "enable_ocr_acceleration": cfg.enable_ocr_acceleration,
             "torch_dtype": cfg.torch_dtype,
             "effective_device": get_effective_device(),
-            "detected_device": detect_available_device()
+            "detected_device": detect_available_device(),
+            "gpu_slots_configured": configured_gpu_slots(),
+            "gpu_slots": gpu_slots_in_force(),
         }
     except ImportError:
         return {"error": "Accelerator config not available"}
