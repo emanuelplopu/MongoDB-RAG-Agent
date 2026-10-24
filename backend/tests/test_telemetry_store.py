@@ -13,10 +13,13 @@ import pytest
 
 from backend.services.telemetry_store import (
     ACTIVITY_EVENTS,
+    DB_SAMPLES,
     HOST_SAMPLES,
+    LEASES,
     SHARED_TENANT,
     TelemetryStore,
     choose_bucket_seconds,
+    slot_due_at,
     tenant_visible,
 )
 
@@ -113,18 +116,29 @@ class TestEnsureCollections:
         await _store(db).ensure_collections()
 
         created = dict(db.created)
-        assert set(created) == {HOST_SAMPLES, ACTIVITY_EVENTS}
+        assert set(created) == {HOST_SAMPLES, ACTIVITY_EVENTS, DB_SAMPLES}
         assert created[HOST_SAMPLES]["timeseries"] == {"timeField": "ts", "metaField": "meta", "granularity": "seconds"}
         assert created[HOST_SAMPLES]["expireAfterSeconds"] == 30 * 86400
         assert created[ACTIVITY_EVENTS]["expireAfterSeconds"] == 90 * 86400
+        assert created[DB_SAMPLES]["timeseries"] == {"timeField": "ts", "metaField": "meta", "granularity": "minutes"}
+        assert created[DB_SAMPLES]["expireAfterSeconds"] == 400 * 86400  # default when built without settings
         index_names = {kwargs["name"] for _, kwargs in db.collections[ACTIVITY_EVENTS].indexes}
         assert index_names == {"job_ts", "kind_ts"}
+
+    @pytest.mark.asyncio
+    async def test_db_samples_ttl_comes_from_settings(self):
+        db = _Database()
+        store = TelemetryStore(_Client(db), "recallhub_telemetry", host_samples_ttl_seconds=1, activity_events_ttl_seconds=1,
+                               owns_client=False, db_samples_ttl_seconds=30 * 86400)
+        await store.ensure_collections()
+        assert dict(db.created)[DB_SAMPLES]["expireAfterSeconds"] == 30 * 86400
 
     @pytest.mark.asyncio
     async def test_updates_ttl_when_setting_changed(self):
         db = _Database(existing={
             HOST_SAMPLES: {"name": HOST_SAMPLES, "type": "timeseries", "options": {"expireAfterSeconds": 7 * 86400}},
             ACTIVITY_EVENTS: {"name": ACTIVITY_EVENTS, "type": "timeseries", "options": {"expireAfterSeconds": 90 * 86400}},
+            DB_SAMPLES: {"name": DB_SAMPLES, "type": "timeseries", "options": {"expireAfterSeconds": 400 * 86400}},
         })
         await _store(db).ensure_collections()
 
@@ -217,3 +231,105 @@ class TestTenantScope:
     ])
     def test_tenant_visible(self, tenant, scope, visible):
         assert tenant_visible(tenant, scope) is visible
+
+    @pytest.mark.asyncio
+    async def test_activity_current_docs_are_scoped(self):
+        docs = [{"_id": "quellex:api", "tenant": "quellex"}, {"_id": "shared:worker", "tenant": SHARED_TENANT},
+                {"_id": "recallhub:api", "tenant": "recallhub"}]
+
+        class _Current:
+            def find(self, _filter):
+                return _Cursor(docs)
+
+        class _Db:
+            def __getitem__(self, name):
+                assert name == "activity_current"
+                return _Current()
+
+        class _C:
+            def __getitem__(self, _name):
+                return _Db()
+
+        scoped = TelemetryStore(_C(), "t", host_samples_ttl_seconds=1, activity_events_ttl_seconds=1, owns_client=False,
+                                tenant_scope="quellex")
+        assert [d["_id"] for d in await scoped.activity_current_docs()] == ["quellex:api", "shared:worker"]
+        unscoped = TelemetryStore(_C(), "t", host_samples_ttl_seconds=1, activity_events_ttl_seconds=1, owns_client=False)
+        assert len(await unscoped.activity_current_docs()) == 3
+
+
+# ── leases ───────────────────────────────────────────────────────────────────
+
+
+class _LeaseCollection:
+    """In-memory stand-in for the lease collection: one document, conditional update semantics."""
+
+    def __init__(self):
+        self.doc: dict[str, Any] | None = None
+
+    async def update_one(self, filter, update, upsert=False):
+        if self.doc is None and upsert:
+            self.doc = {"_id": filter["_id"], **update["$setOnInsert"]}
+
+    async def find_one_and_update(self, filter, update):
+        assert self.doc is not None
+        due = self.doc.get("due_at")
+        if due is not None and due <= filter["due_at"]["$lte"]:
+            before = dict(self.doc)
+            self.doc.update(update["$set"])
+            return before
+        return None
+
+    async def find_one(self, _filter, projection=None):
+        return None if self.doc is None else {k: v for k, v in self.doc.items() if k != "_id"}
+
+
+class _LeaseDb:
+    def __init__(self):
+        self.leases = _LeaseCollection()
+
+    def __getitem__(self, name):
+        assert name == LEASES
+        return self.leases
+
+
+class _LeaseClient:
+    def __init__(self):
+        self.db = _LeaseDb()
+
+    def __getitem__(self, _name):
+        return self.db
+
+
+class TestLeases:
+    def test_slot_due_at(self):
+        now = datetime(2026, 10, 24, 15, 7, 0, tzinfo=timezone.utc)
+        assert slot_due_at(now, 1800) == datetime(2026, 10, 24, 15, 30, tzinfo=timezone.utc)
+        assert slot_due_at(now, 60) == datetime(2026, 10, 24, 15, 8, tzinfo=timezone.utc)
+
+    @pytest.mark.asyncio
+    async def test_first_caller_takes_a_fresh_lease_and_moves_it_to_the_next_slot(self):
+        client = _LeaseClient()
+        store = TelemetryStore(client, "t", host_samples_ttl_seconds=1, activity_events_ttl_seconds=1, owns_client=False)
+        now = datetime(2026, 10, 24, 15, 7, 0, tzinfo=timezone.utc)
+
+        assert await store.acquire_lease("db_stats", 1800, "quellex:api", now=now) is True
+        assert await store.acquire_lease("db_stats", 1800, "shared:worker", now=now + timedelta(seconds=3)) is False
+        status = await store.lease_status("db_stats")
+        assert status == {"due_at": datetime(2026, 10, 24, 15, 30, tzinfo=timezone.utc), "holder": "quellex:api", "taken_at": now}
+
+    @pytest.mark.asyncio
+    async def test_lease_reopens_at_the_slot_boundary(self):
+        client = _LeaseClient()
+        store = TelemetryStore(client, "t", host_samples_ttl_seconds=1, activity_events_ttl_seconds=1, owns_client=False)
+        now = datetime(2026, 10, 24, 15, 7, 0, tzinfo=timezone.utc)
+        await store.acquire_lease("db_stats", 1800, "a", now=now)
+
+        assert await store.acquire_lease("db_stats", 1800, "b", now=datetime(2026, 10, 24, 15, 29, 59, tzinfo=timezone.utc)) is False
+        assert await store.acquire_lease("db_stats", 1800, "b", now=datetime(2026, 10, 24, 15, 30, 2, tzinfo=timezone.utc)) is True
+        assert (await store.lease_status("db_stats"))["holder"] == "b"
+        assert (await store.lease_status("db_stats"))["due_at"] == datetime(2026, 10, 24, 16, 0, tzinfo=timezone.utc)
+
+    @pytest.mark.asyncio
+    async def test_lease_status_before_any_take(self):
+        store = TelemetryStore(_LeaseClient(), "t", host_samples_ttl_seconds=1, activity_events_ttl_seconds=1, owns_client=False)
+        assert await store.lease_status("db_stats") is None

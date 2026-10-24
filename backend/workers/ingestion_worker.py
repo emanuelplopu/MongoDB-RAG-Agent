@@ -128,6 +128,8 @@ class IngestionWorker:
 
         # Telemetry history (activity events); None when disabled or unavailable
         self._telemetry_store = None
+        # MongoDB statistics sampler (db_samples); None when disabled or unavailable
+        self._db_stats_collector = None
     
     async def initialize(self):
         """Initialize MongoDB connection using active profile."""
@@ -179,12 +181,43 @@ class IngestionWorker:
 
             self._telemetry_store = TelemetryStore.from_settings(settings)
             await self._telemetry_store.ensure_collections()
-            recorder = ActivityEventRecorder(self._telemetry_store, tenant=worker_default_tenant(), source="worker")
+            recorder = ActivityEventRecorder(
+                self._telemetry_store, tenant=worker_default_tenant(), source="worker",
+                heartbeat_interval=float(settings.process_heartbeat_seconds),
+            )
             await recorder.start()
             set_activity_recorder(recorder)
             logger.info(f"Telemetry history enabled ({recorder.key})")
         except Exception as e:
             logger.warning(f"Telemetry history unavailable (non-fatal): {e}")
+        await self._start_db_stats()
+
+    async def _start_db_stats(self) -> None:
+        """Sample MongoDB statistics on the shared schedule (one process per host takes each slot)."""
+        try:
+            from backend.core.config import settings
+            if self._telemetry_store is None or not settings.db_stats_enabled:
+                return
+            from backend.services.db_stats import DbStatsCollector
+
+            def _profile_databases() -> Dict[str, str]:
+                from src.profile import get_profile_manager
+
+                pm = get_profile_manager()
+                pm.reload()
+                return {p.database: key for key, p in pm.list_profiles().items()}
+
+            self._db_stats_collector = DbStatsCollector(
+                self._telemetry_store,
+                holder=f"{worker_default_tenant()}:worker",
+                interval_seconds=settings.db_stats_interval_minutes * 60,
+                profile_databases=_profile_databases,
+                telemetry_database=settings.telemetry_database,
+            )
+            await self._db_stats_collector.start()
+            logger.info(f"db-stats collector started (every {settings.db_stats_interval_minutes} min)")
+        except Exception as e:
+            logger.warning(f"db-stats collector unavailable (non-fatal): {e}")
 
     def _emit_job(self, job_id: str, *, status: Optional[str] = None, phase: Optional[str] = None, **fields: Any) -> None:
         """Record a job transition in the telemetry history (no-op when it is disabled)."""
@@ -198,6 +231,9 @@ class IngestionWorker:
 
     async def close(self):
         """Close MongoDB connection."""
+        if self._db_stats_collector is not None:
+            await self._db_stats_collector.stop()
+            self._db_stats_collector = None
         recorder = get_activity_recorder()
         if recorder is not None:
             await recorder.stop()

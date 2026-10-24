@@ -503,6 +503,35 @@ class BackendSettings(BaseSettings):
             "widget then falls back to the in-container view."
         ),
     )
+    db_stats_enabled: bool = Field(
+        default=True,
+        description=(
+            "Sample MongoDB statistics (collection counts and sizes, embedding coverage, "
+            "search-index state, connections, oplog) into db_samples on a fixed interval. "
+            "Needs TELEMETRY_HISTORY_ENABLED; one process per host samples each slot."
+        ),
+    )
+    db_stats_interval_minutes: int = Field(
+        default=30,
+        ge=5,
+        le=1440,
+        description="Minutes between db_samples (slots are aligned to the clock, e.g. :00 and :30).",
+    )
+    db_stats_ttl_days: int = Field(
+        default=400,
+        ge=7,
+        le=3650,
+        description="Retention of db_samples in days (48 small documents a day at the default interval).",
+    )
+    process_heartbeat_seconds: int = Field(
+        default=30,
+        ge=5,
+        le=600,
+        description=(
+            "How often the API and the ingestion worker refresh their activity_current document "
+            "while idle, so the telemetry overview can tell a quiet process from a dead one."
+        ),
+    )
 
     # Strategy OS configuration
     strategy_os_enabled: bool = Field(

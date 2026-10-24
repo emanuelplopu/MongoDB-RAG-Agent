@@ -19,6 +19,14 @@ const COUNT_UNIT: Record<string, string> = {
   container_restart: 'containers',
   container_memory: 'containers',
   sampling_gap: 'gaps',
+  search_index_unhealthy: 'indexes',
+  embedding_coverage: 'databases',
+  embedding_mix: 'databases',
+  search_lag: 'databases',
+  backup_stale: 'databases',
+  chunks_flat: 'databases',
+  connection_churn: 'intervals',
+  process_silent: 'processes',
 }
 
 /** Renders one example (dict of mixed values) as "key: value · key: value". */

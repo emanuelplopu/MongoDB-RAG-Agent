@@ -247,6 +247,20 @@ class TestActivityEventRecorder:
         asyncio.run(rec.flush())  # still running: refreshed so the host agent sees it as fresh
         assert store.current["t:api"]["job_id"] == "j1"
 
+    def test_idle_heartbeat_rewrites_state_after_the_interval(self):
+        store = _FakeStore()
+        rec = ActivityEventRecorder(store, tenant="shared", source="worker", flush_interval=0.0, heartbeat_interval=0.0)
+        asyncio.run(rec.flush())  # initial write
+        first = store.current["shared:worker"]["updated_at"]
+        store.current.clear()
+        asyncio.run(rec.flush())  # idle, clean, but the heartbeat is due: written again with a fresh updated_at
+        assert store.current["shared:worker"]["job_id"] is None
+        assert store.current["shared:worker"]["updated_at"] >= first
+
+    def test_heartbeat_interval_never_shorter_than_the_flush_interval(self):
+        rec = ActivityEventRecorder(_FakeStore(), tenant="t", source="api", flush_interval=2.0, heartbeat_interval=0.5)
+        assert rec._heartbeat_interval == 2.0
+
     def test_start_registers_sink_and_stop_flushes(self):
         store = _FakeStore()
 

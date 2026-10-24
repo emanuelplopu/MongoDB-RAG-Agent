@@ -320,7 +320,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
             telemetry_store = TelemetryStore.from_settings(settings, tenant_scope=settings.tenant_id)
             await telemetry_store.ensure_collections()
             app.state.telemetry_store = telemetry_store
-            activity_recorder = ActivityEventRecorder(telemetry_store, tenant=settings.tenant_id, source="api")
+            activity_recorder = ActivityEventRecorder(
+                telemetry_store, tenant=settings.tenant_id, source="api",
+                heartbeat_interval=float(settings.process_heartbeat_seconds),
+            )
             await activity_recorder.start()
             set_activity_recorder(activity_recorder)
             app.state.activity_recorder = activity_recorder
@@ -328,6 +331,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
                         telemetry_store.database_name, activity_recorder.key)
         except Exception as e:
             logger.warning("Telemetry history store init failed (non-fatal): %s", e)
+
+    # MongoDB statistics sampler (db_samples): every API backend and the worker run one; the
+    # lease in the telemetry database lets exactly one of them take each slot.
+    app.state.db_stats_collector = None
+    if settings.telemetry_history_enabled and settings.db_stats_enabled and app.state.telemetry_store is not None:
+        try:
+            from backend.services.db_stats import DbStatsCollector
+
+            def _profile_databases() -> dict:
+                from src.profile import get_profile_manager
+
+                return {p.database: key for key, p in get_profile_manager().list_profiles().items()}
+
+            db_stats_collector = DbStatsCollector(
+                app.state.telemetry_store,
+                holder=f"{settings.tenant_id}:api",
+                interval_seconds=settings.db_stats_interval_minutes * 60,
+                profile_databases=_profile_databases,
+                telemetry_database=settings.telemetry_database,
+            )
+            await db_stats_collector.start()
+            app.state.db_stats_collector = db_stats_collector
+            logger.info("db-stats collector started (every %d min, holder %s)",
+                        settings.db_stats_interval_minutes, db_stats_collector.holder)
+        except Exception as e:
+            logger.warning("db-stats collector init failed (non-fatal): %s", e)
 
     # Strategy OS initialization (Phase 0)
     if settings.strategy_os_enabled:
@@ -591,6 +620,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     except Exception as e:
         logger.warning(f"Error persisting final scheduler state: {e}")
 
+    db_stats_collector = getattr(app.state, "db_stats_collector", None)
+    if db_stats_collector is not None:
+        await db_stats_collector.stop()
     activity_recorder = getattr(app.state, "activity_recorder", None)
     if activity_recorder is not None:
         from backend.services.activity_events import set_activity_recorder

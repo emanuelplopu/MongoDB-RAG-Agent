@@ -5,6 +5,7 @@ import { ArrowPathIcon, TableCellsIcon, ChartBarIcon, ExclamationTriangleIcon } 
 import {
   ApiError,
   telemetryApi,
+  DbStatsResponse,
   TelemetryAnomalyReport,
   TelemetryHistory,
   TelemetryJobReport,
@@ -14,7 +15,10 @@ import { isSuperAdmin } from '../api/roles'
 import TimeSeriesChart, { ChartBand, ChartSeries, SeriesSlot } from '../components/telemetry/TimeSeriesChart'
 import AnomalyList from '../components/telemetry/AnomalyList'
 import JobReportPanel from '../components/telemetry/JobReportPanel'
-import { bucketGrid, formatNumber, makeTimeFormat } from '../components/telemetry/format'
+import DbStatsSection from '../components/telemetry/DbStatsSection'
+import { bucketGrid, formatBytesShort, formatCount, formatNumber, makeTimeFormat } from '../components/telemetry/format'
+
+const GB = 1024 ** 3
 
 /** Range presets (hours), shortest first. */
 const RANGES: Array<{ key: string; hours: number }> = [
@@ -64,6 +68,8 @@ export default function TelemetryHistoryPage() {
   })
   const [history, setHistory] = useState<TelemetryHistory | null>(null)
   const [anomalies, setAnomalies] = useState<TelemetryAnomalyReport | null>(null)
+  const [dbStats, setDbStats] = useState<DbStatsResponse | null>(null)
+  const [dbError, setDbError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [hover, setHover] = useState<number | null>(null)
@@ -77,16 +83,23 @@ export default function TelemetryHistoryPage() {
 
   const load = useCallback(async () => {
     setLoading(true)
-    try {
-      const [h, a] = await Promise.all([telemetryApi.history(hours), telemetryApi.anomalies(hours)])
-      setHistory(h)
-      setAnomalies(a)
+    const [h, a, d] = await Promise.allSettled([telemetryApi.history(hours), telemetryApi.anomalies(hours), telemetryApi.dbStats(hours)])
+    if (h.status === 'fulfilled' && a.status === 'fulfilled') {
+      setHistory(h.value)
+      setAnomalies(a.value)
       setError(null)
-    } catch (err) {
+    } else {
+      const err = h.status === 'rejected' ? h.reason : a.status === 'rejected' ? a.reason : null
       setError(err instanceof ApiError && err.status === 503 ? t('telemetry.disabled') : t('telemetry.loadFailed'))
-    } finally {
-      setLoading(false)
     }
+    // The database section stands on its own: a failure there leaves the host charts in place.
+    if (d.status === 'fulfilled') {
+      setDbStats(d.value)
+      setDbError(null)
+    } else {
+      setDbError(d.reason instanceof ApiError && d.reason.status === 503 ? t('telemetry.disabled') : t('telemetry.db.loadFailed'))
+    }
+    setLoading(false)
   }, [hours, t])
 
   useEffect(() => {
@@ -135,16 +148,20 @@ export default function TelemetryHistoryPage() {
       end: Date.parse(p.end),
       label: `${t('telemetry.ingestion')}: ${p.phase}`,
     }))
-    const containerSeries: ChartSeries[] = CONTAINER_ROLES.map(({ role, match, slot }) => {
-      const names = Object.keys(history.containers).filter(n => match.test(n))
-      const sums = grid.map(() => null as number | null)
-      for (const name of names) {
-        align(grid, history.containers[name], p => p.cpu_cores).forEach((v, i) => {
-          if (v !== null) sums[i] = (sums[i] ?? 0) + v
-        })
-      }
-      return { key: role, label: t(`telemetry.containers.${role}`), slot, values: sums }
-    })
+    // Containers summed per role (backend = every tenant's backend) on the shared grid.
+    const containerRole = (pick: (p: TelemetryHistory['containers'][string][number]) => number | null): ChartSeries[] =>
+      CONTAINER_ROLES.map(({ role, match, slot }) => {
+        const names = Object.keys(history.containers).filter(n => match.test(n))
+        const sums = grid.map(() => null as number | null)
+        for (const name of names) {
+          align(grid, history.containers[name], pick).forEach((v, i) => {
+            if (v !== null) sums[i] = (sums[i] ?? 0) + v
+          })
+        }
+        return { key: role, label: t(`telemetry.containers.${role}`), slot, values: sums }
+      })
+    const containerSeries = containerRole(p => p.cpu_cores)
+    const containerMemory = containerRole(p => (p.mem_bytes === null ? null : p.mem_bytes / GB))
     // Counts: a bucket without events is zero, not missing (activity does not depend on the agent).
     const files = align(grid, history.activity, p => p.files_ok + p.files_failed + p.files_other).map(v => v ?? 0)
     const chats = align(grid, history.activity, p => p.chats).map(v => v ?? 0)
@@ -169,6 +186,7 @@ export default function TelemetryHistoryPage() {
             { key: 'gpu_power', label: t('telemetry.series.gpu'), slot: 2 as SeriesSlot, values: host(p => p.gpu_power_w) },
           ] },
         { key: 'containers', title: t('telemetry.chart.containers'), unit: t('telemetry.units.cores'), series: containerSeries },
+        { key: 'containerMemory', title: t('telemetry.chart.containerMemory'), unit: 'GB', series: containerMemory },
         { key: 'activity', title: t('telemetry.chart.activity'), unit: t('telemetry.units.perBucket', { bucket: history.bucket_seconds }),
           integer: true,
           series: [
@@ -182,7 +200,12 @@ export default function TelemetryHistoryPage() {
   if (!superAdmin) return null
 
   const unitFormat = (unit: string) => (v: number) =>
-    unit === '%' ? `${Math.round(v)}%` : unit === '°C' ? `${Math.round(v)}°` : unit === 'W' ? `${Math.round(v)} W` : v >= 10 ? String(Math.round(v)) : v.toFixed(1)
+    unit === '%' ? `${Math.round(v)}%`
+      : unit === '°C' ? `${Math.round(v)}°`
+        : unit === 'W' ? `${Math.round(v)} W`
+          : unit === 'GB' ? `${v >= 10 ? Math.round(v) : v.toFixed(1)} GB`
+            : v >= 10 ? String(Math.round(v)) : v.toFixed(1)
+  const dbPoints = dbStats?.points ?? []
 
   return (
     <div className="mx-auto max-w-7xl space-y-5">
@@ -240,38 +263,78 @@ export default function TelemetryHistoryPage() {
             <AnomalyList anomalies={anomalies?.anomalies ?? []} formatTime={fmt.iso} />
           </section>
 
+          {!showTable && (
+            <DbStatsSection data={dbStats} error={dbError} hours={hours} onRefresh={load} formatIso={fmt.iso} formatAxis={fmt.axis} />
+          )}
+
           {showTable ? (
-            <section className="overflow-x-auto rounded-2xl bg-surface p-4 shadow-elevation-1 dark:bg-gray-800">
-              <table className="min-w-full text-sm" aria-label={t('telemetry.tableLabel')}>
-                <thead>
-                  <tr>
-                    {['time', 'cpu', 'ram', 'gpu', 'cpuTemp', 'gpuTemp', 'cpuPower', 'gpuPower', 'files', 'chats'].map(k => (
-                      <th key={k} className="whitespace-nowrap px-2 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">{t(`telemetry.col.${k}`)}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {view.grid.map((ms, i) => {
-                    const c = view.charts
-                    const v = (chart: number, s = 0) => formatNumber(c[chart].series[s].values[i], 1)
-                    return (
-                      <tr key={ms} className="border-t border-gray-100 dark:border-gray-700" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                        <td className="whitespace-nowrap px-2 py-1 text-gray-700 dark:text-gray-300">{fmt.axis(ms, 0)}</td>
-                        <td className="px-2 py-1 text-right">{v(0)}</td>
-                        <td className="px-2 py-1 text-right">{v(1)}</td>
-                        <td className="px-2 py-1 text-right">{v(2)}</td>
-                        <td className="px-2 py-1 text-right">{v(3, 0)}</td>
-                        <td className="px-2 py-1 text-right">{v(3, 1)}</td>
-                        <td className="px-2 py-1 text-right">{v(4, 0)}</td>
-                        <td className="px-2 py-1 text-right">{v(4, 1)}</td>
-                        <td className="px-2 py-1 text-right">{formatNumber(c[6].series[0].values[i], 0)}</td>
-                        <td className="px-2 py-1 text-right">{formatNumber(c[6].series[1].values[i], 0)}</td>
+            <>
+              <section className="overflow-x-auto rounded-2xl bg-surface p-4 shadow-elevation-1 dark:bg-gray-800">
+                <table className="min-w-full text-sm" aria-label={t('telemetry.tableLabel')}>
+                  <thead>
+                    <tr>
+                      {['time', 'cpu', 'ram', 'gpu', 'cpuTemp', 'gpuTemp', 'cpuPower', 'gpuPower', 'files', 'chats'].map(k => (
+                        <th key={k} className="whitespace-nowrap px-2 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">{t(`telemetry.col.${k}`)}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {view.grid.map((ms, i) => {
+                      const chart = (key: string) => view.charts.find(c => c.key === key)
+                      const v = (key: string, s = 0, digits = 1) => formatNumber(chart(key)?.series[s]?.values[i], digits)
+                      return (
+                        <tr key={ms} className="border-t border-gray-100 dark:border-gray-700" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                          <td className="whitespace-nowrap px-2 py-1 text-gray-700 dark:text-gray-300">{fmt.axis(ms, 0)}</td>
+                          <td className="px-2 py-1 text-right">{v('cpu')}</td>
+                          <td className="px-2 py-1 text-right">{v('mem')}</td>
+                          <td className="px-2 py-1 text-right">{v('gpu')}</td>
+                          <td className="px-2 py-1 text-right">{v('temp', 0)}</td>
+                          <td className="px-2 py-1 text-right">{v('temp', 1)}</td>
+                          <td className="px-2 py-1 text-right">{v('power', 0)}</td>
+                          <td className="px-2 py-1 text-right">{v('power', 1)}</td>
+                          <td className="px-2 py-1 text-right">{v('activity', 0, 0)}</td>
+                          <td className="px-2 py-1 text-right">{v('activity', 1, 0)}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </section>
+              {dbPoints.length > 0 && (
+                <section className="overflow-x-auto rounded-2xl bg-surface p-4 shadow-elevation-1 dark:bg-gray-800">
+                  <h2 className="mb-2 text-base font-semibold text-gray-900 dark:text-gray-100">{t('telemetry.db.title')}</h2>
+                  <table className="min-w-full text-sm" aria-label={t('telemetry.db.pointsTable')}>
+                    <thead>
+                      <tr>
+                        {['time', 'chunks', 'documents', 'storageGb', 'oplogGb', 'connections', 'churn', 'embedded', 'lag'].map(k => (
+                          <th key={k} className="whitespace-nowrap px-2 py-1.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400">{t(`telemetry.db.col.${k}`)}</th>
+                        ))}
                       </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </section>
+                    </thead>
+                    <tbody>
+                      {dbPoints.map(p => {
+                        const coverage = p.databases.map(d => d.embedding_coverage_pct).filter((x): x is number => x !== null)
+                        const lag = p.databases.map(d => d.search_lag).filter((x): x is number => x !== null)
+                        return (
+                          <tr key={p.t} className="border-t border-gray-100 dark:border-gray-700" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                            <td className="whitespace-nowrap px-2 py-1 text-gray-700 dark:text-gray-300">{fmt.iso(p.t)}</td>
+                            <td className="px-2 py-1 text-right">{formatCount(p.chunks, i18n.language)}</td>
+                            <td className="px-2 py-1 text-right">{formatCount(p.documents, i18n.language)}</td>
+                            <td className="px-2 py-1 text-right">{p.storage_bytes === null ? '—' : (p.storage_bytes / GB).toFixed(2)}</td>
+                            <td className="px-2 py-1 text-right">{p.oplog_bytes === null ? '—' : (p.oplog_bytes / GB).toFixed(2)}</td>
+                            <td className="px-2 py-1 text-right">{formatCount(p.connections_current, i18n.language)}</td>
+                            <td className="px-2 py-1 text-right">{formatNumber(p.connections_created_per_min, 1)}</td>
+                            <td className="px-2 py-1 text-right">{coverage.length ? `${Math.min(...coverage)}%` : '—'}</td>
+                            <td className="px-2 py-1 text-right">{lag.length ? formatCount(lag.reduce((a, b) => a + b, 0), i18n.language) : '—'}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                  <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{formatBytesShort(dbStats?.latest?.totals.storage_bytes)} · {t('telemetry.db.pointsHint', { count: dbPoints.length })}</p>
+                </section>
+              )}
+            </>
           ) : (
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
               {view.charts.map(chart => (

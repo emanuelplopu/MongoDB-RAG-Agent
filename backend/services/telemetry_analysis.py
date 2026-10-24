@@ -14,7 +14,14 @@ Anomaly rules (thresholds in :data:`THRESHOLDS`):
 * files: ``failed_files`` (grouped by error type), ``cancelled_files`` (timeouts/stops),
   ``unfinished_files`` (a ``file.start`` without ``file.end``: crashed or hung),
   ``slow_files`` (≥ 3× the median of the same file type and ≥ 30 s), ``empty_files``
-  (no chunks: image-only or failed OCR).
+  (no chunks: image-only or failed OCR);
+* database (from ``db_samples``, see :mod:`backend.services.db_stats`): ``search_index_unhealthy``,
+  ``embedding_coverage``, ``embedding_mix`` (several vector lengths or models in one collection),
+  ``search_lag``, ``oplog_near_cap``, ``backup_stale`` (none, too old, empty or not completed),
+  ``filesystem_full``, ``disk_forecast``, ``connection_churn``, ``chunks_flat`` (documents grow,
+  chunks do not);
+* liveness (``activity_current``, only when the range ends now): ``process_silent`` — an API or
+  worker process that stopped refreshing its heartbeat.
 """
 
 from __future__ import annotations
@@ -48,13 +55,18 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "THRESHOLDS",
     "build_phase_intervals",
+    "db_anomalies",
+    "db_anomalies_from",
+    "db_rates",
     "find_episodes",
     "history",
     "job_report",
+    "liveness_anomalies",
+    "liveness_anomalies_from",
     "range_anomalies",
 ]
 
-#: Rule thresholds (percent, °C, ms, seconds).
+#: Rule thresholds (percent, °C, ms, seconds, bytes shares).
 THRESHOLDS: dict[str, float] = {
     "mem_pct": 90.0,
     "mem_pct_critical": 97.0,
@@ -68,6 +80,21 @@ THRESHOLDS: dict[str, float] = {
     "slow_file_min_ms": 30_000.0,
     "unfinished_after_s": 1800.0,
     "stale_job_s": 600.0,
+    # database rules (db_samples)
+    "backup_max_age_s": 7 * 86400.0,
+    "connection_churn_per_min": 20.0,
+    "oplog_share": 0.9,
+    "search_lag_share": 0.1,
+    "search_lag_min": 10_000.0,
+    "search_lag_floor": 50.0,
+    "fs_full_pct": 90.0,
+    "fs_full_pct_critical": 97.0,
+    "disk_forecast_days": 30.0,
+    "disk_forecast_min_span_s": 6 * 3600.0,
+    "chunks_flat_min_docs": 50.0,
+    # liveness (activity_current heartbeats)
+    "process_silent_s": 300.0,
+    "liveness_window_s": 600.0,
 }
 
 _THERMAL_REASONS = frozenset({"sw_thermal", "hw_thermal", "hw_slowdown"})
@@ -554,10 +581,287 @@ async def _unfinished_files(store: TelemetryStore, start: Optional[datetime], en
     return out
 
 
-async def range_anomalies(store: TelemetryStore, start: datetime, end: datetime) -> AnomalyReport:
-    """Host and file anomalies of every job in ``[start, end)``, most severe first."""
+async def range_anomalies(store: TelemetryStore, start: datetime, end: datetime,
+                          *, now: Optional[datetime] = None) -> AnomalyReport:
+    """Host, file, database and (when the range ends now) liveness anomalies in ``[start, end)``, most severe first."""
+    moment = now or datetime.now(timezone.utc)
     anomalies = await host_anomalies(store, start, end) + await file_anomalies(store, start, end)
+    anomalies += await db_anomalies(store, start, end)
+    if (moment - end).total_seconds() < THRESHOLDS["liveness_window_s"]:
+        anomalies += await liveness_anomalies(store, now=moment)
     return AnomalyReport(start=start, end=end, anomalies=_sorted_anomalies(anomalies))
+
+
+# ── database anomalies (db_samples) ──────────────────────────────────────────
+
+
+async def db_anomalies(store: TelemetryStore, start: datetime, end: datetime) -> list[Anomaly]:
+    """Database anomalies in ``[start, end)``: state rules on the newest sample, trend rules on the series."""
+    try:
+        latest = await store.latest_db_sample()
+        points = await store.db_series(start, end, choose_bucket_seconds(start, end, target_points=400, minimum=60))
+    except Exception as exc:  # noqa: BLE001 - no db_samples collection yet, or a read error: no findings
+        logger.debug("db anomalies skipped: %s", exc)
+        return []
+    if latest is not None:
+        ts = _aware(latest.get("ts"))
+        if ts is None or not (start <= ts < end):
+            latest = None
+    return db_anomalies_from(latest, points)
+
+
+def db_anomalies_from(latest: Optional[dict[str, Any]], points: Sequence[dict[str, Any]]) -> list[Anomaly]:
+    """Pure rule evaluation over one full sample (state) and the compact series (trends).
+
+    Args:
+        latest: The newest ``db_samples`` document inside the range, or None.
+        points: :meth:`TelemetryStore.db_series` rows over the range, oldest first.
+
+    Returns:
+        Anomalies, unsorted.
+    """
+    t = THRESHOLDS
+    out: list[Anomaly] = []
+    if latest:
+        out.extend(_db_state_anomalies(latest, t))
+    if len(points) >= 2:
+        out.extend(_db_trend_anomalies(list(points), t))
+    return out
+
+
+def _db_state_anomalies(sample: dict[str, Any], t: dict[str, float]) -> list[Anomaly]:
+    out: list[Anomaly] = []
+    unhealthy: list[dict[str, Any]] = []
+    coverage: list[dict[str, Any]] = []
+    mixed_dims: list[dict[str, Any]] = []
+    mixed_models: list[dict[str, Any]] = []
+    lagging: list[dict[str, Any]] = []
+    backups: list[dict[str, Any]] = []
+    for db in sample.get("databases") or []:
+        name = db.get("name")
+        for idx in db.get("search_indexes") or []:
+            if idx.get("status") != "READY" or idx.get("queryable") is False:
+                unhealthy.append({"database": name, "index": idx.get("name"), "status": idx.get("status"),
+                                  "queryable": idx.get("queryable")})
+        chunk_sample = db.get("sample") or {}
+        size = int(chunk_sample.get("size") or 0)
+        if size > 0:
+            with_embedding = int(chunk_sample.get("with_embedding") or 0)
+            if with_embedding < size:
+                coverage.append({"database": name, "coverage_pct": chunk_sample.get("embedding_coverage_pct"),
+                                 "sampled": size})
+            dims = {k: v for k, v in (chunk_sample.get("embedding_dims") or {}).items()}
+            if len(dims) > 1:
+                mixed_dims.append({"database": name, "vector_lengths": dims})
+            models = chunk_sample.get("embedding_models") or {}
+            if len(models) > 1:
+                mixed_models.append({"database": name, "models": models})
+        lag = db.get("search_lag") or {}
+        count = int(lag.get("collection_count") or 0)
+        # 10 % of the collection (at least 50 documents), capped at 10,000: a backlog, not jitter.
+        lag_limit = min(t["search_lag_min"], max(t["search_lag_floor"], t["search_lag_share"] * count))
+        if count and int(lag.get("lag") or 0) >= lag_limit:
+            lagging.append({"database": name, "index": lag.get("index"), "lag": lag.get("lag"), "chunks": count})
+        documents = int(((db.get("documents") or {}).get("count")) or 0)
+        if documents > 0:
+            backup = db.get("backup") or {}
+            newest_at = _aware(backup.get("newest_at"))
+            age = (_aware(sample.get("ts")) - newest_at).total_seconds() if newest_at and _aware(sample.get("ts")) else None
+            reason = None
+            if not backup or newest_at is None:
+                reason = "no backup recorded"
+            elif backup.get("newest_status") not in (None, "completed"):
+                reason = f"last backup {backup.get('newest_status')}"
+            elif age is not None and age > t["backup_max_age_s"]:
+                reason = f"last backup {age / 86400:.0f} days old"
+            elif (backup.get("newest_size_bytes") or 0) <= 0:
+                reason = "last backup is empty (0 bytes)"
+            if reason:
+                backups.append({"database": name, "reason": reason, "newest_at": newest_at.isoformat() if newest_at else None})
+    if unhealthy:
+        out.append(Anomaly(kind="search_index_unhealthy", severity="critical", title="Search index not ready",
+                           detail="An Atlas Search / Vector Search index is building, failed or not queryable: "
+                                  "semantic or text search returns nothing or stale results for that profile.",
+                           count=len(unhealthy), examples=unhealthy))
+    if coverage:
+        out.append(Anomaly(kind="embedding_coverage", severity="warning", title="Chunks without embeddings",
+                           detail="A random sample of chunks found some without a vector: those chunks are invisible "
+                                  "to semantic search (embedding failures during ingestion).",
+                           count=len(coverage), examples=coverage))
+    if mixed_dims:
+        out.append(Anomaly(kind="embedding_mix", severity="critical", title="Mixed vector lengths in one collection",
+                           detail="Chunks were embedded with models of different dimensions; the vector index can only "
+                                  "serve one of them, the rest never match. Re-embed or clean the collection.",
+                           count=len(mixed_dims), examples=mixed_dims))
+    elif mixed_models:
+        out.append(Anomaly(kind="embedding_mix", severity="warning", title="Several embedding models in one collection",
+                           detail="Chunks carry different embedding_model labels; vectors of different models are not "
+                                  "comparable even at equal length, which degrades retrieval silently.",
+                           count=len(mixed_models), examples=mixed_models))
+    if lagging:
+        out.append(Anomaly(kind="search_lag", severity="warning", title="Search index lagging behind ingestion",
+                           detail=f"The text index trails the chunks collection by {t['search_lag_share'] * 100:.0f} % "
+                                  f"or more (at least {t['search_lag_floor']:.0f}, from {t['search_lag_min']:.0f} documents "
+                                  "always): new documents are stored but not yet searchable (mongot indexing backlog).",
+                           count=len(lagging), examples=lagging))
+    oplog = sample.get("oplog") or {}
+    if (oplog.get("max_bytes") or 0) > 0 and (oplog.get("storage_bytes") or 0) >= t["oplog_share"] * oplog["max_bytes"]:
+        out.append(Anomaly(kind="oplog_near_cap", severity="info", title="Oplog at its cap",
+                           detail="The replica-set oplog has reached its maximum size and now recycles: expected on a "
+                                  "single node, but its window shrinks and it dominates disk use.",
+                           count=1, examples=[{"storage_bytes": oplog.get("storage_bytes"), "max_bytes": oplog.get("max_bytes"),
+                                               "window_h": round((oplog.get("window_s") or 0) / 3600, 1)}]))
+    if backups:
+        out.append(Anomaly(kind="backup_stale", severity="warning", title="Backup missing, old or empty",
+                           detail=f"A database with documents has no completed backup younger than "
+                                  f"{t['backup_max_age_s'] / 86400:.0f} days, or its last backup wrote nothing.",
+                           count=len(backups), examples=backups))
+    fs = sample.get("fs") or {}
+    pct = fs.get("pct")
+    if pct is not None and pct >= t["fs_full_pct"]:
+        out.append(Anomaly(kind="filesystem_full", severity="critical" if pct >= t["fs_full_pct_critical"] else "warning",
+                           title="Data filesystem nearly full",
+                           detail=f"The filesystem under MongoDB's data directory is {pct:.0f} % full; MongoDB stops "
+                                  "accepting writes when it runs out.",
+                           count=1, examples=[{"used_bytes": fs.get("used_bytes"), "total_bytes": fs.get("total_bytes")}]))
+    return out
+
+
+def _db_trend_anomalies(points: list[dict[str, Any]], t: dict[str, float]) -> list[Anomaly]:
+    out: list[Anomaly] = []
+    churn: list[dict[str, Any]] = []
+    for prev, cur in zip(points, points[1:]):
+        per_min = cur.get("connections_created_per_min")
+        if per_min is None:
+            per_min = _created_per_min(prev, cur)
+        if per_min is not None and per_min >= t["connection_churn_per_min"]:
+            churn.append({"from": _iso(prev.get("t")), "to": _iso(cur.get("t")), "per_min": round(per_min, 1)})
+    if churn:
+        out.append(Anomaly(kind="connection_churn", severity="warning", title="MongoDB connection churn",
+                           detail=f"{t['connection_churn_per_min']:.0f} or more new connections a minute: a code path "
+                                  "opens a client per request instead of reusing the pool (slow handshakes, file "
+                                  "descriptors, log noise).",
+                           count=len(churn), examples=sorted(churn, key=lambda c: -c["per_min"])[:10]))
+
+    first, last = points[0], points[-1]
+    flat: list[dict[str, Any]] = []
+    first_dbs = {d.get("name"): d for d in (first.get("databases") or [])}
+    for db in last.get("databases") or []:
+        before = first_dbs.get(db.get("name"))
+        if not before:
+            continue
+        docs_delta = int(db.get("documents") or 0) - int(before.get("documents") or 0)
+        chunks_delta = int(db.get("chunks") or 0) - int(before.get("chunks") or 0)
+        if docs_delta >= t["chunks_flat_min_docs"] and chunks_delta <= 0:
+            flat.append({"database": db.get("name"), "documents_added": docs_delta, "chunks_added": chunks_delta})
+    if flat:
+        out.append(Anomaly(kind="chunks_flat", severity="warning", title="Documents grow but chunks do not",
+                           detail="Documents were added without any new chunks in this range: chunking or embedding "
+                                  "is failing, or every new file was empty (image-only scans without OCR).",
+                           count=len(flat), examples=flat))
+
+    span = _span_seconds(first, last)
+    used0, used1 = first.get("fs_used_bytes"), last.get("fs_used_bytes")
+    total = last.get("fs_total_bytes")
+    if span >= t["disk_forecast_min_span_s"] and used0 is not None and used1 is not None and total:
+        growth_per_day = (used1 - used0) / span * 86400
+        if growth_per_day > 0:
+            headroom = total * t["fs_full_pct"] / 100 - used1
+            days = headroom / growth_per_day
+            if days < t["disk_forecast_days"]:
+                out.append(Anomaly(kind="disk_forecast", severity="warning" if days > 7 else "critical",
+                                   title="Disk fills up soon at the current rate",
+                                   detail=f"At the growth seen in this range the data filesystem reaches "
+                                          f"{t['fs_full_pct']:.0f} % in about {max(days, 0):.0f} days.",
+                                   count=1, examples=[{"growth_gb_per_day": round(growth_per_day / 1024 ** 3, 2),
+                                                       "days_left": round(max(days, 0), 1)}]))
+    return out
+
+
+def db_rates(points: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Add the per-minute rates derived from consecutive series points (connections created, inserts).
+
+    Args:
+        points: :meth:`TelemetryStore.db_series` rows, oldest first.
+
+    Returns:
+        Copies of the rows with ``connections_created_per_min`` and ``inserts_per_min`` filled
+        where both neighbours carry the counter (a counter that went backwards means the server
+        restarted; that gap gets no rate).
+    """
+    out: list[dict[str, Any]] = []
+    prev: Optional[dict[str, Any]] = None
+    for row in points:
+        cur = dict(row)
+        if prev is not None:
+            span = _span_seconds(prev, cur)
+            if span > 0:
+                cur["connections_created_per_min"] = _rate_per_min(prev.get("connections_total_created"),
+                                                                   cur.get("connections_total_created"), span)
+                cur["inserts_per_min"] = _rate_per_min(prev.get("ops_insert"), cur.get("ops_insert"), span)
+        out.append(cur)
+        prev = cur
+    return out
+
+
+def _rate_per_min(a: Any, b: Any, span_s: float) -> Optional[float]:
+    if a is None or b is None or span_s <= 0 or b < a:
+        return None
+    return round((b - a) / span_s * 60.0, 2)
+
+
+def _created_per_min(prev: dict[str, Any], cur: dict[str, Any]) -> Optional[float]:
+    a, b = prev.get("connections_total_created"), cur.get("connections_total_created")
+    span = _span_seconds(prev, cur)
+    if a is None or b is None or span <= 0 or b < a:  # b < a: the server restarted
+        return None
+    return (b - a) / span * 60.0
+
+
+def _span_seconds(a: dict[str, Any], b: dict[str, Any]) -> float:
+    ta, tb = _aware(a.get("t")), _aware(b.get("t"))
+    return (tb - ta).total_seconds() if ta and tb else 0.0
+
+
+def _iso(value: Any) -> Optional[str]:
+    ts = _aware(value)
+    return ts.isoformat() if ts else None
+
+
+# ── liveness (activity_current heartbeats) ───────────────────────────────────
+
+
+async def liveness_anomalies(store: TelemetryStore, *, now: Optional[datetime] = None) -> list[Anomaly]:
+    """Processes whose ``activity_current`` heartbeat stopped (API or worker down or hung)."""
+    try:
+        docs = await store.activity_current_docs()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("liveness anomalies skipped: %s", exc)
+        return []
+    return liveness_anomalies_from(docs, now or datetime.now(timezone.utc))
+
+
+def liveness_anomalies_from(docs: Sequence[dict[str, Any]], now: datetime) -> list[Anomaly]:
+    """Pure rule: a process silent for ``process_silent_s`` is a warning, critical while it owned a running job."""
+    silent: list[dict[str, Any]] = []
+    critical = False
+    for doc in docs:
+        seen = _aware(doc.get("updated_at"))
+        age = (now - seen).total_seconds() if seen else None
+        if age is None or age >= THRESHOLDS["process_silent_s"]:
+            running = bool(doc.get("job_id")) and doc.get("job_status") not in TERMINAL_JOB_STATUSES
+            critical = critical or running
+            silent.append({"process": doc.get("_id"), "last_seen": seen.isoformat() if seen else None,
+                           "age_s": round(age) if age is not None else None,
+                           "job_id": doc.get("job_id") if running else None})
+    if not silent:
+        return []
+    return [Anomaly(kind="process_silent", severity="critical" if critical else "warning",
+                    title="Process stopped reporting",
+                    detail=f"An API or worker process has not refreshed its heartbeat for "
+                           f"{THRESHOLDS['process_silent_s'] / 60:.0f} minutes or more: it is down, hung or cut off "
+                           "from MongoDB. Critical while it owned a running ingestion job.",
+                    count=len(silent), examples=silent)]
 
 
 def _sorted_anomalies(anomalies: list[Anomaly]) -> list[Anomaly]:

@@ -4272,6 +4272,285 @@ export interface TelemetryJobReport {
   agent_samples: number
 }
 
+// ── MongoDB statistics (db_samples) and the health overview ──────────────────
+
+export interface DbCollectionStats {
+  count: number | null
+  /** Uncompressed BSON size. */
+  data_bytes: number | null
+  /** Compressed size on disk, indexes excluded. */
+  storage_bytes: number | null
+  index_bytes: number | null
+  avg_bytes: number | null
+}
+
+export interface DbSearchIndex {
+  name: string
+  /** 'search' or 'vectorSearch'. */
+  type: string | null
+  /** READY, BUILDING, FAILED, ... */
+  status: string | null
+  queryable: boolean | null
+  dimensions: number | null
+  similarity: string | null
+  quantization: string | null
+}
+
+export interface DbSearchLag {
+  index: string
+  indexed_count: number
+  collection_count: number
+  lag: number
+}
+
+export interface DbChunkSample {
+  size: number
+  with_embedding: number
+  embedding_coverage_pct: number | null
+  /** Vector length -> chunks in the sample. */
+  embedding_dims: Record<string, number>
+  embedding_models: Record<string, number>
+  chunk_methods: Record<string, number>
+  with_context_pct: number | null
+  token_p50: number | null
+  token_p95: number | null
+}
+
+export interface DbDocumentSample {
+  size: number
+  zero_chunks: number
+  zero_chunks_pct: number | null
+}
+
+export interface DbBackupInfo {
+  count: number
+  newest_at: string | null
+  newest_status: string | null
+  newest_type: string | null
+  newest_size_bytes: number | null
+}
+
+export interface DbDatabaseStats {
+  name: string
+  profile_key: string | null
+  data_bytes: number | null
+  storage_bytes: number | null
+  index_bytes: number | null
+  size_on_disk_bytes: number | null
+  collections: number | null
+  objects: number | null
+  documents: DbCollectionStats | null
+  chunks: DbCollectionStats | null
+  sample: DbChunkSample | null
+  document_sample: DbDocumentSample | null
+  search_indexes: DbSearchIndex[]
+  search_lag: DbSearchLag | null
+  jobs_by_status: Record<string, number>
+  backup: DbBackupInfo | null
+  failed_documents: number | null
+  file_registry: number | null
+}
+
+export interface DbConnections {
+  current: number | null
+  active: number | null
+  available: number | null
+  total_created: number | null
+}
+
+export interface DbWiredTigerCache {
+  used_bytes: number | null
+  max_bytes: number | null
+  dirty_bytes: number | null
+}
+
+export interface DbServerStats {
+  version: string | null
+  uptime_s: number | null
+  connections: DbConnections
+  wt_cache: DbWiredTigerCache
+  opcounters: Record<string, number>
+  mem_resident_bytes: number | null
+}
+
+export interface DbOplogStats {
+  data_bytes: number | null
+  storage_bytes: number | null
+  max_bytes: number | null
+  window_s: number | null
+  first_at: string | null
+  last_at: string | null
+}
+
+export interface DbFsStats {
+  used_bytes: number | null
+  total_bytes: number | null
+  pct: number | null
+}
+
+export interface DbSizes {
+  data_bytes: number | null
+  storage_bytes: number | null
+  index_bytes: number | null
+  size_on_disk_bytes: number | null
+}
+
+export interface DbTotals {
+  databases: number
+  documents: number
+  chunks: number
+  data_bytes: number
+  storage_bytes: number
+  index_bytes: number
+  size_on_disk_bytes: number
+}
+
+/** One db-stats run (`GET /telemetry/db-stats` → `latest`, `POST /telemetry/db-stats/collect`). */
+export interface DbSample {
+  ts: string
+  collector: string | null
+  forced: boolean
+  duration_ms: number | null
+  server: DbServerStats | null
+  oplog: DbOplogStats | null
+  fs: DbFsStats | null
+  telemetry: DbSizes | null
+  totals: DbTotals
+  databases: DbDatabaseStats[]
+  errors: Record<string, string>
+}
+
+export interface DbSeriesDatabasePoint {
+  name: string
+  documents: number | null
+  chunks: number | null
+  storage_bytes: number | null
+  data_bytes: number | null
+  index_bytes: number | null
+  embedding_coverage_pct: number | null
+  search_lag: number | null
+}
+
+/** Charting fields of one db-stats sample (the last sample of its bucket). */
+export interface DbSeriesPoint {
+  t: string
+  connections_current: number | null
+  connections_total_created: number | null
+  connections_created_per_min: number | null
+  wt_cache_used_bytes: number | null
+  wt_cache_max_bytes: number | null
+  ops_insert: number | null
+  ops_query: number | null
+  inserts_per_min: number | null
+  oplog_bytes: number | null
+  oplog_max_bytes: number | null
+  oplog_window_s: number | null
+  fs_used_bytes: number | null
+  fs_total_bytes: number | null
+  size_on_disk_bytes: number | null
+  data_bytes: number | null
+  storage_bytes: number | null
+  index_bytes: number | null
+  chunks: number | null
+  documents: number | null
+  databases: DbSeriesDatabasePoint[]
+}
+
+export interface DbStatsResponse {
+  start: string
+  end: string
+  bucket_seconds: number
+  interval_seconds: number
+  samples: number
+  points: DbSeriesPoint[]
+  latest: DbSample | null
+  next_due_at: string | null
+  lease_holder: string | null
+}
+
+export interface OverviewDb {
+  sampled_at: string
+  age_seconds: number
+  databases: number
+  documents: number
+  chunks: number
+  data_bytes: number
+  storage_bytes: number
+  index_bytes: number
+  size_on_disk_bytes: number
+  oplog_bytes: number | null
+  embedding_coverage_pct: number | null
+  search_indexes_ok: boolean | null
+  search_lag: number | null
+}
+
+export interface OverviewAnomalies {
+  hours: number
+  critical: number
+  warning: number
+  info: number
+  top: string[]
+}
+
+export interface OverviewProcess {
+  key: string
+  tenant: string | null
+  source: 'api' | 'worker' | string | null
+  host: string | null
+  last_seen_at: string | null
+  age_seconds: number | null
+  online: boolean
+  job_id: string | null
+  job_status: string | null
+  phase: string | null
+  step: string | null
+  processed_files: number | null
+  total_files: number | null
+  files_per_hour: number | null
+  eta_seconds: number | null
+}
+
+export interface OverviewChat {
+  hours: number
+  requests: number
+  errors: number
+  p50_ms: number | null
+  p95_ms: number | null
+}
+
+export interface OverviewBackup {
+  database: string
+  profile_key: string | null
+  count: number
+  newest_at: string | null
+  age_seconds: number | null
+  size_bytes: number | null
+  status: string | null
+}
+
+export interface OverviewLlmModel {
+  name: string
+  size_bytes: number | null
+  vram_bytes: number | null
+  ctx: number | null
+}
+
+export interface OverviewLlm {
+  sampled_at: string | null
+  models: OverviewLlmModel[]
+}
+
+/** Health at a glance (`GET /telemetry/overview`), the machine-stats widget's second poll. */
+export interface TelemetryOverview {
+  generated_at: string
+  db: OverviewDb | null
+  anomalies: OverviewAnomalies
+  processes: OverviewProcess[]
+  chat: OverviewChat
+  backups: OverviewBackup[]
+  llm: OverviewLlm
+}
+
 /** Telemetry history API (`/api/v1/telemetry`, superadmin only; 503 when history is disabled). */
 export const telemetryApi = {
   history: async (hours: number, bucket?: number): Promise<TelemetryHistory> => {
@@ -4297,6 +4576,24 @@ export const telemetryApi = {
   /** The job's self-contained HTML report as a Blob (fetched with the session token). */
   jobReportHtml: async (jobId: string): Promise<Blob> => {
     const response = await api.get(`/telemetry/jobs/${encodeURIComponent(jobId)}/report.html`, { responseType: 'blob' })
+    return response.data
+  },
+
+  /** MongoDB statistics series over the range plus the newest full sample. */
+  dbStats: async (hours: number, bucket?: number): Promise<DbStatsResponse> => {
+    const response = await api.get('/telemetry/db-stats', { params: { hours, ...(bucket ? { bucket } : {}) } })
+    return response.data
+  },
+
+  /** Take a db-stats sample now (503 when the collector is not running on this backend). */
+  collectDbStats: async (): Promise<DbSample> => {
+    const response = await api.post('/telemetry/db-stats/collect')
+    return response.data
+  },
+
+  /** Health at a glance for the machine-stats widget. */
+  overview: async (hours = 24): Promise<TelemetryOverview> => {
+    const response = await api.get('/telemetry/overview', { params: { hours } })
     return response.data
   },
 }

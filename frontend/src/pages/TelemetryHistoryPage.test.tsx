@@ -7,6 +7,8 @@ const historyMock = vi.fn()
 const anomaliesMock = vi.fn()
 const jobMock = vi.fn()
 const reportHtmlMock = vi.fn()
+const dbStatsMock = vi.fn()
+const collectMock = vi.fn()
 
 let authState: { user: { is_admin: boolean } | null; isLoading: boolean }
 
@@ -41,12 +43,50 @@ vi.mock('../api/client', () => {
       anomalies: (...a: unknown[]) => anomaliesMock(...a),
       job: (...a: unknown[]) => jobMock(...a),
       jobReportHtml: (...a: unknown[]) => reportHtmlMock(...a),
+      dbStats: (...a: unknown[]) => dbStatsMock(...a),
+      collectDbStats: (...a: unknown[]) => collectMock(...a),
     },
   }
 })
 
 const START = '2026-10-18T10:00:00+00:00'
 const END = '2026-10-18T10:01:00+00:00'
+const GB = 1024 ** 3
+
+function dbPoint(t: string, chunks: number) {
+  return {
+    t, connections_current: 71, connections_total_created: 28000, connections_created_per_min: 30.4, wt_cache_used_bytes: 1, wt_cache_max_bytes: 2,
+    ops_insert: 1, ops_query: 1, inserts_per_min: 1, oplog_bytes: 21 * GB, oplog_max_bytes: 50 * GB, oplog_window_s: 3600, fs_used_bytes: 1, fs_total_bytes: 2,
+    size_on_disk_bytes: 2.32 * GB, data_bytes: 3.3 * GB, storage_bytes: 2.3 * GB, index_bytes: 8e6, chunks, documents: 47823,
+    databases: [{ name: 'rag_a', documents: 47823, chunks, storage_bytes: 2.3 * GB, data_bytes: 3.3 * GB, index_bytes: 8e6, embedding_coverage_pct: 100, search_lag: 0 }],
+  }
+}
+
+const dbStats = {
+  start: START, end: END, bucket_seconds: 1800, interval_seconds: 1800, samples: 2,
+  points: [dbPoint(START, 227041), dbPoint(END, 299988)],
+  latest: {
+    ts: END, collector: 'quellex:api', forced: false, duration_ms: 1200,
+    server: { version: '8.0.16', uptime_s: 1, connections: { current: 71, active: 21, available: 100, total_created: 28916 },
+      wt_cache: { used_bytes: 1, max_bytes: 2, dirty_bytes: 0 }, opcounters: {}, mem_resident_bytes: 1 },
+    oplog: { data_bytes: 32 * GB, storage_bytes: 21 * GB, max_bytes: 50 * GB, window_s: 3600, first_at: START, last_at: END },
+    fs: { used_bytes: 1, total_bytes: 2, pct: 50 }, telemetry: null,
+    totals: { databases: 1, documents: 47823, chunks: 299988, data_bytes: 3.3 * GB, storage_bytes: 2.3 * GB, index_bytes: 8e6, size_on_disk_bytes: 2.32 * GB },
+    databases: [{
+      name: 'rag_a', profile_key: 'a', data_bytes: 3.3 * GB, storage_bytes: 2.3 * GB, index_bytes: 8e6, size_on_disk_bytes: 2.32 * GB, collections: 20, objects: 1,
+      documents: { count: 47823, data_bytes: 1, storage_bytes: 1, index_bytes: 1, avg_bytes: 1 },
+      chunks: { count: 299988, data_bytes: 1, storage_bytes: 1, index_bytes: 1, avg_bytes: 1 },
+      sample: { size: 1000, with_embedding: 1000, embedding_coverage_pct: 100, embedding_dims: { '768': 1000 }, embedding_models: {}, chunk_methods: {}, with_context_pct: 1, token_p50: 1, token_p95: 1 },
+      document_sample: null,
+      search_indexes: [{ name: 'vector_index', type: 'vectorSearch', status: 'READY', queryable: true, dimensions: 768, similarity: 'cosine', quantization: null }],
+      search_lag: null, jobs_by_status: { running: 1 },
+      backup: { count: 1, newest_at: '2026-10-17T22:42:38Z', newest_status: 'completed', newest_type: 'post_ingestion', newest_size_bytes: 5e6 },
+      failed_documents: null, file_registry: null,
+    }],
+    errors: {},
+  },
+  next_due_at: '2026-10-18T10:30:00+00:00', lease_holder: 'quellex:api',
+}
 
 function hostPoint(t: string, cpu: number) {
   return {
@@ -95,10 +135,12 @@ const jobReport = {
 describe('TelemetryHistoryPage', () => {
   beforeEach(() => {
     authState = { user: { is_admin: true }, isLoading: false }
-    for (const m of [navigateMock, historyMock, anomaliesMock, jobMock, reportHtmlMock]) m.mockReset()
+    for (const m of [navigateMock, historyMock, anomaliesMock, jobMock, reportHtmlMock, dbStatsMock, collectMock]) m.mockReset()
     historyMock.mockResolvedValue(history)
     anomaliesMock.mockResolvedValue(anomalyReport)
     jobMock.mockResolvedValue(jobReport)
+    dbStatsMock.mockResolvedValue(dbStats)
+    collectMock.mockResolvedValue(dbStats.latest)
     try {
       localStorage.clear()
     } catch {
@@ -118,12 +160,36 @@ describe('TelemetryHistoryPage', () => {
 
     await waitFor(() => expect(historyMock).toHaveBeenCalledWith(6))
     expect(anomaliesMock).toHaveBeenCalledWith(6)
-    for (const title of ['telemetry.chart.cpu', 'telemetry.chart.temperature', 'telemetry.chart.containers', 'telemetry.chart.activity']) {
+    expect(dbStatsMock).toHaveBeenCalledWith(6)
+    for (const title of ['telemetry.chart.cpu', 'telemetry.chart.temperature', 'telemetry.chart.containers', 'telemetry.chart.containerMemory', 'telemetry.chart.activity']) {
       expect(await screen.findByText(title)).toBeInTheDocument()
     }
     expect(screen.getByText('Host memory pressure')).toBeInTheDocument()
     expect(screen.getByText('job-1')).toBeInTheDocument()
     expect(screen.queryByText('telemetry.noAgent')).not.toBeInTheDocument()
+  })
+
+  it('renders the database section from db-stats and samples on request', async () => {
+    render(<TelemetryHistoryPage />)
+
+    expect(await screen.findByText('telemetry.db.title')).toBeInTheDocument()
+    expect(screen.getAllByText('299,988').length).toBeGreaterThan(0)
+    expect(screen.getByText('+72,947 · telemetry.db.lastHours')).toBeInTheDocument()
+    expect(screen.getByText('telemetry.db.chart.counts')).toBeInTheDocument()
+    expect(screen.getAllByText('vector_index: READY').length).toBeGreaterThan(0) // chip + table
+
+    fireEvent.click(screen.getByRole('button', { name: 'telemetry.db.collectNow' }))
+    await waitFor(() => expect(collectMock).toHaveBeenCalled())
+    await waitFor(() => expect(dbStatsMock.mock.calls.length).toBeGreaterThanOrEqual(2)) // refetched after the sample
+  })
+
+  it('keeps the host charts when db-stats fail', async () => {
+    dbStatsMock.mockRejectedValue(new Error('nope'))
+    render(<TelemetryHistoryPage />)
+
+    expect(await screen.findByText('telemetry.chart.cpu')).toBeInTheDocument()
+    expect(screen.getByText('telemetry.db.loadFailed')).toBeInTheDocument()
+    expect(screen.queryByText('telemetry.loadFailed')).not.toBeInTheDocument()
   })
 
   it('warns when the host agent sent no samples', async () => {
@@ -153,6 +219,10 @@ describe('TelemetryHistoryPage', () => {
     const table = screen.getByRole('table', { name: 'telemetry.tableLabel' })
     expect(table).toHaveTextContent('30.0')
     expect(table).toHaveTextContent('45.0')
+    const dbTable = screen.getByRole('table', { name: 'telemetry.db.pointsTable' })
+    expect(dbTable).toHaveTextContent('227,041')
+    expect(dbTable).toHaveTextContent('299,988')
+    expect(dbTable).toHaveTextContent('21.00')
   })
 
   it('opens a job report and downloads it with the session token', async () => {

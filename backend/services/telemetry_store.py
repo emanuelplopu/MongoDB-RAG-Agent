@@ -14,7 +14,13 @@ history survives profile switches and is shared by every tenant on the host:
   ``job_id`` so events of one job share buckets. TTL ``activity_events_ttl_days``.
 * ``activity_current`` — one small regular document per ``<tenant>:<source>``
   describing what is running right now; the host agent stamps it onto each
-  sample so samples are self-describing.
+  sample so samples are self-describing. Refreshed on a heartbeat while idle,
+  so ``updated_at`` doubles as "last seen" for the API and the worker.
+* ``db_samples`` — **time-series** (granularity ``minutes``), one document per
+  :mod:`backend.services.db_stats` run (every ``db_stats_interval_minutes``):
+  MongoDB server, oplog and per-database statistics. TTL ``db_samples_ttl_seconds``.
+* ``telemetry_leases`` — one regular document per periodic task (``db_stats``)
+  so that exactly one of the API and worker processes on a host runs each slot.
 
 Host samples describe the machine and are visible to every tenant. Activity is
 tenant data (it holds file paths): ``meta.tenant`` is the tenant the job or chat
@@ -44,15 +50,23 @@ __all__ = [
     "HOST_SAMPLES",
     "ACTIVITY_EVENTS",
     "ACTIVITY_CURRENT",
+    "DB_SAMPLES",
+    "LEASES",
     "SHARED_TENANT",
     "TelemetryStore",
     "choose_bucket_seconds",
+    "slot_due_at",
     "tenant_visible",
 ]
 
 HOST_SAMPLES = "host_samples"
 ACTIVITY_EVENTS = "activity_events"
 ACTIVITY_CURRENT = "activity_current"
+DB_SAMPLES = "db_samples"
+LEASES = "telemetry_leases"
+
+#: Default retention of ``db_samples`` when a store is built without settings (CLI, tests).
+DEFAULT_DB_SAMPLES_TTL_SECONDS = 400 * 86400
 
 #: ``meta.tenant`` of activity that belongs to no single tenant (visible to all of them).
 SHARED_TENANT = "shared"
@@ -70,7 +84,24 @@ def tenant_visible(tenant: Optional[str], scope: Optional[str]) -> bool:
     """
     return scope is None or tenant in (scope, SHARED_TENANT)
 
-_TIMESERIES_OPTIONS: dict[str, str] = {"timeField": "ts", "metaField": "meta", "granularity": "seconds"}
+def _timeseries_options(granularity: str = "seconds") -> dict[str, str]:
+    """Time-series collection options shared by every telemetry collection."""
+    return {"timeField": "ts", "metaField": "meta", "granularity": granularity}
+
+
+def slot_due_at(now: datetime, interval_seconds: int) -> datetime:
+    """Start of the next clock-aligned slot after ``now`` (e.g. the next :00 or :30 for 30 min).
+
+    Args:
+        now: Current time (aware UTC).
+        interval_seconds: Slot length; slots start at multiples of it since the Unix epoch.
+
+    Returns:
+        The first slot boundary strictly after ``now``.
+    """
+    step = max(int(interval_seconds), 1)
+    epoch = int(now.timestamp())
+    return datetime.fromtimestamp((epoch // step + 1) * step, tz=timezone.utc)
 
 #: Bucket sizes (seconds) the history API snaps to, smallest first.
 _NICE_BUCKETS: tuple[int, ...] = (5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 21600, 43200, 86400)
@@ -145,8 +176,9 @@ class TelemetryStore:
         owns_client: Close the client in :meth:`close` (True when built by
             :meth:`from_settings`).
         tenant_scope: When set, activity reads (:meth:`events`, :meth:`aggregate_events`,
-            :meth:`recent_jobs`) return only this tenant's and shared activity. Writes and
-            host-sample reads are never scoped.
+            :meth:`recent_jobs`, :meth:`activity_current_docs`) return only this tenant's and
+            shared activity. Writes, host-sample and db-sample reads are never scoped.
+        db_samples_ttl_seconds: TTL applied to ``db_samples``.
     """
 
     def __init__(
@@ -158,11 +190,13 @@ class TelemetryStore:
         activity_events_ttl_seconds: int,
         owns_client: bool = True,
         tenant_scope: Optional[str] = None,
+        db_samples_ttl_seconds: int = DEFAULT_DB_SAMPLES_TTL_SECONDS,
     ) -> None:
         self._client = client
         self._database = database
         self._host_ttl = int(host_samples_ttl_seconds)
         self._event_ttl = int(activity_events_ttl_seconds)
+        self._db_sample_ttl = int(db_samples_ttl_seconds)
         self._owns_client = owns_client
         self._tenant_scope = tenant_scope or None
         self._ready = False
@@ -188,12 +222,18 @@ class TelemetryStore:
             host_samples_ttl_seconds=settings.host_samples_ttl_days * 86400,
             activity_events_ttl_seconds=settings.activity_events_ttl_days * 86400,
             tenant_scope=tenant_scope,
+            db_samples_ttl_seconds=int(getattr(settings, "db_stats_ttl_days", 400)) * 86400,
         )
 
     @property
     def tenant_scope(self) -> Optional[str]:
         """Tenant whose activity this store reads, or ``None`` for every tenant."""
         return self._tenant_scope
+
+    @property
+    def client(self) -> Any:
+        """The underlying ``AsyncMongoClient`` (the db-stats collector reads other databases through it)."""
+        return self._client
 
     def tenant_filter(self) -> dict[str, Any]:
         """``activity_events`` filter limiting reads to the scoped tenant (empty when unscoped)."""
@@ -233,6 +273,7 @@ class TelemetryStore:
         try:
             await self._ensure_timeseries(HOST_SAMPLES, self._host_ttl)
             await self._ensure_timeseries(ACTIVITY_EVENTS, self._event_ttl)
+            await self._ensure_timeseries(DB_SAMPLES, self._db_sample_ttl, granularity="minutes")
             events = self.db[ACTIVITY_EVENTS]
             await events.create_index([("meta.job_id", 1), ("ts", 1)], name="job_ts")
             await events.create_index([("meta.kind", 1), ("ts", 1)], name="kind_ts")
@@ -240,11 +281,12 @@ class TelemetryStore:
         except PyMongoError as exc:
             logger.warning("telemetry collections not ready (non-fatal): %s", exc)
 
-    async def _ensure_timeseries(self, name: str, ttl_seconds: int) -> None:
+    async def _ensure_timeseries(self, name: str, ttl_seconds: int, *, granularity: str = "seconds") -> None:
         info = await self._collection_info(name)
         if info is None:
             try:
-                await self.db.create_collection(name, timeseries=_TIMESERIES_OPTIONS, expireAfterSeconds=ttl_seconds)
+                await self.db.create_collection(name, timeseries=_timeseries_options(granularity),
+                                                expireAfterSeconds=ttl_seconds)
                 logger.info("created time-series collection %s.%s (ttl %ss)", self._database, name, ttl_seconds)
                 return
             except (CollectionInvalid, OperationFailure) as exc:
@@ -377,6 +419,113 @@ class TelemetryStore:
     async def upsert_activity_current(self, key: str, doc: dict[str, Any]) -> None:
         """Replace the "what is running now" document for ``key`` (``<tenant>:<source>``)."""
         await self.db[ACTIVITY_CURRENT].replace_one({"_id": key}, {"_id": key, **doc}, upsert=True)
+
+    async def activity_current_docs(self) -> list[dict[str, Any]]:
+        """Every process's live-state document visible to this store's tenant scope."""
+        cursor = self.db[ACTIVITY_CURRENT].find({})
+        docs = [doc async for doc in cursor]
+        return [d for d in docs if tenant_visible(d.get("tenant"), self._tenant_scope)]
+
+    # ── db samples (MongoDB statistics) ──────────────────────────────────
+
+    async def insert_db_sample(self, doc: dict[str, Any]) -> None:
+        """Store one db-stats sample (layout in :mod:`backend.services.db_stats`)."""
+        await self.db[DB_SAMPLES].insert_one(dict(doc))
+
+    async def latest_db_sample(self, *, max_age_seconds: Optional[float] = None) -> Optional[dict[str, Any]]:
+        """The most recent db-stats sample (optionally no older than ``max_age_seconds``)."""
+        query: dict[str, Any] = {}
+        if max_age_seconds is not None:
+            query["ts"] = {"$gte": utcnow() - timedelta(seconds=max_age_seconds)}
+        return await self.db[DB_SAMPLES].find_one(query, sort=[("ts", -1)], projection={"_id": 0})
+
+    async def db_samples_between(self, start: datetime, end: datetime, *, limit: int = 5000) -> list[dict[str, Any]]:
+        """Raw db-stats samples in ``[start, end)`` ordered by time."""
+        cursor = self.db[DB_SAMPLES].find({"ts": {"$gte": start, "$lt": end}}, projection={"_id": 0}).sort("ts", 1).limit(limit)
+        return [doc async for doc in cursor]
+
+    async def db_series(self, start: datetime, end: datetime, bucket_seconds: int) -> list[dict[str, Any]]:
+        """Compact db-stats points in ``[start, end)``: the last sample of each bucket, charting fields only.
+
+        The full sample (per-chunk distributions, search indexes, backups) stays out of the
+        series; :meth:`latest_db_sample` serves it once.
+        """
+        pipeline: list[dict[str, Any]] = [
+            {"$match": {"ts": {"$gte": start, "$lt": end}}},
+            {"$sort": {"ts": 1}},
+            {"$project": {
+                "_id": 0,
+                "ts": 1,
+                "connections_current": "$server.connections.current",
+                "connections_total_created": "$server.connections.total_created",
+                "wt_cache_used_bytes": "$server.wt_cache.used_bytes",
+                "wt_cache_max_bytes": "$server.wt_cache.max_bytes",
+                "ops_insert": "$server.opcounters.insert",
+                "ops_query": "$server.opcounters.query",
+                "oplog_bytes": "$oplog.storage_bytes",
+                "oplog_max_bytes": "$oplog.max_bytes",
+                "oplog_window_s": "$oplog.window_s",
+                "fs_used_bytes": "$fs.used_bytes",
+                "fs_total_bytes": "$fs.total_bytes",
+                "size_on_disk_bytes": "$totals.size_on_disk_bytes",
+                "data_bytes": "$totals.data_bytes",
+                "storage_bytes": "$totals.storage_bytes",
+                "index_bytes": "$totals.index_bytes",
+                "chunks": "$totals.chunks",
+                "documents": "$totals.documents",
+                "databases": {"$map": {"input": {"$ifNull": ["$databases", []]}, "as": "d", "in": {
+                    "name": "$$d.name",
+                    "documents": "$$d.documents.count",
+                    "chunks": "$$d.chunks.count",
+                    "storage_bytes": "$$d.storage_bytes",
+                    "data_bytes": "$$d.data_bytes",
+                    "index_bytes": "$$d.index_bytes",
+                    "embedding_coverage_pct": "$$d.sample.embedding_coverage_pct",
+                    "search_lag": "$$d.search_lag.lag",
+                }}},
+            }},
+            {"$group": {
+                "_id": {"$dateTrunc": {"date": "$ts", "unit": "second", "binSize": bucket_seconds}},
+                "point": {"$last": "$$ROOT"},
+            }},
+            {"$replaceRoot": {"newRoot": "$point"}},
+            {"$sort": {"ts": 1}},
+        ]
+        rows = await (await self.db[DB_SAMPLES].aggregate(pipeline)).to_list(length=None)
+        return [{"t": row.pop("ts"), **row} for row in rows]
+
+    # ── leases (one process per host runs a periodic task) ───────────────
+
+    async def acquire_lease(self, name: str, interval_seconds: int, holder: str, *, now: Optional[datetime] = None) -> bool:
+        """Take the lease ``name`` for the slot that is due, if any.
+
+        The lease document holds ``due_at``, the start of the next slot. Whoever first moves a
+        due lease forward (an atomic conditional update) runs the slot; everyone else sees a
+        future ``due_at`` and waits. Slots are clock-aligned (:func:`slot_due_at`), so samples
+        land on the same minutes whichever process takes them.
+
+        Args:
+            name: Lease id (e.g. ``"db_stats"``).
+            interval_seconds: Slot length.
+            holder: Who is asking (``<tenant>:<source>``), recorded for diagnostics.
+            now: Current time (aware UTC, defaults to now).
+
+        Returns:
+            True when this caller owns the slot and should run the task now.
+        """
+        moment = now or utcnow()
+        leases = self.db[LEASES]
+        await leases.update_one({"_id": name}, {"$setOnInsert": {"due_at": datetime(1970, 1, 1, tzinfo=timezone.utc)}},
+                                upsert=True)
+        taken = await leases.find_one_and_update(
+            {"_id": name, "due_at": {"$lte": moment}},
+            {"$set": {"due_at": slot_due_at(moment, interval_seconds), "holder": holder, "taken_at": moment}},
+        )
+        return taken is not None
+
+    async def lease_status(self, name: str) -> Optional[dict[str, Any]]:
+        """The lease document (``due_at``, ``holder``, ``taken_at``) or None when never taken."""
+        return await self.db[LEASES].find_one({"_id": name}, projection={"_id": 0})
 
     async def events(
         self,

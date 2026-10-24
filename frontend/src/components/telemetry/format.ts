@@ -36,6 +36,43 @@ export function formatNumber(v: number | null | undefined, digits = 1): string {
   return v == null || !Number.isFinite(v) ? '—' : v.toFixed(digits)
 }
 
+/** A whole number with thousands separators in the given locale ("361,819"), or a dash. */
+export function formatCount(v: number | null | undefined, locale?: string): string {
+  if (v == null || !Number.isFinite(v)) return '—'
+  try {
+    return new Intl.NumberFormat(locale || undefined, { maximumFractionDigits: 0 }).format(v)
+  } catch {
+    return String(Math.round(v))
+  }
+}
+
+/** A signed count delta ("+72,947", "−12"), or a dash. */
+export function formatSignedCount(v: number | null | undefined, locale?: string): string {
+  if (v == null || !Number.isFinite(v)) return '—'
+  const sign = v > 0 ? '+' : v < 0 ? '−' : '±'
+  return `${sign}${formatCount(Math.abs(v), locale)}`
+}
+
+/** A signed byte delta ("+1.2 GB"), or a dash. */
+export function formatSignedBytes(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '—'
+  const sign = v > 0 ? '+' : v < 0 ? '−' : '±'
+  return `${sign}${formatBytesShort(Math.abs(v))}`
+}
+
+/** Seconds as a short duration: "2d 11h", "3h 2m", "36m", "45s". */
+export function formatSeconds(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '—'
+  const total = Math.floor(seconds)
+  const days = Math.floor(total / 86400)
+  const hours = Math.floor((total % 86400) / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  if (days > 0) return `${days}d ${hours}h`
+  if (hours > 0) return `${hours}h ${minutes}m`
+  if (minutes > 0) return `${minutes}m`
+  return `${total}s`
+}
+
 /**
  * Time formatters for a locale: axis ticks (time of day for spans up to 20 h, else day + time, so
  * a 24 h axis never shows the same clock time twice) and a full timestamp for tooltips (span 0).

@@ -6,6 +6,8 @@ Usage:
     quellexctl telemetry anomalies --hours 24
     quellexctl telemetry anomalies --job <job_id>
     quellexctl telemetry report --job <job_id> --out report.html
+    quellexctl telemetry db --hours 24                         (MongoDB statistics: newest sample + series)
+    quellexctl telemetry db --collect                          (take a db-stats sample now)
 
 Reads the telemetry database directly (``MONGODB_URI``, ``TELEMETRY_DATABASE``; default
 ``mongodb://localhost:11017`` / ``recallhub_telemetry``), so it works on the host while the API is
@@ -185,6 +187,99 @@ if HAS_TYPER:
             raise typer.Exit(code=1)
         out.write_text(page, encoding="utf-8")
         fmt.print_success(f"Wrote {out} ({len(page) // 1024} KB)")
+
+    @telemetry_app.command("db")
+    def db(
+        hours: float = typer.Option(24.0, "--hours", min=0.1, help="Series range back from now"),
+        collect: bool = typer.Option(False, "--collect", help="Take a db-stats sample now and store it first"),
+        mongodb_uri: str = typer.Option(_DEFAULT_URI, "--mongodb-uri"),
+        database: str = typer.Option(_DEFAULT_DB, "--database", "-d"),
+    ) -> None:
+        """MongoDB statistics (db_samples): the newest sample per database and the series over the range."""
+        from backend.services.db_stats import collect_db_sample
+        from backend.services.telemetry_analysis import db_rates
+        from backend.services.telemetry_store import choose_bucket_seconds
+
+        fmt = _fmt()
+
+        def _profiles() -> dict:
+            try:
+                from src.profile import get_profile_manager
+
+                return {p.database: key for key, p in get_profile_manager().list_profiles().items()}
+            except Exception:  # noqa: BLE001 - labels are optional
+                return {}
+
+        async def _run():
+            store = _open_store(mongodb_uri, database)
+            try:
+                if collect:
+                    await store.ensure_collections()
+                    sample = await collect_db_sample(store.client, telemetry_database=database,
+                                                     profile_databases=_profiles(), collector="cli", forced=True)
+                    await store.insert_db_sample(sample)
+                end = datetime.now(timezone.utc)
+                start = end - timedelta(hours=hours)
+                points = db_rates(await store.db_series(start, end, choose_bucket_seconds(start, end, target_points=400, minimum=60)))
+                return await store.latest_db_sample(), points
+            finally:
+                await store.close()
+
+        try:
+            latest, points = run_async(_run())
+        except Exception as exc:  # noqa: BLE001 - CLI boundary
+            fmt.print_error(str(exc))
+            raise typer.Exit(code=1)
+        if fmt.format == "json":
+            import json
+
+            print(json.dumps({"latest": latest, "points": points}, indent=2, default=str))
+            return
+        if latest is None:
+            fmt.print_error("No db-stats sample yet (run with --collect, or wait for the next slot)")
+            raise typer.Exit(code=1)
+        _print_db_sample(fmt, latest)
+        if points:
+            fmt.print_table(["Time", "Chunks", "Documents", "Storage GB", "Oplog GB", "Conns", "New conns/min", "Inserts/min"],
+                            [[_local(p.get("t")), p.get("chunks"), p.get("documents"), _gb(p.get("storage_bytes")),
+                              _gb(p.get("oplog_bytes")), p.get("connections_current"),
+                              _r(p.get("connections_created_per_min")), _r(p.get("inserts_per_min"))] for p in points],
+                            title=f"db_samples over the last {hours:g} h")
+
+
+def _print_db_sample(fmt: "OutputFormatter", sample: dict) -> None:
+    server = sample.get("server") or {}
+    conns = server.get("connections") or {}
+    oplog = sample.get("oplog") or {}
+    fs = sample.get("fs") or {}
+    totals = sample.get("totals") or {}
+    console.print(
+        f"Sample {_local(sample.get('ts'))} by {sample.get('collector') or '?'} in {sample.get('duration_ms') or 0:.0f} ms · "
+        f"MongoDB {server.get('version') or '?'} · connections {conns.get('current')} open / "
+        f"{conns.get('total_created')} created · oplog {_gb(oplog.get('storage_bytes'))} GB of {_gb(oplog.get('max_bytes'))} GB "
+        f"({(oplog.get('window_s') or 0) / 3600:.0f} h) · data filesystem {fs.get('pct') or 0:.0f} % full · "
+        f"totals {totals.get('chunks')} chunks / {totals.get('documents')} documents / {_gb(totals.get('storage_bytes'))} GB"
+    )
+    rows = []
+    for db in sample.get("databases") or []:
+        chunk_sample = db.get("sample") or {}
+        indexes = ", ".join(f"{i.get('name')}:{i.get('status')}" for i in db.get("search_indexes") or []) or ""
+        backup = db.get("backup") or {}
+        rows.append([
+            db.get("name"), db.get("profile_key") or "", (db.get("documents") or {}).get("count"),
+            (db.get("chunks") or {}).get("count"), _gb(db.get("storage_bytes")), _gb(db.get("index_bytes")),
+            _r(chunk_sample.get("embedding_coverage_pct")), ",".join((chunk_sample.get("embedding_dims") or {}).keys()),
+            indexes, (db.get("search_lag") or {}).get("lag"), _local(backup.get("newest_at")),
+        ])
+    fmt.print_table(["Database", "Profile", "Documents", "Chunks", "Storage GB", "Index GB", "Embedded %", "Dims",
+                     "Search indexes", "Index lag", "Last backup"], rows, title="Databases")
+    errors = sample.get("errors") or {}
+    if errors:
+        fmt.print_table(["Probe", "Error"], [[k, v] for k, v in sorted(errors.items())], title="Failed probes")
+
+
+def _gb(value) -> str:
+    return "-" if value is None else f"{float(value) / 1024 ** 3:.2f}"
 
 
 def _print_anomalies(fmt: "OutputFormatter", found) -> None:

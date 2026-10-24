@@ -327,8 +327,58 @@ indexes `meta.job_id+ts` and `meta.kind+ts`. Written by `ActivityEventRecorder`
 | `chat.request` | agent coordinator | `session_id`, `trace_id`, `mode`, `strategy`, `model`, `duration_ms`, `orchestrator_ms`, `worker_ms`, `phases[]`, `outcome` — no message text |
 
 `activity_current` holds one document per `<tenant>:<source>` with the live job/phase/step/file and
-`chat_last_active_at`; the agent stamps it onto every sample. Events contain internal file paths:
-treat the telemetry database like the document database (same access, TTL-limited).
+`chat_last_active_at`; the agent stamps it onto every sample. Each process rewrites its document
+every `PROCESS_HEARTBEAT_SECONDS` (30) even while idle, so `updated_at` is the process's
+"last seen": the overview and the `process_silent` anomaly use it to tell an idle API or worker
+from a dead one (the worker's compose health check is a no-op, so Docker's "healthy" cannot).
+Events contain internal file paths: treat the telemetry database like the document database (same
+access, TTL-limited).
+
+### Database statistics (`db_samples`, time-series, schema 1)
+
+What the machine figures cannot show: how big the corpus is, whether it is still searchable, and
+how MongoDB itself is doing. `backend/services/db_stats.py` takes one sample per
+`DB_STATS_INTERVAL_MINUTES` (30; slots are clock-aligned, :00 and :30) into `db_samples`
+(`timeField` `ts`, `metaField` `meta{source: db-stats, collector, schema}`, granularity minutes,
+TTL `DB_STATS_TTL_DAYS` = 400). Every API backend and the ingestion worker run a
+`DbStatsCollector`; the `telemetry_leases` document `db_stats` (an atomic conditional update of
+its `due_at`) hands each slot to exactly one of them, so two tenants and a worker still write one
+sample per slot and sampling continues while any one process is up. A process that starts when a
+slot is overdue (fresh install, everything was down) samples immediately.
+
+One sample costs about 500 ms and 6 KB on the live stack and never scans a chunks collection:
+
+| Section | Source | Fields |
+|---------|--------|--------|
+| `server` | `serverStatus` | version, uptime, `connections{current, active, available, total_created}` (the delta between samples is the connection churn), `wt_cache{used, max, dirty}`, `opcounters`, resident memory |
+| `oplog` | `$collStats` on `local.oplog.rs` + oldest/newest entry | data/storage/max bytes, `window_s`, first/last time. On a single-node replica set the oplog is the largest thing on disk (21 GB against 2.3 GB of data on 2026-10-24), so it is reported apart from the data |
+| `fs` | `dbStats.fsUsedSize/fsTotalSize` | the filesystem under the data directory (the Docker VM disk on Windows) |
+| `databases[]` | per database except `admin`, `local`, `config`, the telemetry DB | `dbStats` sizes; `$collStats` of `documents` and `chunks` (count, data, storage, index, average size); a `$sample` of 1,000 chunks **projected server-side** to embedding type/length, embedding model, chunk method, contextual flag and token count (coverage %, vector-length and model mix, token p50/p95); a `$sample` of 500 documents (share with `chunks_count` 0); `listSearchIndexes` (name, type, status, queryable, dimensions, similarity, quantization); the text index's lag via `$searchMeta` `count: total` against the collection count; `ingestion_jobs` by status; the newest `backups_metadata` entry; `failed_documents` and `file_registry` counts |
+| `totals`, `telemetry` | sums over `databases[]`; `dbStats` of the telemetry DB | |
+| `errors` | | `probe -> message` for probes that failed (each probe has its own timeout; a failure never loses the sample) |
+
+Profiles label databases (`profile_key`) through `ProfileManager.list_profiles()`; a configured
+profile whose database does not exist yet appears with empty figures. Databases are not tenant
+data in this repo (profiles carry no tenant), so the samples are host-wide and superadmin-only.
+
+Surfaces: `GET /api/v1/telemetry/db-stats?hours=24` (compact points, one per bucket, never finer
+than the interval, with the derived `connections_created_per_min` and `inserts_per_min`, plus
+`latest` = the newest full sample, `next_due_at`, `lease_holder`; up to 400 days),
+`POST /api/v1/telemetry/db-stats/collect` (sample now; 503 when the collector is off on this
+backend), the **Database** section of System → Telemetry (stat cards with the change over the
+range, counts / storage / connections / search charts, per-database table, "Sample now"),
+`quellexctl telemetry db [--hours 24] [--collect]`, and the widget's DB line.
+
+### Overview (`GET /api/v1/telemetry/overview`)
+
+The widget's second poll (every 60 s) for what one host sample cannot tell: the newest database
+figures (chunks, storage, lowest embedding coverage, search indexes all READY, summed index lag),
+anomaly counts over the last 24 h with the top titles (the rules run at most once a minute per
+backend), per-process liveness from `activity_current` (online = seen within 3 heartbeats, the
+running job's files/hour over the last hour and the ETA at that pace), chat latency p50/p95 and
+error count from `chat.request` events, the newest backup per database with its age and size,
+and the models Ollama had loaded when the host agent last looked (empty = the next chat
+cold-starts). Each section degrades to empty on its own error.
 
 **Tenants.** Host samples describe the machine and are shown to every tenant. Activity is tenant
 data: `meta.tenant` (and `tenant` in `activity_current`) is the tenant the job or chat belongs to.
@@ -360,13 +410,24 @@ shows the container view).
   container restarts, agent sampling gaps, and per file: failed (by error type), cancelled
   (timeouts/stops), unfinished (`file.start` without `file.end`: crash or hang, critical), slow
   (≥ 3× the median of the same type and ≥ 30 s), empty (no chunks).
+* **Database rules** (on `db_samples`; state rules use the newest sample in the range, trend rules
+  the series): `search_index_unhealthy` (an index not READY or not queryable, critical),
+  `embedding_coverage` (sampled chunks without a vector), `embedding_mix` (several vector lengths
+  in one collection: critical; several model labels: warning), `search_lag` (text index ≥ 10 % of the
+  collection behind, at least 50 documents, from 10,000 documents always), `oplog_near_cap` (info), `backup_stale` (a database with documents
+  and no completed backup younger than 7 days, or an empty one), `filesystem_full` (≥ 90 %,
+  critical ≥ 97 %), `disk_forecast` (90 % reached within 30 days at the range's growth rate),
+  `connection_churn` (≥ 20 new MongoDB connections a minute between two samples), `chunks_flat`
+  (≥ 50 documents added without a single new chunk).
+* **Liveness** (`activity_current`, only when the range ends now): `process_silent` — an API or
+  worker heartbeat older than 5 minutes (critical while it owned a running job).
 
 | Surface | Path |
 |---------|------|
-| API (superadmin; 503 when disabled) | `GET /api/v1/telemetry/history?hours=6` · `/jobs` · `/jobs/{id}` · `/jobs/{id}/report.html` · `/anomalies?hours=24` |
-| Widget | `GET /api/v1/system/host-stats` (latest sample or container fallback) |
-| UI | System → Telemetry History (`/system/telemetry`): range presets, synced charts with phase bands, anomalies, table view, jobs and job report with HTML download |
-| CLI | `quellexctl telemetry jobs \| job --job ID \| anomalies [--job ID] \| report --job ID --out report.html` (talks to MongoDB directly) |
+| API (superadmin; 503 when disabled) | `GET /api/v1/telemetry/history?hours=6` · `/jobs` · `/jobs/{id}` · `/jobs/{id}/report.html` · `/anomalies?hours=24` · `/db-stats?hours=24` · `POST /db-stats/collect` · `/overview` |
+| Widget | `GET /api/v1/system/host-stats` every 4 s (latest sample or container fallback) + `GET /api/v1/telemetry/overview` every 60 s (DB line, anomaly badge, LLM loaded, worker last seen with job pace and ETA, chat p95, newest backup) |
+| UI | System → Telemetry History (`/system/telemetry`): range presets, synced charts with phase bands (incl. container CPU **and memory**), anomalies, Database section (cards, charts, per-database table, "Sample now"), table view, jobs and job report with HTML download |
+| CLI | `quellexctl telemetry jobs \| job --job ID \| anomalies [--job ID] \| report --job ID --out report.html \| db [--hours 24] [--collect]` (talks to MongoDB directly) |
 
 The HTML job report reuses the benchmark renderer (`synthetic_corpus/telemetry_html.py`) by
 converting agent samples to its sample layout and appends the findings; it is a single file to
@@ -382,16 +443,25 @@ attach to a bug report.
 | `ACTIVITY_EVENTS_TTL_DAYS` | `90` | retention of activity events |
 | `HOST_AGENT_STALE_SECONDS` | `20` | older agent samples count as offline for the widget |
 | `HOST_STATS_DISK_PATH` | empty | disk reported by the container fallback (first existing `DOCUMENT_ROOTS` entry by default) |
+| `DB_STATS_ENABLED` | `true` | run the `db_samples` collector in the API backends and the worker |
+| `DB_STATS_INTERVAL_MINUTES` | `30` | slot length of the db-stats lease (clock-aligned) |
+| `DB_STATS_TTL_DAYS` | `400` | retention of `db_samples` |
+| `PROCESS_HEARTBEAT_SECONDS` | `30` | idle refresh of `activity_current` (process liveness) |
 
-Size: about 17,000 samples a day at 5 s; time-series compression keeps that to a few MB per day.
+Size: about 17,000 host samples a day at 5 s; time-series compression keeps that to a few MB per
+day. `db_samples` adds 48 documents of about 6 KB a day.
 
 ### Tests
 
 * Agent: `dotnet test installer/host-agent.Tests` (parsers, Docker CPU math, RAPL mapping, sensor
   mapping, activity stamping; a MongoDB round trip when `RECALLHUB_TEST_MONGO_URI` is set).
-* Backend: `backend/tests/test_host_stats.py`, `test_telemetry_store.py`, `test_activity_events.py`,
-  `test_telemetry_history.py`; against a throwaway MongoDB (never the stack's):
-  `backend/tests/integration/test_telemetry_store_mongo.py` and `test_telemetry_analysis_mongo.py`
-  with `RECALLHUB_TEST_MONGO_URI=mongodb://127.0.0.1:27999/?directConnection=true`.
+* Backend: `backend/tests/test_host_stats.py`, `test_telemetry_store.py` (incl. the lease),
+  `test_activity_events.py` (incl. the heartbeat), `test_telemetry_history.py`,
+  `test_telemetry_db_stats.py` (database and liveness rules, rates, the overview and the db-stats
+  endpoints), `test_db_stats.py` (summarisers, the sampler against a fake client, the collector
+  loop); against a throwaway MongoDB (never the
+  stack's): `backend/tests/integration/test_telemetry_store_mongo.py` and
+  `test_telemetry_analysis_mongo.py` with
+  `RECALLHUB_TEST_MONGO_URI=mongodb://127.0.0.1:27999/?directConnection=true`.
 * Frontend: `HostStatsWidget.test.tsx`, `components/telemetry/TimeSeriesChart.test.tsx`,
-  `pages/TelemetryHistoryPage.test.tsx`.
+  `components/telemetry/DbStatsSection.test.tsx`, `pages/TelemetryHistoryPage.test.tsx`.

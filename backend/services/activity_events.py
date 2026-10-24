@@ -15,9 +15,11 @@ Event kinds:
 * ``chat.request`` with durations, emitted by the agent coordinator.
 
 ``state`` signals are not stored as events: they update the in-memory state that is written to
-``activity_current`` (key ``<tenant>:<source>``) at most once a second, and refreshed every
+``activity_current`` (key ``<tenant>:<source>``) at most once a second, refreshed every
 ``refresh_interval`` seconds while a job or chat is active so the Windows host agent sees it as
-fresh and stamps it onto its samples.
+fresh and stamps it onto its samples, and rewritten every ``heartbeat_interval`` seconds while
+idle so ``updated_at`` tells a quiet process from a dead one (the telemetry overview shows it as
+"last seen").
 
 Tenants: an API process records everything under its own tenant. The ingestion worker is shared
 by every tenant on the host, so its recorder runs under :data:`~backend.services.telemetry_store.SHARED_TENANT`
@@ -72,6 +74,7 @@ class ActivityEventRecorder:
         host: Host name recorded in ``activity_current`` (defaults to this machine).
         flush_interval: Seconds between flushes.
         refresh_interval: Seconds between ``activity_current`` refreshes while something runs.
+        heartbeat_interval: Seconds between ``activity_current`` rewrites while idle (liveness).
         max_batch: Events per ``insert_many``.
         max_queue: Events kept while MongoDB is unreachable (oldest dropped first).
     """
@@ -85,6 +88,7 @@ class ActivityEventRecorder:
         host: Optional[str] = None,
         flush_interval: float = 1.0,
         refresh_interval: float = 15.0,
+        heartbeat_interval: float = 30.0,
         max_batch: int = 500,
         max_queue: int = 50_000,
     ) -> None:
@@ -94,6 +98,7 @@ class ActivityEventRecorder:
         self._key = f"{tenant}:{source}"
         self._flush_interval = flush_interval
         self._refresh_interval = refresh_interval
+        self._heartbeat_interval = max(float(heartbeat_interval), flush_interval)
         self._max_batch = max_batch
         self._max_queue = max_queue
         self._queue: deque[dict[str, Any]] = deque()
@@ -277,7 +282,10 @@ class ActivityEventRecorder:
     async def _write_state(self, *, force: bool) -> None:
         now = _utcnow()
         with self._lock:
-            due = self._dirty or (self._active(now) and time.monotonic() - self._last_state_write >= self._refresh_interval)
+            since_write = time.monotonic() - self._last_state_write
+            due = (self._dirty
+                   or (self._active(now) and since_write >= self._refresh_interval)
+                   or since_write >= self._heartbeat_interval)
             if not (due or force):
                 return
             snapshot = {**self._state, "updated_at": now}
