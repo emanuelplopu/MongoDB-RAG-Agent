@@ -62,6 +62,23 @@ class EmbeddingResilienceConfig:
 # Global resilience config - can be overridden
 _resilience_config = EmbeddingResilienceConfig()
 
+#: Window assumed for models not in the table (the local EmbeddingGemma server's 2048).
+DEFAULT_MAX_INPUT_TOKENS = 2048
+#: Characters per token assumed when truncating (German legal text runs ~3.3 chars per token).
+CHARS_PER_TOKEN = 3
+
+
+def truncate_to_window(text: str, max_tokens: int) -> str:
+    """Cut ``text`` to roughly ``max_tokens`` tokens (``CHARS_PER_TOKEN`` characters each).
+
+    Embedding models read only their window anyway; sending more made the llama.cpp
+    server reject whole batches ("input (8483 tokens) is too large to process").
+    """
+    limit = max(1, int(max_tokens)) * CHARS_PER_TOKEN
+    if len(text) <= limit:
+        return text
+    return text[:limit]
+
 
 def configure_embedding_resilience(
     max_retries: int = None,
@@ -208,6 +225,9 @@ class EmbeddingGenerator:
             "voyage-code-3": {"dimensions": 1024, "max_tokens": 32000, "provider": "voyageai"},
             "voyage-3-large": {"dimensions": 1024, "max_tokens": 32000, "provider": "voyageai"},
             # Ollama models
+            # Local llama.cpp embedder (OpenAI-compatible endpoint); EmbeddingGemma's window is 2048 tokens
+            "embeddinggemma-2": {"dimensions": 768, "max_tokens": 2048, "provider": "openai"},
+            "embeddinggemma-300m": {"dimensions": 768, "max_tokens": 2048, "provider": "openai"},
             "nomic-embed-text": {"dimensions": 768, "max_tokens": 8192, "provider": "ollama"},
             "mxbai-embed-large": {"dimensions": 1024, "max_tokens": 512, "provider": "ollama"},
             "all-minilm": {"dimensions": 384, "max_tokens": 256, "provider": "ollama"},
@@ -225,6 +245,23 @@ class EmbeddingGenerator:
             self.config["dimensions"] = settings.embedding_dimension
         
         logger.info(f"Embedding generator initialized: model={self.model}, provider={self.provider}, dimensions={self.config['dimensions']}")
+
+    def max_input_tokens(self) -> int:
+        """Tokens one input may carry: ``EMBEDDING_MAX_TOKENS`` when set, else the model's window.
+
+        Unknown models get the conservative default of 2048 (the window of the local
+        EmbeddingGemma server) instead of OpenAI's 8191: an input beyond the server's
+        batch size made llama.cpp reject the whole request with HTTP 500.
+        """
+        raw = os.getenv("EMBEDDING_MAX_TOKENS", "").strip()
+        if raw:
+            try:
+                return max(64, int(raw))
+            except ValueError:
+                logger.warning(f"Ignoring non-numeric EMBEDDING_MAX_TOKENS={raw!r}")
+        if self.model in self.model_configs:
+            return int(self.model_configs[self.model]["max_tokens"])
+        return DEFAULT_MAX_INPUT_TOKENS
 
     def _sanitize_text(self, text: str) -> str:
         """
@@ -646,8 +683,7 @@ class EmbeddingGenerator:
                 sanitized = "[empty]"  # Placeholder to maintain index alignment
                 logger.warning(f"Empty text at index {idx}, using placeholder")
             
-            if len(sanitized) > self.config["max_tokens"] * 4:
-                sanitized = sanitized[:self.config["max_tokens"] * 4]
+            sanitized = truncate_to_window(sanitized, self.max_input_tokens())
             processed_texts.append(sanitized)
         
         if len(empty_indices) == len(texts):
@@ -758,8 +794,28 @@ class EmbeddingGenerator:
             batch_chunks = chunks[i:i + self.batch_size]
             batch_texts = [chunk.content for chunk in batch_chunks]
 
-            # Generate embeddings for this batch
-            embeddings = await self.generate_embeddings_batch(batch_texts)
+            # Generate embeddings for this batch; one rejected input must not cost the
+            # whole batch (a llama.cpp server answers 500 for the entire request when a
+            # single input exceeds its batch size), so fall back to one request per chunk
+            try:
+                embeddings = await self.generate_embeddings_batch(batch_texts)
+            except Exception as batch_error:  # noqa: BLE001 - retried per chunk below
+                logger.warning(
+                    f"Batch embedding of {len(batch_chunks)} chunks failed ({batch_error}); "
+                    "retrying chunk by chunk"
+                )
+                embeddings = []
+                kept: List[DocumentChunk] = []
+                for chunk in batch_chunks:
+                    try:
+                        embeddings.extend(await self.generate_embeddings_batch([chunk.content]))
+                        kept.append(chunk)
+                    except Exception as chunk_error:  # noqa: BLE001 - skip this chunk only
+                        logger.error(
+                            f"Dropping chunk {chunk.index} ({len(chunk.content)} chars) of "
+                            f"{chunk.metadata.get('source', '?')}: embedding failed: {chunk_error}"
+                        )
+                batch_chunks = kept
 
             # Add embeddings to chunks
             for chunk, embedding in zip(batch_chunks, embeddings):

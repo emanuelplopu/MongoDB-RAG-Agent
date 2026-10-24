@@ -287,6 +287,24 @@ async def graceful_shutdown_handler(db):
             logger.info(f"Marked {marked} job(s) as interrupted during shutdown")
 
 
+async def _all_registry_entries(registry_service, profile_key: str, page_size: int = 1000) -> List[dict]:
+    """Every file-registry entry of ``profile_key`` as a dict, read page by page.
+
+    ``FileRegistryService.list_files`` paginates (``page``/``page_size``) and returns
+    pydantic entries; the former single call with ``limit=`` raised on every run and
+    the queue build silently gave up on the registry (retry and skip filters included).
+    """
+    entries: List[dict] = []
+    page = 1
+    while True:
+        batch, total = await registry_service.list_files(profile_key=profile_key, page=page, page_size=page_size)
+        entries.extend(e.model_dump() if hasattr(e, "model_dump") else dict(e) for e in batch)
+        if not batch or len(entries) >= total:
+            break
+        page += 1
+    return entries
+
+
 def _supported_file_patterns() -> List[str]:
     """Glob patterns of every extension the pipeline reads (``SUPPORTED_INGESTION_EXTENSIONS``).
 
@@ -485,10 +503,7 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
         
         if registry_service and profile_key:
             # Build registry lookup by file path
-            registry_entries = await registry_service.list_files(
-                profile_key=profile_key,
-                limit=100000  # Get all entries
-            )
+            registry_entries = await _all_registry_entries(registry_service, profile_key)
             for entry in registry_entries:
                 registry_by_path[entry.get("file_path", "")] = entry
             
