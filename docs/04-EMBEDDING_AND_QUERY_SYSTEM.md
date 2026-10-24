@@ -274,12 +274,18 @@ here is done by a build script):
 5. Rollback: drop the file from `COMPOSE_FILE` (or set `INGEST_GPU_SLOTS=0`)
    and repeat step 3.
 
-`Start-Services.ps1`, `Stop-Services.ps1` and the tray app build their own
-`-f` list (`docker-compose.override.yml`, `docker-compose.shares.yml`) and do
-not add `docker-compose.gpu.yml`; a restart from them brings the containers
-back without the GPU (the pool then logs `GPU conversion slots: 0`) until they
-honour `COMPOSE_FILE`. Restart with `docker compose up -d` from the install
-folder meanwhile.
+`Start-Services.ps1`, `Stop-Services.ps1` and the tray app pass an explicit
+`-f` list, which makes Compose ignore `COMPOSE_FILE` from `.env`; since
+2026-10-25 they read `COMPOSE_FILE` themselves (`Get-ComposeFileSet` in
+`installer/scripts/RecallHub-Docker.psm1`, `ServiceManager.ResolveComposeFiles`
+in the tray app) and pass every listed file in that order, so a restart from
+the tray app or the scripts keeps the GPU layer. A listed file that does not
+exist is logged and skipped. Installs that still run older script copies from
+`%LocalAppData%\RecallHub\scripts` or an older tray exe restart without the
+layer (the pool then logs `GPU conversion slots: 0`): re-deploy the scripts
+(`Write-TrayConfig.ps1`, or `INSTALL.ps1 -SkipPrerequisites`) or restart with
+`docker compose up -d` from the install folder. `Start-Services.ps1 -DryRun`
+prints the resolved command.
 
 **Audio Processing** uses Whisper:
 - Transcribes audio content to text

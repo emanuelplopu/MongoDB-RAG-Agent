@@ -46,7 +46,7 @@ Related: `docs/21-LAN_ACCESS.md` (who can reach the install),
 | Mounts | `docker-compose.yml` (`./mounts:/app/mounts:ro` in `backend`, `backend-quellex`, `ingestion-worker`, `cli`) | Local folders |
 | Shares | `docker-compose.shares.yml` (generated, git-ignored; template `docker-compose.shares.example.yml`) | One CIFS volume per share, attached read-only at `/app/mounts/<name>` |
 | Share script | `installer/scripts/Add-NetworkShare.ps1` | Tests the share, writes `.env` + `docker-compose.shares.yml`, restarts |
-| Compose file set | `Start-Services.ps1`, `Stop-Services.ps1`, tray app `ServiceManager.cs`, `COMPOSE_FILE` in `.env` | All load `docker-compose.override.yml` and `docker-compose.shares.yml` when present |
+| Compose file set | `Start-Services.ps1`, `Stop-Services.ps1`, tray app `ServiceManager.cs`, `COMPOSE_FILE` in `.env` | The scripts and the tray app pass the files listed in `COMPOSE_FILE` when it is set (the share script writes it); without it they load `docker-compose.override.yml` and `docker-compose.shares.yml` when present |
 | Reload | `src/profile.py` (`ProfileManager.reload`), `backend/workers/ingestion_worker.py`, `backend/routers/ingestion.py` | Jobs see folder changes without a restart |
 | Open in Explorer | `MOUNT_MAPPINGS` in `.env` (`container_path=host_path|...`) | Documents page shows the Windows/UNC path |
 
@@ -112,8 +112,9 @@ The script asks for the password, then:
    backend(s);
 4. sets `MOUNT_MAPPINGS` (`/app/mounts/kanzlei=\\nas.diejuristin\Kanzlei`)
    and `COMPOSE_FILE` in `.env` so a plain `docker compose up -d` loads the
-   shares file as well (the installer scripts and the tray app add it on
-   their own);
+   shares file as well (the installer scripts and the tray app follow
+   `COMPOSE_FILE` too, and add the shares file on their own when `.env` has
+   no `COMPOSE_FILE`);
 5. runs `docker compose up -d`, which recreates the backend and worker
    containers with the new volume.
 
@@ -166,7 +167,7 @@ skips files that are already indexed.
 |---|---|---|
 | `DOCUMENT_ROOTS` | `/app/mounts,/app/documents` | Container paths organisation admins may pick folders under (comma separated). Backends only. |
 | `MOUNT_MAPPINGS` | empty | `container_path=host_path` pairs separated by `\|` for "Open in Explorer". Managed for shares by the script; local folders by hand. |
-| `COMPOSE_FILE` | unset | Compose file list for plain `docker compose` calls; `;`-separated on Windows. Managed by the script unless customised. |
+| `COMPOSE_FILE` | unset | Compose file list for plain `docker compose` calls and, since 2026-10-25, for `Start-Services.ps1`, `Stop-Services.ps1` and the tray app (an explicit `-f` list would otherwise make Compose ignore it); `;`-separated on Windows (`COMPOSE_PATH_SEPARATOR`). Managed by the script unless customised. |
 | `SHARE_<NAME>_UNC` | – | `//server/share` of the share (forward slashes). |
 | `SHARE_<NAME>_USER` / `_PASSWORD` | – | Account for the mount. No `,`, `$` or line breaks in the password. |
 | `SHARE_<NAME>_OPTIONS` | `vers=3.1.1` | Extra CIFS options (`vers=`, `domain=`). |
@@ -245,7 +246,7 @@ were assumed.
 | Script: `docker volume create failed` / `Mounting the share failed` | Server name not resolvable from the Docker VM (use the IP), wrong share path, account or password, or the server needs an older dialect (`-SmbVersion 3.0`/`2.1`). SMB1-only devices are not supported. |
 | `docker compose up` fails with `permission denied` / `mount error(13)` after a password change | Update `SHARE_<NAME>_PASSWORD` in `.env`, then `docker compose down` and `up -d`: the volume keeps the old options until it is recreated (`docker volume rm recallhub_share_<name>`). |
 | Container fails to start after adding a share: `mkdir /app/mounts/<name>: read-only file system` | The host mount point `<install>\mounts\<name>` is missing (hand-written shares file, or the folder was deleted). Create the empty folder and `docker compose up -d`; the script creates it itself. |
-| Folder picker shows the root as *not mounted* | The container was started before the share/folder existed, or the shares file is not in the compose file set (`COMPOSE_FILE` in `.env`; installer scripts add it automatically). `docker compose up -d`. |
+| Folder picker shows the root as *not mounted* | The container was started before the share/folder existed, or the shares file is not in the compose file set (`COMPOSE_FILE` in `.env`, which the installer scripts and the tray app follow; without `COMPOSE_FILE` they add the shares file on their own). `docker compose up -d`. |
 | Saving the profile: *outside the document roots* | The path is not below `DOCUMENT_ROOTS`; attach the folder as in A or B first. |
 | Saving: *not reachable from the server* | Typo, or the share is offline/unmounted in the API container (`docker exec rag-backend-quellex ls <path>`). |
 | Documents open as plain text instead of the PDF | The backend container does not have the folder at the same path as the worker; the shares file attaches it to both, local folders come from `./mounts` in both. |

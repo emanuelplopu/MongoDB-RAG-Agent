@@ -11,7 +11,8 @@
 .PARAMETER Timeout
     Maximum seconds to wait for containers to stop (default: 60).
 .PARAMETER DryRun
-    Print the docker command that would run and exit without stopping anything.
+    Resolve config, compose files and profiles, print the docker command that
+    would run, and exit 0 without stopping anything. Skips the Docker engine check.
 .OUTPUTS
     Exit 0 = stopped or nothing to stop, 3 = docker compose down failed.
 #>
@@ -25,6 +26,7 @@ $ErrorActionPreference = "Continue"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Import-Module (Join-Path $ScriptDir "RecallHub-Logging.psm1") -Force
+Import-Module (Join-Path $ScriptDir "RecallHub-Docker.psm1") -Force
 
 $logFile = Initialize-InstallLog -LogName "stop-services"
 Write-InstallLog "Stopping services" -Source "Stop-Services"
@@ -69,10 +71,14 @@ $composeProfile = Get-ConfigValue $dockerCfg "composeProfile" ""
 # root from the script location - scripts\ is one level below the compose file.
 if ($installPath -eq "auto") { $installPath = Split-Path $ScriptDir -Parent }
 
-$null = docker info 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-InstallLog "Docker daemon not running - services are already stopped" -Level WARN -Source "Stop-Services"
-    exit 0
+if ($DryRun) {
+    Write-InstallLog "Dry run: Docker engine check skipped (nothing is stopped)" -Source "Stop-Services"
+} else {
+    $null = docker info 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-InstallLog "Docker daemon not running - services are already stopped" -Level WARN -Source "Stop-Services"
+        exit 0
+    }
 }
 
 $composePath = Join-Path $installPath $composeFile
@@ -82,20 +88,23 @@ if (-not (Test-Path $composePath)) {
 }
 
 $stopTimeout = if ($Force) { 10 } else { $Timeout }
-$downArgs = @("compose", "-f", $composePath)
-if ($composeFile -eq "docker-compose.yml") {
-    # Same file set as Start-Services.ps1 and the tray app: override + network shares.
-    foreach ($extra in @("docker-compose.override.yml", "docker-compose.shares.yml")) {
-        $extraPath = Join-Path $installPath $extra
-        if (Test-Path $extraPath) { $downArgs += @("-f", $extraPath) }
-    }
+# Same compose file set as Start-Services.ps1 (COMPOSE_FILE from .env when set,
+# otherwise compose file + override + network shares; Get-ComposeFileSet in
+# RecallHub-Docker.psm1), otherwise "down" would not know the services and
+# volumes of a layer such as docker-compose.gpu.yml or docker-compose.shares.yml.
+$fileSet = Get-ComposeFileSet -InstallPath $installPath -ComposeFile $composeFile -Log {
+    param([string]$Message, [string]$Level)
+    Write-InstallLog $Message -Level $Level -Source "Stop-Services"
 }
+$downArgs = @("compose")
+foreach ($f in $fileSet.Files) { $downArgs += @("-f", $f) }
 # Same profile set as Start-Services.ps1 (config.json tenant + .env COMPOSE_PROFILES),
 # otherwise e.g. the embedder container would survive "Stop Services".
 $profiles = Get-ComposeProfiles -ConfigProfile $composeProfile -InstallPath $installPath
 foreach ($p in $profiles) { $downArgs += @("--profile", $p) }
 $downArgs += @("down", "--timeout", "$stopTimeout")
 
+Write-InstallLog "Compose files ($($fileSet.Source)): $($fileSet.Files -join '; ')" -Source "Stop-Services"
 Write-InstallLog "Compose profiles: $(if ($profiles) { $profiles -join ', ' } else { '(none)' })" -Source "Stop-Services"
 Write-InstallLog "Running: docker $($downArgs -join ' ')  (cwd: $installPath)" -Source "Stop-Services"
 if ($DryRun) {

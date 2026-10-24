@@ -325,26 +325,138 @@ public class ServiceManager
     }
 
     /// <summary>
-    /// Compose arguments shared by start/stop: compose file, the override file
-    /// (external document mounts) and the tenant profile from config.json.
+    /// Compose arguments shared by start/stop: the compose file set (see
+    /// <see cref="ResolveComposeFiles"/>) and the profiles (see <see cref="ResolveComposeProfiles"/>).
     /// </summary>
     private string BuildComposeArgs(string composePath)
+        => BuildComposeArgs(ResolveComposeFiles(composePath, _installPath, TrayLog.Warn), ResolveComposeProfiles());
+
+    /// <summary><c>compose -f … --profile …</c> for the given files and profiles, in that order.</summary>
+    public static string BuildComposeArgs(IEnumerable<string> composeFiles, IEnumerable<string> profiles)
     {
-        var args = $"compose -f \"{composePath}\"";
-        if (Path.GetFileName(composePath).Equals("docker-compose.yml", StringComparison.OrdinalIgnoreCase))
-        {
-            // Same file set as Start-Services.ps1 / Stop-Services.ps1: the local
-            // override, then the network shares written by Add-NetworkShare.ps1.
-            foreach (var extra in new[] { "docker-compose.override.yml", "docker-compose.shares.yml" })
-            {
-                var extraPath = Path.Combine(_installPath, extra);
-                if (File.Exists(extraPath))
-                    args += $" -f \"{extraPath}\"";
-            }
-        }
-        foreach (var profile in ResolveComposeProfiles())
+        var args = "compose";
+        foreach (var file in composeFiles)
+            args += $" -f \"{file}\"";
+        foreach (var profile in profiles)
             args += $" --profile {profile}";
         return args;
+    }
+
+    /// <summary>Separator of COMPOSE_FILE entries when COMPOSE_PATH_SEPARATOR is unset: ';' on Windows, ':' elsewhere (Compose's default).</summary>
+    public static readonly string DefaultComposePathSeparator = Path.PathSeparator.ToString();
+
+    /// <summary>
+    /// The compose files to pass with <c>-f</c>, in order. An explicit <c>-f</c> list makes
+    /// Compose ignore COMPOSE_FILE from the install's .env (just as an explicit
+    /// <c>--profile</c> replaces COMPOSE_PROFILES), so a restart from here used to drop
+    /// every layer added there, e.g. docker-compose.gpu.yml. Therefore:
+    /// <list type="bullet">
+    /// <item><paramref name="composePath"/> is the default docker-compose.yml and COMPOSE_FILE
+    /// is set (process environment first, then <c>&lt;installPath&gt;\.env</c>, as Compose
+    /// does): the listed files in that order, split on COMPOSE_PATH_SEPARATOR (same lookup;
+    /// default <see cref="DefaultComposePathSeparator"/>), relative entries resolved against
+    /// <paramref name="installPath"/>. A listed file that does not exist is reported through
+    /// <paramref name="warn"/> and skipped; when none of them exists the default set is used,
+    /// so a typo never prevents a start.</item>
+    /// <item>Otherwise: <paramref name="composePath"/> plus docker-compose.override.yml and
+    /// docker-compose.shares.yml when <paramref name="composePath"/> is docker-compose.yml and
+    /// they exist (the behaviour from before COMPOSE_FILE was honoured).</item>
+    /// </list>
+    /// Same rule as <c>Get-ComposeFileSet</c> in RecallHub-Docker.psm1 (Start-Services.ps1 /
+    /// Stop-Services.ps1). <paramref name="environment"/> replaces the process environment in tests.
+    /// </summary>
+    public static IReadOnlyList<string> ResolveComposeFiles(string composePath, string installPath,
+        Action<string>? warn = null, Func<string, string?>? environment = null)
+    {
+        warn ??= _ => { };
+        environment ??= Environment.GetEnvironmentVariable;
+        var isDefaultFile = Path.GetFileName(composePath).Equals("docker-compose.yml", StringComparison.OrdinalIgnoreCase);
+        var envFile = Path.Combine(installPath, ".env");
+
+        if (isDefaultFile)
+        {
+            var list = environment("COMPOSE_FILE");
+            var origin = "the environment";
+            if (string.IsNullOrWhiteSpace(list))
+            {
+                list = ReadDotEnvValue(envFile, "COMPOSE_FILE", warn);
+                origin = envFile;
+            }
+            if (!string.IsNullOrWhiteSpace(list))
+            {
+                var separator = environment("COMPOSE_PATH_SEPARATOR");
+                if (string.IsNullOrEmpty(separator))
+                    separator = ReadDotEnvValue(envFile, "COMPOSE_PATH_SEPARATOR", warn);
+                if (string.IsNullOrEmpty(separator))
+                    separator = DefaultComposePathSeparator;
+
+                var files = new List<string>();
+                foreach (var entry in list.Split(separator))
+                {
+                    var name = entry.Trim().Trim('"', '\'');
+                    if (name.Length == 0) continue;
+                    var path = Path.IsPathRooted(name) ? name : Path.Combine(installPath, name);
+                    if (!File.Exists(path))
+                    {
+                        warn($"COMPOSE_FILE lists {name} but {path} does not exist - skipped");
+                        continue;
+                    }
+                    if (!files.Contains(path, StringComparer.OrdinalIgnoreCase))
+                        files.Add(path);
+                }
+                if (files.Count > 0)
+                    return files;
+                warn($"COMPOSE_FILE from {origin} ({list}) names no existing file - using the default compose file set");
+            }
+        }
+
+        var defaults = new List<string> { composePath };
+        if (isDefaultFile)
+        {
+            // The pre-COMPOSE_FILE set: the local override, then the network shares
+            // written by Add-NetworkShare.ps1.
+            foreach (var extra in new[] { "docker-compose.override.yml", "docker-compose.shares.yml" })
+            {
+                var extraPath = Path.Combine(installPath, extra);
+                if (File.Exists(extraPath))
+                    defaults.Add(extraPath);
+            }
+        }
+        return defaults;
+    }
+
+    /// <summary>
+    /// Value of <paramref name="key"/> in a Compose .env file: last definition wins, an
+    /// <c>export</c> prefix and surrounding quotes are ignored, comment lines are skipped,
+    /// no interpolation. Null when the file or the key is absent (or the file is unreadable,
+    /// which is reported through <paramref name="warn"/>).
+    /// </summary>
+    public static string? ReadDotEnvValue(string envFile, string key, Action<string>? warn = null)
+    {
+        string? value = null;
+        try
+        {
+            if (!File.Exists(envFile))
+                return null;
+            foreach (var line in File.ReadLines(envFile))
+            {
+                var trimmed = line.TrimStart();
+                if (trimmed.StartsWith("export ", StringComparison.Ordinal))
+                    trimmed = trimmed.Substring(7).TrimStart();
+                var eq = trimmed.IndexOf('=');
+                if (eq <= 0 || !trimmed.Substring(0, eq).Trim().Equals(key, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var raw = trimmed.Substring(eq + 1).Trim();
+                if (raw.Length >= 2 && ((raw[0] == '"' && raw[^1] == '"') || (raw[0] == '\'' && raw[^1] == '\'')))
+                    raw = raw.Substring(1, raw.Length - 2);
+                value = raw;
+            }
+        }
+        catch (Exception ex)
+        {
+            warn?.Invoke($"Could not read {key} from {envFile}: {ex.Message}");
+        }
+        return value;
     }
 
     /// <summary>

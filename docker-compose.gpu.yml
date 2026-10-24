@@ -14,11 +14,13 @@
 # measurements and the rollout steps (recreating rag-backend-quellex interrupts
 # a running UI ingestion job, which resumes on its own).
 #
-# Start-Services.ps1, Stop-Services.ps1 and the tray app build their own -f
-# list (override + shares) and do NOT add this file yet; a restart from them
-# brings the containers back without the GPU (the pool then logs "GPU
-# conversion slots: 0"). Restart with `docker compose up -d` from the install
-# folder, where COMPOSE_FILE applies, until they learn COMPOSE_FILE.
+# Start-Services.ps1, Stop-Services.ps1 and the tray app read COMPOSE_FILE from
+# the install's .env and pass every listed file with -f (an explicit -f list
+# would otherwise make Compose ignore COMPOSE_FILE), so a restart from them
+# keeps this layer; a listed file that is missing is logged and skipped. Older
+# script copies in %LocalAppData%\RecallHub\scripts or an older tray exe still
+# restart without it (the pool then logs "GPU conversion slots: 0"): re-deploy
+# them, or restart with `docker compose up -d` from the install folder.
 #
 # Validate with:
 #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml config | grep -A6 reservations

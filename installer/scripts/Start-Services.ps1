@@ -20,9 +20,9 @@
 .PARAMETER Timeout
     Seconds to wait for health when -Wait is given (config docker.startupTimeout wins).
 .PARAMETER DryRun
-    Resolve config and profiles, print the docker command that would run, and
-    exit 0 without starting anything (diagnostics). Skips the Docker engine
-    check, so Docker Desktop is not started either.
+    Resolve config, compose files and profiles, print the docker command that
+    would run, and exit 0 without starting anything (diagnostics). Skips the
+    Docker engine check, so Docker Desktop is not started either.
 .PARAMETER DockerOnly
     Diagnostic switch: only make sure the Docker engine is reachable (waiting for a
     booting Docker Desktop or starting it quietly), then exit 0 without touching
@@ -147,15 +147,20 @@ if (-not (Test-Path $composePath)) {
     exit 2
 }
 
-$composeBase = @("compose", "-f", $composePath)
-if ($composeFile -eq "docker-compose.yml") {
-    # Same file set as Stop-Services.ps1 and the tray app (ServiceManager.cs):
-    # the local override, then the network shares written by Add-NetworkShare.ps1.
-    foreach ($extra in @("docker-compose.override.yml", "docker-compose.shares.yml")) {
-        $extraPath = Join-Path $installPath $extra
-        if (Test-Path $extraPath) { $composeBase += @("-f", $extraPath) }
-    }
+# Compose files: COMPOSE_FILE from the install's .env when it is set (e.g. with
+# the docker-compose.gpu.yml layer), otherwise the compose file plus the local
+# override and the network shares written by Add-NetworkShare.ps1. An explicit
+# -f list makes Compose ignore COMPOSE_FILE, so the script reads it itself.
+# Get-ComposeFileSet (RecallHub-Docker.psm1) is shared with Stop-Services.ps1 and
+# mirrored by the tray app (ServiceManager.cs); missing entries are logged and
+# skipped, never fatal.
+$fileSet = Get-ComposeFileSet -InstallPath $installPath -ComposeFile $composeFile -Log {
+    param([string]$Message, [string]$Level)
+    Write-InstallLog $Message -Level $Level -Source "Start-Services"
 }
+$composeBase = @("compose")
+foreach ($f in $fileSet.Files) { $composeBase += @("-f", $f) }
+Write-InstallLog "Compose files ($($fileSet.Source)): $($fileSet.Files -join '; ')" -Source "Start-Services"
 # Profiles: the tenant from config.json plus COMPOSE_PROFILES from the install's
 # .env (e.g. "quellex,embedder-gpu" for the local embedding server). An explicit
 # --profile flag would otherwise REPLACE the .env list, and the stack would come
