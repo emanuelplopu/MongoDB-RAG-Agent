@@ -215,6 +215,27 @@ class Settings(BaseSettings):
         ),
     )
 
+    chunk_max_tokens: int = Field(
+        default=1024,
+        ge=128,
+        le=8192,
+        description=(
+            "Token budget of the HybridChunker per chunk (CHUNK_MAX_TOKENS). 512 until "
+            "2026-10-26; EmbeddingGemma 2's 2,048-token window allows 1,024, which halves the "
+            "chunk count of long documents. Read by src/ingestion/chunker.py"
+        ),
+    )
+
+    embedding_max_tokens: int = Field(
+        default=2048,
+        ge=256,
+        le=32768,
+        description=(
+            "The embedding model's per-text token limit (EMBEDDING_MAX_TOKENS). Contextualised "
+            "chunks above it are cut into windows before embedding"
+        ),
+    )
+
     ingest_process_isolation: bool = Field(
         default=True,
         description=(

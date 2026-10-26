@@ -121,11 +121,25 @@ function activityLabel(a: HostActivityState, t: (key: string) => string, locale?
   return a.chat_active ? t('hostStats.chatActive') : null
 }
 
-/** "1,550 files/h · ETA 9d 11h" for the running job, from the overview's pace. */
+/** "1,550 files/h · ETA 9d 11h" for the running job: the pace from the overview, the ETA from the
+ * shared per-extension estimator (the same figure the ingestion page shows). */
 function paceLabel(process: OverviewProcess | undefined, t: (key: string) => string, locale?: string): string | null {
-  if (!process || process.files_per_hour == null) return null
-  const eta = process.eta_seconds != null ? ` · ${t('hostStats.eta')} ${formatSeconds(process.eta_seconds)}` : ''
-  return `${formatCount(process.files_per_hour, locale)} ${t('hostStats.filesPerHour')}${eta}`
+  if (!process || (process.files_per_hour == null && process.eta_seconds == null)) return null
+  const pace = process.files_per_hour != null
+    ? `${formatCount(process.files_per_hour, locale)} ${t('hostStats.filesPerHour')}`
+    : ''
+  const eta = process.eta_seconds != null ? `${t('hostStats.eta')} ${formatSeconds(process.eta_seconds)}` : ''
+  return [pace, eta].filter(Boolean).join(' · ')
+}
+
+/** Tooltip: the extensions with the most files left and the pace each is estimated at. */
+export function etaBreakdown(process: OverviewProcess | undefined, locale?: string): string | null {
+  const rows = process?.eta_by_extension ?? []
+  if (rows.length === 0) return null
+  return rows.slice(0, 8).map(r =>
+    `${r.extension || '(none)'}: ${formatCount(r.remaining, locale)} left` +
+    (r.seconds != null ? ` ≈ ${formatSeconds(r.seconds)}` : ' (no pace yet)')
+  ).join('\n')
 }
 
 /** The backup that deserves attention most: none, then empty, then oldest. */
@@ -247,8 +261,11 @@ export default function HostStatsWidget() {
   const cpuTempMissing = fromHost && stats?.cpu_temp_c == null
   const processes = overview?.processes ?? []
   const activity = (stats?.activity ?? [])
-    .map(a => ({ a, label: activityLabel(a, t, locale), pace: paceLabel(processes.find(p => p.job_id && p.job_id === a.job_id), t, locale) }))
-    .filter((x): x is { a: HostActivityState; label: string; pace: string | null } => x.label !== null)
+    .map(a => {
+      const process = processes.find(p => p.job_id && p.job_id === a.job_id)
+      return { a, label: activityLabel(a, t, locale), pace: paceLabel(process, t, locale), breakdown: etaBreakdown(process, locale) }
+    })
+    .filter((x): x is { a: HostActivityState; label: string; pace: string | null; breakdown: string | null } => x.label !== null)
   const busiest = (stats?.containers ?? []).filter(c => (c.cpu_cores ?? 0) > 0).slice(0, 3)
 
   // Overview rows (each absent until its data exists).
@@ -387,7 +404,7 @@ export default function HostStatsWidget() {
           />
           <MetricRow icon={ClockIcon} label={t('hostStats.uptime')} value={formatUptime(stats.uptime_seconds)} />
 
-          {activity.map(({ a, label, pace }) => (
+          {activity.map(({ a, label, pace, breakdown }) => (
             <MetricRow
               key={`${a.tenant}:${a.source}`}
               icon={a.job_id ? ArrowPathIcon : ChatBubbleLeftRightIcon}
@@ -395,7 +412,7 @@ export default function HostStatsWidget() {
               value={label}
               sub={pace}
               wrap
-              title={a.current_file ?? undefined}
+              title={[a.current_file, breakdown].filter(Boolean).join('\n') || undefined}
             />
           ))}
 

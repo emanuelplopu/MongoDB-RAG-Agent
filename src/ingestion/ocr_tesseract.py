@@ -19,7 +19,12 @@ This subclass therefore
    the boxes of a rotated reading back into the unrotated rectangle;
 3. OCRs the whole page when the layout model found no text region on a page
    without a text layer (``empty_page_full_ocr``) - sparse pages such as an ERV
-   footer sheet otherwise yield nothing.
+   footer sheet otherwise yield nothing;
+4. detects the orientation once per page (``osd_once_per_page``) instead of once
+   per OCR rectangle, and not at all on pages whose OCR regions are tiny
+   (``osd_min_area_pt``): per-rectangle OSD on the diejuristin corpus failed with
+   "Too few characters" on 37 % of the rectangles (logos, stamps, signatures) and
+   started one Tesseract process per rectangle.
 
 The model is registered with Docling's OCR factory under its own options kind
 (``tesseract_recallhub``) so a pipeline that carries
@@ -32,9 +37,11 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import subprocess
 import tempfile
 import threading
-from typing import ClassVar, Dict, List, Literal, Optional, Type
+from dataclasses import dataclass
+from typing import ClassVar, Dict, List, Literal, Optional, Tuple, Type
 
 import pandas as pd
 from docling.datamodel.base_models import Page
@@ -86,6 +93,42 @@ class RecallHubTesseractCliOcrOptions(TesseractCliOcrOptions):
             "crop on which Tesseract drops columns, a small value keeps them separate."
         ),
     )
+    osd_once_per_page: bool = Field(
+        default=True,
+        description=(
+            "Run orientation detection once on the whole page and apply its result to every "
+            "OCR rectangle of that page, instead of one 'tesseract --psm 0' per rectangle. "
+            "Per-rectangle OSD failed on 37 % of the rectangles of the diejuristin corpus "
+            "('Too few characters' on logos, stamps and signatures, ~8,000 ERROR lines per 3 h) "
+            "and cost one Tesseract process per rectangle."
+        ),
+    )
+    osd_min_area_pt: float = Field(
+        default=20_000.0,
+        description=(
+            "Skip orientation detection on a page whose OCR rectangles cover less than this "
+            "many square page points in total (a logo or a signature on a born-digital page: "
+            "too few characters for OSD anyway); the page is read upright. 200 x 100 pt by default."
+        ),
+    )
+
+
+@dataclass
+class _PageOsd:
+    """Orientation detection of one page, shared by its OCR rectangles."""
+
+    page: Page
+    rects: List[BoundingBox]
+    done: bool = False
+    frame: Optional[pd.DataFrame] = None
+    suppressed_angle: Optional[int] = None  # guard-suppressed rotation (rectangles retry both ways)
+
+
+def _no_rotation_frame() -> pd.DataFrame:
+    """An OSD result frame that means "upright, nothing to rotate"."""
+    return pd.DataFrame(
+        {"key": [_OSD_ORIENTATION_KEY, _OSD_ROTATE_KEY, _OSD_CONFIDENCE_KEY], "value": [" 0", " 0", " 0.00"]}
+    )
 
 
 class RecallHubTesseractCliOcrModel(TesseractOcrCliModel):
@@ -95,33 +138,91 @@ class RecallHubTesseractCliOcrModel(TesseractOcrCliModel):
         super().__init__(*args, **kwargs)
         self.options: RecallHubTesseractCliOcrOptions
         self._suppressed: Dict[str, int] = {}  # image file -> suppressed OSD angle
+        self._page_osd: Optional[_PageOsd] = None  # the page whose rectangles are being OCRed
         # Diagnostics (read by the harness)
         self.osd_guarded = 0
+        self.osd_page_runs = 0
+        self.osd_skipped_tiny = 0
+        self.osd_failed = 0
         self.retries_rotated = 0
         self.retries_kept = 0
         self.empty_page_fallbacks = 0
 
     # -- orientation guard ------------------------------------------------------------
 
-    def _perform_osd(self, ifilename: str) -> pd.DataFrame:
-        df_osd = super()._perform_osd(ifilename)
+    def _guard(self, df_osd: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[int]]:
+        """Apply ``osd_min_confidence``: a low-confidence rotation is zeroed and returned for the retry."""
         threshold = float(getattr(self.options, "osd_min_confidence", 0.0) or 0.0)
         if threshold <= 0:
-            return df_osd
+            return df_osd, None
         confidence = _osd_value(df_osd, _OSD_CONFIDENCE_KEY)
         orientation = _osd_value(df_osd, _OSD_ORIENTATION_KEY)
         if orientation and confidence is not None and confidence < threshold:
             self.osd_guarded += 1
             # Docling's convention: Tesseract reports clockwise degrees, the pipeline rotates
             # with `image.rotate(-parsed)` where parsed = (-reported) % 360 (tesseract_utils).
-            self._suppressed[ifilename] = (-int(orientation)) % 360
+            suppressed = (-int(orientation)) % 360
             _log.debug(
                 "OSD rotation %s suppressed (confidence %.2f < %.2f)", int(orientation), confidence, threshold
             )
             keys = df_osd["key"].to_numpy()
             df_osd.loc[keys == _OSD_ORIENTATION_KEY, "value"] = " 0"
             df_osd.loc[keys == _OSD_ROTATE_KEY, "value"] = " 0"
-        return df_osd
+            return df_osd, suppressed
+        return df_osd, None
+
+    def _perform_osd(self, ifilename: str) -> pd.DataFrame:
+        """Orientation of the rectangle image ``ifilename``.
+
+        With ``osd_once_per_page`` (default) this is the page's orientation, detected once on
+        the whole page image when its first rectangle asks for it; the per-rectangle call
+        Docling makes costs nothing more. Without it, one OSD per rectangle as in Docling.
+        """
+        state = getattr(self, "_page_osd", None)
+        if not getattr(self.options, "osd_once_per_page", False) or state is None:
+            df_osd, suppressed = self._guard(super()._perform_osd(ifilename))
+            if suppressed:
+                self._suppressed[ifilename] = suppressed
+            return df_osd
+        if not state.done:
+            state.done = True
+            state.frame, state.suppressed_angle = self._detect_page_orientation(state)
+        if state.suppressed_angle:
+            self._suppressed[ifilename] = state.suppressed_angle
+        return state.frame.copy()
+
+    def _detect_page_orientation(self, state: _PageOsd) -> Tuple[pd.DataFrame, Optional[int]]:
+        """Run OSD on the whole page image (skipped for pages with only tiny OCR regions)."""
+        page = state.page
+        area = sum(rect.area() for rect in state.rects)
+        min_area = float(getattr(self.options, "osd_min_area_pt", 0.0) or 0.0)
+        if area < min_area:
+            self.osd_skipped_tiny += 1
+            _log.debug("page %s: OCR regions cover %.0f pt² (< %.0f); OSD skipped", page.page_no, area, min_area)
+            return _no_rotation_frame(), None
+        if page._backend is None:
+            return _no_rotation_frame(), None
+        fd, tmp_name = tempfile.mkstemp(suffix=".png", prefix="recallhub-osd-")
+        os.close(fd)
+        try:
+            page._backend.get_page_image(scale=self.scale).save(tmp_name)
+            self.osd_page_runs += 1
+            df_osd = super()._perform_osd(tmp_name)
+        except subprocess.CalledProcessError as exc:
+            # "Too few characters" and the like: the page is read upright, as Docling would
+            # have read the rectangle; a debug line instead of Docling's ERROR per rectangle
+            self.osd_failed += 1
+            stderr = exc.stderr.decode("utf-8", "replace").strip() if isinstance(exc.stderr, bytes) else exc.stderr
+            _log.debug("page %s: OSD failed (%s); reading it upright", page.page_no, (stderr or "")[:200])
+            return _no_rotation_frame(), None
+        except Exception as exc:  # noqa: BLE001 - OSD is advisory
+            self.osd_failed += 1
+            _log.warning("page %s: OSD could not run (%s); reading it upright", page.page_no, exc)
+            return _no_rotation_frame(), None
+        finally:
+            if os.path.exists(tmp_name):
+                os.remove(tmp_name)
+        return self._guard(df_osd)
 
     def _run_tesseract(self, ifilename: str, osd: Optional[pd.DataFrame]):
         df_plain = super()._run_tesseract(ifilename, osd)
@@ -178,6 +279,13 @@ class RecallHubTesseractCliOcrModel(TesseractOcrCliModel):
         return super()._deduplicate_rects(size, rects, dilation_size=dilation_size)
 
     def get_ocr_rects(self, page: Page) -> List[BoundingBox]:
+        rects = self._ocr_rects(page)
+        # Docling asks for a page's rectangles right before it OCRs them: the page's
+        # orientation is detected once for all of them (see _perform_osd)
+        self._page_osd = _PageOsd(page=page, rects=list(rects))
+        return rects
+
+    def _ocr_rects(self, page: Page) -> List[BoundingBox]:
         rects = super().get_ocr_rects(page)
         if rects or not getattr(self.options, "empty_page_full_ocr", False):
             return rects

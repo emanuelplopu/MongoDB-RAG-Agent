@@ -101,7 +101,9 @@ class TestEmbedQuery:
         client = _mock_client()
         with patch("openai.AsyncOpenAI", return_value=client) as factory:
             await qe.embed_query("Kaution")
-        factory.assert_called_once_with(api_key="none", base_url="http://embedder:8080/v1")
+        factory.assert_called_once()
+        assert factory.call_args.kwargs["api_key"] == "none"
+        assert factory.call_args.kwargs["base_url"] == "http://embedder:8080/v1"
         assert client.embeddings.create.await_args.kwargs["input"] == GEMMA_PREFIX + "Kaution"
 
 
@@ -133,3 +135,76 @@ class TestCallSites:
         assert client.embeddings.create.await_count == 2
         assert client.embeddings.create.await_args.kwargs["input"] == GEMMA_PREFIX + "Miete"
         assert fs._embedding_client is client
+
+
+class TestRetry:
+    """Query embeddings retry transient failures with backoff and may use their own endpoint (F29)."""
+
+    @pytest.fixture(autouse=True)
+    def _fast_backoff(self, gemma_settings, monkeypatch):
+        monkeypatch.setattr(settings, "query_embedding_max_retries", 3)
+        monkeypatch.setattr(settings, "query_embedding_retry_base_seconds", 0.0)
+        monkeypatch.setattr(settings, "query_embedding_url", None)
+        monkeypatch.setattr(qe.asyncio, "sleep", AsyncMock())
+
+    def _failing_then_ok(self, failures):
+        client = MagicMock()
+        outcomes = list(failures) + [SimpleNamespace(data=[SimpleNamespace(embedding=[0.5])])]
+        client.embeddings.create = AsyncMock(side_effect=outcomes)
+        return client
+
+    async def test_connection_errors_are_retried_until_success(self):
+        import openai
+
+        error = openai.APIConnectionError(request=MagicMock())
+        client = self._failing_then_ok([error, error])
+        assert await qe.embed_query("Kaution", client=client) == [0.5]
+        assert client.embeddings.create.await_count == 3
+        assert qe.asyncio.sleep.await_count == 2
+
+    async def test_server_errors_and_rate_limits_are_retried(self):
+        import openai
+
+        response = MagicMock(status_code=503, headers={})
+        server_error = openai.APIStatusError("busy", response=response, body=None)
+        response_429 = MagicMock(status_code=429, headers={})
+        rate_limit = openai.RateLimitError("slow down", response=response_429, body=None)
+        client = self._failing_then_ok([server_error, rate_limit])
+        assert await qe.embed_query("Kaution", client=client) == [0.5]
+        assert client.embeddings.create.await_count == 3
+
+    async def test_client_errors_are_not_retried(self):
+        import openai
+
+        response = MagicMock(status_code=400, headers={})
+        bad_request = openai.BadRequestError("ill-formed UTF-8", response=response, body=None)
+        client = self._failing_then_ok([bad_request])
+        with pytest.raises(openai.BadRequestError):
+            await qe.embed_query("Kaution", client=client)
+        assert client.embeddings.create.await_count == 1
+
+    async def test_the_budget_is_bounded(self):
+        import openai
+
+        error = openai.APITimeoutError(request=MagicMock())
+        client = self._failing_then_ok([error] * 4)
+        with pytest.raises(openai.APITimeoutError):
+            await qe.embed_query("Kaution", client=client)
+        assert client.embeddings.create.await_count == 4, "one try plus three retries"
+
+    def test_backoff_doubles_and_is_capped(self):
+        delays = [qe.retry_delay_seconds(n, base=0.5, jitter=0.0) for n in (1, 2, 3, 4, 5, 6)]
+        assert delays == [0.5, 1.0, 2.0, 4.0, 8.0, 8.0]
+        assert 1.0 <= qe.retry_delay_seconds(2, base=0.5) <= 1.25
+
+    def test_query_url_override_selects_the_second_embedder(self, monkeypatch):
+        assert qe.query_embedding_base_url() == "http://embedder:8080/v1"
+        monkeypatch.setattr(settings, "query_embedding_url", "http://embedder-query:8080/v1")
+        assert qe.query_embedding_base_url() == "http://embedder-query:8080/v1"
+        with patch("openai.AsyncOpenAI") as factory:
+            qe.create_embedding_client()
+        kwargs = factory.call_args.kwargs
+        assert kwargs["base_url"] == "http://embedder-query:8080/v1"
+        assert kwargs["max_retries"] == 0, "the client's own retries would stack on ours"
+        monkeypatch.setattr(settings, "query_embedding_url", "   ")
+        assert qe.query_embedding_base_url() == "http://embedder:8080/v1"

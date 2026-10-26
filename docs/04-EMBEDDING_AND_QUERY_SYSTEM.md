@@ -119,6 +119,7 @@ settings surfaces, passed through by `docker-compose.yml`; evidence in
 | setting | default | what it does |
 |---|---|---|
 | `OCR_OSD_MIN_CONFIDENCE` | `10` | Tesseract's per-rectangle orientation detection is applied outright only at this confidence or above; below it the rectangle is OCRed both ways and the better reading kept (`src/ingestion/ocr_tesseract.py`, Docling kind `tesseract_recallhub`). `0` restores Docling's behaviour, which flipped upright Courier pages and tables by 180°. The same model OCRs a whole page when the layout model finds no text region on it. |
+| `osd_once_per_page` (`RecallHubTesseractCliOcrOptions`) | `true` | Orientation detection runs once on the whole page image and its result is applied to every OCR rectangle of that page, instead of one `tesseract --psm 0` per rectangle (Docling). Per-rectangle OSD failed with "Too few characters" on 37 % of the rectangles of the diejuristin corpus (logos, stamps, signatures: ~8,000 ERROR lines per 3 h) and cost a Tesseract process each. Pages whose OCR rectangles cover less than `osd_min_area_pt` (20,000 pt², a logo or a signature) skip OSD and are read upright; a failed page OSD reads the page upright with a DEBUG line. The confidence guard applies to the page result and marks every rectangle for the both-ways retry. The OCR itself (`deu+eng`) is unchanged. |
 | `OCR_SCAN_DPI` | `216` | Raster resolution of PDF pages for OCR (Docling's `scale=3.0`). 300 dpi measured worse and slower. |
 | `OCR_IMAGE_MAX_MPX` | `8` | Megapixel budget of the OCR bitmap for image files. Docling OCRs images at 3× their size in points, i.e. a phone photo without a DPI tag at 3× its pixel size (~140 Mpx, 20-60 s); the scale is reduced per image to stay within the budget, A4 scan images (4.5 Mpx at 3×) are untouched. `0` = no cap. |
 | `OCR_PSM`, `OCR_TESSDATA_PATH` | empty | Tesseract page segmentation mode and an alternative traineddata directory (e.g. `tessdata_best`). Both were measured and not adopted; available for experiments. Image files Docling cannot load (MPO containers, JPEGs with a `(0, 0)` DPI tag) are re-saved as PNG before conversion. |
@@ -218,6 +219,66 @@ for the next flush. After every flush the job's `timeout_files`,
 runs recorded), so `GET /api/v1/ingestion/status` and the runs list show them
 while the job runs instead of zeros until its end.
 
+**Resume without redoing failures (F23).** The incremental filter only knew the
+`documents` collection, so after a restart every file that had timed out,
+errored or produced no chunks looked new and was processed again (553 timeouts
+on 451 files in the first 4 h after the 2026-10-25 redeploy). A resumed job now
+skips the files its own `failed_documents` records name (`failed_paths_of_job`
+in `src/ingestion/ingest.py`, applied by the pipeline's queue build and by the
+API's `_build_pending_files_queue`), unless the request's `retry_timeouts` /
+`retry_errors` / `retry_no_chunks` / `retry_image_only_pdfs` flag asks for that
+error type or the record was marked resolved. The discovery log line counts them
+as "failed earlier in this job".
+
+**Reader placeholders are never stored (F26).** A file neither Docling nor the
+raw-text fallback could read used to be stored as a document whose whole content
+was `[Error: Could not read file <name>]`, chunked and embedded; it counted as
+ingested and a question naming it got the error string as its source. The
+pipeline now raises `UnreadableFileError` for `[Error: …]` / `[Skipped: …]`
+placeholders (recorded as `error` in `failed_documents`, so "retry errors"
+re-queues the file) and treats `[Document: … - no text content]` as an empty
+file (no chunks, no warning). Existing placeholder documents are removed with
+`quellexctl ingest purge-placeholders --profile <key> [--apply]`
+(`backend/services/placeholder_purge.py`: deletes the documents and their
+chunks, dry run by default, records each file in `failed_documents`).
+
+**Pure scans in the stats (F9).** Every PDF that ends without chunks or as a
+stored document is checked for a text layer (`is_image_only_pdf`, pypdfium, a
+few ms). A pure scan whose OCR found nothing is recorded as `image_only_pdf`
+(with the pdfium reason) instead of `no_chunks`, so it shows up under that type
+in `/failed-documents/summary` and in the job's `image_only_pdfs` counter; a
+pure scan whose OCR produced text carries `image_only_pdf: true` on its
+`ingestion_stats` record and is counted in the job's `image_only_pdfs_ocr`
+(`/failed-documents/summary` reports the total as `image_only_pdfs_ocr_ok`).
+Files whose content is empty (Outlook `ATT0000x.txt` placeholders, frameset
+pages) log "No chunks created" at INFO instead of WARNING.
+
+**UI-started jobs run in the worker (F7).** `POST /api/v1/ingestion/start`
+used to run every job inside the API process (1,400 % CPU, 45 GB RSS, `/health`
+timeouts, the worker container idle). The job is now queued `PENDING` with
+`runner: worker` for the ingestion worker to claim when
+`INGESTION_UI_JOB_RUNNER` is `worker`, or `auto` (the default) and a worker has
+reported itself alive within three heartbeats (`backend/services/worker_liveness.py`
+reads `activity_current`); `api` keeps the in-process run. The status endpoint
+shows the queued/claimed job from the job document (phase `queued` until the
+worker claims it), and the pause, resume and stop endpoints reach a worker job
+through its `control_command` (a job stopped before it was claimed simply ends).
+
+**One ETA.** `GET /api/v1/ingestion/status`, the `/events/stream` metrics and the
+machine-stats widget (`/api/v1/telemetry/overview`) share
+`backend/services/ingestion_eta.py`: the runners record how many files of each
+extension the run queued (`queue_by_extension`) and finished
+(`processed_by_extension`); the estimator reads each extension's pace from
+`ingestion_stats` (files per minute over the last hour, else over the time that
+extension was being processed, else the job's overall pace; cached 60 s per job)
+and sums `remaining / pace`. The status payload carries the breakdown as `eta`
+(`by_extension`, `unknown_remaining` for extensions without any pace yet) next
+to `estimated_remaining_seconds`; the ingestion page lists the largest
+remaining types and the widget shows them in the pace row's tooltip. Until
+2026-10-26 the status page extrapolated `elapsed / progress` and the widget
+divided the remaining files by the last hour's pace; because the queue is
+sorted by file type the two disagreed by weeks (2.5 weeks vs. 58-72 days).
+
 **Copies within one run.** The hash of every stored file was added to the
 de-duplication map, but identical files sort next to each other (same type and
 size) and started in parallel slots before either was stored, so both were
@@ -253,10 +314,15 @@ The Docling HybridChunker provides intelligent document splitting:
 **Configuration Parameters:**
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `max_tokens` | 512 | Maximum tokens per chunk for embedding model |
+| `max_tokens` | `CHUNK_MAX_TOKENS` (1024) | Token budget per chunk. 512 until 2026-10-26: with EmbeddingGemma 2's 2,048-token window the literature documents of the diejuristin corpus averaged 23 chunks each; 1024 halves that and keeps a clause or a table row together. The start request's `max_tokens` overrides it per job. |
+| `embed_max_tokens` | `EMBEDDING_MAX_TOKENS` (2048) | The embedding model's per-text limit: a contextualised chunk above it (an unsplittable table) is cut into overlapping windows below it before embedding (`split_oversized_chunks`). |
 | `chunk_size` | 1000 | Target characters (fallback mode) |
 | `chunk_overlap` | 200 | Character overlap between chunks (fallback mode) |
 | `merge_peers` | true | Merge small adjacent chunks |
+
+The token counter is the chunker's MiniLM tokenizer, which produces more tokens per
+German word than Gemma's SentencePiece vocabulary, so the budgets are conservative with
+respect to the embedder.
 
 **Contextualization Process:**
 1. Docling parses document structure into a DoclingDocument
@@ -452,6 +518,45 @@ Notes:
   representation. See `docs/23-SCAN_IMAGE_EMBEDDING_SPIKE.md`.
 - Ollama's `embeddinggemma-2` tags are MLX-only (Apple Silicon) as of
   2026-10-10 and fail on Windows/Linux with "requires MLX support".
+
+#### Query embeddings: retry and a second instance (F29)
+
+On the live Quellex stack the one `embedder-gpu` instance serves the ingestion
+batches (100 chunks per request, split into one task per chunk over `-np 4`
+slots) and every search query. A query that lands while the slots are busy
+waits behind the batches, and a transient failure (connection reset, 429, 5xx)
+used to fail the search outright. `backend/services/query_embedding.py` now
+
+- retries query embeddings with exponential backoff (`QUERY_EMBEDDING_MAX_RETRIES`,
+  default 3; first delay `QUERY_EMBEDDING_RETRY_BASE_SECONDS` 0.5 s, doubled per
+  attempt, capped at 8 s, with jitter; `QUERY_EMBEDDING_TIMEOUT_SECONDS` 30 s per
+  request; 4xx answers other than 429 are not retried), and
+- embeds queries at `QUERY_EMBEDDING_URL` when it is set, e.g. the
+  `embedder-query` compose service: the same image and model on host port
+  `11091` (`-np 2`, 8k context, ~0.9 GB VRAM), alias `embedder-query`, started
+  with `--profile embedder-query`. Ingestion keeps `EMBEDDING_BASE_URL`.
+
+```powershell
+docker compose --profile quellex --profile embedder-gpu --profile embedder-query up -d
+# .env: QUERY_EMBEDDING_URL=http://embedder-query:8080/v1
+```
+
+**Is the embedder on the GPU?** Checked 2026-10-26 on the live stack after two
+days of uptime: `nvidia-smi` showed the GPU at 0-5 % with the embedder at 100 %
+of one CPU core, 10.4 GiB RSS and 606 tok/s aggregate (1,344 tasks in 10 min);
+a four-text request of 3,468 tokens took 106 s. Restarting the container
+(`docker restart rag-embedder-gpu`) brought it to 13-16k tok/s per request
+(2,364 tokens in 0.15-0.18 s), 81 % GPU utilisation during the request and
+4.6 GiB RSS, with the startup log placing the layers on `CUDA0` ("layer 5 is
+assigned to device CUDA0"; llama.cpp disables flash attention for this model,
+which is expected). The offload flags (`-ngl 999`, `-b 8192 -ub 8192`) are
+therefore correct; the slow state was a degradation of the long-running
+server, not CPU compute. Watch the embedder's tokens per minute (its
+`stop processing: n_tokens = …` log lines) and restart it when the per-request
+rate collapses; the query instance keeps searches responsive either way.
+The log also showed `400 … ill-formed UTF-8` answers to some ingestion
+batches: chunk text with invalid UTF-8 reaches the server and the whole
+batch is rejected (the F27 "HTTP 500" of the prompt-test log); not fixed here.
 
 ### Embedding Validation Checks
 

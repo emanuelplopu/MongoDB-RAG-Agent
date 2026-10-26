@@ -179,17 +179,29 @@ def test_concurrent_loop_ocrs_image_only_pdfs_by_default(
     results, duplicates = _run_concurrent(pipe, corpus)
 
     assert sorted(pipe.processed) == sorted([SCAN, SCAN_WITH_TEXT, TEXT])  # every PDF reached OCR
-    assert detector_calls == []  # no pre-check, no pdfium open per file in the event loop
+    # no pre-check before OCR; one post-check per finished PDF records whether it was a pure scan (F9)
+    assert sorted(detector_calls) == sorted([SCAN, SCAN_WITH_TEXT, TEXT])
     assert duplicates == 0 and len(results) == 3
     assert pipe.stat(SCAN_WITH_TEXT).classification == "normal"
     assert pipe.stat(SCAN_WITH_TEXT).chunks_created == 4
     assert pipe.stat(SCAN_WITH_TEXT).success is True
+    assert pipe.stat(SCAN_WITH_TEXT).image_only_pdf is True  # a pure scan whose OCR produced text
     assert pipe.stat(TEXT).classification == "normal"
-    # a genuinely blank scan is not pre-skipped; it is processed and ends up as no_chunks
+    assert pipe.stat(TEXT).image_only_pdf is False
+    # a genuinely blank scan is not pre-skipped; it is processed, and its empty OCR is recorded
+    # as image_only_pdf (not no_chunks) so it is visible in the failed-documents summary
     blank = pipe.stat(SCAN)
-    assert (blank.classification, blank.error_type, blank.success) == ("no_chunks", "no_chunks", False)
-    assert blank.chunks_created == 0
-    assert all(s.classification != "image_only_pdf" for s in pipe.stats)
+    assert (blank.classification, blank.error_type, blank.success) == ("image_only_pdf", "image_only_pdf", False)
+    assert blank.chunks_created == 0 and blank.image_only_pdf is True
+    assert "OCR found no text" in blank.error_message
+    assert blank.to_dict()["image_only_pdf"] is True and "image_only_pdf" not in _stat_dict_without_flag(pipe)
+
+
+def _stat_dict_without_flag(pipe: _Pipeline) -> dict:
+    """The stored form of a stat whose file was never checked (no PDF) carries no flag."""
+    stat = pipe.stats[0]
+    stat.image_only_pdf = None
+    return stat.to_dict()
 
 
 def test_concurrent_loop_skips_scans_when_the_flag_is_set(
@@ -201,7 +213,8 @@ def test_concurrent_loop_skips_scans_when_the_flag_is_set(
     results, _ = _run_concurrent(pipe, corpus)
 
     assert pipe.processed == [TEXT]  # scans never reach Docling/OCR
-    assert sorted(detector_calls) == sorted([SCAN, SCAN_WITH_TEXT, TEXT])
+    # the pre-check per PDF, plus the post-check of the one PDF that was processed (F9)
+    assert sorted(detector_calls) == sorted([SCAN, SCAN_WITH_TEXT, TEXT, TEXT])
     assert [r.title for r in results] == [TEXT]  # the skip leaves no result, as before
     for name in (SCAN, SCAN_WITH_TEXT):
         skipped = pipe.stat(name)

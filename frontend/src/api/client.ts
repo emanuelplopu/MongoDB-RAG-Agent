@@ -747,6 +747,8 @@ export interface IngestionStatus {
   progress_percent: number
   elapsed_seconds: number
   estimated_remaining_seconds?: number
+  /** Per-extension breakdown behind estimated_remaining_seconds (shared with the machine-stats widget). */
+  eta?: IngestionEta | null
   is_paused: boolean
   can_pause: boolean
   can_stop: boolean
@@ -755,6 +757,32 @@ export interface IngestionStatus {
   phase_message?: string
   discovery_progress?: DiscoveryProgress
   processing_rate?: number  // files per minute
+  /** "api" (in-process) or "worker" (ingestion worker container). */
+  runner?: string | null
+  // Per-outcome counters, updated while the job runs
+  image_only_pdfs?: number
+  image_only_pdfs_ocr?: number
+  no_chunks_files?: number
+  timeout_files?: number
+  error_files?: number
+}
+
+/** Remaining work and measured pace of one file extension. */
+export interface IngestionEtaExtension {
+  extension: string
+  remaining: number
+  files_per_minute: number | null
+  seconds: number | null
+  pace_source: 'window' | 'lifetime' | 'overall' | string | null
+}
+
+/** Per-extension estimate of the remaining time of a running job. */
+export interface IngestionEta {
+  seconds: number | null
+  method: 'per_extension' | 'overall' | string
+  remaining_files: number
+  unknown_remaining: number
+  by_extension: IngestionEtaExtension[]
 }
 
 export interface IngestionStreamEvent {
@@ -778,6 +806,7 @@ export interface IngestionStreamEvent {
     processing_rate: number
     elapsed_seconds: number
     estimated_remaining_seconds?: number
+    eta?: IngestionEta | null
   }
   counts?: {
     document_count: number
@@ -4508,6 +4537,18 @@ export interface OverviewProcess {
   total_files: number | null
   files_per_hour: number | null
   eta_seconds: number | null
+  /** per_extension (shared estimator), overall, or pace (remaining files at files_per_hour). */
+  eta_method?: string | null
+  eta_by_extension?: OverviewEtaExtension[]
+}
+
+/** Remaining files of one extension and the pace they are estimated at. */
+export interface OverviewEtaExtension {
+  extension: string
+  remaining: number
+  files_per_minute: number | null
+  seconds: number | null
+  pace_source: string | null
 }
 
 export interface OverviewChat {

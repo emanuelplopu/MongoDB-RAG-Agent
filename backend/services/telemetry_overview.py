@@ -14,7 +14,9 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional, Sequence
+from typing import Any, Awaitable, Callable, Optional, Sequence
+
+from backend.services.ingestion_eta import EtaEstimate
 
 from backend.models.telemetry_history import (
     AnomalyReport,
@@ -22,6 +24,7 @@ from backend.models.telemetry_history import (
     OverviewBackup,
     OverviewChat,
     OverviewDb,
+    OverviewEtaExtension,
     OverviewLlm,
     OverviewLlmModel,
     OverviewProcess,
@@ -112,8 +115,14 @@ def overview_db(sample: Optional[dict[str, Any]], now: datetime) -> Optional[Ove
 
 
 def process_rows(docs: Sequence[dict[str, Any]], now: datetime, *, online_within_s: float,
-                 pace: Optional[dict[str, int]] = None) -> list[OverviewProcess]:
-    """Map ``activity_current`` documents to liveness rows (``pace``: files finished per job in the last hour)."""
+                 pace: Optional[dict[str, int]] = None,
+                 etas: Optional[dict[str, EtaEstimate]] = None) -> list[OverviewProcess]:
+    """Map ``activity_current`` documents to liveness rows.
+
+    ``pace`` is the files finished per job in the last hour (shown as files/h); ``etas`` the
+    per-extension estimates of :mod:`backend.services.ingestion_eta`, the same ones the
+    ingestion status API reports. A job without one falls back to remaining files at ``pace``.
+    """
     rows: list[OverviewProcess] = []
     for doc in docs:
         seen = _aware(doc.get("updated_at"))
@@ -121,11 +130,25 @@ def process_rows(docs: Sequence[dict[str, Any]], now: datetime, *, online_within
         job_id = doc.get("job_id")
         files_per_hour: Optional[float] = None
         eta: Optional[float] = None
+        eta_method: Optional[str] = None
+        eta_rows: list[OverviewEtaExtension] = []
         if job_id and pace is not None and job_id in pace:
             files_per_hour = float(pace[job_id])
+        estimate = etas.get(job_id) if etas and job_id else None
+        if estimate is not None and estimate.seconds is not None:
+            eta = estimate.seconds
+            eta_method = estimate.method
+            eta_rows = [
+                OverviewEtaExtension(extension=row.extension, remaining=row.remaining,
+                                     files_per_minute=row.files_per_minute, seconds=row.seconds,
+                                     pace_source=row.pace_source)
+                for row in estimate.by_extension
+            ]
+        elif files_per_hour:
             processed, total = doc.get("processed_files"), doc.get("total_files")
             if files_per_hour > 0 and isinstance(processed, int) and isinstance(total, int) and total >= processed:
                 eta = round((total - processed) / files_per_hour * 3600.0)
+                eta_method = "pace"
         rows.append(OverviewProcess(
             key=str(doc.get("_id")),
             tenant=doc.get("tenant"),
@@ -142,6 +165,8 @@ def process_rows(docs: Sequence[dict[str, Any]], now: datetime, *, online_within
             total_files=doc.get("total_files"),
             files_per_hour=files_per_hour,
             eta_seconds=eta,
+            eta_method=eta_method,
+            eta_by_extension=eta_rows,
         ))
     rows.sort(key=lambda r: (r.source != "api", r.key))
     return rows
@@ -206,8 +231,12 @@ def _llm(host_sample: Optional[dict[str, Any]]) -> OverviewLlm:
     return OverviewLlm(sampled_at=_aware(host_sample.get("ts")), models=models)
 
 
+EtaLookup = Callable[[Sequence[str]], Awaitable[dict[str, EtaEstimate]]]
+
+
 async def overview(store: TelemetryStore, *, hours: float = 24.0, online_within_s: float = 90.0,
-                   cache: Optional[AnomalyCache] = None, now: Optional[datetime] = None) -> TelemetryOverview:
+                   cache: Optional[AnomalyCache] = None, now: Optional[datetime] = None,
+                   eta_lookup: Optional[EtaLookup] = None) -> TelemetryOverview:
     """Build the overview; each section degrades to empty on its own error.
 
     Args:
@@ -216,6 +245,9 @@ async def overview(store: TelemetryStore, *, hours: float = 24.0, online_within_
         online_within_s: A process seen within this many seconds counts as online.
         cache: Anomaly cache shared across calls (``app.state``).
         now: Reference time (tests).
+        eta_lookup: Returns the per-extension ETA of the given job ids (the router wires
+            :func:`backend.services.ingestion_eta.job_eta` over the tenant's jobs); without
+            one the rows fall back to remaining files at the last hour's pace.
     """
     moment = now or datetime.now(timezone.utc)
 
@@ -243,8 +275,15 @@ async def overview(store: TelemetryStore, *, hours: float = 24.0, online_within_
     processes: list[OverviewProcess] = []
     try:
         docs = await store.activity_current_docs()
-        pace = await _pace(store, [d["job_id"] for d in docs if d.get("job_id")], moment)
-        processes = process_rows(docs, moment, online_within_s=online_within_s, pace=pace)
+        job_ids = [d["job_id"] for d in docs if d.get("job_id")]
+        pace = await _pace(store, job_ids, moment)
+        etas: dict[str, EtaEstimate] = {}
+        if eta_lookup is not None and job_ids:
+            try:
+                etas = await eta_lookup(job_ids)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("overview: job ETAs unavailable: %s", exc)
+        processes = process_rows(docs, moment, online_within_s=online_within_s, pace=pace, etas=etas)
     except Exception as exc:  # noqa: BLE001
         logger.debug("overview: processes unavailable: %s", exc)
 

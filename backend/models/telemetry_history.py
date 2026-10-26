@@ -474,6 +474,16 @@ class OverviewAnomalies(BaseModel):
     top: List[str] = Field(default_factory=list, description="Titles of the most severe findings.")
 
 
+class OverviewEtaExtension(BaseModel):
+    """Remaining files of one extension and the pace they are estimated at."""
+
+    extension: str
+    remaining: int = 0
+    files_per_minute: Optional[float] = None
+    seconds: Optional[float] = None
+    pace_source: Optional[str] = None
+
+
 class OverviewProcess(BaseModel):
     """Liveness of one API or worker process (from ``activity_current``)."""
 
@@ -491,7 +501,11 @@ class OverviewProcess(BaseModel):
     processed_files: Optional[int] = None
     total_files: Optional[int] = None
     files_per_hour: Optional[float] = Field(default=None, description="Files finished in the last hour.")
-    eta_seconds: Optional[float] = Field(default=None, description="Remaining files at that pace.")
+    eta_seconds: Optional[float] = Field(
+        default=None, description="Remaining time: the per-extension estimate of the ingestion status API, else remaining files at that pace."
+    )
+    eta_method: Optional[str] = Field(default=None, description="per_extension, overall or pace.")
+    eta_by_extension: List[OverviewEtaExtension] = Field(default_factory=list)
 
 
 class OverviewChat(BaseModel):

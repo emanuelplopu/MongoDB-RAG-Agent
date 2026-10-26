@@ -634,6 +634,7 @@
     "toggle": "Toggle",
     "elapsed": "Elapsed",
     "eta": "ETA",
+    "etaByExtension": "Remaining by file type",
     "currentFile": "Current File",
     "logs": "Logs",
     "streamLogs": "Stream",

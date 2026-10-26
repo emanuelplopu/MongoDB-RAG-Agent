@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import re
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
@@ -37,6 +37,7 @@ from backend.models.telemetry_history import (
 from backend.routers.auth import UserResponse, require_admin
 from backend.services import telemetry_analysis, telemetry_overview
 from backend.services.db_stats import LEASE_NAME
+from backend.services.ingestion_eta import EtaEstimate, job_eta
 from backend.services.telemetry_store import TelemetryStore, choose_bucket_seconds
 
 router = APIRouter(prefix="/api/v1/telemetry", tags=["Telemetry History"])
@@ -202,9 +203,44 @@ async def get_overview(
 ) -> TelemetryOverview:
     """Health at a glance: newest database figures, anomaly counts, process liveness, chat latency, backups, loaded LLMs."""
     store = _store(request)
+
+    async def eta_lookup(job_ids: Sequence[str]) -> dict[str, EtaEstimate]:
+        # The same per-extension estimate the ingestion status API reports, from this
+        # tenant's jobs (a job of another tenant is not found: the row keeps the pace fallback)
+        raw_db = request.app.state.db.db
+        live = _live_job_state()
+        etas: dict[str, EtaEstimate] = {}
+        for job_id in job_ids:
+            job = live if live and live.get("job_id") == job_id else await raw_db["ingestion_jobs"].find_one({"_id": job_id})
+            if not job:
+                continue
+            estimate = await job_eta(raw_db, {**_flatten_progress(job), "job_id": job_id})
+            if estimate is not None:
+                etas[job_id] = estimate
+        return etas
+
     return await telemetry_overview.overview(
         store,
         hours=hours,
         online_within_s=max(90.0, 3.0 * settings.process_heartbeat_seconds),
         cache=_overview_cache(request),
+        eta_lookup=eta_lookup,
     )
+
+
+def _live_job_state() -> Optional[dict]:
+    """The in-memory state of the job this API process is running, if any (per-extension counters live there)."""
+    from backend.routers import ingestion as ingestion_router
+
+    state = getattr(ingestion_router, "_current_job_state", None)
+    return state if isinstance(state, dict) else None
+
+
+def _flatten_progress(job: dict) -> dict:
+    """Lift the worker's nested ``progress`` fields to the top level (``total_files``, ``processed_files``)."""
+    flat = dict(job)
+    progress = job.get("progress")
+    if isinstance(progress, dict):
+        for key, value in progress.items():
+            flat.setdefault(key, value)
+    return flat

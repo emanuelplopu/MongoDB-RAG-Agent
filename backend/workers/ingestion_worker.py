@@ -33,6 +33,7 @@ from backend.services.ingestion_counters import apply_stats_counts
 from backend.services.telemetry_store import SHARED_TENANT
 from src.ingestion import telemetry_hooks
 from src.ingestion.progress import progress_percent_label
+from backend.services.ingestion_eta import count_by_extension, extension_of
 
 # Import backup service for post-ingestion backups
 try:
@@ -490,7 +491,8 @@ class IngestionWorker:
             await self._update_job_progress(job_id, job_state)
             
             # Import ingestion components
-            from src.ingestion.ingest import DocumentIngestionPipeline, IngestionConfig
+            from src.ingestion.chunker import chunk_max_tokens_default
+            from src.ingestion.ingest import DocumentIngestionPipeline, IngestionConfig, retry_error_types
             from src.profile import get_profile_manager
             
             # Re-read profiles.yaml: the API edits it (new document folders) and this
@@ -510,7 +512,7 @@ class IngestionWorker:
                 chunk_size=config.get("chunk_size", 1000),
                 chunk_overlap=config.get("chunk_overlap", 200),
                 max_chunk_size=config.get("chunk_size", 1000) * 2,
-                max_tokens=config.get("max_tokens", 512)
+                max_tokens=config.get("max_tokens") or chunk_max_tokens_default(),
             )
             
             job_state["phase_message"] = "Initializing pipeline..."
@@ -580,7 +582,12 @@ class IngestionWorker:
                 
                 if current_file:
                     job_state["current_file"] = current_file
-                    
+
+                    # Per-extension progress for the shared ETA estimator (one call per finished file)
+                    done_by_ext = job_state.setdefault("processed_by_extension", {})
+                    file_ext = extension_of(current_file)
+                    done_by_ext[file_ext] = done_by_ext.get(file_ext, 0) + 1
+
                     # Categorize file
                     ext = current_file.lower().split('.')[-1] if '.' in current_file else ''
                     if ext in ['pdf', 'doc', 'docx', 'txt', 'md', 'html', 'htm', 'xlsx', 'xls', 'pptx', 'ppt']:
@@ -614,6 +621,11 @@ class IngestionWorker:
                 apply_stats_counts(job_state, counts)
                 asyncio.create_task(self._update_job_progress(job_id, job_state))
 
+            def queue_callback(files: List[str]) -> None:
+                # What this run will process, per extension (the shared ETA estimator reads it)
+                job_state["queue_by_extension"] = count_by_extension(files)
+                job_state["processed_by_extension"] = {}
+
             # Run ingestion with configured concurrency
             results = await pipeline.ingest_documents(
                 progress_callback=sync_progress_callback,
@@ -622,6 +634,9 @@ class IngestionWorker:
                 thread_pool_workers=self.config.get("thread_pool_workers"),
                 process_isolation=self.config.get("process_isolation_enabled"),
                 stats_callback=stats_callback,
+                job_id=job_id,
+                retry_failed_types=retry_error_types(config),
+                queue_callback=queue_callback,
             )
             
             # Update phase: finalizing
@@ -829,9 +844,13 @@ class IngestionWorker:
                     "progress.duplicates_skipped": state.get("duplicates_skipped", 0),
                     # Per-outcome counters (read top-level by the runs list and the status API)
                     "image_only_pdfs": state.get("image_only_pdfs", 0),
+                    "image_only_pdfs_ocr": state.get("image_only_pdfs_ocr", 0),
                     "no_chunks_files": state.get("no_chunks_files", 0),
                     "timeout_files": state.get("timeout_files", 0),
                     "error_files": state.get("error_files", 0),
+                    # Per-extension queue and progress (the shared ETA estimator reads them)
+                    "queue_by_extension": state.get("queue_by_extension"),
+                    "processed_by_extension": state.get("processed_by_extension"),
                     # Phase tracking fields
                     "phase": state.get("phase"),
                     "phase_message": state.get("phase_message"),

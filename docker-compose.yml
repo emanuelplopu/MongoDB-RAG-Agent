@@ -99,6 +99,9 @@ services:
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
       - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-https://api.openai.com/v1}
       - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-1536}
+      # Chunker token budget and the embedding model's per-text limit
+      - CHUNK_MAX_TOKENS=${CHUNK_MAX_TOKENS:-1024}
+      - EMBEDDING_MAX_TOKENS=${EMBEDDING_MAX_TOKENS:-2048}
       
       # LLM Configuration (for audio transcription via Whisper)
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}
@@ -259,6 +262,63 @@ services:
           - embedder
     restart: unless-stopped
 
+  # Second llama.cpp instance (same image and model) that embeds search queries
+  # only, so a query never waits behind the ingestion batches on `embedder`
+  # (F29 of docs/system-validation/INGESTION_PROMPT_TEST_LOG_2026-10-24.md).
+  # Point the backends at it with QUERY_EMBEDDING_URL=http://embedder-query:8080/v1
+  # (host: http://localhost:11091/v1). Two slots are plenty for queries; the
+  # model takes ~0.9 GB of VRAM per instance.
+  #   docker compose --profile quellex --profile embedder-gpu --profile embedder-query up -d
+  embedder-query:
+    profiles: [embedder-query]
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: rag-embedder-query
+    command:
+      - "-hf"
+      - "${EMBEDDER_HF_MODEL:-ggml-org/embeddinggemma-2-GGUF:Q8_0}"
+      - "--embeddings"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8080"
+      - "-c"
+      - "${EMBEDDER_QUERY_CTX:-8192}"
+      - "-np"
+      - "${EMBEDDER_QUERY_SLOTS:-2}"
+      - "-b"
+      - "4096"
+      - "-ub"
+      - "4096"
+      - "-ngl"
+      - "${EMBEDDER_GPU_LAYERS:-999}"
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:11091:8080"
+    volumes:
+      - embedder_models:/root/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      rag-network:
+        aliases:
+          - embedder-query
+    restart: unless-stopped
+
   # ===========================================================================
   #  RECALLHUB TENANT  (profile: recallhub)
   # ===========================================================================
@@ -309,6 +369,14 @@ services:
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
       - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-https://api.openai.com/v1}
       - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-1536}
+      # Query embeddings: optional second embedder (profile embedder-query) and retry budget (F29)
+      - QUERY_EMBEDDING_URL=${QUERY_EMBEDDING_URL:-}
+      - QUERY_EMBEDDING_MAX_RETRIES=${QUERY_EMBEDDING_MAX_RETRIES:-3}
+      # Chunker token budget and the embedding model's per-text limit
+      - CHUNK_MAX_TOKENS=${CHUNK_MAX_TOKENS:-1024}
+      - EMBEDDING_MAX_TOKENS=${EMBEDDING_MAX_TOKENS:-2048}
+      # UI-started ingestion jobs: worker when one is alive (auto), or api / worker (F7)
+      - INGESTION_UI_JOB_RUNNER=${INGESTION_UI_JOB_RUNNER:-auto}
 
       # OCR engine for scanned pages (docs/24-OCR_SCAN_QUALITY_CHECK.md)
       - OCR_ENGINE=${OCR_ENGINE:-tesseract}
@@ -498,6 +566,14 @@ services:
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
       - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-https://api.openai.com/v1}
       - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-1536}
+      # Query embeddings: optional second embedder (profile embedder-query) and retry budget (F29)
+      - QUERY_EMBEDDING_URL=${QUERY_EMBEDDING_URL:-}
+      - QUERY_EMBEDDING_MAX_RETRIES=${QUERY_EMBEDDING_MAX_RETRIES:-3}
+      # Chunker token budget and the embedding model's per-text limit
+      - CHUNK_MAX_TOKENS=${CHUNK_MAX_TOKENS:-1024}
+      - EMBEDDING_MAX_TOKENS=${EMBEDDING_MAX_TOKENS:-2048}
+      # UI-started ingestion jobs: worker when one is alive (auto), or api / worker (F7)
+      - INGESTION_UI_JOB_RUNNER=${INGESTION_UI_JOB_RUNNER:-auto}
 
       # OCR engine for scanned pages (docs/24-OCR_SCAN_QUALITY_CHECK.md)
       - OCR_ENGINE=${OCR_ENGINE:-tesseract}

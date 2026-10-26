@@ -276,7 +276,10 @@ class IngestionStartRequest(BaseModel):
     incremental: bool = Field(default=True, description="Skip already-ingested files")
     chunk_size: int = Field(default=1000, ge=100, le=5000)
     chunk_overlap: int = Field(default=200, ge=0, le=1000)
-    max_tokens: int = Field(default=512, ge=128, le=2048)
+    max_tokens: Optional[int] = Field(
+        default=None, ge=128, le=4096,
+        description="Chunker token budget per chunk; the CHUNK_MAX_TOKENS setting (1024) when omitted",
+    )
     
     # Selective ingestion filters
     retry_image_only_pdfs: bool = Field(default=False, description="Only process image-only PDFs")
@@ -317,6 +320,7 @@ class IngestionStatusResponse(BaseModel):
     progress_percent: float = 0.0
     elapsed_seconds: float = 0.0
     estimated_remaining_seconds: Optional[float] = None
+    eta: Optional["IngestionEta"] = None  # per-extension breakdown behind estimated_remaining_seconds
     is_paused: bool = False
     can_pause: bool = True
     can_stop: bool = True
@@ -325,6 +329,33 @@ class IngestionStatusResponse(BaseModel):
     phase_message: Optional[str] = None
     discovery_progress: Optional[DiscoveryProgress] = None
     processing_rate: float = 0.0  # files per minute
+    runner: Optional[str] = None  # "api" (in-process) or "worker" (ingestion worker container)
+    # Per-outcome counters, updated from the per-file stats while the job runs (F2/F3/F9)
+    image_only_pdfs: int = 0  # pure scans skipped or OCRed to nothing
+    image_only_pdfs_ocr: int = 0  # pure scans whose OCR produced text
+    no_chunks_files: int = 0
+    timeout_files: int = 0
+    error_files: int = 0
+
+
+class IngestionEtaExtension(BaseModel):
+    """Remaining work and measured pace of one file extension."""
+    extension: str = Field(description="Lower-case extension with its dot; '' for none")
+    remaining: int = 0
+    files_per_minute: Optional[float] = Field(default=None, description="Pace used for this extension")
+    seconds: Optional[float] = Field(default=None, description="Remaining / pace; None without a pace")
+    pace_source: Optional[str] = Field(
+        default=None, description="window (last hour), lifetime (this job), overall (all extensions) or None"
+    )
+
+
+class IngestionEta(BaseModel):
+    """Per-extension estimate of the remaining time (``backend/services/ingestion_eta.py``)."""
+    seconds: Optional[float] = Field(default=None, description="Sum over the extensions with a pace")
+    method: str = "per_extension"
+    remaining_files: int = 0
+    unknown_remaining: int = Field(default=0, description="Remaining files of extensions without any pace")
+    by_extension: List[IngestionEtaExtension] = Field(default_factory=list)
 
 
 class IngestionRunSummary(BaseModel):
@@ -347,6 +378,7 @@ class IngestionRunSummary(BaseModel):
     # Extended metrics for prioritization
     duplicates_skipped: int = 0
     image_only_pdfs: int = 0  # PDFs with no extractable text
+    image_only_pdfs_ocr: int = 0  # Pure scans whose OCR produced text (F9)
     no_chunks_files: int = 0  # Files that produced 0 chunks (after processing)
     timeout_files: int = 0  # Files that timed out
     error_files: int = 0  # Files with processing errors

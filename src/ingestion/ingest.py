@@ -36,7 +36,7 @@ except ImportError:
     PDFIUM_AVAILABLE = False
     pdfium = None
 
-from src.ingestion.chunker import ChunkingConfig, create_chunker, DocumentChunk
+from src.ingestion.chunker import ChunkingConfig, create_chunker, DocumentChunk, chunk_max_tokens_default
 from src.ingestion.embedder import create_embedder
 from src.ingestion.ocr_repair import repair_docling_document, repair_ocr_text
 from src.ingestion import telemetry_hooks
@@ -155,7 +155,7 @@ class IngestionConfig:
     chunk_size: int = 1000
     chunk_overlap: int = 200
     max_chunk_size: int = 2000
-    max_tokens: int = 512
+    max_tokens: int = field(default_factory=lambda: chunk_max_tokens_default())  # CHUNK_MAX_TOKENS, 1024
 
 
 @dataclass
@@ -187,7 +187,10 @@ class IngestionFileStats:
     content_hash: Optional[str] = None  # SHA256 hash for change detection
     file_modified_at: Optional[datetime] = None  # Filesystem modification time
     classification: str = "pending"  # FileClassification value
-    
+    # PDFs only: True when the file has no text layer (a pure scan), so its text came from
+    # OCR (success) or OCR found nothing (error_type image_only_pdf); None = not checked (F9)
+    image_only_pdf: Optional[bool] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for MongoDB storage."""
         result = {
@@ -209,6 +212,8 @@ class IngestionFileStats:
         }
         if self.job_id:
             result["job_id"] = self.job_id
+        if self.image_only_pdf is not None:
+            result["image_only_pdf"] = self.image_only_pdf
         return result
 
 
@@ -762,6 +767,82 @@ def process_isolation_enabled(configured: Optional[bool] = None) -> bool:
 # every N recorded files or every M seconds, whichever comes first, and once more at the end.
 DEFAULT_STATS_FLUSH_FILES = 25
 DEFAULT_STATS_FLUSH_SECONDS = 60.0
+
+
+class UnreadableFileError(Exception):
+    """A reader could not read the file: nothing is stored and the file is recorded as failed.
+
+    Until 2026-10-26 the readers' ``[Error: Could not read file …]`` placeholder was stored,
+    chunked and embedded as the document's content (F26 of the prompt-test log), so the file
+    counted as ingested and a question naming it got the error string as its source.
+    """
+
+
+#: Reader placeholders that mean "could not read" (an unreadable file, a missing tool)
+ERROR_PLACEHOLDER_PREFIXES: Tuple[str, ...] = ("[Error:", "[Skipped:")
+#: Reader placeholders that mean "read fine, but there is no text in it"
+EMPTY_PLACEHOLDER_PREFIX = "[Document:"
+_PLACEHOLDER_MAX_CHARS = 400
+
+
+def placeholder_kind(content: Optional[str]) -> Optional[str]:
+    """Classify a reader's output: ``"error"`` / ``"empty"`` for a placeholder, else ``None``.
+
+    A placeholder is a single bracketed line such as ``[Error: Could not read file x.pdf]``
+    or ``[Document: x.rtf - no text content]``; real document text never looks like that.
+    """
+    text = (content or "").strip()
+    if not text or len(text) > _PLACEHOLDER_MAX_CHARS or "\n" in text or not text.endswith("]"):
+        return None
+    if text.startswith(ERROR_PLACEHOLDER_PREFIXES):
+        return "error"
+    if text.startswith(EMPTY_PLACEHOLDER_PREFIX):
+        return "empty"
+    return None
+
+
+#: Selective-retry flags of an ingestion request -> the recorded error type they ask to retry
+RETRY_FLAG_ERROR_TYPES: Dict[str, str] = {
+    "retry_timeouts": "timeout",
+    "retry_errors": "error",
+    "retry_no_chunks": "no_chunks",
+    "retry_image_only_pdfs": "image_only_pdf",
+}
+
+
+def retry_error_types(config: Optional[Dict[str, Any]]) -> frozenset:
+    """The error types a job's config asks to retry (its ``retry_*`` flags)."""
+    if not config:
+        return frozenset()
+    return frozenset(error_type for flag, error_type in RETRY_FLAG_ERROR_TYPES.items() if config.get(flag))
+
+
+async def failed_paths_of_job(db: Any, job_id: Optional[str], retry_types: frozenset = frozenset()) -> Dict[str, str]:
+    """``file_path -> error_type`` of the failures a job recorded that its resume must not redo.
+
+    A resumed job knows only the ``documents`` collection, so every file that timed out,
+    errored or produced no chunks before the restart looked new and was processed again
+    (F23: 553 timeouts on 451 files in the first 4 h after a resume). The failures the run
+    wrote to ``failed_documents`` (F2) are skipped unless the job's ``retry_*`` flags ask for
+    that error type or the record was resolved.
+
+    Args:
+        db: The profile's database (``failed_documents`` collection), or ``None``.
+        job_id: The job being resumed.
+        retry_types: Error types the job's config asks to retry (:func:`retry_error_types`).
+    """
+    if db is None or not job_id:
+        return {}
+    skip: Dict[str, str] = {}
+    cursor = db["failed_documents"].find(
+        {"job_id": job_id, "resolved": {"$ne": True}}, {"file_path": 1, "error_type": 1}
+    )
+    async for doc in cursor:
+        error_type = doc.get("error_type") or "error"
+        path = doc.get("file_path")
+        if path and error_type not in retry_types:
+            skip[path] = error_type
+    return skip
 
 
 def stats_flush_config() -> Tuple[int, float]:
@@ -1973,6 +2054,9 @@ class IngestionStatsRecorder:
     def _count(counter: Dict[str, int], stat: IngestionFileStats) -> None:
         key = stat.error_type or "success"
         counter[key] = counter.get(key, 0) + 1
+        if stat.success and stat.image_only_pdf:
+            # Pure scans whose OCR produced text (F9): shown next to the skipped/empty ones
+            counter["image_only_ocr"] = counter.get("image_only_ocr", 0) + 1
 
     @property
     def pending(self) -> int:
@@ -3803,6 +3887,21 @@ class DocumentIngestionPipeline:
 
         # Post-OCR repair of statute references ("$ 94 ÄrzteG" -> "§ 94 ÄrzteG"); the Docling
         # document is repaired too because the chunker builds chunk text from its items.
+        # A reader placeholder is never stored: "[Error: …]" / "[Skipped: …]" is a failed read
+        # (F26), "[Document: … - no text content]" an empty file (no chunks, no warning)
+        kind = placeholder_kind(document_content)
+        if kind == "error":
+            raise UnreadableFileError(document_content.strip().strip("[]"))
+        if kind == "empty":
+            logger.info(f"No text in {os.path.basename(file_path)}: {document_content.strip()}")
+            return IngestionResult(
+                document_id="",
+                title=os.path.basename(file_path),
+                chunks_created=0,
+                processing_time_ms=(datetime.now() - start_time).total_seconds() * 1000,
+                errors=["No chunks created"],
+            )
+
         with telemetry_hooks.step("ocr_repair"):
             repaired_items = repair_docling_document(docling_doc)
             repaired_content = repair_ocr_text(document_content)
@@ -3844,7 +3943,10 @@ class DocumentIngestionPipeline:
             )
 
         if not chunks:
-            logger.warning(f"No chunks created for {document_title}")
+            # An empty file is expected (Outlook ATT0000x.txt placeholders, frameset pages):
+            # no warning for those, one for a file whose text produced no chunk (F9)
+            log = logger.info if not (document_content or "").strip() else logger.warning
+            log(f"No chunks created for {document_title}")
             return IngestionResult(
                 document_id="",
                 title=document_title,
@@ -3947,6 +4049,8 @@ class DocumentIngestionPipeline:
         thread_pool_workers: Optional[int] = None,
         process_isolation: Optional[bool] = None,
         stats_callback: Optional[Callable[[Dict[str, int]], None]] = None,
+        retry_failed_types: Optional[frozenset] = None,
+        queue_callback: Optional[Callable[[List[str]], None]] = None,
     ) -> List[IngestionResult]:
         """Ingest all documents; see :meth:`_ingest_documents_impl` for the arguments.
 
@@ -3964,6 +4068,8 @@ class DocumentIngestionPipeline:
                 thread_pool_workers=thread_pool_workers,
                 process_isolation=process_isolation,
                 stats_callback=stats_callback,
+                retry_failed_types=retry_failed_types,
+                queue_callback=queue_callback,
             )
         finally:
             if token is not None:
@@ -3979,11 +4085,18 @@ class DocumentIngestionPipeline:
         thread_pool_workers: Optional[int] = None,
         process_isolation: Optional[bool] = None,
         stats_callback: Optional[Callable[[Dict[str, int]], None]] = None,
+        retry_failed_types: Optional[frozenset] = None,
+        queue_callback: Optional[Callable[[List[str]], None]] = None,
     ) -> List[IngestionResult]:
         """
         Ingest all documents from the documents folder.
 
         Args:
+            retry_failed_types: Error types the job asks to retry (:func:`retry_error_types`).
+                In incremental mode with a ``job_id``, files the same job already recorded in
+                ``failed_documents`` are skipped unless their error type is listed here (F23).
+            queue_callback: Called once with the final list of files this run will process
+                (after the incremental and failed-file filters), e.g. for the per-extension ETA.
             progress_callback: Optional callback for progress updates
             incremental: If True, skip already-ingested files (default: True)
             max_concurrent_files: Number of files to process concurrently (default: 1)
@@ -4070,11 +4183,29 @@ class DocumentIngestionPipeline:
                     f"Incremental mode: Skipping {skipped_count} already-ingested files"
                 )
             document_files = document_files_to_process
-        
+
+        # A resumed job does not redo the failures it already recorded (F23)
+        if incremental and job_id and document_files:
+            skip_failed = await failed_paths_of_job(self.db, job_id, retry_failed_types or frozenset())
+            if skip_failed:
+                before = len(document_files)
+                document_files = [f for f in document_files if f not in skip_failed]
+                if before > len(document_files):
+                    logger.info(
+                        f"Skipping {before - len(document_files)} file(s) that already failed in job "
+                        f"{job_id} (use the retry options to process them again)"
+                    )
+
+        if queue_callback is not None:
+            try:
+                queue_callback(list(document_files))
+            except Exception as exc:  # noqa: BLE001 - a display hook must not stop the run
+                logger.warning(f"queue_callback failed: {exc}")
+
         if not document_files:
             logger.info("No new documents to ingest")
             return []
-        
+
         logger.info(f"Processing {len(document_files)} new documents")
 
         results = []
@@ -4459,6 +4590,21 @@ class DocumentIngestionPipeline:
                         timeout_seconds,
                     )
 
+                    chunks_created = result.chunks_created if result else 0
+                    is_no_chunks = chunks_created == 0 and result and not result.document_id
+                    # Pure scans are recorded as such (F9): OCRed ones carry the flag, ones
+                    # whose OCR found nothing count as image_only_pdf instead of no_chunks
+                    image_only: Optional[bool] = None
+                    image_only_reason = ""
+                    if file_path.lower().endswith('.pdf') and (is_no_chunks or result.document_id):
+                        try:
+                            image_only, image_only_reason = await loop.run_in_executor(
+                                self.get_executor(), is_image_only_pdf, file_path
+                            )
+                        except Exception as exc:  # noqa: BLE001 - the stat is written either way
+                            logger.debug(f"image-only check failed for {file_path}: {exc}")
+                            image_only = None
+
                     with results_lock:
                         results.append(result)
                         if content_hash and result.document_id:
@@ -4466,15 +4612,22 @@ class DocumentIngestionPipeline:
                         processed_count += 1
 
                         # Track stats - mark as failure if no chunks created
-                        chunks_created = result.chunks_created if result else 0
-                        is_no_chunks = chunks_created == 0 and result and not result.document_id
-                        error_type = "no_chunks" if is_no_chunks else None
+                        if is_no_chunks and image_only:
+                            error_type = "image_only_pdf"
+                            error_message = f"Image-only PDF: OCR found no text ({image_only_reason})"
+                        elif is_no_chunks:
+                            error_type = "no_chunks"
+                            error_message = "No content extracted from document"
+                        else:
+                            error_type = None
+                            error_message = None
                         recorder.add(stat(
                             chunks_created=chunks_created,
                             success=not is_no_chunks,
                             error_type=error_type,
-                            error_message="No content extracted from document" if is_no_chunks else None,
+                            error_message=error_message,
                             classification=map_error_type_to_classification(error_type, chunks_created),
+                            image_only_pdf=image_only,
                         ))
 
                     if progress_callback:

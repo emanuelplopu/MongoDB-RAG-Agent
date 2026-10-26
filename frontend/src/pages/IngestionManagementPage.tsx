@@ -31,7 +31,8 @@ import {
 import {
   ingestionApi, ingestionQueueApi, profilesApi, fileRegistryApi,
   QueueStatus, ScheduledIngestionJob, IngestionStatus, LogEntry,
-  Profile, IngestionStreamEvent, FileRegistryStats, IngestEstimate
+  Profile, IngestionStreamEvent, FileRegistryStats, IngestEstimate,
+  IngestionEta, IngestionEtaExtension
 } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 import { formatDuration, formatPercent } from '../utils/format'
@@ -607,6 +608,20 @@ export default function IngestionManagementPage() {
     return `${rate.toFixed(1)}/min`
   }
 
+  /** The extensions with the most files left (the ETA is their sum). */
+  const etaRows = (eta: IngestionEta | null | undefined): IngestionEtaExtension[] =>
+    eta?.method === 'per_extension' ? (eta.by_extension ?? []).slice(0, 6) : []
+
+  const etaBreakdownText = (eta: IngestionEta | null | undefined): string | null => {
+    if (!eta || !eta.by_extension?.length) return null
+    const lines = eta.by_extension.map(row =>
+      `${row.extension || '(none)'}: ${row.remaining.toLocaleString()} left` +
+      (row.files_per_minute != null ? ` at ${row.files_per_minute.toFixed(2)}/min (${row.pace_source})` : ' (no pace yet)')
+    )
+    if (eta.unknown_remaining > 0) lines.push(`${eta.unknown_remaining.toLocaleString()} files of unknown pace are not in the ETA`)
+    return lines.join('\n')
+  }
+
   const copyToClipboard = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text)
@@ -795,12 +810,25 @@ export default function IngestionManagementPage() {
                 {ingestionStatus.status === 'running' && <ArrowPathIcon className="h-4 w-4 animate-spin inline mr-1" />}
                 {ingestionStatus.status.charAt(0).toUpperCase() + ingestionStatus.status.slice(1)}
               </span>
-              <span className="text-secondary dark:text-gray-400">
+              <span
+                className="text-secondary dark:text-gray-400"
+                title={etaBreakdownText(streamEvent?.metrics?.eta || ingestionStatus.eta) || undefined}
+              >
                 Elapsed: {formatDuration(streamEvent?.metrics?.elapsed_seconds || ingestionStatus.elapsed_seconds)}
                 {(streamEvent?.metrics?.estimated_remaining_seconds || ingestionStatus.estimated_remaining_seconds) &&
                   ` • ETA: ${formatDuration(streamEvent?.metrics?.estimated_remaining_seconds || ingestionStatus.estimated_remaining_seconds || 0)}`}
+                {ingestionStatus.runner === 'worker' && ' • worker'}
               </span>
             </div>
+            {etaRows(streamEvent?.metrics?.eta || ingestionStatus.eta).length > 0 && (
+              <p className="text-xs text-secondary dark:text-gray-500" data-testid="eta-breakdown">
+                {t('ingestion.etaByExtension')}:{' '}
+                {etaRows(streamEvent?.metrics?.eta || ingestionStatus.eta)
+                  .map(row => `${row.extension || '(none)'} ${row.remaining.toLocaleString()} left` +
+                    (row.seconds != null ? ` ≈ ${formatDuration(row.seconds)}` : ' (no pace yet)'))
+                  .join(' · ')}
+              </p>
+            )}
             
             <div className="w-full h-3 bg-surface-variant dark:bg-gray-700 rounded-full overflow-hidden">
               <div className="h-full bg-primary rounded-full transition-all duration-300" style={{ width: `${Math.max(ingestionStatus.progress_percent, 2)}%` }} />
