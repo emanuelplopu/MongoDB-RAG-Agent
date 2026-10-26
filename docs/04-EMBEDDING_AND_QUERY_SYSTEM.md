@@ -130,6 +130,8 @@ settings surfaces, passed through by `docker-compose.yml`; evidence in
 | `INGEST_THREAD_POOL_WORKERS` | `4` | Size of the pipeline's shared thread pool (hashing, Docling conversion, folder discovery) for a run that passes none (CLI). The Configuration page's `thread_pool_workers` sets it per run, and the pool is never smaller than `max_concurrent_files`. See "Parallel conversions" below. |
 | `INGEST_DOCLING_THREADS` | derived | CPU threads per Docling model (layout, TableFormer). Default: the cores shared evenly across the pool, at most Docling's 4 (`OMP_NUM_THREADS` pins it too). |
 | `OCR_OMP_THREAD_LIMIT` | derived | OpenMP threads per Tesseract process. Default: the cores shared evenly across the pool, 1-4; `0` leaves OpenMP free. Applied through a generated wrapper command (`tesseract_command()` in `src/ingestion/ocr_tesseract.py`), so it never caps PyTorch in the ingestion process. |
+| `INGEST_GPU_SLOTS` | empty | Threads of the conversion pool that build their Docling converters (layout model, TableFormer) on the GPU; the other threads convert on the CPU, and Tesseract OCR is a CPU process either way. Empty = 4 when CUDA is visible to the container (`docker-compose.gpu.yml`), `0` = CPU only. Lowered at pool start to what the free VRAM holds; a slot that still runs out of GPU memory moves to the CPU (`convert_with_cpu_fallback()`). Shown by `GET /api/v1/system/ingestion-accelerator-config` (`gpu_slots`). See "GPU conversion slots" below. |
+| `INGEST_GPU_SLOT_VRAM_MB` | `1200` | VRAM assumed per GPU converter for that check (measured 2026-10-24: ~1.0 GB reserved per slot after the models are loaded, see below). |
 
 Converters are cached per worker thread and configuration
 (`create_document_converter()` / `create_image_converter()`); Docling keeps
@@ -162,14 +164,128 @@ Windows: Docker Desktop gets a fraction of the host's RAM, and each conversion
 thread needs ~0.6 GB on top of MongoDB's cache), then watch `docker stats`
 during the first minutes of a run.
 
-A GPU in the worker or backend container (`deploy.resources.reservations.devices`
-as for `embedder-gpu`) is picked up automatically (`get_effective_device()`).
-The Docling accelerator options are always a real `AcceleratorOptions`
-(`docling_accelerator_options()`); the former dict assignment made every
-conversion fail with `'dict' object has no attribute 'device'` as soon as a
-GPU was visible. Each pool thread keeps its own converter, so N threads load
-the layout and TableFormer models N times on the GPU; keep that within the
-VRAM left by the embedder and the chat model.
+**GPU conversion slots** (`docker-compose.gpu.yml`, `INGEST_GPU_SLOTS`). The
+API containers and the ingestion worker ship CUDA torch, but `docker-compose.yml`
+gives only `embedder-gpu` a device reservation, so `torch.cuda.is_available()`
+was false in `rag-backend-quellex` and the worker and every conversion ran on
+the CPU. `docker-compose.gpu.yml` layers the same
+`deploy.resources.reservations.devices` nvidia block onto `backend`,
+`backend-quellex`, `ingestion-worker` and `cli`; it is opt-in through
+`COMPOSE_FILE` (or `-f`). The Docling accelerator options are always a real
+`AcceleratorOptions` (`docling_accelerator_options()`); the former dict
+assignment made every conversion fail with `'dict' object has no attribute
+'device'` as soon as a GPU was visible.
+
+Each pool thread keeps its own converter, so a thread on the GPU holds its own
+copy of the layout and TableFormer models in VRAM (measured 0.7-0.9 GB per
+converter, see below); 16 GPU threads would need ~14 GB of a 16 GB card that
+also hosts the embedder (~4 GB) and, whenever someone chats, gemma4:12b
+(~9 GB). The pool threads are therefore numbered as *conversion slots* when
+they start (`configure_executor()`), and `slot_device()` puts the first
+`INGEST_GPU_SLOTS` slots on `cuda` and the rest on `cpu`, so OCR (Tesseract, a
+CPU process either way) keeps the whole pool while only a few model copies sit
+on the card. The converter cache stays per thread and configuration; the
+thread's device (`conversion_device()`) is part of the key. The slot count is
+`INGEST_GPU_SLOTS` (default 4 when CUDA is visible, `0` = CPU only), never
+more than the pool has threads, and lowered at pool start to what
+`torch.cuda.mem_get_info` reports as free at `INGEST_GPU_SLOT_VRAM_MB`
+(1200) per slot, with a WARNING (`resolve_gpu_slots()`). The pool logs its
+split once per run (`Ingestion thread pool: 16 workers; GPU conversion slots:
+4 (12 on the CPU); …`), the CUDA probe itself logs once per process
+(`detect_available_device()` used to log "No GPU detected, using CPU" for
+every converter build), and `GET /api/v1/system/ingestion-accelerator-config`
+returns `gpu_slots` / `gpu_slots_configured`. A slot whose VRAM is gone by the
+time it converts (the chat model loaded in between) hits a CUDA out-of-memory
+error; `convert_with_cpu_fallback()` then moves that slot to the CPU, logs
+`Conversion slot N moved to the CPU after a GPU out-of-memory error`, and
+retries the file once instead of failing it. Threads outside the pool take the
+next free slot on first use; the per-slot worker processes of process-isolated
+runs pin theirs with `assign_conversion_slot(index)` (and should receive the
+parent's resolved slot count, so all children agree on the split).
+
+Measured 2026-10-24 in a throwaway worker container (`docker run --gpus all`,
+`scripts/bench_gpu_slots.py`, Docling 2.142, RTX PRO 2000 16 GB) on 46 real
+NAS files = 32 born-digital PDFs (land-register extracts `Grundbuchabfrage, KG
+…, EZ …`, RDB printouts, Firmenbuch extracts; 1-11 pages) plus 14 scanned
+PDFs (1-5 pages), 153 pages, 16 threads, 1 Docling thread per model, 1 OpenMP
+thread per Tesseract. The live Quellex ingest ran at the same time (~10 cores
+busy) and the embedder held 3.9 GB of the card, so the numbers are a loaded-box
+comparison, not peak speed. Two passes per setting, in opposite order:
+
+| GPU slots | pages/s (pass 1 / 2) | GPU slot, born-digital | CPU slot, born-digital | scans (any slot) | host VRAM over the embedder | GPU util. mean / p90 |
+|---|---|---|---|---|---|---|
+| 0 | 0.67 / 0.58 | – | 4.3-6.2 s/page | 10-12 s/page | +0.15 GB | 5-7 % / 12-16 % |
+| 4 | 0.77 / 0.74 | 1.1 s/page (pass 1) | 4.4-7.7 s/page | 10 s/page | +3.4-3.6 GB (0.85-0.9 GB/slot) | 10-14 % / 36-38 % |
+| 8 | 0.59 / 0.65 | 3.5-3.9 s/page | 5.7-5.8 s/page | 7-17 s/page | +6.0-7.3 GB (0.75-0.9 GB/slot) | 13-16 % / 28-50 % |
+
+Four slots gave +21 % pages/s over CPU-only (0.755 vs 0.625 averaged); a
+born-digital land-register page took 1.1 s on a GPU slot against 4-8 s on a
+CPU slot, scans were unchanged (OCR). Eight slots brought nothing more: the
+per-page time of the GPU slots tripled while the card stayed under 16 % mean
+utilisation, i.e. the box was CPU-bound (pdfium rendering, the Tesseract
+OSD/OCR passes over the image regions of born-digital pages, table
+post-processing and export all stay on the CPU, and the live job owned half
+the cores). Expect more inside the production job itself, where the layout and
+table inference of four threads leaves the CPU to the twelve OCR threads;
+check the `convert` stage per page in the telemetry after the rollout. Model
+load (warm-up of all 16 converters) took 11-21 s per pool. Keep the default of
+4; raise it only when the chat model is not loaded and the CPU has headroom,
+and keep `INGEST_GPU_SLOT_VRAM_MB` at 1200 (0.9 GB measured plus headroom for
+large pages). Sample and results: `C:\RecallHub-Verify\bench\gpu-slots-2026-10-24`
+on the dev box (`runs/*.json`, `nvidia-smi-matrix.csv`).
+
+CUDA out-of-memory behaviour, same bench with 8 slots on a 20 % VRAM budget
+(`--memory-fraction 0.2`, i.e. `torch.cuda.set_per_process_memory_fraction`,
+so only this process starved): all eight converters loaded (the models alone
+take ~0.4 GB per slot), then the first page of every GPU slot failed in
+Docling's layout stage with `torch.OutOfMemoryError` (`CUDA out of memory.
+Tried to allocate 14.00 MiB`), which Docling 2.142 surfaces as
+`ConversionError: Conversion failed for: … with status: failure. Errors: CUDA
+out of memory …`. `convert_with_cpu_fallback()` recognised it, moved each slot
+to the CPU (eight `Conversion slot N moved to the CPU after a GPU
+out-of-memory error` warnings) and retried: 24/24 files converted, none
+failed, the run finished at CPU speed (0.31 pages/s next to the live job).
+Without the fallback every one of those files would have been recorded as a
+conversion error. Demoted slots stay on the CPU until the pool is replaced (a
+run with another `thread_pool_workers`, or a container restart), so once the
+chat model is unloaded again a restart puts them back on the GPU
+(`runs/oom_fraction020_slots8.json`).
+
+Rollout on the live Quellex stack (started from `C:\RecallHub-Verify`; nothing
+here is done by a build script):
+
+1. Build the backend and worker images from a checkout that contains this
+   change (`docs/15-DOCKER_BUILD_GUIDE.md`; on the dev box with plain
+   `docker build` and a side tag, then retag).
+2. In `C:\RecallHub-Verify\.env` append the layer to `COMPOSE_FILE`
+   (`;` separated on Windows):
+   `COMPOSE_FILE=docker-compose.yml;docker-compose.override.yml;docker-compose.shares.yml;docker-compose.gpu.yml`.
+   Optionally pin `INGEST_GPU_SLOTS=4` (empty = the same default).
+3. From `C:\RecallHub-Verify`: `docker compose up -d --no-build --no-deps
+   backend-quellex ingestion-worker` (add `backend` for the RecallHub
+   tenant). Recreating `rag-backend-quellex` interrupts a UI-started
+   ingestion job; the job resumes on its own when the container is back.
+4. Verify: `docker inspect rag-backend-quellex --format "{{json
+   .HostConfig.DeviceRequests}}"` is no longer `null`; the container log shows
+   `CUDA available: NVIDIA RTX PRO 2000 Blackwell` once and, at the next run
+   start, `GPU conversion slots: 4 (12 on the CPU)`; `nvidia-smi` shows
+   ~3.5 GB more in use; `GET /api/v1/system/ingestion-accelerator-config`
+   returns `"gpu_slots": 4`.
+5. Rollback: drop the file from `COMPOSE_FILE` (or set `INGEST_GPU_SLOTS=0`)
+   and repeat step 3.
+
+`Start-Services.ps1`, `Stop-Services.ps1` and the tray app pass an explicit
+`-f` list, which makes Compose ignore `COMPOSE_FILE` from `.env`; since
+2026-10-25 they read `COMPOSE_FILE` themselves (`Get-ComposeFileSet` in
+`installer/scripts/RecallHub-Docker.psm1`, `ServiceManager.ResolveComposeFiles`
+in the tray app) and pass every listed file in that order, so a restart from
+the tray app or the scripts keeps the GPU layer. A listed file that does not
+exist is logged and skipped. Installs that still run older script copies from
+`%LocalAppData%\RecallHub\scripts` or an older tray exe restart without the
+layer (the pool then logs `GPU conversion slots: 0`): re-deploy the scripts
+(`Write-TrayConfig.ps1`, or `INSTALL.ps1 -SkipPrerequisites`) or restart with
+`docker compose up -d` from the install folder. `Start-Services.ps1 -DryRun`
+prints the resolved command.
 
 **Audio Processing** uses Whisper:
 - Transcribes audio content to text

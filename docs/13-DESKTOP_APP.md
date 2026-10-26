@@ -81,7 +81,7 @@ The config file is the single source of truth for all build and runtime paramete
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `composeFile` | `docker-compose.yml` | Path to compose file (relative to installPath) |
+| `composeFile` | `docker-compose.yml` | Path to compose file (relative to installPath). When it is `docker-compose.yml`, the scripts and the tray app take the whole `-f` list from `COMPOSE_FILE` in `<installPath>\.env` when that is set (split on `COMPOSE_PATH_SEPARATOR`, default `;`; a listed file that is missing is logged and skipped, and when none exists the default set is used), otherwise `docker-compose.yml` plus `docker-compose.override.yml` and `docker-compose.shares.yml` when present. An explicit `-f` list makes Compose ignore `COMPOSE_FILE`, which is why a restart from the tray app used to drop layers such as `docker-compose.gpu.yml`. Any other `composeFile` is passed alone. `Get-ComposeFileSet` in `RecallHub-Docker.psm1` and `ServiceManager.ResolveComposeFiles` implement the same rule |
 | `composeProfile` | _(tenant)_ | Compose profile to enable: `recallhub` or `quellex`. Set by `Write-TrayConfig.ps1`. The scripts and the tray app merge it with `COMPOSE_PROFILES` from `<installPath>\.env` (e.g. `quellex,embedder-gpu` for the local embedding server): an explicit `--profile` flag would otherwise replace the `.env` list and the stack would start without the embedder. `Start-Services.ps1 -DryRun` / `Stop-Services.ps1 -DryRun` print the resolved command |
 | `installPath` | `C:\RecallHub` | Installation root directory. `auto` (the hardened installer's `config.json`) means the parent folder of the `scripts` directory the service scripts run from. |
 | `startupTimeout` | `120` | Seconds to wait for services to become healthy |
@@ -128,7 +128,7 @@ Located at `installer/tray-app/ServiceManager.cs`. Handles all Docker interactio
 
 ### Start/Stop strategy
 
-ServiceManager prefers the PowerShell scripts (`%LocalAppData%\RecallHub\scripts`, then `<installPath>\installer\scripts`): they know the install path, the Compose profile and the health endpoints and leave a log. Only when no script is found does it run `docker compose -f <file> [-f override] [--profile <tenant>] up -d --remove-orphans` itself. Decisions are logged to `%LocalAppData%\RecallHub\logs\tray-app.log`.
+ServiceManager prefers the PowerShell scripts (`%LocalAppData%\RecallHub\scripts`, then `<installPath>\installer\scripts`): they know the install path, the Compose profile and the health endpoints and leave a log. Only when no script is found does it run `docker compose -f <file> [-f <file> …] [--profile <profile> …] up -d --remove-orphans` itself, with the compose files from `.env` `COMPOSE_FILE` (else compose file + override + shares; `ServiceManager.ResolveComposeFiles`) and the merged profiles (`ResolveComposeProfiles`). Decisions are logged to `%LocalAppData%\RecallHub\logs\tray-app.log`.
 
 ### Why Docker Desktop is never relaunched
 
@@ -152,7 +152,7 @@ Located at `installer/scripts/Start-Services.ps1`.
 - `-Detached` (default: true) — run in background
 - `-Wait` — block until services are healthy
 - `-Timeout` (default: 180) — max seconds to wait
-- `-DryRun` — print the resolved `docker compose` command (profiles from `config.json` plus `.env` `COMPOSE_PROFILES`) and exit; the Docker step is skipped, so nothing is started
+- `-DryRun` — print the resolved `docker compose` command (compose files from `.env` `COMPOSE_FILE` or the default set, profiles from `config.json` plus `.env` `COMPOSE_PROFILES`) and exit; the Docker step is skipped, so nothing is started
 - `-DockerOnly` — diagnostic: only run the Docker step (wait for or quietly start Docker Desktop), exit 0/1, do not touch the stack
 
 **Steps:**
@@ -161,7 +161,7 @@ Located at `installer/scripts/Start-Services.ps1`.
 3. `Confirm-DockerEngine`: returns at once when `docker info` answers; waits (3s polls, up to `docker.startupTimeout`) while a Docker Desktop process exists; starts Docker Desktop quietly (`docker desktop start --detach`, exe minimized as fallback) only when no process exists. The log shows which of these happened (`ready`, `waited`, `started-cli`, `started-exe`)
 4. With `-DockerOnly`: exits here
 5. Validates compose file exists at `<installPath>/<composeFile>`
-6. Runs `docker compose up -d` from `installPath` with the profiles from `config.json` plus `.env` `COMPOSE_PROFILES` (`-DryRun` prints this command and exits instead)
+6. Runs `docker compose up -d` from `installPath` with the compose files from `.env` `COMPOSE_FILE` (else compose file + override + shares; `Get-ComposeFileSet` in `RecallHub-Docker.psm1`, missing entries logged and skipped) and the profiles from `config.json` plus `.env` `COMPOSE_PROFILES` (`-DryRun` prints this command and exits instead)
 7. If `-Wait`: polls the frontend (`ports.frontend`) and backend (`ports.backend`, `/api/v1/system/health`) until both return 200
 
 The script runs native Docker commands with `$ErrorActionPreference = Continue` and judges them by exit code: Docker prints progress to stderr, and Windows PowerShell 5.1 would otherwise turn the first stderr line into a terminating error (every pre-October-2026 run died silently right after "Running docker compose up").
@@ -181,21 +181,28 @@ Located at `installer/scripts/Stop-Services.ps1`.
 **Parameters:**
 - `-Force` — use shorter 10s shutdown timeout
 - `-Timeout` (default: 60) — max seconds for container stop
+- `-DryRun` — print the resolved `docker compose down` command and exit; the Docker check is skipped, nothing is stopped
 
 **Steps:**
-1. Imports `RecallHub-Logging.psm1`
+1. Imports `RecallHub-Logging.psm1` and `RecallHub-Docker.psm1`
 2. Loads `config.json`
-3. Checks Docker is running (exits gracefully if not)
-4. Runs `docker compose down --timeout <N>` from `installPath`
+3. Checks Docker is running (exits gracefully if not; skipped with `-DryRun`)
+4. Runs `docker compose down --timeout <N>` from `installPath` with the same compose files (`.env` `COMPOSE_FILE`, else compose file + override + shares) and profiles as `Start-Services.ps1`, so a layer's services and volumes are torn down too
 5. Does NOT terminate Docker Desktop itself
 
 ### Tests
 
-`installer/tests/RecallHub-Docker.Tests.ps1` covers the Docker readiness module with mocked probes (engine already up, Docker Desktop booting, CLI start, exe fallback, timeout, `-NoLaunch`). Windows ships Pester 3.4 only, so install a current Pester once per user, then run from the repo root:
+`installer/tests/RecallHub-Docker.Tests.ps1` covers the Docker readiness module with mocked probes (engine already up, Docker Desktop booting, CLI start, exe fallback, timeout, `-NoLaunch`) and `Get-ComposeFileSet` (`COMPOSE_FILE` order, missing entries, `COMPOSE_PATH_SEPARATOR`, fallback to the default set, other compose files). `installer/tests/Service-Scripts.Tests.ps1` runs `Start-Services.ps1` and `Stop-Services.ps1` with `-DryRun` against a throwaway install folder (compose files, `.env`, `config.json`, scripts copied below `scripts\`) in a child `powershell.exe` and checks the printed command; its logs go to a temporary `LOCALAPPDATA`. Windows ships Pester 3.4 only, so install a current Pester once per user, then run from the repo root:
 
 ```powershell
 Install-Module Pester -Scope CurrentUser -Force -SkipPublisherCheck
 Invoke-Pester -Path installer/tests -Output Detailed
+```
+
+The tray app's compose file resolution (`ServiceManager.ResolveComposeFiles`, `BuildComposeArgs`, `ReadDotEnvValue`) has its own xunit project, `installer/tray-app.Tests` (.NET 8 SDK):
+
+```powershell
+dotnet test installer/tray-app.Tests
 ```
 
 ## Installation Paths

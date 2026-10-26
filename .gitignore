@@ -78,6 +78,8 @@ installer/host-agent/bin/
 installer/host-agent/obj/
 installer/host-agent.Tests/bin/
 installer/host-agent.Tests/obj/
+installer/tray-app.Tests/bin/
+installer/tray-app.Tests/obj/
 
 # Installer build outputs
 installer/output/

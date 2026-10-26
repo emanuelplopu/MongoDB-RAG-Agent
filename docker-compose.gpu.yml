@@ -1,0 +1,44 @@
+# NVIDIA GPU for Docling conversions (layout and TableFormer models) in the API
+# containers and the ingestion worker - the same device reservation the
+# `embedder-gpu` profile uses. Opt-in: layer this file through COMPOSE_FILE in
+# .env (";" on Windows, ":" elsewhere), e.g.
+#   COMPOSE_FILE=docker-compose.yml;docker-compose.override.yml;docker-compose.shares.yml;docker-compose.gpu.yml
+# or pass it with -f. Requires the NVIDIA Container Toolkit on the host
+# (`docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi`).
+#
+# Inside the containers the first INGEST_GPU_SLOTS threads of the conversion pool
+# (default 4, `0` = CPU only) build their Docling converters on the GPU, the rest
+# on the CPU; each GPU converter needs ~1.2 GB of VRAM and the count is lowered
+# at pool start to what the free memory holds. Tesseract OCR stays on the CPU.
+# See docs/04-EMBEDDING_AND_QUERY_SYSTEM.md, "Parallel conversions", for the
+# measurements and the rollout steps (recreating rag-backend-quellex interrupts
+# a running UI ingestion job, which resumes on its own).
+#
+# Start-Services.ps1, Stop-Services.ps1 and the tray app read COMPOSE_FILE from
+# the install's .env and pass every listed file with -f (an explicit -f list
+# would otherwise make Compose ignore COMPOSE_FILE), so a restart from them
+# keeps this layer; a listed file that is missing is logged and skipped. Older
+# script copies in %LocalAppData%\RecallHub\scripts or an older tray exe still
+# restart without it (the pool then logs "GPU conversion slots: 0"): re-deploy
+# them, or restart with `docker compose up -d` from the install folder.
+#
+# Validate with:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml config | grep -A6 reservations
+
+x-nvidia-gpu: &nvidia-gpu
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: all
+          capabilities: [gpu]
+
+services:
+  backend:
+    deploy: *nvidia-gpu
+  backend-quellex:
+    deploy: *nvidia-gpu
+  ingestion-worker:
+    deploy: *nvidia-gpu
+  cli:
+    deploy: *nvidia-gpu

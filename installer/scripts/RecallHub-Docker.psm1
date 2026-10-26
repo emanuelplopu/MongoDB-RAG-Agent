@@ -207,6 +207,122 @@ function Confirm-DockerEngine {
     return (New-DockerEngineResult -Ready $true -Action $action -Seconds $seconds -Message "Docker engine ready after ${seconds}s ($action)")
 }
 
+function Get-DotEnvValue {
+    <#
+    .SYNOPSIS
+        Value of a key in a Compose .env file; $null when the file or key is absent.
+    .DESCRIPTION
+        Reads the file the way Compose does for the keys the service scripts need:
+        leading whitespace and an optional "export " are ignored, comment lines are
+        skipped, surrounding quotes are stripped and the last definition wins.
+        Variable interpolation is not supported.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Key
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    $value = $null
+    $pattern = '^\s*(?:export\s+)?' + [regex]::Escape($Key) + '\s*=(.*)$'
+    foreach ($line in (Get-Content -LiteralPath $Path)) {
+        if ($line -match $pattern) {
+            $value = $Matches[1].Trim()
+            if ($value.Length -ge 2 -and (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'")))) {
+                $value = $value.Substring(1, $value.Length - 2)
+            }
+        }
+    }
+    return $value
+}
+
+function Get-ComposeFileSet {
+    <#
+    .SYNOPSIS
+        The compose files Start-Services.ps1 and Stop-Services.ps1 pass with -f, in order.
+    .DESCRIPTION
+        An explicit -f list makes Compose ignore COMPOSE_FILE from the project's .env
+        (just as an explicit --profile replaces COMPOSE_PROFILES), so a start or stop
+        from the scripts used to drop every layer added there, e.g.
+        docker-compose.gpu.yml. The scripts therefore read COMPOSE_FILE themselves:
+
+          * ComposeFile is the default docker-compose.yml and COMPOSE_FILE is set
+            (process environment first, then <InstallPath>\.env, as Compose does):
+            the listed files in that order, split on COMPOSE_PATH_SEPARATOR (same
+            lookup; default ';', the Windows path separator). Relative entries are
+            resolved against InstallPath. A listed file that does not exist is
+            reported through -Log (WARN) and skipped; when none of them exists the
+            default set below is used instead, so the start never fails on a typo.
+          * Otherwise: <InstallPath>\<ComposeFile>, plus docker-compose.override.yml
+            and docker-compose.shares.yml when ComposeFile is docker-compose.yml and
+            they exist (the behaviour from before COMPOSE_FILE was honoured).
+
+        Must match ServiceManager.ResolveComposeFiles in the tray app.
+    .PARAMETER InstallPath
+        Folder holding the compose files and .env (Compose's project directory).
+    .PARAMETER ComposeFile
+        docker.composeFile from config.json, relative to InstallPath or absolute.
+    .PARAMETER Log
+        Script block receiving (Message, Level) for skipped entries.
+    .OUTPUTS
+        PSCustomObject with Files (paths as passed to -f, never empty, in order,
+        duplicates dropped) and Source ('COMPOSE_FILE' or 'default').
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$InstallPath,
+        [string]$ComposeFile = 'docker-compose.yml',
+        [scriptblock]$Log = { param([string]$Message, [string]$Level) }
+    )
+
+    $composePath = if ([System.IO.Path]::IsPathRooted($ComposeFile)) { $ComposeFile } else { Join-Path $InstallPath $ComposeFile }
+    $isDefaultFile = ([System.IO.Path]::GetFileName($ComposeFile) -eq 'docker-compose.yml')
+    $envFile = Join-Path $InstallPath '.env'
+
+    if ($isDefaultFile) {
+        $list = $env:COMPOSE_FILE
+        $origin = 'the environment'
+        if ([string]::IsNullOrWhiteSpace($list)) {
+            $list = Get-DotEnvValue -Path $envFile -Key 'COMPOSE_FILE'
+            $origin = $envFile
+        }
+        if (-not [string]::IsNullOrWhiteSpace($list)) {
+            $separator = $env:COMPOSE_PATH_SEPARATOR
+            if ([string]::IsNullOrEmpty($separator)) { $separator = Get-DotEnvValue -Path $envFile -Key 'COMPOSE_PATH_SEPARATOR' }
+            if ([string]::IsNullOrEmpty($separator)) { $separator = [string][System.IO.Path]::PathSeparator }
+
+            $files = New-Object System.Collections.Generic.List[string]
+            foreach ($entry in ($list -split [regex]::Escape($separator))) {
+                $name = $entry.Trim().Trim('"').Trim("'")
+                if (-not $name) { continue }
+                $path = if ([System.IO.Path]::IsPathRooted($name)) { $name } else { Join-Path $InstallPath $name }
+                if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                    & $Log "COMPOSE_FILE lists $name but $path does not exist - skipped" 'WARN'
+                    continue
+                }
+                if ($files -contains $path) { continue }
+                $files.Add($path)
+            }
+            if ($files.Count -gt 0) {
+                return [pscustomobject]@{ Files = @($files); Source = 'COMPOSE_FILE' }
+            }
+            & $Log "COMPOSE_FILE from $origin ($list) names no existing file - using the default compose file set" 'WARN'
+        }
+    }
+
+    $default = New-Object System.Collections.Generic.List[string]
+    $default.Add($composePath)
+    if ($isDefaultFile) {
+        foreach ($extra in @('docker-compose.override.yml', 'docker-compose.shares.yml')) {
+            $extraPath = Join-Path $InstallPath $extra
+            if (Test-Path -LiteralPath $extraPath -PathType Leaf) { $default.Add($extraPath) }
+        }
+    }
+    return [pscustomobject]@{ Files = @($default); Source = 'default' }
+}
+
 Export-ModuleMember -Function @(
     'Test-DockerEngine',
     'Test-DockerDesktopProcess',
@@ -214,5 +330,7 @@ Export-ModuleMember -Function @(
     'Invoke-DockerDesktopStartCli',
     'Start-DockerDesktopQuietly',
     'Wait-DockerEngine',
-    'Confirm-DockerEngine'
+    'Confirm-DockerEngine',
+    'Get-DotEnvValue',
+    'Get-ComposeFileSet'
 )

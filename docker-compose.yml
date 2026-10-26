@@ -119,10 +119,13 @@ services:
       - OCR_IMAGE_NOISE_GATE=${OCR_IMAGE_NOISE_GATE:-false}
       - INGEST_SKIP_IMAGE_ONLY_PDF=${INGEST_SKIP_IMAGE_ONLY_PDF:-false}
       # Parallel conversions (docs/04, "Parallel conversions"): pool size for runs that
-      # pass none, CPU threads per Docling model and per Tesseract process (derived when empty)
+      # pass none, CPU threads per Docling model and per Tesseract process (derived when
+      # empty), and the pool threads that convert on the GPU (empty = 4 when a GPU is
+      # visible through docker-compose.gpu.yml, 0 = CPU only; ~1.2 GB VRAM each)
       - INGEST_THREAD_POOL_WORKERS=${INGEST_THREAD_POOL_WORKERS:-4}
       - INGEST_DOCLING_THREADS=${INGEST_DOCLING_THREADS:-}
       - OCR_OMP_THREAD_LIMIT=${OCR_OMP_THREAD_LIMIT:-}
+      - INGEST_GPU_SLOTS=${INGEST_GPU_SLOTS:-}
       - MSG_EXTRACT_ATTACHMENTS=${MSG_EXTRACT_ATTACHMENTS:-false}
       - MSG_ATTACHMENT_MAX_MB=${MSG_ATTACHMENT_MAX_MB:-25}
       - MSG_ATTACHMENT_MAX_COUNT=${MSG_ATTACHMENT_MAX_COUNT:-20}
@@ -321,10 +324,13 @@ services:
       - OCR_IMAGE_NOISE_GATE=${OCR_IMAGE_NOISE_GATE:-false}
       - INGEST_SKIP_IMAGE_ONLY_PDF=${INGEST_SKIP_IMAGE_ONLY_PDF:-false}
       # Parallel conversions (docs/04, "Parallel conversions"): pool size for runs that
-      # pass none, CPU threads per Docling model and per Tesseract process (derived when empty)
+      # pass none, CPU threads per Docling model and per Tesseract process (derived when
+      # empty), and the pool threads that convert on the GPU (empty = 4 when a GPU is
+      # visible through docker-compose.gpu.yml, 0 = CPU only; ~1.2 GB VRAM each)
       - INGEST_THREAD_POOL_WORKERS=${INGEST_THREAD_POOL_WORKERS:-4}
       - INGEST_DOCLING_THREADS=${INGEST_DOCLING_THREADS:-}
       - OCR_OMP_THREAD_LIMIT=${OCR_OMP_THREAD_LIMIT:-}
+      - INGEST_GPU_SLOTS=${INGEST_GPU_SLOTS:-}
       - MSG_EXTRACT_ATTACHMENTS=${MSG_EXTRACT_ATTACHMENTS:-false}
       - MSG_ATTACHMENT_MAX_MB=${MSG_ATTACHMENT_MAX_MB:-25}
       - MSG_ATTACHMENT_MAX_COUNT=${MSG_ATTACHMENT_MAX_COUNT:-20}
@@ -507,10 +513,13 @@ services:
       - OCR_IMAGE_NOISE_GATE=${OCR_IMAGE_NOISE_GATE:-false}
       - INGEST_SKIP_IMAGE_ONLY_PDF=${INGEST_SKIP_IMAGE_ONLY_PDF:-false}
       # Parallel conversions (docs/04, "Parallel conversions"): pool size for runs that
-      # pass none, CPU threads per Docling model and per Tesseract process (derived when empty)
+      # pass none, CPU threads per Docling model and per Tesseract process (derived when
+      # empty), and the pool threads that convert on the GPU (empty = 4 when a GPU is
+      # visible through docker-compose.gpu.yml, 0 = CPU only; ~1.2 GB VRAM each)
       - INGEST_THREAD_POOL_WORKERS=${INGEST_THREAD_POOL_WORKERS:-4}
       - INGEST_DOCLING_THREADS=${INGEST_DOCLING_THREADS:-}
       - OCR_OMP_THREAD_LIMIT=${OCR_OMP_THREAD_LIMIT:-}
+      - INGEST_GPU_SLOTS=${INGEST_GPU_SLOTS:-}
       - MSG_EXTRACT_ATTACHMENTS=${MSG_EXTRACT_ATTACHMENTS:-false}
       - MSG_ATTACHMENT_MAX_MB=${MSG_ATTACHMENT_MAX_MB:-25}
       - MSG_ATTACHMENT_MAX_COUNT=${MSG_ATTACHMENT_MAX_COUNT:-20}
@@ -663,10 +672,13 @@ services:
       - OCR_IMAGE_NOISE_GATE=${OCR_IMAGE_NOISE_GATE:-false}
       - INGEST_SKIP_IMAGE_ONLY_PDF=${INGEST_SKIP_IMAGE_ONLY_PDF:-false}
       # Parallel conversions (docs/04, "Parallel conversions"): pool size for runs that
-      # pass none, CPU threads per Docling model and per Tesseract process (derived when empty)
+      # pass none, CPU threads per Docling model and per Tesseract process (derived when
+      # empty), and the pool threads that convert on the GPU (empty = 4 when a GPU is
+      # visible through docker-compose.gpu.yml, 0 = CPU only; ~1.2 GB VRAM each)
       - INGEST_THREAD_POOL_WORKERS=${INGEST_THREAD_POOL_WORKERS:-4}
       - INGEST_DOCLING_THREADS=${INGEST_DOCLING_THREADS:-}
       - OCR_OMP_THREAD_LIMIT=${OCR_OMP_THREAD_LIMIT:-}
+      - INGEST_GPU_SLOTS=${INGEST_GPU_SLOTS:-}
       - MSG_EXTRACT_ATTACHMENTS=${MSG_EXTRACT_ATTACHMENTS:-false}
       - MSG_ATTACHMENT_MAX_MB=${MSG_ATTACHMENT_MAX_MB:-25}
       - MSG_ATTACHMENT_MAX_COUNT=${MSG_ATTACHMENT_MAX_COUNT:-20}
