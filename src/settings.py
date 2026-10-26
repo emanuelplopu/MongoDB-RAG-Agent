@@ -1,7 +1,7 @@
 """Settings configuration for RecallHub."""
 
 from pydantic_settings import BaseSettings
-from pydantic import Field, ConfigDict
+from pydantic import Field, ConfigDict, field_validator
 from dotenv import load_dotenv
 from typing import Optional, TYPE_CHECKING
 import os
@@ -215,6 +215,23 @@ class Settings(BaseSettings):
         ),
     )
 
+    ingest_gpu_slots: Optional[int] = Field(
+        default=None,
+        description=(
+            "Threads of the conversion pool that build their Docling converters on the GPU "
+            "(~1.2 GB VRAM each; lowered at pool start to what the free memory holds). "
+            "Empty = 4 when CUDA is visible, 0 = every conversion on the CPU"
+        ),
+    )
+
+    @field_validator("ingest_gpu_slots", mode="before")
+    @classmethod
+    def _blank_gpu_slots_means_automatic(cls, value: object) -> object:
+        """``INGEST_GPU_SLOTS=`` (docker-compose.yml forwards it empty) is the automatic default."""
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
     msg_extract_attachments: bool = Field(
         default=False,
         description=(
@@ -291,6 +308,7 @@ class Settings(BaseSettings):
             'ingest_page_furniture': self.ingest_page_furniture,
             'ingest_table_structure': self.ingest_table_structure,
             'ingest_skip_image_only_pdf': self.ingest_skip_image_only_pdf,
+            'ingest_gpu_slots': self.ingest_gpu_slots,
             'ocr_rect_dilation': self.ocr_rect_dilation,
             'ocr_image_noise_gate': self.ocr_image_noise_gate,
             'msg_extract_attachments': self.msg_extract_attachments,
