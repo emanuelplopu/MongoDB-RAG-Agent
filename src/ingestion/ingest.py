@@ -15,7 +15,11 @@ from pathlib import Path
 from typing import List, Dict, Any, Iterator, Optional, Set, Tuple, Callable, Awaitable
 from datetime import datetime
 import argparse
-from dataclasses import dataclass
+import concurrent.futures
+import contextlib
+import contextvars
+import time
+from dataclasses import dataclass, field, asdict
 from concurrent.futures import ThreadPoolExecutor
 import functools
 import threading
@@ -286,29 +290,35 @@ def update_timeout_config(
 
 
 def calculate_file_timeout(
-    file_size_bytes: int, 
+    file_size_bytes: int,
     file_path: str = None,
     max_timeout_seconds: int = None,
     config: TimeoutConfig = None,
-    retry_attempt: int = 0
+    retry_attempt: int = 0,
+    concurrency_factor: float = 1.0,
 ) -> float:
     """
     Calculate adaptive timeout for a file based on its size and type.
-    
+
     Formula: base_timeout + (size_in_mb * seconds_per_mb) * type_multiplier
     - Base timeout: 120 seconds minimum (configurable)
     - Per MB: 30 seconds per megabyte (configurable)
     - PDF multiplier: 1.5x for standard PDFs, 2x+ for complex PDFs
     - Max: 1800 seconds (30 minutes, configurable)
     - Retry multiplier: Each retry increases timeout
-    
+    - Concurrency factor: the CPU share of one conversion at the run's concurrency
+      (:func:`conversion_budget_factor`); the formula describes a conversion with
+      Docling's default 4 threads to itself
+
     Args:
         file_size_bytes: Size of the file in bytes
         file_path: Optional path to determine file type for multiplier
         max_timeout_seconds: Override for maximum timeout
         config: Optional TimeoutConfig (uses global if not provided)
         retry_attempt: Retry attempt number (0 = first try)
-        
+        concurrency_factor: Multiplier >= 1 for the concurrency of the run (1 = no scaling);
+            applied before the ``max_timeout`` cap, which stays absolute
+
     Returns:
         Timeout in seconds
     """
@@ -358,7 +368,11 @@ def calculate_file_timeout(
             f"Retry {retry_attempt}: timeout increased to {calculated_timeout:.0f}s "
             f"(multiplier: {retry_multiplier:.1f}x)"
         )
-    
+
+    # Budget for the CPU share of one conversion at this concurrency (conversion_budget_factor)
+    if concurrency_factor and concurrency_factor > 1.0:
+        calculated_timeout *= concurrency_factor
+
     return min(calculated_timeout, max_timeout)
 
 
@@ -457,6 +471,22 @@ def _positive_int_env(*names: str) -> Optional[int]:
     return None
 
 
+def _positive_float_env(*names: str) -> Optional[float]:
+    """The first positive number among the environment variables ``names``."""
+    for name in names:
+        raw = os.getenv(name)
+        if raw is None or raw.strip() == "":
+            continue
+        try:
+            value = float(raw)
+        except ValueError:
+            logger.warning(f"Ignoring non-numeric {name}={raw!r}")
+            continue
+        if value > 0:
+            return value
+    return None
+
+
 def default_thread_pool_workers() -> int:
     """Pool size of a run that passes none: ``INGEST_THREAD_POOL_WORKERS`` or 4."""
     return min(
@@ -496,6 +526,38 @@ def docling_num_threads(pool_workers: Optional[int] = None) -> int:
         return pinned
     pool = pool_workers or _pool_workers_in_force or default_thread_pool_workers()
     return max(1, min(MAX_DOCLING_THREADS, available_cpu_count() // max(1, pool)))
+
+
+def conversion_budget_factor(
+    parallel_conversions: int,
+    threads_per_conversion: Optional[int] = None,
+    cpu_count: Optional[int] = None,
+) -> float:
+    """How much longer one conversion may take when ``parallel_conversions`` share the CPU.
+
+    The timeout formula (:func:`calculate_file_timeout`) describes a conversion that has
+    Docling's default 4 threads to itself. With 16 conversions on 20 cores each gets one
+    thread (:func:`docling_num_threads`, the Tesseract OpenMP limit), and scans that
+    converted within their budget at concurrency 2 timed out at 16 (F1 of the 2026-10-24
+    prompt-test log). The factor is the thread share lost (4 / threads) times the
+    oversubscription of the cores (conversions * threads / cores), never below 1. The
+    ``max_timeout`` cap is not scaled.
+
+    Args:
+        parallel_conversions: Conversions running at once (``max_concurrent_files``).
+        threads_per_conversion: CPU threads each conversion has; the Docling thread count
+            for that many parallel conversions when omitted.
+        cpu_count: Cores available; detected when omitted.
+
+    Returns:
+        A multiplier >= 1.0 for the per-file budget.
+    """
+    parallel = max(1, int(parallel_conversions))
+    threads = max(1, int(threads_per_conversion or docling_num_threads(parallel)))
+    cores = max(1, int(cpu_count if cpu_count is not None else available_cpu_count()))
+    thin_share = MAX_DOCLING_THREADS / threads
+    oversubscription = (parallel * threads) / cores
+    return max(1.0, thin_share) * max(1.0, oversubscription)
 
 
 def docling_accelerator_options(device: Optional[str] = None, num_threads: Optional[int] = None):
@@ -663,6 +725,68 @@ def skip_image_only_pdf_enabled() -> bool:
     if raw is None:
         return DEFAULT_INGEST_SKIP_IMAGE_ONLY_PDF
     return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+# Convert files in killable worker processes (src/ingestion/conversion_workers.py). The
+# performance config's `process_isolation_enabled` (Configuration page) is the switch; the
+# API and the ingestion worker pass the stored value, the CLI falls back to the environment
+# and the settings. Off, conversions run on the thread pool, where a timed-out conversion
+# cannot be stopped and keeps its slot reserved until it ends.
+DEFAULT_INGEST_PROCESS_ISOLATION = True
+
+
+def process_isolation_enabled(configured: Optional[bool] = None) -> bool:
+    """Whether the concurrent loop converts in worker processes it can kill on a timeout.
+
+    Args:
+        configured: The performance config's ``process_isolation_enabled`` when the caller has
+            it; otherwise ``INGEST_PROCESS_ISOLATION``, then the settings default (on).
+
+    Returns:
+        True for process isolation, False for the thread pool.
+    """
+    if configured is not None:
+        return bool(configured)
+    raw = os.environ.get("INGEST_PROCESS_ISOLATION")
+    if raw is None:
+        try:
+            raw = str(load_settings(use_profile=False).ingest_process_isolation)
+        except Exception:  # settings need MONGODB_URI etc.; the harness has none
+            raw = None
+    if raw is None:
+        return DEFAULT_INGEST_PROCESS_ISOLATION
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+# Per-file stats (`ingestion_stats`, `failed_documents`) are written in batches during a run:
+# every N recorded files or every M seconds, whichever comes first, and once more at the end.
+DEFAULT_STATS_FLUSH_FILES = 25
+DEFAULT_STATS_FLUSH_SECONDS = 60.0
+
+
+def stats_flush_config() -> Tuple[int, float]:
+    """``(files, seconds)`` between flushes of the per-file stats of a run.
+
+    ``INGEST_STATS_FLUSH_FILES`` / ``INGEST_STATS_FLUSH_SECONDS`` win, then the settings
+    (``ingest_stats_flush_files`` / ``ingest_stats_flush_seconds``), then 25 files / 60 s.
+
+    Returns:
+        Files per batch (>= 1) and seconds between time-based flushes (>= 1).
+    """
+    files = _positive_int_env("INGEST_STATS_FLUSH_FILES")
+    seconds = _positive_float_env("INGEST_STATS_FLUSH_SECONDS")
+    if files is None or seconds is None:
+        try:
+            configured = load_settings(use_profile=False)
+        except Exception:  # settings need MONGODB_URI etc.; the harness has none
+            configured = None
+        if configured is not None:
+            files = files or getattr(configured, "ingest_stats_flush_files", None)
+            seconds = seconds or getattr(configured, "ingest_stats_flush_seconds", None)
+    return (
+        max(1, int(files or DEFAULT_STATS_FLUSH_FILES)),
+        max(1.0, float(seconds or DEFAULT_STATS_FLUSH_SECONDS)),
+    )
 
 
 # Keep page headers and footers (Docling's "furniture" content layer) in the stored content
@@ -1769,14 +1893,177 @@ def map_error_type_to_classification(error_type: Optional[str], chunks_created: 
         return "no_chunks"
 
 
+@dataclass
+class ConversionHandle:
+    """What the concurrent loop needs to know about one file's conversion step.
+
+    ``started`` is set when the conversion actually begins (a pool thread picked it up, or a
+    conversion worker process acknowledged it): the file's budget starts there, not when the
+    file was queued. ``thread_future`` is the pool future of a thread-mode conversion; after a
+    timeout it tells the loop whether the thread is still running (a thread cannot be
+    interrupted, so its slot stays reserved until it ends).
+    """
+
+    started: asyncio.Event = field(default_factory=asyncio.Event)
+    started_at: Optional[float] = None
+    thread_future: Optional[concurrent.futures.Future] = None
+
+    def mark_started(self) -> None:
+        if self.started_at is None:
+            self.started_at = time.monotonic()
+            self.started.set()
+
+
+# The concurrent loop sets the handle of the file it is about to process; the per-file task
+# (and the conversion step inside it) inherits the context, so ``_ingest_single_document``
+# keeps its signature and subclasses that override it (tests) keep working.
+_conversion_handle_var: contextvars.ContextVar[Optional[ConversionHandle]] = contextvars.ContextVar(
+    "ingest_conversion_handle", default=None
+)
+
+
+class IngestionStatsRecorder:
+    """Buffers the per-file stats of a run and writes them in batches while it is running.
+
+    Until 2026-10-24 the concurrent loop wrote ``ingestion_stats`` and ``failed_documents``
+    only after its last file: for a weeks-long job the failed-documents page, the analytics
+    endpoints and the retry options had nothing to work with, and a restart lost everything
+    held in memory (F2 of the prompt-test log). Stats are now flushed every
+    ``flush_every_files`` recorded files (``add`` schedules the write) or every
+    ``flush_every_seconds`` (:meth:`timer_loop`), and once more when the run ends.
+
+    Args:
+        save: Coroutine function writing one batch (``_save_ingestion_stats``). ``False``
+            means the batch was not written; it is kept for the next flush. Any other return
+            value counts as written.
+        flush_every_files: Recorded files that trigger a flush.
+        flush_every_seconds: Seconds between time-based flushes.
+        on_flush: Called after every successful write with :meth:`snapshot` (the cumulative
+            counts of the stats written so far), e.g. to update job status counters.
+    """
+
+    COUNTED: Tuple[str, ...] = ("timeout", "no_chunks", "error", "image_only_pdf", "duplicate", "success")
+    #: Stats kept in memory while the database refuses writes; the oldest are dropped beyond it.
+    MAX_PENDING = 10_000
+
+    def __init__(
+        self,
+        save: Callable[[List[IngestionFileStats]], Awaitable[Any]],
+        flush_every_files: int = DEFAULT_STATS_FLUSH_FILES,
+        flush_every_seconds: float = DEFAULT_STATS_FLUSH_SECONDS,
+        on_flush: Optional[Callable[[Dict[str, int]], None]] = None,
+    ) -> None:
+        self._save = save
+        self.flush_every_files = max(1, int(flush_every_files))
+        self.flush_every_seconds = max(1.0, float(flush_every_seconds))
+        self._on_flush = on_flush
+        self._pending: List[IngestionFileStats] = []
+        self._lock = threading.Lock()  # add() runs under the loop's results lock; keep it cheap
+        self._flush_lock: Optional[asyncio.Lock] = None
+        self._flush_task: Optional[asyncio.Task] = None
+        self.counts: Dict[str, int] = {}  # of every recorded stat, by error type ("success" if none)
+        self.written_counts: Dict[str, int] = {}  # of the stats written to the database
+        self.recorded = 0
+        self.written = 0
+        self.flushes = 0
+        self.failed_flushes = 0
+        self.dropped = 0
+
+    @staticmethod
+    def _count(counter: Dict[str, int], stat: IngestionFileStats) -> None:
+        key = stat.error_type or "success"
+        counter[key] = counter.get(key, 0) + 1
+
+    @property
+    def pending(self) -> int:
+        """Stats recorded but not yet written."""
+        with self._lock:
+            return len(self._pending)
+
+    def add(self, stat: IngestionFileStats) -> None:
+        """Record one file's stats; schedules a flush once a batch is full."""
+        with self._lock:
+            self._pending.append(stat)
+            self.recorded += 1
+            self._count(self.counts, stat)
+            due = len(self._pending) >= self.flush_every_files
+        if due:
+            self.schedule_flush()
+
+    def schedule_flush(self) -> None:
+        """Start a flush in the background unless one is already running."""
+        if self._flush_task is not None and not self._flush_task.done():
+            return
+        try:
+            self._flush_task = asyncio.get_running_loop().create_task(self.flush())
+        except RuntimeError:  # no running loop: the next explicit flush() writes the batch
+            self._flush_task = None
+
+    def snapshot(self) -> Dict[str, int]:
+        """Cumulative counts of the stats written so far, plus ``written``."""
+        counts = {key: self.written_counts.get(key, 0) for key in self.COUNTED}
+        counts["written"] = self.written
+        return counts
+
+    async def flush(self) -> int:
+        """Write the buffered stats.
+
+        Returns:
+            Number of stats written (0 when there was nothing, or the write failed and the
+            batch was kept).
+        """
+        if self._flush_lock is None:
+            self._flush_lock = asyncio.Lock()
+        async with self._flush_lock:
+            with self._lock:
+                batch, self._pending = self._pending, []
+            if not batch:
+                return 0
+            try:
+                outcome = await self._save(batch)
+            except Exception as exc:  # noqa: BLE001 - keep the batch, report, carry on
+                logger.error(f"Ingestion stats flush failed ({len(batch)} files kept for the next flush): {exc}")
+                outcome = False
+            if outcome is False:
+                self.failed_flushes += 1
+                with self._lock:
+                    self._pending[0:0] = batch
+                    overflow = len(self._pending) - self.MAX_PENDING
+                    if overflow > 0:
+                        del self._pending[:overflow]
+                        self.dropped += overflow
+                        logger.error(f"Ingestion stats buffer full: dropped the oldest {overflow} unwritten file stats")
+                return 0
+            self.flushes += 1
+            self.written += len(batch)
+            for stat in batch:
+                self._count(self.written_counts, stat)
+            logger.info(f"Saved {len(batch)} file stats to database ({self.written} this run)")
+            if self._on_flush is not None:
+                try:
+                    self._on_flush(self.snapshot())
+                except Exception:  # noqa: BLE001 - a status update must not end the run
+                    logger.exception("Ingestion stats callback failed")
+            return len(batch)
+
+    async def timer_loop(self) -> None:
+        """Flush every ``flush_every_seconds`` until cancelled (time-based flushes)."""
+        while True:
+            await asyncio.sleep(self.flush_every_seconds)
+            if self.pending:
+                await self.flush()
+
+
 class DocumentIngestionPipeline:
     """Pipeline for ingesting documents into MongoDB vector database."""
-    
+
     # Thread pool for the CPU-bound steps (hashing, Docling conversion, folder discovery),
     # shared across instances. Sized per run by configure_executor() from the performance
     # config; see resolve_thread_pool_workers().
     _executor: Optional[ThreadPoolExecutor] = None
     _executor_workers: int = 0
+    # Conversion worker processes of the run in progress (process isolation); None = thread pool
+    _conversion_pool: Optional[Any] = None
 
     @classmethod
     def get_executor(cls) -> ThreadPoolExecutor:
@@ -1824,6 +2111,26 @@ class DocumentIngestionPipeline:
             f"{tesseract_threads if tesseract_threads else 'unlimited'}"
         )
         return cls._executor
+
+    @classmethod
+    def reader_only(cls) -> "DocumentIngestionPipeline":
+        """A pipeline that only reads documents, for the conversion worker processes.
+
+        ``_read_document`` and the format readers need ``settings`` only; there is no
+        database, chunker or embedder behind this instance.
+        """
+        reader = cls.__new__(cls)
+        reader.settings = load_settings()
+        reader.config = None
+        reader.clean_before_ingest = False
+        reader.documents_folders = []
+        reader.documents_folder = ""
+        reader.mongo_client = None
+        reader.db = None
+        reader.chunker = None
+        reader.embedder = None
+        reader._initialized = False
+        return reader
 
     def __init__(
         self,
@@ -3313,6 +3620,132 @@ class DocumentIngestionPipeline:
         docs_result = await documents_collection.delete_many({})
         logger.info(f"Deleted {docs_result.deleted_count} documents")
 
+    # -- Conversion step: thread pool or worker processes --------------------------------
+
+    def _start_conversion_pool(self, size: int) -> Any:
+        """Create this run's conversion worker processes (started on their first file).
+
+        The CPU threads (Docling models, Tesseract) are shared across the ``size`` worker
+        processes instead of the thread pool, which then only hashes and discovers files.
+
+        Args:
+            size: Number of worker processes, one per file slot (``max_concurrent_files``).
+
+        Returns:
+            The ``ConversionProcessPool`` now set as :attr:`_conversion_pool`.
+        """
+        from src.ingestion.conversion_workers import ConversionProcessPool, WorkerInit
+
+        try:
+            from src.ingestion.ocr_tesseract import configure_tesseract_threads
+        except ImportError:  # Docling not installed: no Tesseract either
+            pass
+        else:
+            configure_tesseract_threads(size)
+        init = WorkerInit(
+            pool_workers=size,
+            accelerator=asdict(_accelerator_config),
+            log_level=logging.getLogger().getEffectiveLevel() or logging.INFO,
+        )
+        self._conversion_pool = ConversionProcessPool(size, init=init)
+        logger.info(
+            f"Process isolation on: {size} conversion worker processes (each started on its first "
+            f"file), Docling threads per model: {docling_num_threads(size)}"
+        )
+        return self._conversion_pool
+
+    async def _stop_conversion_pool(self) -> None:
+        """End this run's conversion worker processes, if any (off the event loop)."""
+        pool = self._conversion_pool
+        self._conversion_pool = None
+        if pool is None:
+            return
+        await asyncio.get_running_loop().run_in_executor(None, pool.shutdown)
+        if pool.kills:
+            logger.info(f"Conversion workers killed during the run: {pool.kills} (processes started: {pool.starts})")
+
+    async def _convert_document(
+        self, file_path: str, handle: Optional[ConversionHandle] = None
+    ) -> tuple[str, Optional[Any]]:
+        """Run :meth:`_read_document` off the event loop.
+
+        In this run's conversion worker process when process isolation is on, otherwise on
+        the shared thread pool. ``handle`` learns when the conversion starts and, on the
+        thread pool, which future keeps running after a cancel.
+
+        Args:
+            file_path: Document to convert.
+            handle: The loop's view of this conversion; the one the concurrent loop put in
+                the task's context (``_conversion_handle_var``) when omitted, else a private one.
+
+        Returns:
+            ``(markdown_content, docling_document)`` as :meth:`_read_document` returns it.
+        """
+        handle = handle or _conversion_handle_var.get() or ConversionHandle()
+        pool = self._conversion_pool
+        if pool is not None:
+            return await pool.convert(file_path, on_started=handle.mark_started)
+        loop = asyncio.get_running_loop()
+
+        def read() -> tuple[str, Optional[Any]]:
+            try:
+                loop.call_soon_threadsafe(handle.mark_started)
+            except RuntimeError:  # loop already closed: nothing waits for this conversion
+                pass
+            return self._read_document(file_path)
+
+        future = self.get_executor().submit(read)
+        handle.thread_future = future
+        return await asyncio.wrap_future(future, loop=loop)
+
+    @staticmethod
+    async def _run_with_budget(coro: Awaitable[Any], handle: ConversionHandle, timeout_seconds: float) -> Any:
+        """Await ``coro`` with ``timeout_seconds`` counted from the moment its conversion starts.
+
+        Waiting for a pool thread or for a conversion worker's warm-up is not charged to the
+        file: once the conversion starts, the file has the whole budget from that moment. A
+        file whose conversion has not started within one budget times out all the same, so a
+        step stuck before the conversion cannot hold a slot forever. Like ``asyncio.wait_for``,
+        a timeout cancels the inner task first (which kills a conversion worker process) and
+        raises ``asyncio.TimeoutError``.
+
+        Args:
+            coro: The per-file coroutine (``_ingest_single_document``).
+            handle: The conversion handle of that file; it is put in the context the task
+                inherits, so the conversion step finds it without a parameter.
+            timeout_seconds: Budget from the conversion start.
+
+        Returns:
+            The coroutine's result.
+        """
+        token = _conversion_handle_var.set(handle)
+        try:
+            task = asyncio.ensure_future(coro)  # copies the context: the handle travels with the task
+        finally:
+            _conversion_handle_var.reset(token)
+        started = asyncio.ensure_future(handle.started.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {task, started}, timeout=timeout_seconds, return_when=asyncio.FIRST_COMPLETED
+            )
+        except asyncio.CancelledError:
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                await task
+            raise
+        finally:
+            started.cancel()
+        if task in done:
+            return task.result()
+        if not done:
+            # Nothing started within the budget: stuck before the conversion (or never converting)
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                await task
+            raise asyncio.TimeoutError()
+        remaining = max(0.0, (handle.started_at or time.monotonic()) + timeout_seconds - time.monotonic())
+        return await asyncio.wait_for(task, timeout=remaining)
+
     async def _ingest_single_document(
         self,
         file_path: str,
@@ -3323,6 +3756,8 @@ class DocumentIngestionPipeline:
 
         Emits ``file.start`` / ``file.end`` telemetry (with per-step timings) through
         :mod:`src.ingestion.telemetry_hooks`; a no-op unless a host process registered a sink.
+        The concurrent loop watches the conversion step through the :class:`ConversionHandle`
+        it put in the task's context (see :meth:`_convert_document`).
 
         Args:
             file_path: Path to the document file
@@ -3356,15 +3791,10 @@ class DocumentIngestionPipeline:
                     file_path
                 )
 
-        # Run CPU-intensive document reading in thread pool to avoid blocking event loop
-        # This allows API requests (login, status checks) to be processed during ingestion
-        loop = asyncio.get_running_loop()
+        # Convert off the event loop (thread pool, or this run's conversion worker process),
+        # so API requests (login, status checks) are served during ingestion
         with telemetry_hooks.step("convert"):
-            document_content, docling_doc = await loop.run_in_executor(
-                self.get_executor(),
-                self._read_document,
-                file_path
-            )
+            document_content, docling_doc = await self._convert_document(file_path)
         pages = getattr(docling_doc, "pages", None)
         telemetry_hooks.note(
             pages=len(pages) if isinstance(pages, (dict, list)) else None,
@@ -3515,6 +3945,8 @@ class DocumentIngestionPipeline:
         job_id: Optional[str] = None,
         pause_checkpoint: Optional[Callable[[], Awaitable[None]]] = None,
         thread_pool_workers: Optional[int] = None,
+        process_isolation: Optional[bool] = None,
+        stats_callback: Optional[Callable[[Dict[str, int]], None]] = None,
     ) -> List[IngestionResult]:
         """Ingest all documents; see :meth:`_ingest_documents_impl` for the arguments.
 
@@ -3530,6 +3962,8 @@ class DocumentIngestionPipeline:
                 job_id=job_id,
                 pause_checkpoint=pause_checkpoint,
                 thread_pool_workers=thread_pool_workers,
+                process_isolation=process_isolation,
+                stats_callback=stats_callback,
             )
         finally:
             if token is not None:
@@ -3543,6 +3977,8 @@ class DocumentIngestionPipeline:
         job_id: Optional[str] = None,
         pause_checkpoint: Optional[Callable[[], Awaitable[None]]] = None,
         thread_pool_workers: Optional[int] = None,
+        process_isolation: Optional[bool] = None,
+        stats_callback: Optional[Callable[[Dict[str, int]], None]] = None,
     ) -> List[IngestionResult]:
         """
         Ingest all documents from the documents folder.
@@ -3559,6 +3995,13 @@ class DocumentIngestionPipeline:
             thread_pool_workers: Size of the shared thread pool for this run (the
                 performance config's ``thread_pool_workers``); ``INGEST_THREAD_POOL_WORKERS``
                 or 4 when omitted, and never below ``max_concurrent_files``.
+            process_isolation: Convert in killable worker processes (the performance
+                config's ``process_isolation_enabled``); :func:`process_isolation_enabled`
+                resolves the environment/settings default when omitted. Only the concurrent
+                loop (``max_concurrent_files > 1``) has per-file timeouts and uses it.
+            stats_callback: Called after every flush of per-file stats with the cumulative
+                counts written so far (see :class:`IngestionStatsRecorder`); the API and the
+                worker update the job's status counters from it.
 
         Returns:
             List of ingestion results
@@ -3639,15 +4082,24 @@ class DocumentIngestionPipeline:
         
         # Use concurrent processing if max_concurrent_files > 1
         if max_concurrent_files > 1:
-            results, duplicates_skipped = await self._ingest_documents_concurrent(
-                document_files=document_files,
-                existing_hashes=existing_hashes,
-                incremental=incremental,
-                max_concurrent=max_concurrent_files,
-                progress_callback=progress_callback,
-                job_id=job_id,
-                pause_checkpoint=pause_checkpoint
-            )
+            # Killable conversions (process isolation) for the loop with per-file timeouts
+            use_processes = process_isolation_enabled(process_isolation)
+            if use_processes:
+                self._start_conversion_pool(max_concurrent_files)
+            try:
+                results, duplicates_skipped = await self._ingest_documents_concurrent(
+                    document_files=document_files,
+                    existing_hashes=existing_hashes,
+                    incremental=incremental,
+                    max_concurrent=max_concurrent_files,
+                    progress_callback=progress_callback,
+                    job_id=job_id,
+                    pause_checkpoint=pause_checkpoint,
+                    stats_callback=stats_callback,
+                )
+            finally:
+                if use_processes:
+                    await self._stop_conversion_pool()
         else:
             # Sequential processing (original behavior)
             results, duplicates_skipped = await self._ingest_documents_sequential(
@@ -3777,19 +4229,39 @@ class DocumentIngestionPipeline:
         max_concurrent: int,
         progress_callback: Optional[callable] = None,
         job_id: Optional[str] = None,
-        pause_checkpoint: Optional[Callable[[], Awaitable[None]]] = None
+        pause_checkpoint: Optional[Callable[[], Awaitable[None]]] = None,
+        stats_callback: Optional[Callable[[Dict[str, int]], None]] = None,
     ) -> Tuple[List[IngestionResult], int]:
         """
         Process documents concurrently using a semaphore with timeout and failure tracking.
 
+        Each file takes one of ``max_concurrent`` slots. Its budget (:func:`calculate_file_timeout`,
+        scaled by :func:`conversion_budget_factor` for the CPU share of one conversion at this
+        concurrency) starts when its conversion actually starts, not when it was queued. On a
+        timeout the conversion is stopped: with process isolation the worker process is killed;
+        on the thread pool the thread cannot be interrupted, so the slot stays reserved until it
+        ends and the pool never runs more conversions than there are slots (F1 of
+        ``docs/system-validation/INGESTION_PROMPT_TEST_LOG_2026-10-24.md``). Timed-out files are
+        retried in later rounds with a larger budget (``max_retries``).
+
+        Per-file stats go to ``ingestion_stats`` / ``failed_documents`` in batches while the run
+        is going (:class:`IngestionStatsRecorder`, :func:`stats_flush_config`), not only at the
+        end (F2). The hash of every stored file is added to ``existing_hashes``; a copy of a file
+        that is still in flight is deferred until that file's outcome is known and then skipped
+        as a duplicate (F4).
+
         Args:
             document_files: List of file paths to process
-            existing_hashes: Dict of content hashes to source paths
+            existing_hashes: Dict of content hashes to source paths; the hashes of files stored
+                during this run are added to it
             incremental: Whether to skip duplicates
             max_concurrent: Maximum concurrent files to process
             progress_callback: Optional progress callback
             job_id: Optional job ID to link stats to
             pause_checkpoint: Optional coroutine function awaited before each file
+            stats_callback: Called after every stats flush with the cumulative counts of the
+                stats written so far (``timeout``, ``no_chunks``, ``error``, ``image_only_pdf``,
+                ``duplicate``, ``success``, ``written``)
 
         Returns:
             Tuple of (results list, duplicates skipped count)
@@ -3798,34 +4270,62 @@ class DocumentIngestionPipeline:
             asyncio.CancelledError: A file task was cancelled by a stop/shutdown check. Files
                 already in progress finish first; stats of processed files are still saved.
         """
-        import threading
-        
         semaphore = asyncio.Semaphore(max_concurrent)
         results: List[IngestionResult] = []
         duplicates_skipped = 0
         processed_count = 0
         results_lock = threading.Lock()
-        file_stats: List[IngestionFileStats] = []
-        
+        loop = asyncio.get_running_loop()
+
         total_files = len(document_files)
         profile_key = os.getenv("PROFILE", "default")
         timeout_cfg = get_timeout_config()
         # Resolved once per run; scans are OCRed unless INGEST_SKIP_IMAGE_ONLY_PDF is set
         skip_image_only_pdfs = skip_image_only_pdf_enabled()
+        pool = self._conversion_pool
+        # Budget scaling for the CPU share of one conversion: worker processes share the cores
+        # among themselves, pool threads according to the pool size in force
+        threads_per_conversion = docling_num_threads(max_concurrent) if pool is not None else docling_num_threads()
+        budget_factor = conversion_budget_factor(max_concurrent, threads_per_conversion)
+        if budget_factor > 1.0:
+            logger.info(
+                f"Per-file budgets x{budget_factor:.1f}: {max_concurrent} conversions at once with "
+                f"{threads_per_conversion} CPU thread(s) each"
+            )
 
-        # Track timeout failures for potential retry
-        timed_out_files: List[Tuple[int, str, Optional[str]]] = []  # (index, file_path, content_hash or None)
-        
+        flush_files, flush_seconds = stats_flush_config()
+        recorder = IngestionStatsRecorder(
+            self._save_ingestion_stats,
+            flush_every_files=flush_files,
+            flush_every_seconds=flush_seconds,
+            on_flush=stats_callback,
+        )
+
+        # Timed-out files waiting for a retry round: (index, file_path, content_hash, next attempt)
+        timed_out_files: List[Tuple[int, str, Optional[str], int]] = []
+        # Content hash of every file being processed right now -> its path (same-run copies, F4)
+        in_flight_hashes: Dict[str, str] = {}
+        # Copies of a file in flight, processed once its outcome is known: (index, path, hash)
+        deferred_copies: List[Tuple[int, str, str]] = []
+        # Thread-pool conversions still running after their timeout; each keeps its slot, and a
+        # retry of the same file waits for it (retrying alongside it would only double its load)
+        orphan_threads: Set[concurrent.futures.Future] = set()
+        orphan_by_file: Dict[str, concurrent.futures.Future] = {}
+
         async def process_file_with_retry(
-            index: int, 
-            file_path: str, 
+            index: int,
+            file_path: str,
             retry_attempt: int = 0,
-            prev_content_hash: str = None
-        ):
-            """Process a file with retry support for timeouts."""
+            prev_content_hash: Optional[str] = None,
+        ) -> None:
+            """Process a file once; timed-out and deferred files are queued for a later round."""
             nonlocal duplicates_skipped, processed_count
-            
-            async with semaphore:
+
+            await semaphore.acquire()
+            release_slot = True
+            claimed_hash: Optional[str] = None
+            handle: Optional[ConversionHandle] = None
+            try:
                 # Pause point after taking a slot: every file task is created up front,
                 # so a check before the semaphore would let queued tasks slip past a pause
                 if pause_checkpoint:
@@ -3834,77 +4334,97 @@ class DocumentIngestionPipeline:
                 file_start_time = datetime.now()
                 file_size = get_file_size_safe(file_path)
                 file_modified_at = get_file_modified_time_safe(file_path)
-                # Use adaptive timeout with file type and retry awareness
+                # Adaptive budget: file size and type, retry round, CPU share at this concurrency
                 timeout_seconds = calculate_file_timeout(
-                    file_size, 
+                    file_size,
                     file_path=file_path,
-                    retry_attempt=retry_attempt
+                    retry_attempt=retry_attempt,
+                    concurrency_factor=budget_factor,
                 )
-                
+
                 # Initialize content_hash before try block to avoid NameError
                 # in exception handlers if hash computation itself times out
-                content_hash = prev_content_hash or None
-                
+                content_hash: Optional[str] = prev_content_hash or None
+
+                def stat(**overrides: Any) -> IngestionFileStats:
+                    """This file's stats record; ``overrides`` set outcome fields."""
+                    completed = datetime.now()
+                    values: Dict[str, Any] = dict(
+                        file_path=file_path,
+                        file_name=os.path.basename(file_path),
+                        file_size_bytes=file_size,
+                        started_at=file_start_time,
+                        completed_at=completed,
+                        processing_time_ms=(completed - file_start_time).total_seconds() * 1000,
+                        chunks_created=0,
+                        success=False,
+                        error_type=None,
+                        error_message=None,
+                        timeout_seconds=timeout_seconds,
+                        profile_key=profile_key,
+                        job_id=job_id,
+                        content_hash=content_hash,
+                        file_modified_at=file_modified_at,
+                        classification="error",
+                    )
+                    values.update(overrides)
+                    return IngestionFileStats(**values)
+
+                def failed_result(error: str, processing_time_ms: float) -> IngestionResult:
+                    return IngestionResult(
+                        document_id="",
+                        title=os.path.basename(file_path),
+                        chunks_created=0,
+                        processing_time_ms=processing_time_ms,
+                        errors=[error],
+                    )
+
                 # Progress callback before processing
                 if progress_callback:
                     progress_callback(processed_count, total_files, file_path)
-                
+
                 try:
                     # Compute file hash with timeout (reuse from previous attempt if retrying)
-                    if prev_content_hash:
-                        content_hash = prev_content_hash
-                    else:
-                        loop = asyncio.get_running_loop()
+                    if not content_hash:
                         content_hash = await asyncio.wait_for(
-                            loop.run_in_executor(
-                                self.get_executor(),
-                                compute_file_hash,
-                                file_path
-                            ),
-                            timeout=60  # 1 minute timeout for hash computation
+                            loop.run_in_executor(self.get_executor(), compute_file_hash, file_path),
+                            timeout=60,  # 1 minute timeout for hash computation
                         )
-                    
-                    # Check for duplicates (thread-safe check)
+
+                    # Duplicate check (thread-safe). A copy of a file that is being processed right
+                    # now is deferred until that file's outcome is known: both used to start together
+                    # (identical files sort next to each other) and both were stored.
+                    original_source: Optional[str] = None
                     with results_lock:
                         if incremental and content_hash in existing_hashes:
                             original_source = existing_hashes[content_hash]
+                        elif incremental and content_hash in in_flight_hashes:
+                            deferred_copies.append((index, file_path, content_hash))
                             logger.info(
-                                f"Skipping duplicate: {file_path} "
-                                f"(identical to: {original_source})"
+                                f"Deferring {file_path}: identical to {in_flight_hashes[content_hash]}, "
+                                f"which is being processed"
                             )
+                            return
+                        elif content_hash:
+                            in_flight_hashes[content_hash] = file_path
+                            claimed_hash = content_hash
+                    if original_source is not None:
+                        logger.info(f"Skipping duplicate: {file_path} (identical to: {original_source})")
+                        with results_lock:
                             duplicates_skipped += 1
-                            result = IngestionResult(
-                                document_id="",
-                                title=os.path.basename(file_path),
-                                chunks_created=0,
-                                processing_time_ms=0,
-                                errors=[f"Duplicate of: {original_source}"]
-                            )
-                            results.append(result)
+                            results.append(failed_result(f"Duplicate of: {original_source}", 0))
                             processed_count += 1
                             # Track stats for duplicates too
-                            file_stats.append(IngestionFileStats(
-                                file_path=file_path,
-                                file_name=os.path.basename(file_path),
-                                file_size_bytes=file_size,
-                                started_at=file_start_time,
-                                completed_at=datetime.now(),
-                                processing_time_ms=(datetime.now() - file_start_time).total_seconds() * 1000,
-                                chunks_created=0,
+                            recorder.add(stat(
                                 success=True,
                                 error_type="duplicate",
                                 error_message=f"Duplicate of: {original_source}",
-                                timeout_seconds=timeout_seconds,
-                                profile_key=profile_key,
-                                job_id=job_id,
-                                content_hash=content_hash,
-                                file_modified_at=file_modified_at,
-                                classification="normal"  # Duplicates mean file was already processed
+                                classification="normal",  # Duplicates mean file was already processed
                             ))
-                            if progress_callback:
-                                progress_callback(processed_count, total_files, file_path, 0)
-                            return
-                    
+                        if progress_callback:
+                            progress_callback(processed_count, total_files, file_path, 0)
+                        return
+
                     # Pre-check (INGEST_SKIP_IMAGE_ONLY_PDF, off by default): skip image-only
                     # PDFs for text-only profiles. Otherwise they go through Docling + OCR below,
                     # exactly like the sequential path; a blank scan ends up as no_chunks.
@@ -3914,92 +4434,94 @@ class DocumentIngestionPipeline:
                             logger.info(f"Skipping image-only PDF: {file_path} ({check_reason})")
                             with results_lock:
                                 processed_count += 1
-                                file_stats.append(IngestionFileStats(
-                                    file_path=file_path,
-                                    file_name=os.path.basename(file_path),
-                                    file_size_bytes=file_size,
-                                    started_at=file_start_time,
-                                    completed_at=datetime.now(),
-                                    processing_time_ms=(datetime.now() - file_start_time).total_seconds() * 1000,
-                                    chunks_created=0,
+                                recorder.add(stat(
                                     success=True,  # Not an error, just no content
                                     error_type="image_only_pdf",
                                     error_message=check_reason,
-                                    timeout_seconds=timeout_seconds,
-                                    profile_key=profile_key,
-                                    job_id=job_id,
-                                    content_hash=content_hash,
-                                    file_modified_at=file_modified_at,
-                                    classification="image_only_pdf"
+                                    classification="image_only_pdf",
                                 ))
                             if progress_callback:
                                 progress_callback(processed_count, total_files, file_path, 0)
                             return
-                    
+
                     size_mb = file_size / (1024 * 1024)
                     logger.info(
                         f"Processing file ({processed_count+1}/{total_files}, "
                         f"{progress_percent_label(processed_count + 1, total_files)}): {file_path} "
                         f"({size_mb:.1f}MB, timeout={timeout_seconds:.0f}s)"
                     )
-                    
-                    # Process with timeout - this is the key improvement
-                    result = await asyncio.wait_for(
+
+                    # Process with a budget counted from the start of the conversion
+                    handle = ConversionHandle()
+                    result = await self._run_with_budget(
                         self._ingest_single_document(file_path, content_hash),
-                        timeout=timeout_seconds
+                        handle,
+                        timeout_seconds,
                     )
-                    
-                    processing_time = (datetime.now() - file_start_time).total_seconds() * 1000
-                    
+
                     with results_lock:
                         results.append(result)
                         if content_hash and result.document_id:
                             existing_hashes[content_hash] = os.path.basename(file_path)
                         processed_count += 1
-                        
+
                         # Track stats - mark as failure if no chunks created
                         chunks_created = result.chunks_created if result else 0
                         is_no_chunks = chunks_created == 0 and result and not result.document_id
                         error_type = "no_chunks" if is_no_chunks else None
-                        
-                        file_stats.append(IngestionFileStats(
-                            file_path=file_path,
-                            file_name=os.path.basename(file_path),
-                            file_size_bytes=file_size,
-                            started_at=file_start_time,
-                            completed_at=datetime.now(),
-                            processing_time_ms=processing_time,
+                        recorder.add(stat(
                             chunks_created=chunks_created,
                             success=not is_no_chunks,
                             error_type=error_type,
                             error_message="No content extracted from document" if is_no_chunks else None,
-                            timeout_seconds=timeout_seconds,
-                            profile_key=profile_key,
-                            job_id=job_id,
-                            content_hash=content_hash,
-                            file_modified_at=file_modified_at,
-                            classification=map_error_type_to_classification(error_type, chunks_created)
+                            classification=map_error_type_to_classification(error_type, chunks_created),
                         ))
-                    
+
                     if progress_callback:
                         progress_callback(
-                            processed_count, 
-                            total_files, 
+                            processed_count,
+                            total_files,
                             file_path,
-                            result.chunks_created if result else 0
+                            result.chunks_created if result else 0,
                         )
-                        
+
                 except asyncio.TimeoutError:
                     # Timeout - check if we should retry or record as failure
                     processing_time = (datetime.now() - file_start_time).total_seconds() * 1000
                     size_mb = file_size / (1024 * 1024)
-                    
+
+                    thread_future = handle.thread_future if handle is not None else None
+                    if thread_future is not None and not thread_future.done():
+                        # A pool thread cannot be interrupted (process isolation would have killed
+                        # the worker). Keep its slot until it ends, so the pool never runs more
+                        # conversions than there are slots; the file's retry waits for a later round.
+                        release_slot = False
+                        orphan_threads.add(thread_future)
+                        orphan_by_file[file_path] = thread_future
+
+                        def thread_ended(done_future: concurrent.futures.Future, _path: str = file_path) -> None:
+                            orphan_threads.discard(done_future)
+                            if orphan_by_file.get(_path) is done_future:
+                                orphan_by_file.pop(_path, None)
+                            try:
+                                loop.call_soon_threadsafe(semaphore.release)
+                            except RuntimeError:  # loop closed: no slot left to free
+                                pass
+
+                        thread_future.add_done_callback(thread_ended)
+                        logger.warning(
+                            f"Conversion thread of {file_path} keeps running after its "
+                            f"{timeout_seconds:.0f}s budget; its slot stays reserved until it ends "
+                            f"({len(orphan_threads)} such thread(s)). Process isolation stops them instead."
+                        )
+
                     # Check if we should retry
                     if retry_attempt < timeout_cfg.max_retries:
                         next_timeout = calculate_file_timeout(
-                            file_size, 
+                            file_size,
                             file_path=file_path,
-                            retry_attempt=retry_attempt + 1
+                            retry_attempt=retry_attempt + 1,
+                            concurrency_factor=budget_factor,
                         )
                         logger.warning(
                             f"TIMEOUT (attempt {retry_attempt + 1}/{timeout_cfg.max_retries + 1}) "
@@ -4008,86 +4530,57 @@ class DocumentIngestionPipeline:
                         )
                         # Queue for retry with increased timeout
                         with results_lock:
-                            timed_out_files.append((index, file_path, content_hash))
+                            timed_out_files.append((index, file_path, content_hash, retry_attempt + 1))
                         return  # Don't count as processed yet
-                    
+
                     # Max retries exceeded - record as final failure
                     error_msg = (
                         f"Timeout after {timeout_seconds:.0f}s "
                         f"(file size: {size_mb:.1f}MB, retries exhausted: {retry_attempt + 1}/{timeout_cfg.max_retries + 1})"
                     )
                     logger.error(f"TIMEOUT (final) processing {file_path}: {error_msg}")
-                    
+
                     with results_lock:
-                        results.append(IngestionResult(
-                            document_id="",
-                            title=os.path.basename(file_path),
-                            chunks_created=0,
-                            processing_time_ms=processing_time,
-                            errors=[error_msg]
-                        ))
+                        results.append(failed_result(error_msg, processing_time))
                         processed_count += 1
                         # Track timeout stats
-                        file_stats.append(IngestionFileStats(
-                            file_path=file_path,
-                            file_name=os.path.basename(file_path),
-                            file_size_bytes=file_size,
-                            started_at=file_start_time,
-                            completed_at=datetime.now(),
+                        recorder.add(stat(
                             processing_time_ms=processing_time,
-                            chunks_created=0,
-                            success=False,
                             error_type="timeout",
                             error_message=error_msg,
-                            timeout_seconds=timeout_seconds,
-                            profile_key=profile_key,
-                            job_id=job_id,
-                            content_hash=content_hash,
-                            file_modified_at=file_modified_at,
-                            classification="timeout"
+                            classification="timeout",
                         ))
-                    
+
                     if progress_callback:
                         progress_callback(processed_count, total_files, file_path, 0)
-                        
+
                 except Exception as e:
                     # General error - log and continue with others
                     processing_time = (datetime.now() - file_start_time).total_seconds() * 1000
                     error_msg = str(e)
                     logger.exception(f"Failed to process {file_path}: {error_msg}")
-                    
+
                     with results_lock:
-                        results.append(IngestionResult(
-                            document_id="",
-                            title=os.path.basename(file_path),
-                            chunks_created=0,
-                            processing_time_ms=processing_time,
-                            errors=[error_msg]
-                        ))
+                        results.append(failed_result(error_msg, processing_time))
                         processed_count += 1
                         # Track error stats
-                        file_stats.append(IngestionFileStats(
-                            file_path=file_path,
-                            file_name=os.path.basename(file_path),
-                            file_size_bytes=file_size,
-                            started_at=file_start_time,
-                            completed_at=datetime.now(),
+                        recorder.add(stat(
                             processing_time_ms=processing_time,
-                            chunks_created=0,
-                            success=False,
                             error_type="error",
                             error_message=error_msg[:500],  # Truncate long error messages
-                            timeout_seconds=timeout_seconds,
-                            profile_key=profile_key,
-                            job_id=job_id,
-                            content_hash=content_hash,
-                            file_modified_at=file_modified_at,
-                            classification="error"
+                            classification="error",
                         ))
-                    
+
                     if progress_callback:
                         progress_callback(processed_count, total_files, file_path, 0)
-        
+            finally:
+                if claimed_hash is not None:
+                    with results_lock:
+                        if in_flight_hashes.get(claimed_hash) == file_path:
+                            del in_flight_hashes[claimed_hash]
+                if release_slot:
+                    semaphore.release()
+
         def raise_if_cancelled(outcomes: List[Any]) -> None:
             # gather(return_exceptions=True) keeps one failing file from ending the run, but it
             # also returns the CancelledError a stop/shutdown raises inside a file task (from
@@ -4097,70 +4590,110 @@ class DocumentIngestionPipeline:
                 if isinstance(outcome, asyncio.CancelledError):
                     raise outcome
 
+        async def run_round(tasks: List[asyncio.Task]) -> None:
+            if tasks:
+                raise_if_cancelled(await asyncio.gather(*tasks, return_exceptions=True))
+
+        flush_timer = asyncio.create_task(recorder.timer_loop())
         try:
-            # Create initial tasks for all files (first attempt)
-            tasks = [
+            # First round: every file once
+            await run_round([
                 asyncio.create_task(process_file_with_retry(i, file_path, retry_attempt=0))
                 for i, file_path in enumerate(document_files)
-            ]
+            ])
 
-            # Wait for all initial tasks to complete
-            raise_if_cancelled(await asyncio.gather(*tasks, return_exceptions=True))
-
-            # Process retry queue with increasing retry attempts
-            for retry_round in range(1, timeout_cfg.max_retries + 1):
-                if not timed_out_files:
+            # Later rounds: copies deferred behind a file in flight (first attempts), then timed-out
+            # files (next attempt, larger budget). Every round settles at least one copy per hash
+            # and retries are bounded by max_retries, so the loop ends.
+            retry_round = 0
+            while True:
+                with results_lock:
+                    copies, deferred_copies[:] = list(deferred_copies), []
+                    retries, timed_out_files[:] = list(timed_out_files), []
+                if not copies and not retries:
                     break
-
-                files_to_retry = list(timed_out_files)
-                timed_out_files.clear()
-
-                logger.info(
-                    f"Retry round {retry_round}/{timeout_cfg.max_retries}: "
-                    f"Processing {len(files_to_retry)} timed-out files with increased timeout"
-                )
-
-                retry_tasks = [
-                    asyncio.create_task(
-                        process_file_with_retry(
-                            idx,
-                            fpath,
-                            retry_attempt=retry_round,
-                            prev_content_hash=chash
+                if copies:
+                    logger.info(f"Processing {len(copies)} deferred copies of files converted in this run")
+                    await run_round([
+                        asyncio.create_task(process_file_with_retry(idx, fpath, retry_attempt=0, prev_content_hash=chash))
+                        for idx, fpath, chash in copies
+                    ])
+                if retries:
+                    retry_round += 1
+                    still_running = [
+                        orphan_by_file[fpath] for _, fpath, _, _ in retries
+                        if fpath in orphan_by_file and not orphan_by_file[fpath].done()
+                    ]
+                    if still_running:
+                        logger.info(
+                            f"Waiting for {len(still_running)} conversion thread(s) of timed-out files to end "
+                            f"before retrying them"
                         )
+                        await asyncio.gather(
+                            *(asyncio.wrap_future(f) for f in still_running), return_exceptions=True
+                        )
+                    logger.info(
+                        f"Retry round {retry_round}/{timeout_cfg.max_retries}: "
+                        f"Processing {len(retries)} timed-out files with increased timeout"
                     )
-                    for idx, fpath, chash in files_to_retry
-                ]
-
-                raise_if_cancelled(await asyncio.gather(*retry_tasks, return_exceptions=True))
+                    await run_round([
+                        asyncio.create_task(
+                            process_file_with_retry(idx, fpath, retry_attempt=attempt, prev_content_hash=chash)
+                        )
+                        for idx, fpath, chash, attempt in retries
+                    ])
 
             # Log retry summary
             if timeout_cfg.max_retries > 0:
-                timeout_failures = sum(1 for s in file_stats if s.error_type == "timeout")
+                timeout_failures = recorder.counts.get("timeout", 0)
                 if timeout_failures > 0:
                     logger.warning(
                         f"Retry summary: {timeout_failures} files still timed out after "
                         f"{timeout_cfg.max_retries} retries"
                     )
+            if orphan_threads:
+                logger.warning(
+                    f"{len(orphan_threads)} conversion thread(s) of timed-out files are still running "
+                    f"after the run; they end on their own (process isolation would have stopped them)"
+                )
         finally:
             # Save stats to database - also when the run is stopped, for the files already processed
-            await self._save_ingestion_stats(file_stats)
+            flush_timer.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await flush_timer
+            await recorder.flush()
+            if recorder.pending:
+                logger.error(f"{recorder.pending} file stats of this run could not be written to the database")
 
         return results, duplicates_skipped
-    
-    async def _save_ingestion_stats(self, file_stats: List[IngestionFileStats]) -> None:
-        """Save ingestion stats to database for analysis."""
+
+    async def _save_ingestion_stats(self, file_stats: List[IngestionFileStats]) -> bool:
+        """Write a batch of per-file stats to ``ingestion_stats`` and its failures to ``failed_documents``.
+
+        Called by :class:`IngestionStatsRecorder` during and at the end of a concurrent run.
+
+        Args:
+            file_stats: The batch.
+
+        Returns:
+            True when the stats were written (or there was nothing to write, or no database);
+            False when the ``ingestion_stats`` write failed, so the recorder keeps the batch
+            for its next flush.
+        """
         if self.db is None or not file_stats:
-            return
-            
+            return True
+
         try:
             # Save all stats to ingestion_stats collection
             stats_collection = self.db["ingestion_stats"]
             stats_docs = [stat.to_dict() for stat in file_stats]
             if stats_docs:
                 await stats_collection.insert_many(stats_docs)
-                logger.info(f"Saved {len(stats_docs)} file stats to database")
-            
+        except Exception as e:
+            logger.error(f"Failed to save ingestion stats: {e}")
+            return False
+
+        try:
             # Save failed documents to failed_documents collection
             failed_stats = [s for s in file_stats if not s.success]
             if failed_stats:
@@ -4185,9 +4718,10 @@ class DocumentIngestionPipeline:
                     failed_docs.append(doc)
                 await failed_collection.insert_many(failed_docs)
                 logger.warning(f"Recorded {len(failed_docs)} failed documents to database")
-                
         except Exception as e:
-            logger.error(f"Failed to save ingestion stats: {e}")
+            # The stats are in; do not write them twice for the sake of the failure list
+            logger.error(f"Failed to record failed documents: {e}")
+        return True
 
 
 async def main() -> None:

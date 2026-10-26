@@ -130,6 +130,8 @@ settings surfaces, passed through by `docker-compose.yml`; evidence in
 | `INGEST_THREAD_POOL_WORKERS` | `4` | Size of the pipeline's shared thread pool (hashing, Docling conversion, folder discovery) for a run that passes none (CLI). The Configuration page's `thread_pool_workers` sets it per run, and the pool is never smaller than `max_concurrent_files`. See "Parallel conversions" below. |
 | `INGEST_DOCLING_THREADS` | derived | CPU threads per Docling model (layout, TableFormer). Default: the cores shared evenly across the pool, at most Docling's 4 (`OMP_NUM_THREADS` pins it too). |
 | `OCR_OMP_THREAD_LIMIT` | derived | OpenMP threads per Tesseract process. Default: the cores shared evenly across the pool, 1-4; `0` leaves OpenMP free. Applied through a generated wrapper command (`tesseract_command()` in `src/ingestion/ocr_tesseract.py`), so it never caps PyTorch in the ingestion process. |
+| `INGEST_PROCESS_ISOLATION` | `true` | Convert in worker processes the concurrent loop kills when a file's budget runs out (`src/ingestion/conversion_workers.py`). Runs started by the API or the ingestion worker take the Configuration page's "Process isolation" (`process_isolation_enabled`) instead; this is the fallback for runs without a stored performance config (CLI). See "Timed-out conversions" below. |
+| `INGEST_STATS_FLUSH_FILES`, `INGEST_STATS_FLUSH_SECONDS` | `25`, `60` | How often the per-file stats of a run are written to `ingestion_stats` / `failed_documents`: every N recorded files or every M seconds, whichever comes first (and once more when the run ends). See "Per-file stats during the run" below. |
 
 Converters are cached per worker thread and configuration
 (`create_document_converter()` / `create_image_converter()`); Docling keeps
@@ -161,6 +163,68 @@ the cores you can spare and to the memory of the Docker VM (`.wslconfig` on
 Windows: Docker Desktop gets a fraction of the host's RAM, and each conversion
 thread needs ~0.6 GB on top of MongoDB's cache), then watch `docker stats`
 during the first minutes of a run.
+
+**Timed-out conversions (process isolation).** Until 2026-10-24 the per-file
+timeout of the concurrent loop cancelled an asyncio future while the thread
+converting the file kept running: the slot went to the next file, more
+conversions ran than the pool was sized for, every file slowed down, more
+files timed out, and their retries redid the work (F1 of
+`docs/system-validation/INGESTION_PROMPT_TEST_LOG_2026-10-24.md`: 209 timeouts
+in 2 h at concurrency 16, the longest conversion 2,160 s against a 902 s
+limit, inserts down 20×). The stored `process_isolation_enabled` flag was
+read by nothing. Now:
+
+- With the Configuration page's "Process isolation" on (the default;
+  `INGEST_PROCESS_ISOLATION` for runs without a stored config) every file
+  slot of a run owns one worker process (`src/ingestion/conversion_workers.py`,
+  `spawn` context, started on its first file, warmed up with the PDF pipeline
+  before it takes requests). The worker runs `_read_document`; chunking,
+  embedding and the MongoDB writes stay in the API or ingestion-worker
+  process. On a timeout, stop or shutdown the process is killed and the next
+  file on that slot starts a fresh one; the model reload (10-20 s on a CPU)
+  is not charged to that file. Each worker applies the run's CPU-thread
+  sharing (`docling_num_threads`, `OCR_OMP_THREAD_LIMIT`, computed for the
+  number of workers) and the stored accelerator config, and loads the models
+  for itself (on a GPU: once per worker, as the threads did). Measured
+  2026-10-24 on Windows, CPU: an idle worker with the layout and TableFormer
+  models loaded holds ~1.1 GB RSS, plus the working set of a conversion; the
+  parent process no longer holds any converter.
+- Off, conversions run on the thread pool as before, but a timed-out
+  conversion keeps its slot until its thread ends (a thread cannot be
+  interrupted), so the pool never runs more conversions than there are
+  slots, and the retry of that file waits for its first thread to end.
+- The budget (`calculate_file_timeout`) starts when the conversion actually
+  starts, not when the file was queued, and is multiplied by
+  `conversion_budget_factor`: the formula describes a conversion that has
+  Docling's default 4 threads to itself; with 16 conversions on 20 cores each
+  has one thread, so the factor is 4 (8 conversions: 2 threads, factor 2;
+  pinned thread counts that oversubscribe the cores count too). The
+  `max_timeout` cap (30 min by default) stays absolute. A file whose
+  conversion has not started within one budget times out all the same, so
+  nothing stuck before the conversion can hold a slot forever.
+
+**Per-file stats during the run.** `ingestion_stats` and `failed_documents`
+were written only after the last file (F2), so during a multi-week job the
+failed-documents page, the analytics endpoints and the retry options
+(`retry_timeouts`, `retry_no_chunks`) had nothing to work with, and a restart
+lost everything held in memory. They are now written every
+`INGEST_STATS_FLUSH_FILES` recorded files or `INGEST_STATS_FLUSH_SECONDS`
+seconds (25 / 60; `IngestionStatsRecorder` in `src/ingestion/ingest.py`), once
+more when the run ends or is stopped, and a batch the database refused is kept
+for the next flush. After every flush the job's `timeout_files`,
+`no_chunks_files`, `error_files`, `image_only_pdfs`, `duplicates_skipped` and
+`failed_files` are set from what was written
+(`backend/services/ingestion_counters.py`; a resumed job adds what its earlier
+runs recorded), so `GET /api/v1/ingestion/status` and the runs list show them
+while the job runs instead of zeros until its end.
+
+**Copies within one run.** The hash of every stored file was added to the
+de-duplication map, but identical files sort next to each other (same type and
+size) and started in parallel slots before either was stored, so both were
+converted, embedded and stored (F4: 17-20 % redundant documents in the
+sampled windows). A file whose hash is being processed by another slot is now
+deferred and processed after that file's outcome is known: skipped as
+`Duplicate of: …` when it was stored, converted itself when it failed.
 
 A GPU in the worker or backend container (`deploy.resources.reservations.devices`
 as for `embedder-gpu`) is picked up automatically (`get_effective_device()`).

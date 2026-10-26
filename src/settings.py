@@ -215,6 +215,28 @@ class Settings(BaseSettings):
         ),
     )
 
+    ingest_process_isolation: bool = Field(
+        default=True,
+        description=(
+            "Convert files in worker processes the concurrent ingestion loop kills on a timeout "
+            "(the performance config's process_isolation_enabled wins when a run passes it). Off "
+            "converts on the thread pool, where a timed-out conversion keeps its slot until it ends"
+        ),
+    )
+
+    ingest_stats_flush_files: int = Field(
+        default=25,
+        description=(
+            "Write the per-file ingestion stats (ingestion_stats, failed_documents) every this many "
+            "files during a run, not only at its end"
+        ),
+    )
+
+    ingest_stats_flush_seconds: float = Field(
+        default=60.0,
+        description="Also write the per-file ingestion stats every this many seconds during a run",
+    )
+
     msg_extract_attachments: bool = Field(
         default=False,
         description=(
@@ -291,6 +313,9 @@ class Settings(BaseSettings):
             'ingest_page_furniture': self.ingest_page_furniture,
             'ingest_table_structure': self.ingest_table_structure,
             'ingest_skip_image_only_pdf': self.ingest_skip_image_only_pdf,
+            'ingest_process_isolation': self.ingest_process_isolation,
+            'ingest_stats_flush_files': self.ingest_stats_flush_files,
+            'ingest_stats_flush_seconds': self.ingest_stats_flush_seconds,
             'ocr_rect_dilation': self.ocr_rect_dilation,
             'ocr_image_noise_gate': self.ocr_image_noise_gate,
             'msg_extract_attachments': self.msg_extract_attachments,

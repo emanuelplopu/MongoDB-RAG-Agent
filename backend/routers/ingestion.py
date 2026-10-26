@@ -26,6 +26,7 @@ from backend.routers.auth import require_admin, UserResponse
 from backend.routers.backup import trigger_post_ingestion_backup
 from backend.services.activity_events import get_activity_recorder
 from backend.services.file_registry import FileRegistryService
+from backend.services.ingestion_counters import apply_stats_counts
 from fastapi import Depends
 
 logger = logging.getLogger(__name__)
@@ -1202,11 +1203,20 @@ async def run_ingestion(
         perf_config = await db.db["ingestion_config"].find_one({"_id": "performance_config"}) or {}
         max_concurrent = int(perf_config.get("max_concurrent_files", settings.ingestion_max_concurrent_files))
         thread_pool_workers = int(perf_config.get("thread_pool_workers", settings.ingestion_thread_pool_workers))
+        # Killable conversions: the stored flag was saved by the Configuration page but read by nothing
+        process_isolation = bool(perf_config.get("process_isolation_enabled", settings.ingestion_process_isolation))
 
         logger.info(
             f"Running ingestion with max_concurrent_files={max_concurrent}, "
-            f"thread_pool_workers={thread_pool_workers}"
+            f"thread_pool_workers={thread_pool_workers}, process_isolation={process_isolation}"
         )
+
+        # Status counters follow the per-file stats as the pipeline writes them during the run;
+        # a resumed job starts from what its earlier runs recorded
+        counter_baseline = await _calculate_job_extended_metrics(db, job_id) if resumed_job is not None else {}
+
+        def stats_callback(counts: dict) -> None:
+            apply_stats_counts(job_state, counts, counter_baseline)
 
         async def pause_checkpoint() -> None:
             # The pipeline cleans before its file loop: from the first file on, a resume
@@ -1223,7 +1233,9 @@ async def run_ingestion(
             max_concurrent_files=max_concurrent,
             thread_pool_workers=thread_pool_workers,
             job_id=job_id,
-            pause_checkpoint=pause_checkpoint
+            pause_checkpoint=pause_checkpoint,
+            process_isolation=process_isolation,
+            stats_callback=stats_callback,
         )
         
         # Update phase to finalizing
