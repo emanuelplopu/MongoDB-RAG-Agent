@@ -1010,7 +1010,7 @@ MongoDB Storage
 |-----------|---------|-------------|
 | `chunk_size` | 1000 | Target characters per chunk |
 | `chunk_overlap` | 200 | Character overlap |
-| `max_tokens` | 512 | Maximum tokens for embedding |
+| `max_tokens` | `CHUNK_MAX_TOKENS` (1024) | Token budget per chunk (`EMBEDDING_MAX_TOKENS`, 2048, caps contextualised chunks) |
 
 ### 8.4 Ingestion Features
 

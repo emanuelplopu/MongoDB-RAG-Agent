@@ -375,7 +375,10 @@ The widget's second poll (every 60 s) for what one host sample cannot tell: the 
 figures (chunks, storage, lowest embedding coverage, search indexes all READY, summed index lag),
 anomaly counts over the last 24 h with the top titles (the rules run at most once a minute per
 backend), per-process liveness from `activity_current` (online = seen within 3 heartbeats, the
-running job's files/hour over the last hour and the ETA at that pace), chat latency p50/p95 and
+running job's files/hour over the last hour and its ETA: the per-extension estimate of
+`backend/services/ingestion_eta.py` that `GET /api/v1/ingestion/status` reports too, with the
+breakdown in `eta_by_extension` for the widget's tooltip; a job the estimator does not know falls
+back to the remaining files at that pace, `eta_method: pace`), chat latency p50/p95 and
 error count from `chat.request` events, the newest backup per database with its age and size,
 and the models Ollama had loaded when the host agent last looked (empty = the next chat
 cold-starts). Each section degrades to empty on its own error.

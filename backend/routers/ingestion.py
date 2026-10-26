@@ -20,12 +20,15 @@ from backend.models.schemas import (
 from backend.core.config import settings
 from src.ingestion.progress import progress_percent_label
 from backend.core.ingestion_jobs import (
-    API_OWNED, INTERRUPTED_STATUS, RUNNER_API, TENANT_FIELD, reached_files, resume_config
+    API_OWNED, INTERRUPTED_STATUS, RUNNER_API, RUNNER_WORKER, TENANT_FIELD, reached_files, resume_config
 )
 from backend.routers.auth import require_admin, UserResponse
 from backend.routers.backup import trigger_post_ingestion_backup
 from backend.services.activity_events import get_activity_recorder
 from backend.services.file_registry import FileRegistryService
+from backend.services.ingestion_counters import apply_stats_counts
+from backend.services.ingestion_eta import count_by_extension, extension_of, job_eta
+from backend.services.worker_liveness import choose_ui_job_runner
 from fastapi import Depends
 
 logger = logging.getLogger(__name__)
@@ -127,14 +130,50 @@ async def get_job_from_db(db, job_id: str) -> Optional[dict]:
 
 
 async def get_latest_job_from_db(db) -> Optional[dict]:
-    """Get the most recent job from the database."""
+    """Get the most recent job from the database.
+
+    A job that is live (pending, running or paused: e.g. one handed to the ingestion
+    worker and not yet claimed, which has no ``started_at``) wins over finished ones.
+    """
     collection = await get_jobs_collection(db)
+    live = await collection.find_one(
+        {"status": {"$in": [IngestionStatus.PENDING, IngestionStatus.RUNNING, IngestionStatus.PAUSED]}},
+        sort=[("created_at", -1), ("started_at", -1)],
+    )
+    if live:
+        live["job_id"] = live.pop("_id")
+        return _flatten_job_progress(live)
     cursor = collection.find().sort("started_at", -1).limit(1)
     async for doc in cursor:
         doc["job_id"] = doc.pop("_id")
         # Flatten nested progress object from worker
         return _flatten_job_progress(doc)
     return None
+
+
+async def get_worker_job_from_db(db) -> Optional[dict]:
+    """The job the ingestion worker runs or will claim (pending, running or paused), if any."""
+    collection = await get_jobs_collection(db)
+    doc = await collection.find_one({
+        "runner": RUNNER_WORKER,
+        "status": {"$in": [IngestionStatus.PENDING, IngestionStatus.RUNNING, IngestionStatus.PAUSED]},
+    })
+    if doc:
+        doc["job_id"] = doc.pop("_id")
+        return _flatten_job_progress(doc)
+    return None
+
+
+async def _send_worker_command(db, job: dict, command: str) -> None:
+    """Hand a PAUSE/RESUME/STOP to the worker through the job's ``control_command``."""
+    collection = await get_jobs_collection(db)
+    await collection.update_one({"_id": job["job_id"]}, {"$set": {"control_command": command}})
+    _ingestion_logs.append({
+        "timestamp": datetime.now().isoformat(),
+        "level": "INFO",
+        "message": f"{command} sent to the ingestion worker for job {job['job_id']}",
+        "logger": "ingestion",
+    })
 
 
 def _flatten_job_progress(doc: dict) -> dict:
@@ -496,7 +535,17 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
             async for doc in cursor:
                 if "source" in doc:
                     existing_sources.add(doc["source"])
-        
+
+        # A resumed job does not redo the failures it already recorded, unless its retry
+        # options ask for that error type (F23)
+        failed_to_skip: Dict[str, str] = {}
+        if incremental and raw_db is not None and job_state is not None and job_state.get("job_id"):
+            from src.ingestion.ingest import failed_paths_of_job, retry_error_types
+
+            failed_to_skip = await failed_paths_of_job(
+                raw_db, job_state.get("job_id"), retry_error_types(config)
+            )
+
         # Get file registry data for selective filtering
         registry_by_path = {}
         files_to_retry = set()  # Files matching retry filters
@@ -548,8 +597,9 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
         files_to_process = []
         skipped_count = 0
         skipped_by_registry = 0
+        skipped_failed = 0
         retry_filter_count = 0
-        
+
         for file_path in all_files:
             document_source = os.path.basename(file_path)
             for folder in pipeline.documents_folders:
@@ -576,11 +626,16 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
             if incremental and document_source in existing_sources:
                 skipped_count += 1
                 continue
-            
+
+            # Already failed in this job (resume): not again without a retry option (F23)
+            if file_path in failed_to_skip:
+                skipped_failed += 1
+                continue
+
             files_to_process.append(file_path)
-        
+
         # Update discovery with filter results
-        total_skipped = skipped_count + skipped_by_registry
+        total_skipped = skipped_count + skipped_by_registry + skipped_failed
         update_discovery(
             files_to_process=len(files_to_process),
             files_skipped=total_skipped
@@ -598,9 +653,11 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
                     skip_details.append(f"{skipped_count} existing")
                 if skipped_by_registry > 0:
                     skip_details.append(f"{skipped_by_registry} filtered")
+                if skipped_failed > 0:
+                    skip_details.append(f"{skipped_failed} failed earlier in this job")
                 job_state["phase_message"] = f"No files to process (skipped: {', '.join(skip_details) if skip_details else '0'})"
             return
-        
+
         # Build log message with filter details
         log_parts = [f"Processing {len(files_to_process)} files"]
         if retry_filter_count > 0:
@@ -609,6 +666,8 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
             log_parts.append(f"existing: {skipped_count}")
         if skipped_by_registry > 0:
             log_parts.append(f"filtered by registry: {skipped_by_registry}")
+        if skipped_failed > 0:
+            log_parts.append(f"failed earlier in this job (retry options re-queue them): {skipped_failed}")
         
         _ingestion_logs.append({
             "timestamp": datetime.now().isoformat(),
@@ -1026,7 +1085,8 @@ async def run_ingestion(
         await _apply_offline_mode_for_ingestion(db)
         
         # Import ingestion module
-        from src.ingestion.ingest import DocumentIngestionPipeline, IngestionConfig
+        from src.ingestion.chunker import chunk_max_tokens_default
+        from src.ingestion.ingest import DocumentIngestionPipeline, IngestionConfig, retry_error_types
         from src.profile import get_profile_manager
         
         # Switch profile if specified. Reload first so folders added to
@@ -1050,7 +1110,7 @@ async def run_ingestion(
             chunk_size=config.get("chunk_size", 1000),
             chunk_overlap=config.get("chunk_overlap", 200),
             max_chunk_size=config.get("chunk_size", 1000) * 2,
-            max_tokens=config.get("max_tokens", 512)
+            max_tokens=config.get("max_tokens") or chunk_max_tokens_default(),
         )
         
         # Helper to create pipeline synchronously (includes heavy tokenizer loading)
@@ -1154,7 +1214,12 @@ async def run_ingestion(
             
             if current_file:
                 job_state["current_file"] = current_file
-                
+
+                # Per-extension progress for the shared ETA estimator (one call per finished file)
+                done_by_ext = job_state.setdefault("processed_by_extension", {})
+                file_ext = extension_of(current_file)
+                done_by_ext[file_ext] = done_by_ext.get(file_ext, 0) + 1
+
                 # Update pending files queue - remove processed file
                 _update_pending_files_queue(current, total, current_file)
                 
@@ -1202,11 +1267,20 @@ async def run_ingestion(
         perf_config = await db.db["ingestion_config"].find_one({"_id": "performance_config"}) or {}
         max_concurrent = int(perf_config.get("max_concurrent_files", settings.ingestion_max_concurrent_files))
         thread_pool_workers = int(perf_config.get("thread_pool_workers", settings.ingestion_thread_pool_workers))
+        # Killable conversions: the stored flag was saved by the Configuration page but read by nothing
+        process_isolation = bool(perf_config.get("process_isolation_enabled", settings.ingestion_process_isolation))
 
         logger.info(
             f"Running ingestion with max_concurrent_files={max_concurrent}, "
-            f"thread_pool_workers={thread_pool_workers}"
+            f"thread_pool_workers={thread_pool_workers}, process_isolation={process_isolation}"
         )
+
+        # Status counters follow the per-file stats as the pipeline writes them during the run;
+        # a resumed job starts from what its earlier runs recorded
+        counter_baseline = await _calculate_job_extended_metrics(db, job_id) if resumed_job is not None else {}
+
+        def stats_callback(counts: dict) -> None:
+            apply_stats_counts(job_state, counts, counter_baseline)
 
         async def pause_checkpoint() -> None:
             # The pipeline cleans before its file loop: from the first file on, a resume
@@ -1216,6 +1290,11 @@ async def run_ingestion(
                 await save_job_to_db(db, job_state)
             await _hold_while_paused(job_state, db)
 
+        def queue_callback(files: List[str]) -> None:
+            # What this run will process, per extension (the shared ETA estimator reads it)
+            job_state["queue_by_extension"] = count_by_extension(files)
+            job_state["processed_by_extension"] = {}
+
         # Run ingestion with configured concurrency
         results = await pipeline.ingest_documents(
             progress_callback=progress_callback,
@@ -1223,7 +1302,11 @@ async def run_ingestion(
             max_concurrent_files=max_concurrent,
             thread_pool_workers=thread_pool_workers,
             job_id=job_id,
-            pause_checkpoint=pause_checkpoint
+            pause_checkpoint=pause_checkpoint,
+            process_isolation=process_isolation,
+            stats_callback=stats_callback,
+            retry_failed_types=retry_error_types(config),
+            queue_callback=queue_callback,
         )
         
         # Update phase to finalizing
@@ -1391,8 +1474,11 @@ async def start_ingestion(
 ):
     """
     Start document ingestion.
-    
-    Initiates a background ingestion job for documents in the configured folder.
+
+    The job runs in the ingestion worker container when one is alive (or
+    ``INGESTION_UI_JOB_RUNNER=worker``): it is queued ``PENDING`` with ``runner: worker``
+    and the worker claims it. Otherwise it runs as a background task of this process
+    (the behaviour until 2026-10-26, which starved the API: F7).
     """
     db = request_obj.app.state.db
 
@@ -1412,13 +1498,23 @@ async def start_ingestion(
             status_code=409,
             detail=f"Ingestion job {running_job['job_id']} is already running"
         )
-    
+    worker_job = await get_worker_job_from_db(db)
+    if worker_job:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Ingestion job {worker_job['job_id']} is queued for or running in the ingestion worker"
+        )
+
+    runner = await choose_ui_job_runner(request_obj.app.state)
+    config = request.model_dump()
+
     # Create new job
     job_id = str(uuid.uuid4())
     job = {
         "job_id": job_id,
         "status": IngestionStatus.PENDING,
-        "runner": RUNNER_API,
+        "runner": runner,
+        "created_at": datetime.now().isoformat(),
         "started_at": None,
         "completed_at": None,
         "total_files": 0,
@@ -1430,14 +1526,28 @@ async def start_ingestion(
         "errors": [],
         "progress_percent": 0.0
     }
-    
+    if runner == RUNNER_WORKER:
+        # The worker reads the request from the job; the API only watches it from here on
+        job["config"] = config
+        job["phase"] = "queued"
+        job["phase_message"] = "Waiting for the ingestion worker to claim the job..."
+
     # Save initial job state to DB
     await save_job_to_db(db, job)
-    
+
+    if runner == RUNNER_WORKER:
+        logger.info(f"Ingestion job {job_id} queued for the ingestion worker")
+        _ingestion_logs.append({
+            "timestamp": datetime.now().isoformat(),
+            "level": "INFO",
+            "message": f"Job {job_id} handed to the ingestion worker",
+            "logger": "ingestion",
+        })
+        return IngestionStatusResponse(**{k: v for k, v in job.items() if k != "config"})
+
     # Start background task with DB reference
-    config = request.model_dump()
     background_tasks.add_task(run_ingestion, job_id, config, db)
-    
+
     return IngestionStatusResponse(**job)
 
 
@@ -1500,36 +1610,53 @@ async def get_ingestion_status(request: Request):
             elapsed_seconds = (datetime.now() - started_at).total_seconds()
         
         # Calculate ETA if running
-        status = job_data.get("status")
-        if status == IngestionStatus.RUNNING or status == "running":
-            progress = job_data.get("progress_percent", 0)
-            if progress > 0:
-                total_estimated = elapsed_seconds / (progress / 100)
-                estimated_remaining = max(0, total_estimated - elapsed_seconds)
-    
+    # ETA while running: per-extension pace from the stats, the same estimate the widget shows
+    eta_payload = None
+    status = job_data.get("status")
+    if status in (IngestionStatus.RUNNING, "running", IngestionStatus.PAUSED, "paused"):
+        eta_payload, estimated_remaining = await _job_eta_payload(db, job_data)
+
     # Determine if job is currently pausable/stoppable (an interrupted job has no live run to stop)
     status = job_data.get("status")
     is_active = status in [IngestionStatus.RUNNING, IngestionStatus.PAUSED, "running", "paused"]
-    
+
     # Filter out fields not in response model
     response_fields = {
-        k: v for k, v in job_data.items() 
-        if k not in ["elapsed_seconds", "estimated_remaining_seconds", "config", "interrupted_at", 
+        k: v for k, v in job_data.items()
+        if k not in ["elapsed_seconds", "estimated_remaining_seconds", "eta", "config", "interrupted_at",
                      "is_paused", "can_pause", "can_stop", "_last_counted_file_idx", "first_file_time"]
     }
-    
+
     # Normalize status to lowercase (DB may have uppercase from worker)
     if "status" in response_fields and isinstance(response_fields["status"], str):
         response_fields["status"] = response_fields["status"].lower()
-    
+
+    # A job the ingestion worker runs is paused/stopped through its control command
+    worker_job = response_fields.get("runner") == RUNNER_WORKER
+    paused = (_is_paused or _pause_requested) if not worker_job else status in (IngestionStatus.PAUSED, "paused")
+
     return IngestionStatusResponse(
         **response_fields,
         elapsed_seconds=elapsed_seconds,
         estimated_remaining_seconds=estimated_remaining,
-        is_paused=_is_paused or _pause_requested,
-        can_pause=is_active and not _pause_requested,
+        eta=eta_payload,
+        is_paused=paused,
+        can_pause=is_active and not paused,
         can_stop=is_active
     )
+
+
+async def _job_eta_payload(db, job_data: dict) -> tuple[Optional[dict], Optional[float]]:
+    """``(IngestionEta payload, remaining seconds)`` of a live job; ``(None, None)`` when unknown."""
+    try:
+        raw_db = db.db if hasattr(db, "db") else db
+        eta = await job_eta(raw_db, job_data)
+    except Exception as exc:  # noqa: BLE001 - the status must not fail on the estimate
+        logger.debug(f"ETA unavailable: {exc}")
+        return None, None
+    if eta is None:
+        return None, None
+    return eta.to_dict(), eta.seconds
 
 
 @router.get("/status/{job_id}", response_model=IngestionStatusResponse)
@@ -2025,10 +2152,16 @@ async def pause_ingestion(request: Request):
     The run holds at the pipeline's next pause point until resumed or stopped.
     """
     global _pause_requested
-    
+
     if not _current_job_id:
+        worker_job = await get_worker_job_from_db(request.app.state.db)
+        if worker_job and worker_job.get("status") == IngestionStatus.RUNNING:
+            await _send_worker_command(request.app.state.db, worker_job, "PAUSE")
+            return SuccessResponse(success=True, message="Pause requested - the ingestion worker pauses after the current document(s)")
+        if worker_job and worker_job.get("status") == IngestionStatus.PAUSED:
+            return SuccessResponse(success=True, message="Already paused")
         raise HTTPException(status_code=400, detail="No ingestion job is running")
-    
+
     if _pause_requested:
         return SuccessResponse(success=True, message="Already pausing or paused")
     
@@ -2050,8 +2183,14 @@ async def resume_ingestion(request: Request):
     Resume a paused ingestion job.
     """
     global _pause_requested, _is_paused
-    
+
     if not _current_job_id:
+        worker_job = await get_worker_job_from_db(request.app.state.db)
+        if worker_job and worker_job.get("status") == IngestionStatus.PAUSED:
+            await _send_worker_command(request.app.state.db, worker_job, "RESUME")
+            return SuccessResponse(success=True, message="Resume sent to the ingestion worker")
+        if worker_job:
+            return SuccessResponse(success=True, message="Job is not paused")
         raise HTTPException(status_code=400, detail="No ingestion job to resume")
     
     if not _pause_requested and not _is_paused:
@@ -2082,6 +2221,18 @@ async def stop_ingestion(request: Request):
     db = request.app.state.db
 
     if not _current_job_id:
+        worker_job = await get_worker_job_from_db(db)
+        if worker_job and worker_job.get("status") == IngestionStatus.PENDING:
+            # Not claimed yet: nothing runs, the job simply ends here
+            collection = await get_jobs_collection(db)
+            await collection.update_one(
+                {"_id": worker_job["job_id"], "status": IngestionStatus.PENDING},
+                {"$set": {"status": IngestionStatus.STOPPED, "completed_at": datetime.now().isoformat()}},
+            )
+            return SuccessResponse(success=True, message="Queued job stopped before the worker claimed it")
+        if worker_job:
+            await _send_worker_command(db, worker_job, "STOP")
+            return SuccessResponse(success=True, message="Stop sent to the ingestion worker")
         raise HTTPException(status_code=400, detail="No ingestion job is running")
 
     _stop_requested = True
@@ -2157,7 +2308,7 @@ async def stream_logs():
 
 
 @router.get("/events/stream")
-async def stream_events():
+async def stream_events(request: Request):
     """
     Stream structured ingestion events via Server-Sent Events (SSE).
     
@@ -2167,9 +2318,11 @@ async def stream_events():
     - Processing metrics (rate, ETA)
     - Current job status
     """
+    db = request.app.state.db
+
     async def event_generator():
         import json
-        
+
         while True:
             # Build state snapshot
             if _current_job_state is not None and _current_job_id is not None:
@@ -2182,13 +2335,10 @@ async def stream_events():
                     if isinstance(started_at, str):
                         started_at = datetime.fromisoformat(started_at)
                     elapsed_seconds = (datetime.now() - started_at).total_seconds()
-                    
-                    # Calculate ETA based on progress
-                    progress = _current_job_state.get("progress_percent", 0)
-                    if progress > 0:
-                        total_estimated = elapsed_seconds / (progress / 100)
-                        estimated_remaining = max(0, total_estimated - elapsed_seconds)
-                
+
+                # Per-extension ETA, shared with /status and the machine-stats widget (cached)
+                eta_payload, estimated_remaining = await _job_eta_payload(db, _current_job_state)
+
                 state = {
                     "type": "state",
                     "is_running": True,
@@ -2209,7 +2359,8 @@ async def stream_events():
                     "metrics": {
                         "processing_rate": _current_job_state.get("processing_rate", 0),
                         "elapsed_seconds": elapsed_seconds,
-                        "estimated_remaining_seconds": estimated_remaining
+                        "estimated_remaining_seconds": estimated_remaining,
+                        "eta": eta_payload,
                     },
                     "counts": {
                         "document_count": _current_job_state.get("document_count", 0),
@@ -2942,13 +3093,18 @@ async def get_failed_documents_summary(request: Request):
     ]
     
     results = await db["failed_documents"].aggregate(pipeline).to_list(length=100)
-    
+
     # Get counts
     total_unresolved = await db["failed_documents"].count_documents({"resolved": False})
     total_resolved = await db["failed_documents"].count_documents({"resolved": True})
-    
+
+    # Pure scans whose OCR produced text are not failures, but they belong in the same
+    # picture as the image-only PDFs that were skipped or OCRed to nothing (F9)
+    image_only_ocr_ok = await db["ingestion_stats"].count_documents({"image_only_pdf": True, "success": True})
+
     return {
         "by_error_type": {r["_id"]: r for r in results},
+        "image_only_pdfs_ocr_ok": image_only_ocr_ok,
         "total_unresolved": total_unresolved,
         "total_resolved": total_resolved,
         "total": total_unresolved + total_resolved

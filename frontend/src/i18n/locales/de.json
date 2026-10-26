@@ -634,6 +634,7 @@
     "toggle": "Umschalten",
     "elapsed": "Vergangen",
     "eta": "Geschätzte Zeit",
+    "etaByExtension": "Verbleibend nach Dateityp",
     "currentFile": "Aktuelle Datei",
     "logs": "Protokolle",
     "streamLogs": "Live-Protokoll",

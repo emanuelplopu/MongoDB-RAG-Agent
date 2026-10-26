@@ -14,6 +14,7 @@ are rough; see the printed assumptions.
 """
 from __future__ import annotations
 
+import json
 import os
 from typing import Optional
 
@@ -175,3 +176,93 @@ if HAS_TYPER:
             )
         for note in est.assumptions:
             console.print(f"[dim]• {note}[/dim]")
+
+
+if HAS_TYPER:
+
+    @ingest_app.command("purge-placeholders")
+    def purge_placeholders(
+        profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Profile whose database to clean (profiles.yaml)"),
+        database: Optional[str] = typer.Option(None, "--database", "-d", help="Database name (instead of --profile)"),
+        documents_collection: str = typer.Option("documents", "--documents-collection"),
+        chunks_collection: str = typer.Option("chunks", "--chunks-collection"),
+        mongodb_uri: str = typer.Option(
+            os.environ.get("MONGODB_URI", "mongodb://localhost:11017/?directConnection=true"), "--mongodb-uri"
+        ),
+        apply: bool = typer.Option(False, "--apply", help="Delete (default: dry run, list only)"),
+        no_record: bool = typer.Option(False, "--no-record", help="Do not record the purged files in failed_documents"),
+    ) -> None:
+        """Delete documents whose content is a reader placeholder ("[Error: Could not read file …]").
+
+        Such documents were stored, chunked and embedded until 2026-10-26 (F26). They are
+        deleted with their chunks and recorded as failed files, so the retry-errors option
+        re-queues them. Dry run unless --apply is given.
+        """
+        fmt = OutputFormatter(app.state.get("format", "table") if hasattr(app, "state") else "table")
+        if bool(profile) == bool(database):
+            fmt.print_error("Give exactly one of --profile or --database")
+            raise typer.Exit(code=2)
+
+        db_name = database
+        if profile:
+            try:
+                from src.profile import get_profile_manager
+
+                pm = get_profile_manager()
+                if profile not in pm.list_profiles():
+                    available = ", ".join(sorted(pm.list_profiles())) or "(none)"
+                    fmt.print_error(f"Profile '{profile}' not found. Available: {available}")
+                    raise typer.Exit(code=1)
+                prof = pm.get_profile(profile)
+                db_name = prof.database
+                documents_collection = prof.collection_documents or documents_collection
+                chunks_collection = prof.collection_chunks or chunks_collection
+            except typer.Exit:
+                raise
+            except Exception as exc:  # noqa: BLE001 - CLI boundary
+                fmt.print_error(f"Could not resolve profile: {exc}")
+                raise typer.Exit(code=1)
+
+        async def _run():
+            from pymongo import AsyncMongoClient
+
+            from backend.services.placeholder_purge import purge_placeholder_documents
+
+            client = AsyncMongoClient(mongodb_uri, serverSelectionTimeoutMS=8000)
+            try:
+                return await purge_placeholder_documents(
+                    client[db_name],
+                    documents_collection=documents_collection,
+                    chunks_collection=chunks_collection,
+                    dry_run=not apply,
+                    record_failures=not no_record,
+                    profile_key=profile,
+                )
+            finally:
+                await client.close()
+
+        try:
+            result = run_async(_run())
+        except Exception as exc:  # noqa: BLE001 - CLI boundary
+            fmt.print_error(str(exc))
+            raise typer.Exit(code=1)
+
+        if fmt.format == "json":
+            print(json.dumps(result.__dict__, indent=2, default=str))
+            return
+        mode = "dry run" if result.dry_run else "applied"
+        rows = [
+            ["Placeholder documents found", _fmt_int(result.documents_found)],
+            ["Documents deleted", _fmt_int(result.documents_deleted)],
+            ["Chunks deleted", _fmt_int(result.chunks_deleted)],
+            ["Failures recorded", _fmt_int(result.failures_recorded)],
+        ]
+        fmt.print_table(["Metric", "Value"], rows, title=f"Purge placeholders — {db_name} ({mode})")
+        if result.samples:
+            fmt.print_table(
+                ["Source", "Content"],
+                [[s["source"] or "", s["content"]] for s in result.samples],
+                title="Affected documents" + (" (first 25)" if result.documents_found > len(result.samples) else ""),
+            )
+        if result.dry_run and result.documents_found:
+            console.print("[dim]Dry run: pass --apply to delete them.[/dim]")

@@ -73,6 +73,33 @@ class BackendSettings(BaseSettings):
             "'task: search result | query: '; empty string: no prefix; other value: used verbatim."
         ),
     )
+    query_embedding_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "OpenAI-compatible base URL that embeds search queries (QUERY_EMBEDDING_URL), e.g. a "
+            "second llama.cpp instance (compose profile embedder-query, http://embedder-query:8080/v1) "
+            "so queries never wait behind ingestion batches on the main embedder. Unset: "
+            "EMBEDDING_BASE_URL. Same model and dimension as the documents (F29)."
+        ),
+    )
+    query_embedding_max_retries: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Retries of a failed query embedding (connection errors, timeouts, 429, 5xx) with exponential backoff",
+    )
+    query_embedding_retry_base_seconds: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=30.0,
+        description="First retry delay of a query embedding; doubled per attempt, capped at 8 s, with jitter",
+    )
+    query_embedding_timeout_seconds: float = Field(
+        default=30.0,
+        ge=1.0,
+        le=300.0,
+        description="Timeout of one query-embedding request",
+    )
 
     # Search Settings
     default_match_count: int = Field(default=10)
@@ -355,6 +382,26 @@ class BackendSettings(BaseSettings):
         description=(
             "Skip image-only PDFs (pure scans, no text layer) before OCR in the concurrent "
             "ingestion loop. Off OCRs them like any other PDF; on is for text-only profiles"
+        ),
+    )
+    chunk_max_tokens: int = Field(
+        default=1024,
+        ge=128,
+        le=8192,
+        description="Token budget of the HybridChunker per chunk (CHUNK_MAX_TOKENS; 512 until 2026-10-26)",
+    )
+    embedding_max_tokens: int = Field(
+        default=2048,
+        ge=256,
+        le=32768,
+        description="The embedding model's per-text token limit; longer contextualised chunks are cut into windows",
+    )
+    ingestion_ui_job_runner: str = Field(
+        default="auto",
+        description=(
+            "Who runs ingestion jobs started from the UI/API: 'worker' hands them to the ingestion "
+            "worker container through the job collection, 'api' runs them inside this process, "
+            "'auto' (default) uses the worker when one has reported itself alive recently (F7)"
         ),
     )
     msg_extract_attachments: bool = Field(
@@ -757,6 +804,8 @@ def get_settings() -> BackendSettings:
             ingest_page_furniture=main_settings.ingest_page_furniture,
             ingest_table_structure=main_settings.ingest_table_structure,
             ingest_skip_image_only_pdf=main_settings.ingest_skip_image_only_pdf,
+            chunk_max_tokens=main_settings.chunk_max_tokens,
+            embedding_max_tokens=main_settings.embedding_max_tokens,
             ocr_rect_dilation=main_settings.ocr_rect_dilation,
             ocr_image_noise_gate=main_settings.ocr_image_noise_gate,
             msg_extract_attachments=main_settings.msg_extract_attachments,

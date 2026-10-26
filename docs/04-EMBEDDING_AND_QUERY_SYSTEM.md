@@ -119,6 +119,7 @@ settings surfaces, passed through by `docker-compose.yml`; evidence in
 | setting | default | what it does |
 |---|---|---|
 | `OCR_OSD_MIN_CONFIDENCE` | `10` | Tesseract's per-rectangle orientation detection is applied outright only at this confidence or above; below it the rectangle is OCRed both ways and the better reading kept (`src/ingestion/ocr_tesseract.py`, Docling kind `tesseract_recallhub`). `0` restores Docling's behaviour, which flipped upright Courier pages and tables by 180°. The same model OCRs a whole page when the layout model finds no text region on it. |
+| `osd_once_per_page` (`RecallHubTesseractCliOcrOptions`) | `true` | Orientation detection runs once on the whole page image and its result is applied to every OCR rectangle of that page, instead of one `tesseract --psm 0` per rectangle (Docling). Per-rectangle OSD failed with "Too few characters" on 37 % of the rectangles of the diejuristin corpus (logos, stamps, signatures: ~8,000 ERROR lines per 3 h) and cost a Tesseract process each. Pages whose OCR rectangles cover less than `osd_min_area_pt` (20,000 pt², a logo or a signature) skip OSD and are read upright; a failed page OSD reads the page upright with a DEBUG line. The confidence guard applies to the page result and marks every rectangle for the both-ways retry. The OCR itself (`deu+eng`) is unchanged. |
 | `OCR_SCAN_DPI` | `216` | Raster resolution of PDF pages for OCR (Docling's `scale=3.0`). 300 dpi measured worse and slower. |
 | `OCR_IMAGE_MAX_MPX` | `8` | Megapixel budget of the OCR bitmap for image files. Docling OCRs images at 3× their size in points, i.e. a phone photo without a DPI tag at 3× its pixel size (~140 Mpx, 20-60 s); the scale is reduced per image to stay within the budget, A4 scan images (4.5 Mpx at 3×) are untouched. `0` = no cap. |
 | `OCR_PSM`, `OCR_TESSDATA_PATH` | empty | Tesseract page segmentation mode and an alternative traineddata directory (e.g. `tessdata_best`). Both were measured and not adopted; available for experiments. Image files Docling cannot load (MPO containers, JPEGs with a `(0, 0)` DPI tag) are re-saved as PNG before conversion. |
@@ -130,6 +131,8 @@ settings surfaces, passed through by `docker-compose.yml`; evidence in
 | `INGEST_THREAD_POOL_WORKERS` | `4` | Size of the pipeline's shared thread pool (hashing, Docling conversion, folder discovery) for a run that passes none (CLI). The Configuration page's `thread_pool_workers` sets it per run, and the pool is never smaller than `max_concurrent_files`. See "Parallel conversions" below. |
 | `INGEST_DOCLING_THREADS` | derived | CPU threads per Docling model (layout, TableFormer). Default: the cores shared evenly across the pool, at most Docling's 4 (`OMP_NUM_THREADS` pins it too). |
 | `OCR_OMP_THREAD_LIMIT` | derived | OpenMP threads per Tesseract process. Default: the cores shared evenly across the pool, 1-4; `0` leaves OpenMP free. Applied through a generated wrapper command (`tesseract_command()` in `src/ingestion/ocr_tesseract.py`), so it never caps PyTorch in the ingestion process. |
+| `INGEST_PROCESS_ISOLATION` | `true` | Convert in worker processes the concurrent loop kills when a file's budget runs out (`src/ingestion/conversion_workers.py`). Runs started by the API or the ingestion worker take the Configuration page's "Process isolation" (`process_isolation_enabled`) instead; this is the fallback for runs without a stored performance config (CLI). See "Timed-out conversions" below. |
+| `INGEST_STATS_FLUSH_FILES`, `INGEST_STATS_FLUSH_SECONDS` | `25`, `60` | How often the per-file stats of a run are written to `ingestion_stats` / `failed_documents`: every N recorded files or every M seconds, whichever comes first (and once more when the run ends). See "Per-file stats during the run" below. |
 
 Converters are cached per worker thread and configuration
 (`create_document_converter()` / `create_image_converter()`); Docling keeps
@@ -162,6 +165,128 @@ Windows: Docker Desktop gets a fraction of the host's RAM, and each conversion
 thread needs ~0.6 GB on top of MongoDB's cache), then watch `docker stats`
 during the first minutes of a run.
 
+**Timed-out conversions (process isolation).** Until 2026-10-24 the per-file
+timeout of the concurrent loop cancelled an asyncio future while the thread
+converting the file kept running: the slot went to the next file, more
+conversions ran than the pool was sized for, every file slowed down, more
+files timed out, and their retries redid the work (F1 of
+`docs/system-validation/INGESTION_PROMPT_TEST_LOG_2026-10-24.md`: 209 timeouts
+in 2 h at concurrency 16, the longest conversion 2,160 s against a 902 s
+limit, inserts down 20×). The stored `process_isolation_enabled` flag was
+read by nothing. Now:
+
+- With the Configuration page's "Process isolation" on (the default;
+  `INGEST_PROCESS_ISOLATION` for runs without a stored config) every file
+  slot of a run owns one worker process (`src/ingestion/conversion_workers.py`,
+  `spawn` context, started on its first file, warmed up with the PDF pipeline
+  before it takes requests). The worker runs `_read_document`; chunking,
+  embedding and the MongoDB writes stay in the API or ingestion-worker
+  process. On a timeout, stop or shutdown the process is killed and the next
+  file on that slot starts a fresh one; the model reload (10-20 s on a CPU)
+  is not charged to that file. Each worker applies the run's CPU-thread
+  sharing (`docling_num_threads`, `OCR_OMP_THREAD_LIMIT`, computed for the
+  number of workers) and the stored accelerator config, and loads the models
+  for itself (on a GPU: once per worker, as the threads did). Measured
+  2026-10-24 on Windows, CPU: an idle worker with the layout and TableFormer
+  models loaded holds ~1.1 GB RSS, plus the working set of a conversion; the
+  parent process no longer holds any converter.
+- Off, conversions run on the thread pool as before, but a timed-out
+  conversion keeps its slot until its thread ends (a thread cannot be
+  interrupted), so the pool never runs more conversions than there are
+  slots, and the retry of that file waits for its first thread to end.
+- The budget (`calculate_file_timeout`) starts when the conversion actually
+  starts, not when the file was queued, and is multiplied by
+  `conversion_budget_factor`: the formula describes a conversion that has
+  Docling's default 4 threads to itself; with 16 conversions on 20 cores each
+  has one thread, so the factor is 4 (8 conversions: 2 threads, factor 2;
+  pinned thread counts that oversubscribe the cores count too). The
+  `max_timeout` cap (30 min by default) stays absolute. A file whose
+  conversion has not started within one budget times out all the same, so
+  nothing stuck before the conversion can hold a slot forever.
+
+**Per-file stats during the run.** `ingestion_stats` and `failed_documents`
+were written only after the last file (F2), so during a multi-week job the
+failed-documents page, the analytics endpoints and the retry options
+(`retry_timeouts`, `retry_no_chunks`) had nothing to work with, and a restart
+lost everything held in memory. They are now written every
+`INGEST_STATS_FLUSH_FILES` recorded files or `INGEST_STATS_FLUSH_SECONDS`
+seconds (25 / 60; `IngestionStatsRecorder` in `src/ingestion/ingest.py`), once
+more when the run ends or is stopped, and a batch the database refused is kept
+for the next flush. After every flush the job's `timeout_files`,
+`no_chunks_files`, `error_files`, `image_only_pdfs`, `duplicates_skipped` and
+`failed_files` are set from what was written
+(`backend/services/ingestion_counters.py`; a resumed job adds what its earlier
+runs recorded), so `GET /api/v1/ingestion/status` and the runs list show them
+while the job runs instead of zeros until its end.
+
+**Resume without redoing failures (F23).** The incremental filter only knew the
+`documents` collection, so after a restart every file that had timed out,
+errored or produced no chunks looked new and was processed again (553 timeouts
+on 451 files in the first 4 h after the 2026-10-25 redeploy). A resumed job now
+skips the files its own `failed_documents` records name (`failed_paths_of_job`
+in `src/ingestion/ingest.py`, applied by the pipeline's queue build and by the
+API's `_build_pending_files_queue`), unless the request's `retry_timeouts` /
+`retry_errors` / `retry_no_chunks` / `retry_image_only_pdfs` flag asks for that
+error type or the record was marked resolved. The discovery log line counts them
+as "failed earlier in this job".
+
+**Reader placeholders are never stored (F26).** A file neither Docling nor the
+raw-text fallback could read used to be stored as a document whose whole content
+was `[Error: Could not read file <name>]`, chunked and embedded; it counted as
+ingested and a question naming it got the error string as its source. The
+pipeline now raises `UnreadableFileError` for `[Error: …]` / `[Skipped: …]`
+placeholders (recorded as `error` in `failed_documents`, so "retry errors"
+re-queues the file) and treats `[Document: … - no text content]` as an empty
+file (no chunks, no warning). Existing placeholder documents are removed with
+`quellexctl ingest purge-placeholders --profile <key> [--apply]`
+(`backend/services/placeholder_purge.py`: deletes the documents and their
+chunks, dry run by default, records each file in `failed_documents`).
+
+**Pure scans in the stats (F9).** Every PDF that ends without chunks or as a
+stored document is checked for a text layer (`is_image_only_pdf`, pypdfium, a
+few ms). A pure scan whose OCR found nothing is recorded as `image_only_pdf`
+(with the pdfium reason) instead of `no_chunks`, so it shows up under that type
+in `/failed-documents/summary` and in the job's `image_only_pdfs` counter; a
+pure scan whose OCR produced text carries `image_only_pdf: true` on its
+`ingestion_stats` record and is counted in the job's `image_only_pdfs_ocr`
+(`/failed-documents/summary` reports the total as `image_only_pdfs_ocr_ok`).
+Files whose content is empty (Outlook `ATT0000x.txt` placeholders, frameset
+pages) log "No chunks created" at INFO instead of WARNING.
+
+**UI-started jobs run in the worker (F7).** `POST /api/v1/ingestion/start`
+used to run every job inside the API process (1,400 % CPU, 45 GB RSS, `/health`
+timeouts, the worker container idle). The job is now queued `PENDING` with
+`runner: worker` for the ingestion worker to claim when
+`INGESTION_UI_JOB_RUNNER` is `worker`, or `auto` (the default) and a worker has
+reported itself alive within three heartbeats (`backend/services/worker_liveness.py`
+reads `activity_current`); `api` keeps the in-process run. The status endpoint
+shows the queued/claimed job from the job document (phase `queued` until the
+worker claims it), and the pause, resume and stop endpoints reach a worker job
+through its `control_command` (a job stopped before it was claimed simply ends).
+
+**One ETA.** `GET /api/v1/ingestion/status`, the `/events/stream` metrics and the
+machine-stats widget (`/api/v1/telemetry/overview`) share
+`backend/services/ingestion_eta.py`: the runners record how many files of each
+extension the run queued (`queue_by_extension`) and finished
+(`processed_by_extension`); the estimator reads each extension's pace from
+`ingestion_stats` (files per minute over the last hour, else over the time that
+extension was being processed, else the job's overall pace; cached 60 s per job)
+and sums `remaining / pace`. The status payload carries the breakdown as `eta`
+(`by_extension`, `unknown_remaining` for extensions without any pace yet) next
+to `estimated_remaining_seconds`; the ingestion page lists the largest
+remaining types and the widget shows them in the pace row's tooltip. Until
+2026-10-26 the status page extrapolated `elapsed / progress` and the widget
+divided the remaining files by the last hour's pace; because the queue is
+sorted by file type the two disagreed by weeks (2.5 weeks vs. 58-72 days).
+
+**Copies within one run.** The hash of every stored file was added to the
+de-duplication map, but identical files sort next to each other (same type and
+size) and started in parallel slots before either was stored, so both were
+converted, embedded and stored (F4: 17-20 % redundant documents in the
+sampled windows). A file whose hash is being processed by another slot is now
+deferred and processed after that file's outcome is known: skipped as
+`Duplicate of: …` when it was stored, converted itself when it failed.
+
 A GPU in the worker or backend container (`deploy.resources.reservations.devices`
 as for `embedder-gpu`) is picked up automatically (`get_effective_device()`).
 The Docling accelerator options are always a real `AcceleratorOptions`
@@ -189,10 +314,15 @@ The Docling HybridChunker provides intelligent document splitting:
 **Configuration Parameters:**
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `max_tokens` | 512 | Maximum tokens per chunk for embedding model |
+| `max_tokens` | `CHUNK_MAX_TOKENS` (1024) | Token budget per chunk. 512 until 2026-10-26: with EmbeddingGemma 2's 2,048-token window the literature documents of the diejuristin corpus averaged 23 chunks each; 1024 halves that and keeps a clause or a table row together. The start request's `max_tokens` overrides it per job. |
+| `embed_max_tokens` | `EMBEDDING_MAX_TOKENS` (2048) | The embedding model's per-text limit: a contextualised chunk above it (an unsplittable table) is cut into overlapping windows below it before embedding (`split_oversized_chunks`). |
 | `chunk_size` | 1000 | Target characters (fallback mode) |
 | `chunk_overlap` | 200 | Character overlap between chunks (fallback mode) |
 | `merge_peers` | true | Merge small adjacent chunks |
+
+The token counter is the chunker's MiniLM tokenizer, which produces more tokens per
+German word than Gemma's SentencePiece vocabulary, so the budgets are conservative with
+respect to the embedder.
 
 **Contextualization Process:**
 1. Docling parses document structure into a DoclingDocument
@@ -388,6 +518,45 @@ Notes:
   representation. See `docs/23-SCAN_IMAGE_EMBEDDING_SPIKE.md`.
 - Ollama's `embeddinggemma-2` tags are MLX-only (Apple Silicon) as of
   2026-10-10 and fail on Windows/Linux with "requires MLX support".
+
+#### Query embeddings: retry and a second instance (F29)
+
+On the live Quellex stack the one `embedder-gpu` instance serves the ingestion
+batches (100 chunks per request, split into one task per chunk over `-np 4`
+slots) and every search query. A query that lands while the slots are busy
+waits behind the batches, and a transient failure (connection reset, 429, 5xx)
+used to fail the search outright. `backend/services/query_embedding.py` now
+
+- retries query embeddings with exponential backoff (`QUERY_EMBEDDING_MAX_RETRIES`,
+  default 3; first delay `QUERY_EMBEDDING_RETRY_BASE_SECONDS` 0.5 s, doubled per
+  attempt, capped at 8 s, with jitter; `QUERY_EMBEDDING_TIMEOUT_SECONDS` 30 s per
+  request; 4xx answers other than 429 are not retried), and
+- embeds queries at `QUERY_EMBEDDING_URL` when it is set, e.g. the
+  `embedder-query` compose service: the same image and model on host port
+  `11091` (`-np 2`, 8k context, ~0.9 GB VRAM), alias `embedder-query`, started
+  with `--profile embedder-query`. Ingestion keeps `EMBEDDING_BASE_URL`.
+
+```powershell
+docker compose --profile quellex --profile embedder-gpu --profile embedder-query up -d
+# .env: QUERY_EMBEDDING_URL=http://embedder-query:8080/v1
+```
+
+**Is the embedder on the GPU?** Checked 2026-10-26 on the live stack after two
+days of uptime: `nvidia-smi` showed the GPU at 0-5 % with the embedder at 100 %
+of one CPU core, 10.4 GiB RSS and 606 tok/s aggregate (1,344 tasks in 10 min);
+a four-text request of 3,468 tokens took 106 s. Restarting the container
+(`docker restart rag-embedder-gpu`) brought it to 13-16k tok/s per request
+(2,364 tokens in 0.15-0.18 s), 81 % GPU utilisation during the request and
+4.6 GiB RSS, with the startup log placing the layers on `CUDA0` ("layer 5 is
+assigned to device CUDA0"; llama.cpp disables flash attention for this model,
+which is expected). The offload flags (`-ngl 999`, `-b 8192 -ub 8192`) are
+therefore correct; the slow state was a degradation of the long-running
+server, not CPU compute. Watch the embedder's tokens per minute (its
+`stop processing: n_tokens = …` log lines) and restart it when the per-request
+rate collapses; the query instance keeps searches responsive either way.
+The log also showed `400 … ill-formed UTF-8` answers to some ingestion
+batches: chunk text with invalid UTF-8 reaches the server and the whole
+batch is rejected (the F27 "HTTP 500" of the prompt-test log); not fixed here.
 
 ### Embedding Validation Checks
 
@@ -591,6 +760,77 @@ Where:
 - General-purpose queries
 - When query type is uncertain
 - Balancing semantic understanding with keyword precision
+
+### Identifier Queries (FN, EZ/KG, Geschäftszahl)
+
+Module: `backend/services/identifier_search.py`, used by `hybrid_search` in
+`backend/routers/search.py` and by `FederatedSearch._search_database` (the chat
+path). Background: findings F25 and F17 in
+`docs/system-validation/INGESTION_PROMPT_TEST_LOG_2026-10-24.md`. Entity
+questions that name an identifier lost their best document once copies of
+related documents accumulated (Finanzamt letters stored 2–6 times under
+different paths filled the top 10), and case numbers were tokenisation-sensitive
+(`13 U 39/16v` did not find the printed `13 U 39/16 v`, and the fuzzy text
+search let `404945h` match unrelated numbers).
+
+**Only queries that contain an identifier take this path.** `detect_identifiers`
+returns an empty list for every other query, and nothing below runs: the
+ordinary candidate counts (`2 × match_count`, `numCandidates: 100`), the fuzzy
+text query and the RRF fusion stay exactly as described above. No re-ingestion
+and no index change is needed; the exact query runs on the existing
+`text_index` (`lucene.standard` on `content`).
+
+**Detection** (regex, Austrian legal identifiers):
+
+| Kind | Examples | Variants generated |
+|------|----------|--------------------|
+| Firmenbuchnummer | `FN 404945h`, `FN404945h`, `FN 404945 h` | with/without spaces, lower/upper check letter, bare `404945h` |
+| Grundbuch | `EZ 52` **together with** `KG 11029` | `EZ 52`/`EZ52` and `KG 11029`/`KG11029`; an EZ or KG alone is not an identifier |
+| Geschäftszahl / Aktenzeichen | `13 U 39/16v`, `13 U 39/16 v`, `17 Cg 114/11a`, `038 C 1199/2017a`, `5 E 1149/20k-12` | check letter with/without the space and in both cases, leading-zero department also without the zeros, ON suffix (`-12`) with and without |
+
+**Retrieval on this path:**
+
+1. The vector and fuzzy text stages run unchanged but fetch `5 × match_count`
+   candidates per index, with `numCandidates = max(100, 20 × limit)` for
+   `$vectorSearch`, and additionally project `chunk_index` and the parent
+   document's `content_hash`.
+2. One extra Atlas Search query on `text_index`: `compound.should` of exact
+   `phrase` clauses on `content`, one per spelling variant, no fuzziness,
+   `$limit 20`, same `$lookup` to the documents collection. A Grundbuch entry
+   contributes a nested `compound.must` that requires an EZ and a KG variant in
+   the same chunk. In addition, documents whose `source` path or `title`
+   carries the identifier are matched with a tolerant case-insensitive regex
+   (`FN\s*404945\s*h`; a Geschäftszahl's slash may be `_`, `-`, `.` or a space,
+   as in the file name `17Cg114_11a`), up to 20 documents, and up to 8 of each
+   one's chunks (lowest `chunk_index` first, fetched by the indexed
+   `document_id`) join the exact hits after the phrase hits. This is what
+   rescues F25: the Firmenbuchabfrage's text lost the number in conversion
+   (no chunk in the corpus contains `404945`), only its file name has it. The
+   regex scan over the documents collection costs about 65 ms for 79k
+   documents and runs on this path only.
+3. Merge (`merge_identifier_results`): the exact hits are **pinned ahead** of
+   the RRF-fused list (among them, chunks the normal search also found come
+   first, then the rest in search order). Copies are then **collapsed**: the
+   candidates are grouped by `(content_hash, chunk_index)` (by chunk id when
+   either value is missing), the first representative of each group stays and
+   the other copies' source paths are listed in its `metadata.locations`. The
+   remaining slots are filled from the fused list; copies beyond the result
+   window still contribute their locations.
+
+Pinned results carry `metadata.exact_identifier_match: true` and a
+`similarity`/`rrf_score` of `1.0`; every result on this path has
+`metadata.locations` (possibly empty). On the federated path the exact hits ride
+through `_apply_rrf` as `search_type: "exact"` (they never reach a strategy's
+own RRF), and `_deduplicate_and_rank` keeps pinned documents first and collapses
+copies across sources by the same key, by chunk id when the hash is absent.
+
+Limits: the identifier must be spelled closely enough for the regexes (a
+Geschäftszahl needs its check letter), and copies only collapse when the file
+bytes are identical (same `content_hash`); a re-scanned copy of the same letter
+is a different file. The live check for F25 is
+`backend/tests/integration/test_identifier_search_live.py` (skipped unless
+`RUN_INTEGRATION_TESTS=true` and a backend answers at `TEST_BASE_URL`, default
+`http://127.0.0.1:11001`, with `TEST_API_KEY` for `X-API-Key`).
 
 ---
 

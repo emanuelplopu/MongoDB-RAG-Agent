@@ -26,6 +26,17 @@ from backend.agent.strategy.models import (
     OmittedResultEntry,
 )
 from backend.core.config import settings
+from backend.services.identifier_search import (
+    COPY_FIELDS_PROJECTION,
+    DEFAULT_NUM_CANDIDATES,
+    add_location,
+    copy_group_key,
+    detect_identifiers,
+    fetch_exact_hits,
+    identifier_fetch_count,
+    merge_identifier_results,
+    vector_num_candidates,
+)
 from backend.services.query_embedding import create_embedding_client, embed_query
 
 if TYPE_CHECKING:
@@ -240,23 +251,38 @@ class FederatedSearch:
             match_count: Maximum results to return
             search_type: "vector", "text", or "hybrid"
             strategy: Optional strategy for custom RRF scoring
-        
+
         Returns:
             List of search result dicts
+
+        A query naming a legal identifier (see ``backend/services/identifier_search``)
+        widens the candidate windows, adds one exact phrase query on the text index
+        and pins its hits ahead of the fused list with copies collapsed; ordinary
+        queries run exactly as before.
         """
         try:
             db = self.client[database_name]
             collection = db[chunks_collection]
-            
+
             # Check if collection exists and has data. find_one stops at the first
             # document; count_documents({}) scanned every chunk (embeddings included)
             # on each search task.
             if await collection.find_one({}, {"_id": 1}) is None:
                 logger.debug(f"Database {database_name}.{chunks_collection} is empty")
                 return []
-            
+
             results = []
-            
+
+            identifiers = detect_identifiers(query) if search_type in ["text", "hybrid"] else []
+            if identifiers:
+                fetch_count = identifier_fetch_count(match_count)
+                num_candidates = vector_num_candidates(fetch_count)
+                copy_fields = dict(COPY_FIELDS_PROJECTION)
+            else:
+                fetch_count = match_count * 2 if search_type == "hybrid" else match_count
+                num_candidates = DEFAULT_NUM_CANDIDATES
+                copy_fields = {}
+
             if search_type in ["vector", "hybrid"]:
                 # Vector search
                 try:
@@ -266,8 +292,8 @@ class FederatedSearch:
                                 "index": settings.mongodb_vector_index,
                                 "queryVector": query_embedding,
                                 "path": "embedding",
-                                "numCandidates": 100,
-                                "limit": match_count * 2 if search_type == "hybrid" else match_count
+                                "numCandidates": num_candidates,
+                                "limit": fetch_count
                             }
                         },
                         {
@@ -287,18 +313,19 @@ class FederatedSearch:
                                 "similarity": {"$meta": "vectorSearchScore"},
                                 "metadata": 1,
                                 "document_title": {"$ifNull": ["$doc_info.title", "Unknown"]},
-                                "document_source": {"$ifNull": ["$doc_info.source", ""]}
+                                "document_source": {"$ifNull": ["$doc_info.source", ""]},
+                                **copy_fields
                             }
                         }
                     ]
-                    
+
                     cursor = collection.aggregate(vector_pipeline)
                     async for doc in cursor:
                         doc["search_type"] = "vector"
                         results.append(doc)
                 except Exception as e:
                     logger.warning(f"Vector search failed for {database_name}: {e}")
-            
+
             if search_type in ["text", "hybrid"]:
                 # Text search
                 try:
@@ -313,7 +340,7 @@ class FederatedSearch:
                                 }
                             }
                         },
-                        {"$limit": match_count * 2 if search_type == "hybrid" else match_count},
+                        {"$limit": fetch_count},
                         {
                             "$lookup": {
                                 "from": docs_collection,
@@ -331,22 +358,40 @@ class FederatedSearch:
                                 "similarity": {"$meta": "searchScore"},
                                 "metadata": 1,
                                 "document_title": {"$ifNull": ["$doc_info.title", "Unknown"]},
-                                "document_source": {"$ifNull": ["$doc_info.source", ""]}
+                                "document_source": {"$ifNull": ["$doc_info.source", ""]},
+                                **copy_fields
                             }
                         }
                     ]
-                    
+
                     cursor = collection.aggregate(text_pipeline)
                     async for doc in cursor:
                         doc["search_type"] = "text"
                         results.append(doc)
                 except Exception as e:
                     logger.warning(f"Text search failed for {database_name}: {e}")
-            
-            # For hybrid, apply RRF
-            if search_type == "hybrid" and results:
-                results = self._apply_rrf(results, match_count, strategy=strategy)
-            
+
+            exact_hits: List[Dict[str, Any]] = []
+            if identifiers:
+                exact_hits = await fetch_exact_hits(
+                    collection,
+                    identifiers,
+                    text_index=settings.mongodb_text_index,
+                    docs_collection=docs_collection,
+                    documents=db[docs_collection],
+                )
+                logger.info(
+                    "Identifier query %s in %s: %d exact hit(s), %d fused candidates",
+                    [identifier.canonical for identifier in identifiers],
+                    database_name, len(exact_hits), len(results),
+                )
+
+            # For hybrid, apply RRF (exact hits ride along and are pinned there)
+            if search_type == "hybrid" and (results or exact_hits):
+                results = self._apply_rrf(results + exact_hits, match_count, strategy=strategy)
+            elif exact_hits:
+                results = merge_identifier_results(exact_hits, results, match_count)
+
             return results[:match_count]
             
         except Exception as e:
@@ -370,15 +415,39 @@ class FederatedSearch:
         - Content quality penalties (very short content penalized)
         - Original vector similarity preservation for reference
         
+        Results tagged ``search_type == "exact"`` (the identifier path) never take
+        part in the fusion: the vector/text results are fused as usual and the
+        exact hits are then pinned ahead of them with copies collapsed, see
+        ``backend.services.identifier_search.merge_identifier_results``.
+
         Args:
             results: Combined results from vector and text search
             limit: Maximum results to return
             k: RRF constant (default 60)
             strategy: Optional strategy for custom scoring
-        
+
         Returns:
             Deduplicated and ranked results with normalized scores (0-1 scale)
         """
+        exact_hits = [r for r in results if r.get("search_type") == "exact"]
+        if not exact_hits:
+            return self._fuse_vector_and_text(results, limit, k=k, strategy=strategy)
+        fused_input = [r for r in results if r.get("search_type") != "exact"]
+        # Fuse the whole candidate window: the collapse needs the copies below `limit` too.
+        fused = (
+            self._fuse_vector_and_text(fused_input, len(fused_input), k=k, strategy=strategy)
+            if fused_input else []
+        )
+        return merge_identifier_results(exact_hits, fused, limit)
+
+    def _fuse_vector_and_text(
+        self,
+        results: List[Dict],
+        limit: int,
+        k: int = 60,
+        strategy: "BaseStrategy" = None
+    ) -> List[Dict]:
+        """The RRF fusion proper (strategy override or the default enhanced RRF)."""
         # If a strategy is provided, use its custom RRF scoring
         if strategy is not None:
             try:
@@ -591,6 +660,16 @@ class FederatedSearch:
                 total_raw_results += len(results)
             
             for result in results:
+                metadata = {
+                    "source_id": source.id,
+                    "source_display_name": source.display_name,
+                    "document_source": result.get("document_source", ""),
+                    **(result.get("metadata", {}))
+                }
+                # Identifier path only: the copy key, so copies across sources collapse too.
+                if result.get("content_hash") and result.get("chunk_index") is not None:
+                    metadata["content_hash"] = result["content_hash"]
+                    metadata["chunk_index"] = result["chunk_index"]
                 doc_ref = DocumentReference(
                     id=str(result["chunk_id"]),
                     document_id=str(result["document_id"]),
@@ -601,12 +680,7 @@ class FederatedSearch:
                     excerpt=result.get("content", "")[:500],
                     full_content=result.get("content", ""),
                     similarity_score=result.get("rrf_score", result.get("similarity", 0)),
-                    metadata={
-                        "source_id": source.id,
-                        "source_display_name": source.display_name,
-                        "document_source": result.get("document_source", ""),
-                        **(result.get("metadata", {}))
-                    }
+                    metadata=metadata
                 )
                 documents.append(doc_ref)
         
@@ -637,26 +711,44 @@ class FederatedSearch:
         limit: int
     ) -> List[DocumentReference]:
         """Deduplicate documents and rank by relevance.
-        
+
+        Pinned exact identifier hits (``metadata.exact_identifier_match``) stay
+        ahead of everything else. Copies collapse by ``(content_hash, chunk_index)``
+        when the identifier path projected those fields, by chunk id otherwise;
+        a collapsed copy's source path is added to the representative's
+        ``metadata.locations``.
+
         Args:
             documents: List of document references (may have duplicates)
             limit: Maximum documents to return
-        
+
         Returns:
             Deduplicated and sorted list
         """
-        # Deduplicate by chunk ID (same chunk might appear from different sources)
-        seen = set()
-        unique = []
-        
-        for doc in documents:
-            if doc.id not in seen:
-                seen.add(doc.id)
+        # Best first, so the representative of a copy group is its best-ranked member.
+        ranked = sorted(
+            documents,
+            key=lambda x: (bool(x.metadata.get("exact_identifier_match")), x.similarity_score),
+            reverse=True,
+        )
+
+        representatives: Dict[Tuple[Any, ...], DocumentReference] = {}
+        unique: List[DocumentReference] = []
+        for doc in ranked:
+            key = copy_group_key(doc.metadata.get("content_hash"), doc.metadata.get("chunk_index"), doc.id)
+            representative = representatives.get(key)
+            if representative is None:
+                representatives[key] = doc
                 unique.append(doc)
-        
-        # Sort by similarity score
-        unique.sort(key=lambda x: x.similarity_score, reverse=True)
-        
+                continue
+            locations = representative.metadata.setdefault("locations", [])
+            add_location(
+                locations,
+                representative.document_source,
+                doc.document_source,
+                doc.metadata.get("locations") or [],
+            )
+
         return unique[:limit]
     
     def assess_result_quality(self, documents: List[DocumentReference]) -> ResultQuality:

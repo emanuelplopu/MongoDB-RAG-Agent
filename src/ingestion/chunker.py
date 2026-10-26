@@ -17,7 +17,7 @@ Benefits over custom chunking:
 import os
 import logging
 from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 from transformers import AutoTokenizer
@@ -67,12 +67,15 @@ class ChunkingConfig:
     chunk_overlap: int = 200  # Character overlap between chunks (used in fallback)
     max_chunk_size: int = 2000  # Maximum chunk size (used in fallback)
     min_chunk_size: int = 100  # Minimum chunk size (used in fallback)
-    max_tokens: int = 512  # Maximum tokens for embedding models
+    max_tokens: int = field(default_factory=lambda: chunk_max_tokens_default())  # chunker budget per chunk
+    embed_max_tokens: int = field(default_factory=lambda: embed_max_tokens_default())  # embedder's per-text limit
 
     def __post_init__(self):
         """Validate configuration."""
         if self.chunk_overlap >= self.chunk_size:
             raise ValueError("Chunk overlap must be less than chunk size")
+        if self.embed_max_tokens < self.max_tokens:
+            raise ValueError("embed_max_tokens must not be below max_tokens")
         if self.min_chunk_size <= 0:
             raise ValueError("Minimum chunk size must be positive")
 
@@ -215,7 +218,8 @@ class DoclingHybridChunker:
                 current_pos = end_char
 
             document_chunks = split_oversized_chunks(
-                document_chunks, self.config.max_tokens, lambda t: len(self.tokenizer.encode(t))
+                document_chunks, self.config.max_tokens, lambda t: len(self.tokenizer.encode(t)),
+                limit_tokens=self.config.embed_max_tokens,
             )
             logger.info(f"Created {len(document_chunks)} chunks using HybridChunker")
             return document_chunks
@@ -307,13 +311,50 @@ CHARS_PER_TOKEN = 3
 WINDOW_OVERLAP_CHARS = 200
 
 
-def split_oversized_chunks(chunks: List[DocumentChunk], max_tokens: int, count_tokens=None) -> List[DocumentChunk]:
-    """Cut chunks longer than ``OVERSIZE_FACTOR * max_tokens`` tokens into overlapping windows.
+#: Default chunker budget (tokens per chunk) and the embedder's per-text limit (tokens);
+#: ``CHUNK_MAX_TOKENS`` / ``EMBEDDING_MAX_TOKENS`` in the environment override them
+#: (``src/settings.py`` documents them). 512 until 2026-10-26: with EmbeddingGemma 2's
+#: 2,048-token window the literature of the diejuristin corpus averaged 23 chunks per
+#: document; 1,024 halves the chunk count and keeps a clause or a table row together.
+DEFAULT_CHUNK_MAX_TOKENS = 1024
+DEFAULT_EMBED_MAX_TOKENS = 2048
+
+
+def _env_int(name: str, default: int, minimum: int = 64) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return max(minimum, int(raw.strip()))
+    except ValueError:
+        logger.warning(f"{name}={raw!r} is not an integer; using {default}")
+        return default
+
+
+def chunk_max_tokens_default() -> int:
+    """The chunker's token budget per chunk: ``CHUNK_MAX_TOKENS`` or 1024."""
+    return _env_int("CHUNK_MAX_TOKENS", DEFAULT_CHUNK_MAX_TOKENS)
+
+
+def embed_max_tokens_default() -> int:
+    """The embedding model's per-text token limit: ``EMBEDDING_MAX_TOKENS`` or 2048."""
+    return _env_int("EMBEDDING_MAX_TOKENS", DEFAULT_EMBED_MAX_TOKENS)
+
+
+def split_oversized_chunks(
+    chunks: List[DocumentChunk], max_tokens: int, count_tokens=None, limit_tokens: Optional[int] = None
+) -> List[DocumentChunk]:
+    """Cut chunks longer than the embedder allows into overlapping windows.
+
+    A chunk is oversized above ``OVERSIZE_FACTOR * max_tokens`` tokens or above
+    ``limit_tokens`` (the embedding model's per-text limit), whichever is smaller; the
+    windows stay below ``limit_tokens``.
 
     Args:
         chunks: Chunks in document order.
-        max_tokens: The chunker's token target (the embedding model's window is larger).
+        max_tokens: The chunker's token target.
         count_tokens: Optional token counter; ``len(text) / CHARS_PER_TOKEN`` when omitted.
+        limit_tokens: The embedding model's window; ``OVERSIZE_FACTOR * max_tokens`` when omitted.
 
     Returns:
         The chunks with oversized ones replaced by their windows, indices renumbered and
@@ -321,7 +362,11 @@ def split_oversized_chunks(chunks: List[DocumentChunk], max_tokens: int, count_t
     """
     counter = count_tokens or (lambda text: len(text) // CHARS_PER_TOKEN)
     limit = OVERSIZE_FACTOR * max_tokens
-    window_chars = WINDOW_FACTOR * max_tokens * CHARS_PER_TOKEN
+    window_tokens = WINDOW_FACTOR * max_tokens
+    if limit_tokens:
+        limit = min(limit, int(limit_tokens))
+        window_tokens = min(window_tokens, int(limit_tokens) * 3 // 4)
+    window_chars = max(CHARS_PER_TOKEN * 64, window_tokens * CHARS_PER_TOKEN)
     result: List[DocumentChunk] = []
     changed = False
     for chunk in chunks:

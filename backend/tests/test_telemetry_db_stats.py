@@ -273,8 +273,8 @@ class TestDbStatsRouter:
     def test_overview_endpoint(self, client: TestClient, with_db_store, monkeypatch):
         seen = {}
 
-        async def fake_overview(store, *, hours, online_within_s, cache):
-            seen.update(hours=hours, online=online_within_s, cache=cache)
+        async def fake_overview(store, *, hours, online_within_s, cache, eta_lookup=None):
+            seen.update(hours=hours, online=online_within_s, cache=cache, eta_lookup=eta_lookup)
             return TelemetryOverview(generated_at=T0, anomalies=OverviewAnomalies(hours=hours), chat=OverviewChat(hours=hours))
 
         monkeypatch.setattr(tov, "overview", fake_overview)
