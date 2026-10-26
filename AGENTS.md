@@ -33,7 +33,7 @@ If docs and code disagree, trust the current code first, then fix the docs.
 - Main settings surface: `backend/core/config.py`
 - Security middleware and auth rules: `backend/core/security.py`, `backend/routers/auth.py`
 - DB manager: `backend/core/database.py`
-- Search endpoints: `backend/routers/search.py` (query embeddings go through `backend/services/query_embedding.py`, which applies the model family's query prefix, e.g. for EmbeddingGemma; `EMBEDDING_QUERY_PREFIX` overrides or disables it)
+- Search endpoints: `backend/routers/search.py` (query embeddings go through `backend/services/query_embedding.py`, which applies the model family's query prefix, e.g. for EmbeddingGemma; `EMBEDDING_QUERY_PREFIX` overrides or disables it). Queries naming an Austrian legal identifier (`FN 404945h`, `EZ 52` + `KG 11029`, `13 U 39/16v`) take the identifier path of `backend/services/identifier_search.py` in both `hybrid_search` and `FederatedSearch._search_database`: wider candidate windows, one exact phrase query on `text_index` plus a regex match on the documents' `source`/`title` (the number of a Firmenbuchauszug survives only in its file name), both pinned ahead of the RRF list, copies collapsed by `(content_hash, chunk_index)` into `metadata.locations`; ordinary queries are untouched (`docs/04-EMBEDDING_AND_QUERY_SYSTEM.md`, "Identifier Queries")
 - Chat/session APIs: `backend/routers/chat.py`, `backend/routers/sessions.py`
 - Federated/orchestrated agent (legacy): `backend/agent/orchestrator.py`, `backend/agent/strategies/` (plural, legacy `BaseStrategy` registry)
 - Strategy OS runtime: `backend/agent/strategy/` (singular), `backend/agent/strategy/nodes/`, `backend/agent/strategy/strategy_runner.py`, `backend/agent/strategy/spec_store.py`

@@ -656,6 +656,77 @@ Where:
 - When query type is uncertain
 - Balancing semantic understanding with keyword precision
 
+### Identifier Queries (FN, EZ/KG, Geschäftszahl)
+
+Module: `backend/services/identifier_search.py`, used by `hybrid_search` in
+`backend/routers/search.py` and by `FederatedSearch._search_database` (the chat
+path). Background: findings F25 and F17 in
+`docs/system-validation/INGESTION_PROMPT_TEST_LOG_2026-10-24.md`. Entity
+questions that name an identifier lost their best document once copies of
+related documents accumulated (Finanzamt letters stored 2–6 times under
+different paths filled the top 10), and case numbers were tokenisation-sensitive
+(`13 U 39/16v` did not find the printed `13 U 39/16 v`, and the fuzzy text
+search let `404945h` match unrelated numbers).
+
+**Only queries that contain an identifier take this path.** `detect_identifiers`
+returns an empty list for every other query, and nothing below runs: the
+ordinary candidate counts (`2 × match_count`, `numCandidates: 100`), the fuzzy
+text query and the RRF fusion stay exactly as described above. No re-ingestion
+and no index change is needed; the exact query runs on the existing
+`text_index` (`lucene.standard` on `content`).
+
+**Detection** (regex, Austrian legal identifiers):
+
+| Kind | Examples | Variants generated |
+|------|----------|--------------------|
+| Firmenbuchnummer | `FN 404945h`, `FN404945h`, `FN 404945 h` | with/without spaces, lower/upper check letter, bare `404945h` |
+| Grundbuch | `EZ 52` **together with** `KG 11029` | `EZ 52`/`EZ52` and `KG 11029`/`KG11029`; an EZ or KG alone is not an identifier |
+| Geschäftszahl / Aktenzeichen | `13 U 39/16v`, `13 U 39/16 v`, `17 Cg 114/11a`, `038 C 1199/2017a`, `5 E 1149/20k-12` | check letter with/without the space and in both cases, leading-zero department also without the zeros, ON suffix (`-12`) with and without |
+
+**Retrieval on this path:**
+
+1. The vector and fuzzy text stages run unchanged but fetch `5 × match_count`
+   candidates per index, with `numCandidates = max(100, 20 × limit)` for
+   `$vectorSearch`, and additionally project `chunk_index` and the parent
+   document's `content_hash`.
+2. One extra Atlas Search query on `text_index`: `compound.should` of exact
+   `phrase` clauses on `content`, one per spelling variant, no fuzziness,
+   `$limit 20`, same `$lookup` to the documents collection. A Grundbuch entry
+   contributes a nested `compound.must` that requires an EZ and a KG variant in
+   the same chunk. In addition, documents whose `source` path or `title`
+   carries the identifier are matched with a tolerant case-insensitive regex
+   (`FN\s*404945\s*h`; a Geschäftszahl's slash may be `_`, `-`, `.` or a space,
+   as in the file name `17Cg114_11a`), up to 20 documents, and up to 8 of each
+   one's chunks (lowest `chunk_index` first, fetched by the indexed
+   `document_id`) join the exact hits after the phrase hits. This is what
+   rescues F25: the Firmenbuchabfrage's text lost the number in conversion
+   (no chunk in the corpus contains `404945`), only its file name has it. The
+   regex scan over the documents collection costs about 65 ms for 79k
+   documents and runs on this path only.
+3. Merge (`merge_identifier_results`): the exact hits are **pinned ahead** of
+   the RRF-fused list (among them, chunks the normal search also found come
+   first, then the rest in search order). Copies are then **collapsed**: the
+   candidates are grouped by `(content_hash, chunk_index)` (by chunk id when
+   either value is missing), the first representative of each group stays and
+   the other copies' source paths are listed in its `metadata.locations`. The
+   remaining slots are filled from the fused list; copies beyond the result
+   window still contribute their locations.
+
+Pinned results carry `metadata.exact_identifier_match: true` and a
+`similarity`/`rrf_score` of `1.0`; every result on this path has
+`metadata.locations` (possibly empty). On the federated path the exact hits ride
+through `_apply_rrf` as `search_type: "exact"` (they never reach a strategy's
+own RRF), and `_deduplicate_and_rank` keeps pinned documents first and collapses
+copies across sources by the same key, by chunk id when the hash is absent.
+
+Limits: the identifier must be spelled closely enough for the regexes (a
+Geschäftszahl needs its check letter), and copies only collapse when the file
+bytes are identical (same `content_hash`); a re-scanned copy of the same letter
+is a different file. The live check for F25 is
+`backend/tests/integration/test_identifier_search_live.py` (skipped unless
+`RUN_INTEGRATION_TESTS=true` and a backend answers at `TEST_BASE_URL`, default
+`http://127.0.0.1:11001`, with `TEST_API_KEY` for `X-API-Key`).
+
 ---
 
 ## Response Generation
