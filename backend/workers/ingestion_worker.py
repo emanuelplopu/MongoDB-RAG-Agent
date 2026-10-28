@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 from backend.core.ingestion_jobs import (
     FILES_STARTED_FIELD, RUNNER_WORKER, TENANT_FIELD, WORKER_OWNED, reached_files, resume_config
 )
+from backend.services.ingestion_schedule import ConcurrencyController, EffectiveLimits
 from backend.services.activity_events import (
     ActivityEventRecorder, get_activity_recorder, set_activity_recorder
 )
@@ -266,6 +267,9 @@ class IngestionWorker:
                     "process_isolation_enabled": bool(config_doc.get("process_isolation_enabled", True)),
                     "file_processing_timeout": config_doc.get("file_processing_timeout", 300),
                     "job_poll_interval": config_doc.get("job_poll_interval_seconds", 1.0),
+                    # Load profile (backend/services/ingestion_schedule.py), resolved per file
+                    "load_profile": config_doc.get("load_profile"),
+                    "office_hours": config_doc.get("office_hours"),
                 })
                 new_concurrent = self.config.get("max_concurrent_files", 1)
                 if old_concurrent != new_concurrent:
@@ -626,18 +630,41 @@ class IngestionWorker:
                 job_state["queue_by_extension"] = count_by_extension(files)
                 job_state["processed_by_extension"] = {}
 
-            # Run ingestion with configured concurrency
-            results = await pipeline.ingest_documents(
-                progress_callback=sync_progress_callback,
-                incremental=config.get("incremental", True),
-                max_concurrent_files=self.config.get("max_concurrent_files", 1),
-                thread_pool_workers=self.config.get("thread_pool_workers"),
-                process_isolation=self.config.get("process_isolation_enabled"),
-                stats_callback=stats_callback,
-                job_id=job_id,
-                retry_failed_types=retry_error_types(config),
-                queue_callback=queue_callback,
+            # Load profile: the slot limit the file loop reads before every file; the stored
+            # config is re-read while the run is going (profile switches reach this job)
+            max_concurrent = int(self.config.get("max_concurrent_files", 1))
+
+            def on_limits(limits: EffectiveLimits) -> None:
+                job_state["load_period"] = limits.period
+                job_state["concurrency_slots"] = limits.max_concurrent_files
+                asyncio.create_task(self._write_log(
+                    "INFO", f"File slots: {limits.max_concurrent_files} of {max_concurrent} ({limits.label})"
+                ))
+
+            slot_controller = ConcurrencyController(self.config, max_concurrent, on_change=on_limits)
+            slot_controller.limits()
+            config_refresh = asyncio.create_task(
+                slot_controller.refresh_loop(
+                    lambda: self.db[INGESTION_CONFIG_COLLECTION].find_one({"_id": "performance_config"})
+                )
             )
+
+            # Run ingestion with configured concurrency
+            try:
+                results = await pipeline.ingest_documents(
+                    progress_callback=sync_progress_callback,
+                    incremental=config.get("incremental", True),
+                    max_concurrent_files=max_concurrent,
+                    thread_pool_workers=self.config.get("thread_pool_workers"),
+                    process_isolation=self.config.get("process_isolation_enabled"),
+                    stats_callback=stats_callback,
+                    job_id=job_id,
+                    retry_failed_types=retry_error_types(config),
+                    queue_callback=queue_callback,
+                    slot_limit=slot_controller.current,
+                )
+            finally:
+                config_refresh.cancel()
             
             # Update phase: finalizing
             job_state["phase"] = "finalizing"
@@ -846,6 +873,9 @@ class IngestionWorker:
                     "image_only_pdfs": state.get("image_only_pdfs", 0),
                     "image_only_pdfs_ocr": state.get("image_only_pdfs_ocr", 0),
                     "no_chunks_files": state.get("no_chunks_files", 0),
+                    # Load profile period and file slots in force (status line)
+                    "load_period": state.get("load_period"),
+                    "concurrency_slots": state.get("concurrency_slots"),
                     "timeout_files": state.get("timeout_files", 0),
                     "error_files": state.get("error_files", 0),
                     # Per-extension queue and progress (the shared ETA estimator reads them)

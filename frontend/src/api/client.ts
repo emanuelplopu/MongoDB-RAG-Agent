@@ -679,6 +679,21 @@ export interface AgentPerformanceConfig {
   max_sources_per_search: number
 }
 
+/** Load profile of the performance config: how many files a run converts at once, by time of day. */
+export type IngestionLoadProfile = 'server_room' | 'office'
+
+/** Office hours of the "office" load profile: local time in `timezone`, weekdays 0 = Monday to 6 = Sunday. */
+export interface IngestionOfficeHours {
+  timezone: string
+  /** HH:MM */
+  start: string
+  /** HH:MM, after start */
+  end: string
+  weekdays: number[]
+  /** Files converted at once during office hours (never above max_concurrent_files). */
+  max_concurrent_files: number
+}
+
 export interface IngestionPerformanceConfig {
   process_isolation_enabled: boolean
   max_concurrent_files: number
@@ -687,6 +702,9 @@ export interface IngestionPerformanceConfig {
   embedding_requests_per_minute: number
   file_processing_timeout: number
   job_poll_interval_seconds: number
+  /** server_room: max_concurrent_files around the clock; office: office_hours.max_concurrent_files during office hours. */
+  load_profile: IngestionLoadProfile
+  office_hours: IngestionOfficeHours
 }
 
 export interface LLMProviderConfigResponse {
@@ -759,6 +777,10 @@ export interface IngestionStatus {
   processing_rate?: number  // files per minute
   /** "api" (in-process) or "worker" (ingestion worker container). */
   runner?: string | null
+  /** Load profile period in force: "server_room", "office_hours" or "off_hours". */
+  load_period?: string | null
+  /** File slots in use right now (the office profile lowers them during office hours). */
+  concurrency_slots?: number | null
   // Per-outcome counters, updated while the job runs
   image_only_pdfs?: number
   image_only_pdfs_ocr?: number

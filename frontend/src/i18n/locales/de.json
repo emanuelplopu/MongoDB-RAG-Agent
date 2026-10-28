@@ -635,6 +635,7 @@
     "elapsed": "Vergangen",
     "eta": "Geschätzte Zeit",
     "etaByExtension": "Verbleibend nach Dateityp",
+    "officeHoursSlots": "Bürozeiten: {{count}} Dateien gleichzeitig",
     "currentFile": "Aktuelle Datei",
     "logs": "Protokolle",
     "streamLogs": "Live-Protokoll",

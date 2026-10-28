@@ -165,6 +165,38 @@ Windows: Docker Desktop gets a fraction of the host's RAM, and each conversion
 thread needs ~0.6 GB on top of MongoDB's cache), then watch `docker stats`
 during the first minutes of a run.
 
+**Load profiles (office hours).** A machine that stands in the office is loud
+and hot at 16 conversions around the clock (2026-10-27: an Ultra 9 285HX held at
+90 W, hottest core 92-94 °C, for four days). The performance config therefore
+carries a `load_profile` (Configuration page → Ingestion → "Load Profile";
+`backend/services/ingestion_schedule.py`):
+
+- `server_room` (default): `max_concurrent_files` files at once around the
+  clock, as before.
+- `office`: on the office days (`office_hours.weekdays`, 0 = Monday) between
+  `office_hours.start` and `office_hours.end` (wall-clock time in
+  `office_hours.timezone`, default `INGESTION_OFFICE_TIMEZONE` =
+  `Europe/Vienna`) a run converts at most `office_hours.max_concurrent_files`
+  files at once (default 8, never above `max_concurrent_files`); at night, from
+  the end of the last office day to the start of the next (Friday evening to
+  Monday morning with the default days) it uses the full `max_concurrent_files`.
+
+The limit follows the clock inside a running job: the concurrent loop takes it
+from a `SlotLimiter` (`src/ingestion/ingest.py`) whose `limit()` callable is
+`ConcurrencyController.current` (`slot_limit` of `ingest_documents`), read
+before every file. A lowered limit takes effect as the running files finish
+(nothing is interrupted), a raised one admits waiting files at once. The API
+runner and the ingestion worker re-read `performance_config` every minute, so
+switching the profile or its hours on the Configuration page reaches the
+running job without a restart. The thread pool, the per-conversion CPU threads
+and the conversion worker processes stay sized for `max_concurrent_files`,
+which is why a raised `max_concurrent_files` still needs a new run; idle
+worker processes cost memory, not CPU. The job status (`/api/v1/ingestion/status`)
+reports `load_period` (`server_room`, `office_hours`, `off_hours`) and
+`concurrency_slots`, and the Ingestion page shows "office hours: N files at
+once" next to the ETA while the lower limit is in force. Jobs run from the
+CLI pass no `slot_limit` and use every slot.
+
 **Timed-out conversions (process isolation).** Until 2026-10-24 the per-file
 timeout of the concurrent loop cancelled an asyncio future while the thread
 converting the file kept running: the slot went to the next file, more

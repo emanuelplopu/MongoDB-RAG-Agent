@@ -28,6 +28,7 @@ from backend.services.activity_events import get_activity_recorder
 from backend.services.file_registry import FileRegistryService
 from backend.services.ingestion_counters import apply_stats_counts
 from backend.services.ingestion_eta import count_by_extension, extension_of, job_eta
+from backend.services.ingestion_schedule import ConcurrencyController, EffectiveLimits
 from backend.services.worker_liveness import choose_ui_job_runner
 from fastapi import Depends
 
@@ -1275,6 +1276,27 @@ async def run_ingestion(
             f"thread_pool_workers={thread_pool_workers}, process_isolation={process_isolation}"
         )
 
+        # Load profile: the slot limit the file loop reads before every file (the office
+        # profile lowers it during office hours). The stored config is re-read while the
+        # run is going, so a profile switch on the Configuration page reaches this job.
+        def on_limits(limits: EffectiveLimits) -> None:
+            job_state["load_period"] = limits.period
+            job_state["concurrency_slots"] = limits.max_concurrent_files
+            _ingestion_logs.append({
+                "timestamp": datetime.now().isoformat(),
+                "level": "INFO",
+                "message": f"File slots: {limits.max_concurrent_files} of {max_concurrent} ({limits.label})",
+                "logger": "ingestion",
+            })
+
+        slot_controller = ConcurrencyController(perf_config, max_concurrent, on_change=on_limits)
+        slot_controller.limits()
+        config_refresh = asyncio.create_task(
+            slot_controller.refresh_loop(
+                lambda: db.db["ingestion_config"].find_one({"_id": "performance_config"})
+            )
+        )
+
         # Status counters follow the per-file stats as the pipeline writes them during the run;
         # a resumed job starts from what its earlier runs recorded
         counter_baseline = await _calculate_job_extended_metrics(db, job_id) if resumed_job is not None else {}
@@ -1296,18 +1318,22 @@ async def run_ingestion(
             job_state["processed_by_extension"] = {}
 
         # Run ingestion with configured concurrency
-        results = await pipeline.ingest_documents(
-            progress_callback=progress_callback,
-            incremental=config.get("incremental", True),
-            max_concurrent_files=max_concurrent,
-            thread_pool_workers=thread_pool_workers,
-            job_id=job_id,
-            pause_checkpoint=pause_checkpoint,
-            process_isolation=process_isolation,
-            stats_callback=stats_callback,
-            retry_failed_types=retry_error_types(config),
-            queue_callback=queue_callback,
-        )
+        try:
+            results = await pipeline.ingest_documents(
+                progress_callback=progress_callback,
+                incremental=config.get("incremental", True),
+                max_concurrent_files=max_concurrent,
+                thread_pool_workers=thread_pool_workers,
+                job_id=job_id,
+                pause_checkpoint=pause_checkpoint,
+                process_isolation=process_isolation,
+                stats_callback=stats_callback,
+                retry_failed_types=retry_error_types(config),
+                queue_callback=queue_callback,
+                slot_limit=slot_controller.current,
+            )
+        finally:
+            config_refresh.cancel()
         
         # Update phase to finalizing
         job_state["phase"] = "finalizing"

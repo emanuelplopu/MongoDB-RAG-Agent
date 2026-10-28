@@ -23,6 +23,7 @@ from dataclasses import dataclass, field, asdict
 from concurrent.futures import ThreadPoolExecutor
 import functools
 import threading
+from collections import deque
 
 from pymongo import AsyncMongoClient
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
@@ -512,6 +513,88 @@ def resolve_thread_pool_workers(configured: Optional[int], max_concurrent_files:
     """
     base = int(configured) if configured else default_thread_pool_workers()
     return max(1, min(MAX_THREAD_POOL_WORKERS, max(base, int(max_concurrent_files or 1))))
+
+
+class SlotLimiter:
+    """File slots of the concurrent loop whose number can change while the run is going.
+
+    Like ``asyncio.Semaphore(max_slots)``, but the number of slots in use at once is
+    ``limit()`` (``max_slots`` when no ``limit`` callable is given, never above it and never
+    below one), read again whenever a slot is taken or freed. The ingestion load profile
+    lowers it during office hours and raises it again afterwards
+    (``backend/services/ingestion_schedule.py``): a lowered limit takes effect as running
+    files finish, a raised one admits waiting files at the next release or :meth:`kick`.
+    Waiters are admitted in order; a cancelled waiter takes no slot.
+
+    Args:
+        max_slots: The run's slot count (its thread pool and worker processes are sized for it).
+        limit: Returns the number of slots to use right now; a failing callable means ``max_slots``.
+    """
+
+    def __init__(self, max_slots: int, limit: Optional[Callable[[], int]] = None) -> None:
+        self._max = max(1, int(max_slots))
+        self._limit_fn = limit
+        self._active = 0
+        self._waiters: deque = deque()
+
+    @property
+    def active(self) -> int:
+        """Slots in use."""
+        return self._active
+
+    @property
+    def max_slots(self) -> int:
+        """The run's slot count."""
+        return self._max
+
+    def limit(self) -> int:
+        """Slots to use right now: ``limit()`` clamped to ``1..max_slots``."""
+        if self._limit_fn is None:
+            return self._max
+        try:
+            value = int(self._limit_fn())
+        except Exception as exc:  # the schedule must never stop the run
+            logger.warning(f"Slot limit unavailable, using all {self._max} slots: {exc}")
+            return self._max
+        return max(1, min(self._max, value))
+
+    async def acquire(self) -> None:
+        """Take a slot, waiting while ``limit()`` slots are in use."""
+        loop = asyncio.get_running_loop()
+        while self._active >= self.limit():
+            waiter = loop.create_future()
+            self._waiters.append(waiter)
+            try:
+                await waiter
+            except asyncio.CancelledError:
+                if waiter.done() and not waiter.cancelled():
+                    self._wake()  # admitted but cancelled before running: pass the turn on
+                else:
+                    try:
+                        self._waiters.remove(waiter)
+                    except ValueError:
+                        pass
+                raise
+        self._active += 1
+
+    def release(self) -> None:
+        """Free a slot and admit waiters up to the current limit."""
+        if self._active <= 0:
+            raise ValueError("SlotLimiter released more often than acquired")
+        self._active -= 1
+        self._wake()
+
+    def kick(self) -> None:
+        """Re-read the limit and admit waiters it allows (after a raised limit)."""
+        self._wake()
+
+    def _wake(self) -> None:
+        free = self.limit() - self._active
+        while free > 0 and self._waiters:
+            waiter = self._waiters.popleft()
+            if not waiter.done():
+                waiter.set_result(None)
+                free -= 1
 
 
 def docling_num_threads(pool_workers: Optional[int] = None) -> int:
@@ -4051,6 +4134,7 @@ class DocumentIngestionPipeline:
         stats_callback: Optional[Callable[[Dict[str, int]], None]] = None,
         retry_failed_types: Optional[frozenset] = None,
         queue_callback: Optional[Callable[[List[str]], None]] = None,
+        slot_limit: Optional[Callable[[], int]] = None,
     ) -> List[IngestionResult]:
         """Ingest all documents; see :meth:`_ingest_documents_impl` for the arguments.
 
@@ -4070,6 +4154,7 @@ class DocumentIngestionPipeline:
                 stats_callback=stats_callback,
                 retry_failed_types=retry_failed_types,
                 queue_callback=queue_callback,
+                slot_limit=slot_limit,
             )
         finally:
             if token is not None:
@@ -4087,6 +4172,7 @@ class DocumentIngestionPipeline:
         stats_callback: Optional[Callable[[Dict[str, int]], None]] = None,
         retry_failed_types: Optional[frozenset] = None,
         queue_callback: Optional[Callable[[List[str]], None]] = None,
+        slot_limit: Optional[Callable[[], int]] = None,
     ) -> List[IngestionResult]:
         """
         Ingest all documents from the documents folder.
@@ -4097,6 +4183,10 @@ class DocumentIngestionPipeline:
                 ``failed_documents`` are skipped unless their error type is listed here (F23).
             queue_callback: Called once with the final list of files this run will process
                 (after the incremental and failed-file filters), e.g. for the per-extension ETA.
+            slot_limit: Returns how many of the ``max_concurrent_files`` slots the concurrent
+                loop may use right now (the load profile's ``ConcurrencyController.current``,
+                ``backend/services/ingestion_schedule.py``); read before every file. The pool
+                and the worker processes stay sized for ``max_concurrent_files``.
             progress_callback: Optional callback for progress updates
             incremental: If True, skip already-ingested files (default: True)
             max_concurrent_files: Number of files to process concurrently (default: 1)
@@ -4227,6 +4317,7 @@ class DocumentIngestionPipeline:
                     job_id=job_id,
                     pause_checkpoint=pause_checkpoint,
                     stats_callback=stats_callback,
+                    slot_limit=slot_limit,
                 )
             finally:
                 if use_processes:
@@ -4362,6 +4453,7 @@ class DocumentIngestionPipeline:
         job_id: Optional[str] = None,
         pause_checkpoint: Optional[Callable[[], Awaitable[None]]] = None,
         stats_callback: Optional[Callable[[Dict[str, int]], None]] = None,
+        slot_limit: Optional[Callable[[], int]] = None,
     ) -> Tuple[List[IngestionResult], int]:
         """
         Process documents concurrently using a semaphore with timeout and failure tracking.
@@ -4386,7 +4478,10 @@ class DocumentIngestionPipeline:
             existing_hashes: Dict of content hashes to source paths; the hashes of files stored
                 during this run are added to it
             incremental: Whether to skip duplicates
-            max_concurrent: Maximum concurrent files to process
+            max_concurrent: Maximum concurrent files to process (the run's slot count)
+            slot_limit: Returns how many of those slots to use right now (the load
+                profile's ``ConcurrencyController.current``); read before every file by
+                :class:`SlotLimiter`. None uses every slot.
             progress_callback: Optional progress callback
             job_id: Optional job ID to link stats to
             pause_checkpoint: Optional coroutine function awaited before each file
@@ -4401,7 +4496,7 @@ class DocumentIngestionPipeline:
             asyncio.CancelledError: A file task was cancelled by a stop/shutdown check. Files
                 already in progress finish first; stats of processed files are still saved.
         """
-        semaphore = asyncio.Semaphore(max_concurrent)
+        slots = SlotLimiter(max_concurrent, slot_limit)
         results: List[IngestionResult] = []
         duplicates_skipped = 0
         processed_count = 0
@@ -4452,7 +4547,7 @@ class DocumentIngestionPipeline:
             """Process a file once; timed-out and deferred files are queued for a later round."""
             nonlocal duplicates_skipped, processed_count
 
-            await semaphore.acquire()
+            await slots.acquire()
             release_slot = True
             claimed_hash: Optional[str] = None
             handle: Optional[ConversionHandle] = None
@@ -4657,7 +4752,7 @@ class DocumentIngestionPipeline:
                             if orphan_by_file.get(_path) is done_future:
                                 orphan_by_file.pop(_path, None)
                             try:
-                                loop.call_soon_threadsafe(semaphore.release)
+                                loop.call_soon_threadsafe(slots.release)
                             except RuntimeError:  # loop closed: no slot left to free
                                 pass
 
@@ -4732,7 +4827,7 @@ class DocumentIngestionPipeline:
                         if in_flight_hashes.get(claimed_hash) == file_path:
                             del in_flight_hashes[claimed_hash]
                 if release_slot:
-                    semaphore.release()
+                    slots.release()
 
         def raise_if_cancelled(outcomes: List[Any]) -> None:
             # gather(return_exceptions=True) keeps one failing file from ending the run, but it

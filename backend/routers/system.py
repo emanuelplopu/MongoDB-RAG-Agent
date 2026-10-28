@@ -14,6 +14,13 @@ from backend.models.schemas import (
 from backend.core.config import settings
 from backend.routers.auth import require_admin, UserResponse
 from backend.services import host_stats
+from backend.services.ingestion_schedule import (
+    DEFAULT_LOAD_PROFILE,
+    LoadProfile,
+    OfficeHoursConfig,
+    load_profile_from,
+    office_hours_from,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1616,6 +1623,19 @@ class IngestionPerformanceConfig(BaseModel):
     # Polling settings
     job_poll_interval_seconds: float = Field(default=1.0, ge=0.5, le=10.0, description="Worker job poll interval")
 
+    # Load profile: files at once by time of day (backend/services/ingestion_schedule.py)
+    load_profile: LoadProfile = Field(
+        default=DEFAULT_LOAD_PROFILE,
+        description=(
+            "server_room: max_concurrent_files around the clock; office: office_hours.max_concurrent_files "
+            "during office hours, max_concurrent_files at night and on the other days"
+        ),
+    )
+    office_hours: OfficeHoursConfig = Field(
+        default_factory=OfficeHoursConfig,
+        description="Office hours of the office profile: timezone, start, end, weekdays, files at once",
+    )
+
 
 @router.get("/ingestion-performance")
 async def get_ingestion_performance_config(request: Request):
@@ -1640,6 +1660,8 @@ async def get_ingestion_performance_config(request: Request):
                 "embedding_requests_per_minute": doc.get("embedding_requests_per_minute", settings.ingestion_embedding_requests_per_minute),
                 "file_processing_timeout": doc.get("file_processing_timeout", settings.ingestion_file_processing_timeout),
                 "job_poll_interval_seconds": doc.get("job_poll_interval_seconds", settings.ingestion_job_poll_interval),
+                "load_profile": load_profile_from(doc),
+                "office_hours": office_hours_from(doc).model_dump(),
             }
     except Exception as e:
         logger.warning(f"Failed to load ingestion config from database: {e}")
@@ -1653,6 +1675,8 @@ async def get_ingestion_performance_config(request: Request):
         "embedding_requests_per_minute": settings.ingestion_embedding_requests_per_minute,
         "file_processing_timeout": settings.ingestion_file_processing_timeout,
         "job_poll_interval_seconds": settings.ingestion_job_poll_interval,
+        "load_profile": DEFAULT_LOAD_PROFILE,
+        "office_hours": OfficeHoursConfig().model_dump(),
     }
 
 
@@ -1678,6 +1702,8 @@ async def save_ingestion_performance_config(request: Request, config: IngestionP
             "embedding_requests_per_minute": config.embedding_requests_per_minute,
             "file_processing_timeout": config.file_processing_timeout,
             "job_poll_interval_seconds": config.job_poll_interval_seconds,
+            "load_profile": config.load_profile,
+            "office_hours": config.office_hours.model_dump(),
             "updated_at": datetime.now().isoformat(),
         }
         
@@ -1696,7 +1722,16 @@ async def save_ingestion_performance_config(request: Request, config: IngestionP
         settings.ingestion_file_processing_timeout = config.file_processing_timeout
         settings.ingestion_job_poll_interval = config.job_poll_interval_seconds
         
-        logger.info(f"Saved ingestion performance config: concurrent_files={config.max_concurrent_files}, isolation={config.process_isolation_enabled}")
+        logger.info(
+            f"Saved ingestion performance config: concurrent_files={config.max_concurrent_files}, "
+            f"isolation={config.process_isolation_enabled}, load_profile={config.load_profile}"
+            + (
+                f" (office hours {config.office_hours.start}-{config.office_hours.end} "
+                f"{config.office_hours.timezone}, days {config.office_hours.weekdays}: "
+                f"{config.office_hours.max_concurrent_files} files at once)"
+                if config.load_profile == "office" else ""
+            )
+        )
         
         return {"success": True, "message": "Ingestion performance configuration saved"}
     except Exception as e:
