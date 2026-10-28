@@ -200,6 +200,22 @@ reports `load_period` (`server_room`, `office_hours`, `off_hours`) and
 once" next to the ETA while the lower limit is in force. Jobs run from the
 CLI pass no `slot_limit` and use every slot.
 
+Why a profile and not simply a smaller `max_concurrent_files`: the CPU threads
+of each conversion are the cores shared across the pool (`docling_num_threads`,
+`OCR_OMP_THREAD_LIMIT`, table above), so a run started with 8 slots gives every
+conversion three threads and loads the CPU like 16 slots with one. Measured on
+the client's MS-02 Ultra (Ultra 9 285HX, 24 threads, host agent samples,
+diejuristin corpus, 2026-10-27/28): 16 slots 96 % CPU, 88 W package, 87 °C
+package, hottest core 88 °C average / 96 °C peak; 8 slots (a new run sized for
+8) 96 %, 88 W, 87 °C, the same; `office_lite` with 4 of 16 slots 43-51 % CPU,
+65-74 W, 81-84 °C package, hottest core 82-86 °C average / 92 °C peak, the API
+container down from 13 to 3-5 cores. Power and load halve; the temperature
+falls less, because the few busy cores run at their boost clock. Going quieter
+than that is a matter of the CPU power limit (BIOS or the Windows power plan's
+maximum processor state), not of the ingestion settings. The host agent records
+no CPU or case fan speed on this board (LibreHardwareMonitor finds no Super I/O
+on it); only the GPU fan is sampled, as a percentage.
+
 **Timed-out conversions (process isolation).** Until 2026-10-24 the per-file
 timeout of the concurrent loop cancelled an asyncio future while the thread
 converting the file kept running: the slot went to the next file, more
