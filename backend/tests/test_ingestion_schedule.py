@@ -76,6 +76,14 @@ class TestEffectiveLimits:
         assert limits_at(custom, vienna(2026, 10, 27, 10)) == (2, "office_hours")
         assert limits_at(config, vienna(2026, 10, 27, 10), maximum=3) == (3, "office_hours")
 
+    def test_cap_cpu_boost_only_in_office_hours(self):
+        config = {**OFFICE_CONFIG, "office_hours": {**OFFICE_CONFIG["office_hours"], "cap_cpu_boost": True}}
+        assert effective_limits(config, vienna(2026, 10, 27, 10)).cap_cpu_boost is True
+        assert effective_limits(config, vienna(2026, 10, 27, 20)).cap_cpu_boost is False
+        assert effective_limits({**config, "load_profile": "office_lite"}, vienna(2026, 10, 27, 10)).cap_cpu_boost is True
+        assert effective_limits({**config, "load_profile": "server_room"}, vienna(2026, 10, 27, 10)).cap_cpu_boost is False
+        assert effective_limits(OFFICE_CONFIG, vienna(2026, 10, 27, 10)).cap_cpu_boost is False
+
     def test_weekday_evening_and_night_use_the_maximum(self):
         assert limits_at(OFFICE_CONFIG, vienna(2026, 10, 27, 18)) == (16, "off_hours")
         assert limits_at(OFFICE_CONFIG, vienna(2026, 10, 27, 23, 30)) == (16, "off_hours")

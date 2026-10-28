@@ -358,6 +358,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         except Exception as e:
             logger.warning("db-stats collector init failed (non-fatal): %s", e)
 
+    # Host power plan control: publish this tenant's desired CPU clock state (an office load
+    # profile with cap_cpu_boost, in its office hours) for the host agent, which applies it
+    app.state.power_plan_publisher = None
+    if settings.telemetry_history_enabled and app.state.telemetry_store is not None:
+        try:
+            from backend.services.power_plan_control import HOST_CONTROL, PowerPlanPublisher
+
+            async def _load_performance_config():
+                return await app.state.db.db["ingestion_config"].find_one({"_id": "performance_config"})
+
+            power_plan_publisher = PowerPlanPublisher(
+                app.state.telemetry_store.db[HOST_CONTROL], _load_performance_config, settings.tenant_id,
+            )
+            await power_plan_publisher.start()
+            app.state.power_plan_publisher = power_plan_publisher
+            logger.info("power plan publisher started (tenant %s)", settings.tenant_id)
+        except Exception as e:
+            logger.warning("power plan publisher init failed (non-fatal): %s", e)
+
     # Strategy OS initialization (Phase 0)
     if settings.strategy_os_enabled:
         try:
@@ -620,6 +639,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     except Exception as e:
         logger.warning(f"Error persisting final scheduler state: {e}")
 
+    power_plan_publisher = getattr(app.state, "power_plan_publisher", None)
+    if power_plan_publisher is not None:
+        await power_plan_publisher.stop()
     db_stats_collector = getattr(app.state, "db_stats_collector", None)
     if db_stats_collector is not None:
         await db_stats_collector.stop()

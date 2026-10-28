@@ -29,7 +29,7 @@ import {
   Profile, SystemStats, CustomEndpoint, NetworkScanResult, ConfigOptions,
   LLMModel, EmbeddingModel, LLMProviderConfigResponse, LLMProviderConfigRequest,
   ProviderModelInfo, FetchModelsResponse, ProviderTestResponse,
-  AgentTool, ToolTestResponse, IngestionPerformanceConfig, IngestionLoadProfile, IngestionOfficeHours,
+  AgentTool, ToolTestResponse, IngestionPerformanceConfig, IngestionLoadProfile, IngestionOfficeHours, PowerPlanStatus,
   ModelTestResult, ModelCapability
 } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
@@ -142,10 +142,12 @@ export default function ConfigurationPage() {
         weekdays: [0, 1, 2, 3, 4],
         max_concurrent_files: 8,
         lite_max_concurrent_files: 4,
+        cap_cpu_boost: false,
       },
     })
     const [isSavingIngestionConfig, setIsSavingIngestionConfig] = useState(false)
     const [ingestionConfigErrors, setIngestionConfigErrors] = useState<Record<string, string>>({})
+    const [powerPlan, setPowerPlan] = useState<PowerPlanStatus | null>(null)
 
     // Model Capability Testing state
     const [modelCapabilities, setModelCapabilities] = useState<ModelCapability[]>([])
@@ -337,6 +339,12 @@ export default function ConfigurationPage() {
         }))
       } catch (ingestionErr) {
         console.error('Error fetching ingestion config:', ingestionErr)
+      }
+      // CPU clock cap status (host agent); absent when telemetry history is off
+      try {
+        setPowerPlan(await systemApi.getPowerPlanStatus())
+      } catch {
+        setPowerPlan(null)
       }
       // Fetch model capabilities
       try {
@@ -2927,6 +2935,27 @@ export default function ConfigurationPage() {
                       ))}
                     </div>
                   </div>
+                  <label className="inline-flex items-start gap-2 text-sm text-primary-900 dark:text-gray-200">
+                    <input
+                      type="checkbox"
+                      aria-label="Cap the CPU clock during office hours"
+                      checked={ingestionConfig.office_hours.cap_cpu_boost}
+                      onChange={(e) => updateOfficeHours({ cap_cpu_boost: e.target.checked })}
+                      className="mt-0.5 h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                    />
+                    <span>
+                      Cap the CPU clock during office hours (Windows power plan: boost off). The host agent applies it and
+                      lifts it afterwards; the machine stays cool and quiet, at a fraction of the indexing pace.
+                    </span>
+                  </label>
+                  {powerPlan && (
+                    <p className="text-xs text-secondary dark:text-gray-500" data-testid="power-plan-status">
+                      Host agent: {powerPlan.agent_seen && powerPlan.agent
+                        ? `plan ${powerPlan.agent.state}${powerPlan.agent.applied_at ? ` since ${new Date(powerPlan.agent.applied_at).toLocaleString()}` : ''}`
+                        : 'not reporting (service not installed or stopped)'}
+                      {' · '}this tenant asks for {powerPlan.desired} ({powerPlan.reason})
+                    </p>
+                  )}
                   <p className="text-xs text-secondary dark:text-gray-500">
                     Outside these hours and on the other days a run uses the full {ingestionConfig.max_concurrent_files} concurrent files.
                   </p>

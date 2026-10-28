@@ -220,6 +220,7 @@ const apiMocks = vi.hoisted(() => ({
     getAgentPerformanceConfig: vi.fn(),
     saveAgentPerformanceConfig: vi.fn(),
     getIngestionPerformanceConfig: vi.fn(),
+    getPowerPlanStatus: vi.fn(),
     saveIngestionPerformanceConfig: vi.fn(),
     getModelCapabilities: vi.fn(),
     testModelCapability: vi.fn(),
@@ -600,7 +601,15 @@ function resetApiMocks() {
     file_processing_timeout: 300,
     job_poll_interval_seconds: 1.0,
     load_profile: 'server_room',
-    office_hours: { timezone: 'Europe/Vienna', start: '08:00', end: '18:00', weekdays: [0, 1, 2, 3, 4], max_concurrent_files: 8, lite_max_concurrent_files: 4 },
+    office_hours: { timezone: 'Europe/Vienna', start: '08:00', end: '18:00', weekdays: [0, 1, 2, 3, 4], max_concurrent_files: 8, lite_max_concurrent_files: 4, cap_cpu_boost: false },
+  })
+  apiMocks.systemApi.getPowerPlanStatus.mockResolvedValue({
+    desired: 'normal',
+    reason: 'server room, load profile server_room',
+    tenants: [],
+    agent: { state: 'normal', applied_at: null, updated_at: '2026-10-28T10:00:00Z' },
+    agent_seen: true,
+    stale_after_seconds: 600,
   })
   apiMocks.systemApi.getModelCapabilities.mockResolvedValue({ models: modelCapabilities })
   apiMocks.systemApi.saveLLMProviderConfig.mockResolvedValue({ success: true })
@@ -1678,9 +1687,12 @@ describe('large workflow page coverage smoke tests', () => {
     expect(screen.getByLabelText('Office day Mon')).toBeChecked()
     expect(screen.getByLabelText('Office day Sat')).not.toBeChecked()
 
-    // Saturday becomes an office day, Friday a free one
+    // Saturday becomes an office day, Friday a free one; the clock cap goes on
     await user.click(screen.getByLabelText('Office day Sat'))
     await user.click(screen.getByLabelText('Office day Fri'))
+    expect(screen.getByLabelText('Cap the CPU clock during office hours')).not.toBeChecked()
+    await user.click(screen.getByLabelText('Cap the CPU clock during office hours'))
+    expect(screen.getByTestId('power-plan-status')).toHaveTextContent('plan normal')
 
     // More files at once than the Concurrent Files setting (2 in the mock) is rejected
     const files = screen.getByLabelText('Files at once in office hours')
@@ -1705,6 +1717,7 @@ describe('large workflow page coverage smoke tests', () => {
       weekdays: [0, 1, 2, 3, 5],
       max_concurrent_files: 1,
       lite_max_concurrent_files: 4,
+      cap_cpu_boost: true,
     })
     expect(await screen.findByText(/load profile reaches a running job/)).toBeInTheDocument()
 

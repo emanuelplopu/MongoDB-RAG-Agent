@@ -21,6 +21,7 @@ from backend.services.ingestion_schedule import (
     load_profile_from,
     office_hours_from,
 )
+from backend.services.power_plan_control import HOST_CONTROL, PowerPlanStatusResponse, power_plan_status
 
 logger = logging.getLogger(__name__)
 
@@ -612,6 +613,22 @@ async def get_stats(request: Request):
         indexes=index_status,
         config=config
     )
+
+
+@router.get("/power-plan", response_model=PowerPlanStatusResponse)
+async def get_power_plan_status(request: Request, admin: UserResponse = Depends(require_admin)) -> PowerPlanStatusResponse:
+    """The CPU clock cap: what this tenant asks for and what the host agent applied.
+
+    Superadmin only. The desire follows the ingestion load profile (``office_hours.cap_cpu_boost``
+    during office hours); the host agent reports in ``host_control`` (see
+    ``backend/services/power_plan_control.py``). 503 while telemetry history is disabled.
+    """
+    store = getattr(request.app.state, "telemetry_store", None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="Telemetry history is disabled; no host control channel")
+    db = request.app.state.db
+    config = await db.db[INGESTION_CONFIG_COLLECTION].find_one({"_id": INGESTION_CONFIG_DOC_ID}) or {}
+    return await power_plan_status(store.db[HOST_CONTROL], settings.tenant_id, config)
 
 
 @router.get("/host-stats", response_model=HostStatsResponse)

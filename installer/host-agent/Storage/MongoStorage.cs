@@ -8,6 +8,7 @@ public sealed class MongoContext
 {
     public const string HostSamples = "host_samples";
     public const string ActivityCurrent = "activity_current";
+    public const string HostControl = "host_control";
 
     public MongoContext(AgentOptions options)
     {

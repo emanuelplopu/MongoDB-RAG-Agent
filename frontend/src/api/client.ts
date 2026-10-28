@@ -694,6 +694,31 @@ export interface IngestionOfficeHours {
   max_concurrent_files: number
   /** Files converted at once during office hours under the office_lite profile. */
   lite_max_concurrent_files: number
+  /** Cap the CPU clock during office hours (Windows power plan, applied by the host agent). */
+  cap_cpu_boost: boolean
+}
+
+/** What the host agent last reported about the Windows power plan (host_control "power_plan"). */
+export interface PowerPlanAgentStatus {
+  /** "capped", "normal" or "unknown". */
+  state: string
+  desired?: string | null
+  max_state_ac?: number | null
+  boost_mode_ac?: number | null
+  applied_at?: string | null
+  updated_at?: string | null
+  error?: string | null
+  agent_version?: string | null
+}
+
+/** GET /system/power-plan: this tenant's desire, every tenant's desire and the agent's report. */
+export interface PowerPlanStatus {
+  desired: string
+  reason: string
+  tenants: { tenant: string; desired: string; reason: string; updated_at?: string | null; fresh: boolean }[]
+  agent?: PowerPlanAgentStatus | null
+  agent_seen: boolean
+  stale_after_seconds: number
 }
 
 export interface IngestionPerformanceConfig {
@@ -1623,6 +1648,12 @@ export const systemApi = {
     embedding_provider?: string
   }): Promise<any> => {
     const response = await api.post('/model-versions/switch', switchRequest)
+    return response.data
+  },
+
+  // CPU clock cap (load profile office hours), applied by the host agent
+  getPowerPlanStatus: async (): Promise<PowerPlanStatus> => {
+    const response = await api.get('/system/power-plan')
     return response.data
   },
 

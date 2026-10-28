@@ -11,6 +11,8 @@ using RecallHub.HostAgent.Storage;
 //   RecallHubHostAgent.exe --sensors    list every LibreHardwareMonitor sensor and the derived temperatures, then exit
 //                                       (no write, no configuration; run elevated)
 //
+// As a service it also applies the CPU clock cap the backends ask for (host_control, PowerPlanControl.cs).
+//
 // Configuration precedence: appsettings.json next to the exe < %ProgramData%\RecallHub\HostAgent\appsettings.json
 // < RECALLHUB_AGENT_* environment variables (e.g. RECALLHUB_AGENT_Agent__IntervalSeconds=10) < command line.
 
@@ -63,6 +65,15 @@ builder.Services.AddHostedService(sp => new AgentWorker(
     sp.GetRequiredService<IHostApplicationLifetime>(),
     mode,
     mode == OutputMode.Mongo ? new MongoSampleSink(sp.GetRequiredService<ILogger<MongoSampleSink>>(), options, mongo) : null));
+if (mode == OutputMode.Mongo && options.PowerPlan.Enabled)
+{
+    // CPU clock cap requested by the backends' load profiles (host_control), applied with powercfg
+    builder.Services.AddHostedService(sp => new PowerPlanWorker(
+        sp.GetRequiredService<ILogger<PowerPlanWorker>>(),
+        options.PowerPlan,
+        mongo,
+        new PowercfgApplier(sp.GetRequiredService<ILogger<PowercfgApplier>>())));
+}
 
 using var host = builder.Build();
 await host.RunAsync();

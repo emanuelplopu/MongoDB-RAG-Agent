@@ -12,6 +12,11 @@ carries a ``load_profile``:
 * ``office_lite`` - ``office`` with ``office_hours.lite_max_concurrent_files`` (default 4)
   during office hours: for a machine that stands next to the people working.
 
+Both office profiles can also ask for a capped CPU clock during office hours
+(``office_hours.cap_cpu_boost``): the host agent then sets the Windows power plan to 99 %
+maximum processor state with the boost disabled and restores it afterwards
+(``backend/services/power_plan_control.py``).
+
 The limit follows the clock inside a running job. The concurrent file loop of
 ``DocumentIngestionPipeline`` takes its slot limit from :meth:`ConcurrencyController.current`
 before every file (the ``slot_limit`` argument of ``ingest_documents``): a lowered limit takes
@@ -95,6 +100,13 @@ class OfficeHoursConfig(BaseModel):
         le=32,
         description="Files converted at once during office hours under the office_lite profile (never above max_concurrent_files)",
     )
+    cap_cpu_boost: bool = Field(
+        default=False,
+        description=(
+            "During office hours the host agent caps the CPU clock (Windows power plan: 99 % maximum "
+            "processor state, boost off) and lifts the cap outside them; cool and quiet, but slow"
+        ),
+    )
 
     @field_validator("timezone")
     @classmethod
@@ -145,6 +157,7 @@ class EffectiveLimits(BaseModel):
     profile: LoadProfile
     period: LoadPeriod
     max_concurrent_files: int
+    cap_cpu_boost: bool = Field(default=False, description="The CPU clock should be capped right now")
 
     @property
     def label(self) -> str:
@@ -191,6 +204,7 @@ def resolve_limits(
                 profile=profile,
                 period="office_hours",
                 max_concurrent_files=max(1, min(cap, office.files_at_once(profile))),
+                cap_cpu_boost=office.cap_cpu_boost,
             )
         return EffectiveLimits(profile=profile, period="off_hours", max_concurrent_files=cap)
     return EffectiveLimits(profile="server_room", period="server_room", max_concurrent_files=cap)

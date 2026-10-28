@@ -216,9 +216,11 @@ maximum processor state), not of the ingestion settings. The host agent records
 no CPU or case fan speed on this board (LibreHardwareMonitor finds no Super I/O
 on it); only the GPU fan is sampled, as a percentage.
 
-**Clock cap (tested 2026-10-28, not recommended).** `scripts/Set-CpuBoostCap.ps1
+**Clock cap (tested 2026-10-28; available per office hours, costly).** `scripts/Set-CpuBoostCap.ps1
 -Apply` (elevated) sets the active Windows power plan to 99 % maximum processor
-state with the boost mode disabled, `-Restore` undoes it. On the MS-02 Ultra the
+state with the boost mode disabled, `-Restore` undoes it; the office profiles'
+`office_hours.cap_cpu_boost` lets the host agent do the same during office hours
+and lift it afterwards (`docs/12-TELEMETRY_SYSTEM.md`, "Power plan control"). On the MS-02 Ultra the
 CPU then sits at 2.24 GHz: 28-35 W instead of 83-88 W, package 54-58 °C instead
 of 78-87 °C, hottest core 58-62 °C instead of 92-96 °C, within 15 s. But the
 conversions slow down far more than the clock ratio suggests: the big scanned

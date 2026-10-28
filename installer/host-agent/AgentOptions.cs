@@ -38,6 +38,8 @@ public sealed class AgentOptions
 
     public SensorOptions HardwareSensors { get; set; } = new();
 
+    public PowerPlanOptions PowerPlan { get; set; } = new();
+
     /// <summary>Fills list defaults after binding (the binder appends to pre-filled lists).</summary>
     public AgentOptions Normalize()
     {
@@ -78,4 +80,16 @@ public sealed class SensorOptions
 {
     /// <summary>Read CPU/board/storage sensors with LibreHardwareMonitor (needs the PawnIO driver and elevation).</summary>
     public bool Enabled { get; set; }
+}
+
+public sealed class PowerPlanOptions
+{
+    /// <summary>Apply the CPU clock cap the backends publish in host_control (the service runs elevated).</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>Seconds between checks of host_control.</summary>
+    public int CheckSeconds { get; set; } = 15;
+
+    /// <summary>A tenant's desire older than this counts as "normal" (a stopped backend never leaves the cap on).</summary>
+    public int DesiredFreshSeconds { get; set; } = 600;
 }
