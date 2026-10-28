@@ -24,3 +24,10 @@ def sleepy_reader(file_path: str) -> Tuple[str, Any]:
     seconds = float(raw or 0)
     time.sleep(seconds)
     return f"slept {seconds:.1f} in {os.getpid()}", None
+
+
+def noting_reader(file_path: str) -> Tuple[str, Any, Dict[str, Any]]:
+    """Return the file's text plus reader notes, like ``read_document_in_worker`` does."""
+    with open(file_path, "r", encoding="utf-8") as handle:
+        raw = handle.read().strip()
+    return raw, None, {"ocr_fallback": "full_page", "pid": os.getpid()}

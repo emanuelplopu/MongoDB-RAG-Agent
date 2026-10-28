@@ -185,3 +185,56 @@ from `SUPPORTED_INGESTION_EXTENSIONS` (`_supported_file_patterns()` in
 
 Items 3, 5 and 6 above are therefore done; item 2 is enabled for the diejuristin ingest
 (`MSG_EXTRACT_ATTACHMENTS=true` in the live `.env`); items 4 and 7 (audio/video) stay open.
+
+## Follow-up 2026-10-28: scanned pages whose OCR text Docling keeps inside a picture (F35)
+
+**Finding** (prompt-test log F35, ticks 21-23, after the PR #29 deploy made pure scans visible as
+`image_only_pdf` records): 484 of the first 539 pure scans (90 %) were recorded as
+`image_only_pdf: OCR found no text`, although OCR had worked. Of 12 random ones re-read with plain
+Tesseract 5.5 (deu+eng) on a pypdfium2 render, 4 were readable; the other 8 are photos, IDs, a
+sketch and the CCITT fax class of F30, which stays out of scope here. The pipeline's own
+converter (`create_document_converter()` in the live API container) on
+`HandMa_MileTh/Unterlagen/Aufklärungsbogen Aesthetic.Clinic vom 16.6.2017.pdf` returns
+`ConversionStatus.SUCCESS` with items = {`PictureItem`: 1}: Docling 2.142 classifies the scanned
+page as one picture, its OCR still runs, and the 1,568 characters it recognised hang on that
+picture as its *children*. `export_to_markdown()` renders `<!-- image -->`, the HybridChunker does
+not traverse pictures, no chunk is produced, and the file is recorded as a scan without text.
+`Beilage I.PDF` carries 736 characters the same way; `Erlagschein.pdf` 18 text items. A second
+variant returns no items at all for a page plain Tesseract reads without trouble
+(`Direktzustellung_2009_03_24_4.pdf`, 209 words). Multi-page scans show the same loss as
+documents whose text is only `<!-- image -->` lines. The rollback image behaves identically, so
+this is the Docling of the 2026-10-23 dependency refresh, not PR #29.
+
+**Fix** (`src/ingestion/scan_text_fallback.py`, called from the PDF branch of `_read_document` in
+`src/ingestion/ingest.py` through `_recover_scan_text`; the same code runs in the thread pool and
+in the conversion worker processes). It runs after the conversion, on the `DoclingDocument`,
+and changes nothing for a page that produced body text: the trigger is, per page, *no text item
+and no table cell outside pictures* (page headers and footers, Docling's furniture layer, do not
+count as text). Two variants, applied in page order:
+
+| variant | trigger | what happens | `ocr_fallback` |
+|---|---|---|---|
+| picture children | the page has `PictureItem`s whose descendants (captions excluded) carry text | each child's text is inserted into the body as a plain text item right after its picture, in the children's order, with the child's own provenance; the picture and its children stay as they are | `picture_children` |
+| full page | the page has no item at all, no native text layer (< 50 characters, the `is_image_only_pdf` threshold) and at least one image object | the page is rendered with pypdfium2 at the pipeline's OCR scale (`OCR_SCAN_DPI`, `OcrConfig.pdf_scale()`) and read with one Tesseract pass (`deu+eng` / the configured languages, `OCR_PSM`, `OCR_TESSDATA_PATH`, through the `OCR_OMP_THREAD_LIMIT` wrapper of `src/ingestion/ocr_tesseract.py`, `ocr_image_file`); Tesseract's paragraphs become text items of that page, inserted where the page belongs in the body | `full_page` |
+
+A document with both variants records `picture_children+full_page`. The Markdown is exported
+from the repaired document, so the stored `content`, the title extraction and the chunker all see
+the recovered text, and the § repair (`src/ingestion/ocr_repair.py`), which runs after the
+conversion on the whole document, covers the recovered items too. pdfium is opened only when
+Docling listed a page without any item (or no page at all); a document whose pages all hold
+something never pays for it. Without a `tesseract` binary only the first variant runs. A failure
+inside the fallback is logged and the conversion result stands as Docling returned it.
+
+What is recorded: one INFO line per file (`OCR fallback for <file> (picture_children: 1,568
+characters from 1 picture(s) on page(s) 1)`), the per-file stat `ocr_fallback` in
+`ingestion_stats` (`IngestionFileStats.ocr_fallback`, carried from the conversion worker to the
+loop as `ConversionHandle.notes` through `note_conversion`, and from `_ingest_single_document` as
+`IngestionResult.ocr_fallback`). The `image_only_pdf` semantics of PR #29 are unchanged: a scan
+rescued this way is `success=True, image_only_pdf=True`; one whose full-page pass finds nothing
+either stays `image_only_pdf: OCR found no text` and retryable.
+
+Not covered on purpose: a page whose only item is a picture *without* text children (Docling's
+OCR already ran on that bitmap and found nothing; a second pass with the same engine would only
+cost time), the CCITT fax scans of F30, and files whose Docling conversion fails outright.
+Tests: `backend/tests/test_scan_text_fallback.py` (synthetic equivalents of the sample files;
+Tesseract mocked, rendering and chunking real).

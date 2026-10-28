@@ -166,6 +166,9 @@ class IngestionResult:
     chunks_created: int
     processing_time_ms: float
     errors: List[str]
+    # PDFs only: which scan-text fallback put OCR text back into the document after the
+    # conversion (F35): "picture_children", "full_page" or both joined with "+"; None = none
+    ocr_fallback: Optional[str] = None
 
 
 @dataclass
@@ -190,6 +193,9 @@ class IngestionFileStats:
     # PDFs only: True when the file has no text layer (a pure scan), so its text came from
     # OCR (success) or OCR found nothing (error_type image_only_pdf); None = not checked (F9)
     image_only_pdf: Optional[bool] = None
+    # PDFs only: the scan-text fallback that recovered OCR text Docling had left out of the
+    # body (F35): "picture_children", "full_page" or "picture_children+full_page"; None = none
+    ocr_fallback: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for MongoDB storage."""
@@ -214,6 +220,8 @@ class IngestionFileStats:
             result["job_id"] = self.job_id
         if self.image_only_pdf is not None:
             result["image_only_pdf"] = self.image_only_pdf
+        if self.ocr_fallback:
+            result["ocr_fallback"] = self.ocr_fallback
         return result
 
 
@@ -1753,6 +1761,35 @@ def get_effective_device() -> str:
     return cfg.device
 
 
+def full_page_ocr_reader(ocr_config: OcrConfig) -> Optional[Callable[[Any], str]]:
+    """The one-pass Tesseract reader of the ``full_page`` scan-text fallback (F35).
+
+    Reads a rendered page image with ``deu+eng`` (the configured languages), the configured
+    page segmentation mode and tessdata, through the ``OCR_OMP_THREAD_LIMIT`` wrapper of
+    :mod:`src.ingestion.ocr_tesseract`.
+
+    Args:
+        ocr_config: The pipeline's OCR configuration.
+
+    Returns:
+        The reader, or ``None`` when no Tesseract binary is available (the fallback then only
+        recovers picture children).
+    """
+    try:
+        from src.ingestion.ocr_tesseract import ocr_pil_image, tesseract_available
+    except ImportError:  # Docling without the Tesseract stages
+        return None
+    if not tesseract_available():
+        return None
+
+    def read(image: Any) -> str:
+        return ocr_pil_image(
+            image, ocr_config.languages, psm=ocr_config.psm, tessdata_path=ocr_config.tessdata_path
+        )
+
+    return read
+
+
 def create_document_converter(ocr_config: Optional[OcrConfig] = None):
     """
     Create (or reuse) a DocumentConverter with optimal settings for the current environment.
@@ -1982,17 +2019,49 @@ class ConversionHandle:
     conversion worker process acknowledged it): the file's budget starts there, not when the
     file was queued. ``thread_future`` is the pool future of a thread-mode conversion; after a
     timeout it tells the loop whether the thread is still running (a thread cannot be
-    interrupted, so its slot stays reserved until it ends).
+    interrupted, so its slot stays reserved until it ends). ``notes`` are the facts the
+    reader recorded about the conversion with :func:`note_conversion` (today: which scan-text
+    fallback fired), brought back from the pool thread or the worker process.
     """
 
     started: asyncio.Event = field(default_factory=asyncio.Event)
     started_at: Optional[float] = None
     thread_future: Optional[concurrent.futures.Future] = None
+    notes: Dict[str, Any] = field(default_factory=dict)
 
     def mark_started(self) -> None:
         if self.started_at is None:
             self.started_at = time.monotonic()
             self.started.set()
+
+
+# Facts a reader records about the conversion it is running (``note_conversion``), collected
+# per thread by ``conversion_notes``: the thread-pool reader and the conversion worker process
+# both wrap ``_read_document`` in it and hand the notes back to the loop on the ConversionHandle.
+_conversion_notes_local = threading.local()
+
+
+@contextlib.contextmanager
+def conversion_notes() -> Iterator[Dict[str, Any]]:
+    """Collect the :func:`note_conversion` facts of the conversions run in this thread inside the block.
+
+    Yields:
+        The dict the notes land in (read it after the block).
+    """
+    previous = getattr(_conversion_notes_local, "notes", None)
+    notes: Dict[str, Any] = {}
+    _conversion_notes_local.notes = notes
+    try:
+        yield notes
+    finally:
+        _conversion_notes_local.notes = previous
+
+
+def note_conversion(**facts: Any) -> None:
+    """Record facts about the conversion running in this thread; a no-op outside :func:`conversion_notes`."""
+    notes = getattr(_conversion_notes_local, "notes", None)
+    if notes is not None:
+        notes.update(facts)
 
 
 # The concurrent loop sets the handle of the file it is about to process; the per-file task
@@ -2433,6 +2502,44 @@ class DocumentIngestionPipeline:
         
         return sorted_files
 
+    def _recover_scan_text(self, document: Any, file_path: str) -> Optional[Any]:
+        """Put the OCR text of scanned pages Docling left out of the body back into ``document`` (F35).
+
+        Runs :func:`src.ingestion.scan_text_fallback.recover_scan_text` on a converted PDF:
+        pages with body text are untouched; a page whose text hangs below a ``PictureItem``
+        gets it copied into the body (``picture_children``), a page without any item that is
+        a scan is read with one full-page Tesseract pass at the pipeline's OCR scale
+        (``full_page``). What fired is logged once per file and recorded for the file's stats
+        through :func:`note_conversion`. A failure inside the fallback never fails the file.
+
+        Args:
+            document: The converted ``DoclingDocument`` (modified in place).
+            file_path: The source PDF.
+
+        Returns:
+            The ``ScanTextRecovery``, or ``None`` when nothing was recovered.
+        """
+        if document is None:
+            return None
+        try:
+            from src.ingestion.scan_text_fallback import recover_scan_text
+
+            ocr_config = resolve_ocr_config()
+            recovery = recover_scan_text(
+                document,
+                file_path,
+                ocr_page=full_page_ocr_reader(ocr_config),
+                scale=ocr_config.pdf_scale(),
+            )
+        except Exception as exc:  # noqa: BLE001 - the conversion result stands as Docling returned it
+            logger.warning(f"Scan text fallback failed for {os.path.basename(file_path)}: {exc}")
+            return None
+        if recovery is None:
+            return None
+        logger.info(f"OCR fallback for {os.path.basename(file_path)} ({recovery.describe()})")
+        note_conversion(ocr_fallback=recovery.fallback)
+        return recovery
+
     def _read_document(self, file_path: str) -> tuple[str, Optional[Any]]:
         """
         Read document content from file - supports multiple formats via Docling.
@@ -2589,6 +2696,11 @@ class DocumentIngestionPipeline:
 
                 converter = create_document_converter()
                 result = converter.convert(file_path)
+
+                # Scanned pages whose OCR text Docling attached to a picture, or returned
+                # empty, get their text back into the document before export/chunking (F35)
+                if file_ext == '.pdf':
+                    self._recover_scan_text(result.document, file_path)
 
                 # Export to markdown for consistent processing
                 markdown_content = export_document_markdown(result.document)
@@ -3768,7 +3880,9 @@ class DocumentIngestionPipeline:
         handle = handle or _conversion_handle_var.get() or ConversionHandle()
         pool = self._conversion_pool
         if pool is not None:
-            return await pool.convert(file_path, on_started=handle.mark_started)
+            content, document, notes = await pool.convert_with_notes(file_path, on_started=handle.mark_started)
+            handle.notes.update(notes)
+            return content, document
         loop = asyncio.get_running_loop()
 
         def read() -> tuple[str, Optional[Any]]:
@@ -3776,7 +3890,10 @@ class DocumentIngestionPipeline:
                 loop.call_soon_threadsafe(handle.mark_started)
             except RuntimeError:  # loop already closed: nothing waits for this conversion
                 pass
-            return self._read_document(file_path)
+            with conversion_notes() as notes:
+                outcome = self._read_document(file_path)
+            handle.notes.update(notes)
+            return outcome
 
         future = self.get_executor().submit(read)
         handle.thread_future = future
@@ -3876,13 +3993,27 @@ class DocumentIngestionPipeline:
                 )
 
         # Convert off the event loop (thread pool, or this run's conversion worker process),
-        # so API requests (login, status checks) are served during ingestion
-        with telemetry_hooks.step("convert"):
-            document_content, docling_doc = await self._convert_document(file_path)
+        # so API requests (login, status checks) are served during ingestion. The reader's
+        # notes about the conversion (which scan-text fallback fired, F35) come back on the
+        # ConversionHandle the loop put in the task's context; a sequential or direct call
+        # gets a private one here.
+        handle = _conversion_handle_var.get()
+        handle_token: Optional[contextvars.Token] = None
+        if handle is None:
+            handle = ConversionHandle()
+            handle_token = _conversion_handle_var.set(handle)
+        try:
+            with telemetry_hooks.step("convert"):
+                document_content, docling_doc = await self._convert_document(file_path)
+        finally:
+            if handle_token is not None:
+                _conversion_handle_var.reset(handle_token)
+        ocr_fallback: Optional[str] = handle.notes.get("ocr_fallback") or None
         pages = getattr(docling_doc, "pages", None)
         telemetry_hooks.note(
             pages=len(pages) if isinstance(pages, (dict, list)) else None,
             chars=len(document_content) if document_content else 0,
+            ocr_fallback=ocr_fallback,
         )
 
         # Post-OCR repair of statute references ("$ 94 ÄrzteG" -> "§ 94 ÄrzteG"); the Docling
@@ -3900,6 +4031,7 @@ class DocumentIngestionPipeline:
                 chunks_created=0,
                 processing_time_ms=(datetime.now() - start_time).total_seconds() * 1000,
                 errors=["No chunks created"],
+                ocr_fallback=ocr_fallback,
             )
 
         with telemetry_hooks.step("ocr_repair"):
@@ -3954,7 +4086,8 @@ class DocumentIngestionPipeline:
                 processing_time_ms=(
                     datetime.now() - start_time
                 ).total_seconds() * 1000,
-                errors=["No chunks created"]
+                errors=["No chunks created"],
+                ocr_fallback=ocr_fallback,
             )
 
         logger.info(f"Created {len(chunks)} chunks")
@@ -3990,7 +4123,8 @@ class DocumentIngestionPipeline:
             title=document_title,
             chunks_created=len(chunks),
             processing_time_ms=processing_time,
-            errors=[]
+            errors=[],
+            ocr_fallback=ocr_fallback,
         )
 
     async def _get_existing_sources(self) -> set:
@@ -4628,6 +4762,7 @@ class DocumentIngestionPipeline:
                             error_message=error_message,
                             classification=map_error_type_to_classification(error_type, chunks_created),
                             image_only_pdf=image_only,
+                            ocr_fallback=getattr(result, "ocr_fallback", None) if result else None,
                         ))
 
                     if progress_callback:
