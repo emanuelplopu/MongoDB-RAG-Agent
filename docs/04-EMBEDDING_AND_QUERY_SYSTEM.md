@@ -180,6 +180,9 @@ carries a `load_profile` (Configuration page → Ingestion → "Load Profile";
   files at once (default 8, never above `max_concurrent_files`); at night, from
   the end of the last office day to the start of the next (Friday evening to
   Monday morning with the default days) it uses the full `max_concurrent_files`.
+- `office_lite`: the same hours and days with
+  `office_hours.lite_max_concurrent_files` (default 4) files at once, for a
+  machine that stands next to the people working.
 
 The limit follows the clock inside a running job: the concurrent loop takes it
 from a `SlotLimiter` (`src/ingestion/ingest.py`) whose `limit()` callable is

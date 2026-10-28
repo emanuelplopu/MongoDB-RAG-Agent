@@ -600,7 +600,7 @@ function resetApiMocks() {
     file_processing_timeout: 300,
     job_poll_interval_seconds: 1.0,
     load_profile: 'server_room',
-    office_hours: { timezone: 'Europe/Vienna', start: '08:00', end: '18:00', weekdays: [0, 1, 2, 3, 4], max_concurrent_files: 8 },
+    office_hours: { timezone: 'Europe/Vienna', start: '08:00', end: '18:00', weekdays: [0, 1, 2, 3, 4], max_concurrent_files: 8, lite_max_concurrent_files: 4 },
   })
   apiMocks.systemApi.getModelCapabilities.mockResolvedValue({ models: modelCapabilities })
   apiMocks.systemApi.saveLLMProviderConfig.mockResolvedValue({ success: true })
@@ -1704,8 +1704,15 @@ describe('large workflow page coverage smoke tests', () => {
       end: '18:00',
       weekdays: [0, 1, 2, 3, 5],
       max_concurrent_files: 1,
+      lite_max_concurrent_files: 4,
     })
     expect(await screen.findByText(/load profile reaches a running job/)).toBeInTheDocument()
+
+    // Office lite shares the hours and days but has its own number of files
+    await user.selectOptions(screen.getByLabelText('Load Profile'), 'office_lite')
+    expect(screen.getByTestId('ingestion-office-hours')).toBeInTheDocument()
+    expect(screen.getByLabelText('Files at once in office hours')).toHaveValue(4)
+    expect(screen.getByLabelText('Office day Sat')).toBeChecked()
 
     // Back to the server room the office fields disappear
     await user.selectOptions(screen.getByLabelText('Load Profile'), 'server_room')

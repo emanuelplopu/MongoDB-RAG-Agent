@@ -66,6 +66,16 @@ class TestEffectiveLimits:
         assert limits_at(OFFICE_CONFIG, vienna(2026, 10, 27, 8)) == (8, "office_hours")
         assert limits_at(OFFICE_CONFIG, vienna(2026, 10, 27, 17, 59)) == (8, "office_hours")
 
+    def test_office_lite_uses_the_lite_number_in_office_hours(self):
+        config = {**OFFICE_CONFIG, "load_profile": "office_lite"}
+        assert limits_at(config, vienna(2026, 10, 27, 10)) == (4, "office_hours")
+        assert limits_at(config, vienna(2026, 10, 27, 20)) == (16, "off_hours")
+        assert limits_at(config, vienna(2026, 10, 31, 12)) == (16, "off_hours")
+        assert effective_limits(config, vienna(2026, 10, 27, 10)).profile == "office_lite"
+        custom = {**config, "office_hours": {**OFFICE_CONFIG["office_hours"], "lite_max_concurrent_files": 2}}
+        assert limits_at(custom, vienna(2026, 10, 27, 10)) == (2, "office_hours")
+        assert limits_at(config, vienna(2026, 10, 27, 10), maximum=3) == (3, "office_hours")
+
     def test_weekday_evening_and_night_use_the_maximum(self):
         assert limits_at(OFFICE_CONFIG, vienna(2026, 10, 27, 18)) == (16, "off_hours")
         assert limits_at(OFFICE_CONFIG, vienna(2026, 10, 27, 23, 30)) == (16, "off_hours")
@@ -113,7 +123,10 @@ class TestEffectiveLimits:
 class TestOfficeHoursConfig:
     def test_defaults(self):
         office = OfficeHoursConfig()
-        assert (office.start, office.end, office.weekdays, office.max_concurrent_files) == ("08:00", "18:00", [0, 1, 2, 3, 4], 8)
+        assert (office.start, office.end, office.weekdays, office.max_concurrent_files, office.lite_max_concurrent_files) == (
+            "08:00", "18:00", [0, 1, 2, 3, 4], 8, 4
+        )
+        assert (office.files_at_once("office"), office.files_at_once("office_lite")) == (8, 4)
         ZoneInfo(office.timezone)  # a real zone
 
     def test_times_are_normalised_and_days_sorted(self):

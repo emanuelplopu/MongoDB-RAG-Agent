@@ -1628,7 +1628,8 @@ class IngestionPerformanceConfig(BaseModel):
         default=DEFAULT_LOAD_PROFILE,
         description=(
             "server_room: max_concurrent_files around the clock; office: office_hours.max_concurrent_files "
-            "during office hours, max_concurrent_files at night and on the other days"
+            "during office hours, max_concurrent_files at night and on the other days; office_lite: the same "
+            "with office_hours.lite_max_concurrent_files during office hours"
         ),
     )
     office_hours: OfficeHoursConfig = Field(
@@ -1728,8 +1729,8 @@ async def save_ingestion_performance_config(request: Request, config: IngestionP
             + (
                 f" (office hours {config.office_hours.start}-{config.office_hours.end} "
                 f"{config.office_hours.timezone}, days {config.office_hours.weekdays}: "
-                f"{config.office_hours.max_concurrent_files} files at once)"
-                if config.load_profile == "office" else ""
+                f"{config.office_hours.files_at_once(config.load_profile)} files at once)"
+                if config.load_profile in ("office", "office_lite") else ""
             )
         )
         

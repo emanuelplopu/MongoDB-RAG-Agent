@@ -680,7 +680,7 @@ export interface AgentPerformanceConfig {
 }
 
 /** Load profile of the performance config: how many files a run converts at once, by time of day. */
-export type IngestionLoadProfile = 'server_room' | 'office'
+export type IngestionLoadProfile = 'server_room' | 'office' | 'office_lite'
 
 /** Office hours of the "office" load profile: local time in `timezone`, weekdays 0 = Monday to 6 = Sunday. */
 export interface IngestionOfficeHours {
@@ -692,6 +692,8 @@ export interface IngestionOfficeHours {
   weekdays: number[]
   /** Files converted at once during office hours (never above max_concurrent_files). */
   max_concurrent_files: number
+  /** Files converted at once during office hours under the office_lite profile. */
+  lite_max_concurrent_files: number
 }
 
 export interface IngestionPerformanceConfig {
@@ -702,7 +704,7 @@ export interface IngestionPerformanceConfig {
   embedding_requests_per_minute: number
   file_processing_timeout: number
   job_poll_interval_seconds: number
-  /** server_room: max_concurrent_files around the clock; office: office_hours.max_concurrent_files during office hours. */
+  /** server_room: max_concurrent_files around the clock; office / office_lite: office_hours.max_concurrent_files / lite_max_concurrent_files during office hours. */
   load_profile: IngestionLoadProfile
   office_hours: IngestionOfficeHours
 }

@@ -141,6 +141,7 @@ export default function ConfigurationPage() {
         end: '18:00',
         weekdays: [0, 1, 2, 3, 4],
         max_concurrent_files: 8,
+        lite_max_concurrent_files: 4,
       },
     })
     const [isSavingIngestionConfig, setIsSavingIngestionConfig] = useState(false)
@@ -189,15 +190,24 @@ export default function ConfigurationPage() {
       setIngestionConfigErrors(prev => ({ ...prev, office_hours: '' }))
     }
 
+    const isOfficeProfile = ingestionConfig.load_profile === 'office' || ingestionConfig.load_profile === 'office_lite'
+    const officeFilesAtOnce = ingestionConfig.load_profile === 'office_lite'
+      ? ingestionConfig.office_hours.lite_max_concurrent_files
+      : ingestionConfig.office_hours.max_concurrent_files
+    const setOfficeFilesAtOnce = (value: number) => updateOfficeHours(
+      ingestionConfig.load_profile === 'office_lite' ? { lite_max_concurrent_files: value } : { max_concurrent_files: value },
+    )
+
     const toggleOfficeDay = (day: number, on: boolean) => {
       const days = ingestionConfig.office_hours.weekdays.filter(d => d !== day)
       updateOfficeHours({ weekdays: (on ? [...days, day] : days).sort((a, b) => a - b) })
     }
 
     const validateOfficeHours = (cfg: IngestionPerformanceConfig): string => {
-      if (cfg.load_profile !== 'office') return ''
+      if (cfg.load_profile !== 'office' && cfg.load_profile !== 'office_lite') return ''
       const office = cfg.office_hours
-      if (isNaN(office.max_concurrent_files) || office.max_concurrent_files < 1 || office.max_concurrent_files > cfg.max_concurrent_files) {
+      const filesAtOnce = cfg.load_profile === 'office_lite' ? office.lite_max_concurrent_files : office.max_concurrent_files
+      if (isNaN(filesAtOnce) || filesAtOnce < 1 || filesAtOnce > cfg.max_concurrent_files) {
         return `Files at once in office hours must be between 1 and ${cfg.max_concurrent_files} (the Concurrent Files setting)`
       }
       if (office.weekdays.length === 0) return 'Pick at least one office day'
@@ -2828,6 +2838,7 @@ export default function ConfigurationPage() {
               <p className="text-xs text-secondary dark:text-gray-500 mb-3">
                 Server room: the configured number of concurrent files around the clock. Office: fewer files at once
                 during office hours so the machine stays quiet, the full number at night and on the other days.
+                Office lite: the same hours with an even smaller number, for a machine next to the people working.
                 A running job follows a change within a minute.
               </p>
               <select
@@ -2842,8 +2853,9 @@ export default function ConfigurationPage() {
               >
                 <option value="server_room">Server room (full speed around the clock)</option>
                 <option value="office">Office (quieter during office hours)</option>
+                <option value="office_lite">Office lite (quietest during office hours)</option>
               </select>
-              {ingestionConfig.load_profile === 'office' && (
+              {isOfficeProfile && (
                 <div className="mt-4 space-y-4" data-testid="ingestion-office-hours">
                   <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                     <div>
@@ -2879,8 +2891,8 @@ export default function ConfigurationPage() {
                         type="number"
                         min={1}
                         max={ingestionConfig.max_concurrent_files}
-                        value={ingestionConfig.office_hours.max_concurrent_files}
-                        onChange={(e) => updateOfficeHours({ max_concurrent_files: Number(e.target.value) })}
+                        value={officeFilesAtOnce}
+                        onChange={(e) => setOfficeFilesAtOnce(Number(e.target.value))}
                         className={officeInputClass}
                       />
                     </div>

@@ -9,6 +9,8 @@ carries a ``load_profile``:
   listed weekdays, ``start`` to ``end`` wall-clock time in the office's timezone) a run
   converts at most ``office_hours.max_concurrent_files`` files at once, so the fans stay
   quiet; nights and the weekend use the full ``max_concurrent_files``.
+* ``office_lite`` - ``office`` with ``office_hours.lite_max_concurrent_files`` (default 4)
+  during office hours: for a machine that stands next to the people working.
 
 The limit follows the clock inside a running job. The concurrent file loop of
 ``DocumentIngestionPipeline`` takes its slot limit from :meth:`ConcurrencyController.current`
@@ -34,10 +36,11 @@ from backend.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-LoadProfile = Literal["server_room", "office"]
+LoadProfile = Literal["server_room", "office", "office_lite"]
 LoadPeriod = Literal["server_room", "office_hours", "off_hours"]
 
-LOAD_PROFILES: Tuple[str, ...] = ("server_room", "office")
+LOAD_PROFILES: Tuple[str, ...] = ("server_room", "office", "office_lite")
+OFFICE_PROFILES: Tuple[str, ...] = ("office", "office_lite")
 DEFAULT_LOAD_PROFILE: LoadProfile = "server_room"
 DEFAULT_OFFICE_WEEKDAYS: Tuple[int, ...] = (0, 1, 2, 3, 4)  # Monday to Friday
 CONFIG_REFRESH_SECONDS = 60.0
@@ -86,6 +89,12 @@ class OfficeHoursConfig(BaseModel):
         le=32,
         description="Files converted at once during office hours (never above the profile's max_concurrent_files)",
     )
+    lite_max_concurrent_files: int = Field(
+        default=4,
+        ge=1,
+        le=32,
+        description="Files converted at once during office hours under the office_lite profile (never above max_concurrent_files)",
+    )
 
     @field_validator("timezone")
     @classmethod
@@ -115,6 +124,10 @@ class OfficeHoursConfig(BaseModel):
         if parse_hhmm(self.start) >= parse_hhmm(self.end):
             raise ValueError("office hours must end after they start")
         return self
+
+    def files_at_once(self, profile: str) -> int:
+        """The office-hours limit of ``profile``: the lite number for ``office_lite``, else the normal one."""
+        return self.lite_max_concurrent_files if profile == "office_lite" else self.max_concurrent_files
 
     def contains(self, now: datetime) -> bool:
         """Whether ``now`` falls into the office hours (a naive datetime counts as UTC)."""
@@ -166,18 +179,18 @@ def resolve_limits(
     """The limit at ``now`` for an already parsed profile.
 
     Args:
-        profile: ``server_room`` or ``office``.
-        office: Office hours of the ``office`` profile (ignored by ``server_room``).
+        profile: ``server_room``, ``office`` or ``office_lite``.
+        office: Office hours of the office profiles (ignored by ``server_room``).
         maximum: The run's slot count; office hours never go above it.
         now: The moment to resolve (aware; naive counts as UTC).
     """
     cap = max(1, int(maximum))
-    if profile == "office":
+    if profile in OFFICE_PROFILES:
         if office.contains(now):
             return EffectiveLimits(
                 profile=profile,
                 period="office_hours",
-                max_concurrent_files=max(1, min(cap, office.max_concurrent_files)),
+                max_concurrent_files=max(1, min(cap, office.files_at_once(profile))),
             )
         return EffectiveLimits(profile=profile, period="off_hours", max_concurrent_files=cap)
     return EffectiveLimits(profile="server_room", period="server_room", max_concurrent_files=cap)
