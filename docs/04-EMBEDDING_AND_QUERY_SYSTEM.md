@@ -216,6 +216,35 @@ maximum processor state), not of the ingestion settings. The host agent records
 no CPU or case fan speed on this board (LibreHardwareMonitor finds no Super I/O
 on it); only the GPU fan is sampled, as a percentage.
 
+**Clock cap (tested 2026-10-28, not recommended).** `scripts/Set-CpuBoostCap.ps1
+-Apply` (elevated) sets the active Windows power plan to 99 % maximum processor
+state with the boost mode disabled, `-Restore` undoes it. On the MS-02 Ultra the
+CPU then sits at 2.24 GHz: 28-35 W instead of 83-88 W, package 54-58 °C instead
+of 78-87 °C, hottest core 58-62 °C instead of 92-96 °C, within 15 s. But the
+conversions slow down far more than the clock ratio suggests: the big scanned
+PDFs that take 250-400 s at full speed no longer fit their budget, and the run
+indexed 5 pages/min at 16 slots × 1 thread, 5 pages/min at 8 slots × 2 threads
+(3,600 s `max_timeout`), with most files cancelled at their budget, against
+91-130 pages/min uncapped. A profile of fewer slots keeps 75-90 % of the pace at
+a few degrees less; the cap keeps the machine cool at a tenth of the pace. For a
+cool *and* productive machine the lever is a sustained power limit (PL1) in the
+BIOS, which keeps the boost for short bursts, not the Windows plan's all-or-
+nothing boost switch. Measured rows (pages/min, files finished, CPU, package
+power, package temperature, hottest-core peak):
+
+| Run | pages/min | files ok | CPU | W | pkg °C | core peak °C |
+|---|---|---|---|---|---|---|
+| 16 slots × 1 thread, no cap | 91-130 | 566 of 657 | 87-96 % | 87-88 | 80-87 | 90-96 |
+| 8 of 16 slots × 1 thread, no cap | 120 | 25 of 44 | 73 % | 83 | 78 | 92 |
+| 4 of 16 slots × 1 thread, no cap (`office_lite`) | 15-46 | 19 of 118 | 51-60 % | 75-78 | 80-82 | 92 |
+| 8 of 16 slots × 1 thread, cap | 65 (files begun uncapped) | 5 of 21 | 49 % | 28 | 54 | 58 |
+| 16 of 16 slots × 1 thread, cap | 5 | 2 of 39 | 81 % | 35 | 58 | 62 |
+| 8 slots × 2 threads, cap, 3,600 s budget | 5 | 4 of 58 | 74 % | 33 | 56 | 58 |
+
+The same test found that `POST /api/v1/system/ingestion-performance` replaced
+the whole `performance_config` document and so dropped the `timeout_config`
+saved by `/ingestion-timeout-config`; it now merges (`$set`).
+
 **Timed-out conversions (process isolation).** Until 2026-10-24 the per-file
 timeout of the concurrent loop cancelled an asyncio future while the thread
 converting the file kept running: the slot went to the next file, more
