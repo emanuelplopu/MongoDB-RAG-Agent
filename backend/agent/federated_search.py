@@ -12,7 +12,7 @@ Supports strategy-specific scoring through the strategy pattern.
 import asyncio
 import logging
 import time
-from typing import List, Optional, Dict, Any, Set, Tuple, TYPE_CHECKING
+from typing import List, Optional, Dict, Any, Sequence, Set, Tuple, TYPE_CHECKING
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from backend.agent.schemas import (
@@ -29,12 +29,15 @@ from backend.core.config import settings
 from backend.services.identifier_search import (
     COPY_FIELDS_PROJECTION,
     DEFAULT_NUM_CANDIDATES,
+    LegalIdentifier,
     add_location,
     copy_group_key,
     detect_identifiers,
     fetch_exact_hits,
     identifier_fetch_count,
     merge_identifier_results,
+    plan_text_stage,
+    semantic_guarantee,
     vector_num_candidates,
 )
 from backend.services.query_embedding import create_embedding_client, embed_query
@@ -257,7 +260,9 @@ class FederatedSearch:
 
         A query naming a legal identifier (see ``backend/services/identifier_search``)
         widens the candidate windows, adds one exact phrase query on the text index
-        and pins its hits ahead of the fused list with copies collapsed; ordinary
+        and pins its hits ahead of the fused list with copies collapsed; a statute
+        citation or statute name also replaces the fuzzy text stage with phrase
+        clauses and guarantees the vector top-3 a place in the window; ordinary
         queries run exactly as before.
         """
         try:
@@ -274,6 +279,7 @@ class FederatedSearch:
             results = []
 
             identifiers = detect_identifiers(query) if search_type in ["text", "hybrid"] else []
+            text_plan = plan_text_stage(query, identifiers, index=settings.mongodb_text_index)
             if identifiers:
                 fetch_count = identifier_fetch_count(match_count)
                 num_candidates = vector_num_candidates(fetch_count)
@@ -327,19 +333,10 @@ class FederatedSearch:
                     logger.warning(f"Vector search failed for {database_name}: {e}")
 
             if search_type in ["text", "hybrid"]:
-                # Text search
+                # Text search (the fuzzy operator, or the phrase/compound of a statute query)
                 try:
                     text_pipeline = [
-                        {
-                            "$search": {
-                                "index": settings.mongodb_text_index,
-                                "text": {
-                                    "query": query,
-                                    "path": "content",
-                                    "fuzzy": {"maxEdits": 2, "prefixLength": 3}
-                                }
-                            }
-                        },
+                        {"$search": text_plan.operator},
                         {"$limit": fetch_count},
                         {
                             "$lookup": {
@@ -381,14 +378,16 @@ class FederatedSearch:
                     documents=db[docs_collection],
                 )
                 logger.info(
-                    "Identifier query %s in %s: %d exact hit(s), %d fused candidates",
+                    "Identifier query %s in %s: %s, %d exact hit(s), %d fused candidates",
                     [identifier.canonical for identifier in identifiers],
-                    database_name, len(exact_hits), len(results),
+                    database_name, text_plan.describe(), len(exact_hits), len(results),
                 )
 
             # For hybrid, apply RRF (exact hits ride along and are pinned there)
             if search_type == "hybrid" and (results or exact_hits):
-                results = self._apply_rrf(results + exact_hits, match_count, strategy=strategy)
+                results = self._apply_rrf(
+                    results + exact_hits, match_count, strategy=strategy, identifiers=identifiers
+                )
             elif exact_hits:
                 results = merge_identifier_results(exact_hits, results, match_count)
 
@@ -403,34 +402,40 @@ class FederatedSearch:
         results: List[Dict],
         limit: int,
         k: int = 60,
-        strategy: "BaseStrategy" = None
+        strategy: "BaseStrategy" = None,
+        identifiers: Sequence[LegalIdentifier] = (),
     ) -> List[Dict]:
         """Apply Reciprocal Rank Fusion to combine vector and text results.
-        
+
         If a strategy is provided, delegates to the strategy's calculate_rrf_scores
         method for custom scoring logic. Otherwise, uses the default enhanced RRF.
-        
+
         Enhanced with:
         - Cross-search boosting (documents found by both searches get higher scores)
         - Content quality penalties (very short content penalized)
         - Original vector similarity preservation for reference
-        
+
         Results tagged ``search_type == "exact"`` (the identifier path) never take
         part in the fusion: the vector/text results are fused as usual and the
         exact hits are then pinned ahead of them with copies collapsed, see
-        ``backend.services.identifier_search.merge_identifier_results``.
+        ``backend.services.identifier_search.merge_identifier_results``. When the
+        query's ``identifiers`` include a statute citation, the vector top-3 keep
+        a place in the window (``semantic_guarantee``, finding F34).
 
         Args:
             results: Combined results from vector and text search
             limit: Maximum results to return
             k: RRF constant (default 60)
             strategy: Optional strategy for custom scoring
+            identifiers: The query's legal identifiers (``detect_identifiers``)
 
         Returns:
             Deduplicated and ranked results with normalized scores (0-1 scale)
         """
         exact_hits = [r for r in results if r.get("search_type") == "exact"]
-        if not exact_hits:
+        vector_results = [r for r in results if r.get("search_type") == "vector"]
+        guaranteed = semantic_guarantee(identifiers, vector_results)
+        if not exact_hits and not guaranteed:
             return self._fuse_vector_and_text(results, limit, k=k, strategy=strategy)
         fused_input = [r for r in results if r.get("search_type") != "exact"]
         # Fuse the whole candidate window: the collapse needs the copies below `limit` too.
@@ -438,7 +443,7 @@ class FederatedSearch:
             self._fuse_vector_and_text(fused_input, len(fused_input), k=k, strategy=strategy)
             if fused_input else []
         )
-        return merge_identifier_results(exact_hits, fused, limit)
+        return merge_identifier_results(exact_hits, fused, limit, guaranteed=guaranteed)
 
     def _fuse_vector_and_text(
         self,
@@ -713,10 +718,11 @@ class FederatedSearch:
         """Deduplicate documents and rank by relevance.
 
         Pinned exact identifier hits (``metadata.exact_identifier_match``) stay
-        ahead of everything else. Copies collapse by ``(content_hash, chunk_index)``
-        when the identifier path projected those fields, by chunk id otherwise;
-        a collapsed copy's source path is added to the representative's
-        ``metadata.locations``.
+        ahead of everything else, then the vector results a statute query
+        guaranteed (``metadata.semantic_guarantee``), then the rest by score.
+        Copies collapse by ``(content_hash, chunk_index)`` when the identifier
+        path projected those fields, by chunk id otherwise; a collapsed copy's
+        source path is added to the representative's ``metadata.locations``.
 
         Args:
             documents: List of document references (may have duplicates)
@@ -728,7 +734,11 @@ class FederatedSearch:
         # Best first, so the representative of a copy group is its best-ranked member.
         ranked = sorted(
             documents,
-            key=lambda x: (bool(x.metadata.get("exact_identifier_match")), x.similarity_score),
+            key=lambda x: (
+                bool(x.metadata.get("exact_identifier_match")),
+                bool(x.metadata.get("semantic_guarantee")),
+                x.similarity_score,
+            ),
             reverse=True,
         )
 

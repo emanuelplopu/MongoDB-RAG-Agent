@@ -15,6 +15,8 @@ from backend.services.identifier_search import (
     fetch_exact_hits,
     identifier_fetch_count,
     merge_identifier_results,
+    plan_text_stage,
+    semantic_guarantee,
     vector_num_candidates,
 )
 from backend.services.query_embedding import embed_query
@@ -195,8 +197,11 @@ async def hybrid_search(request: Request, search_request: SearchRequest):
     A query that names a legal identifier (``FN 404945h``, ``EZ 52 KG 11029``,
     ``13 U 39/16v``) takes the identifier path of
     ``backend/services/identifier_search``: wider candidate windows, one exact
-    phrase query pinned ahead of the fused list, copies collapsed. Ordinary
-    queries are unaffected.
+    phrase query pinned ahead of the fused list, copies collapsed. A statute
+    citation (``§ 1 TKG 2021``, ``Art 6 EMRK``) or a statute name with a year
+    additionally replaces the fuzzy text stage with phrase clauses
+    (``plan_text_stage``) and guarantees the vector top-3 a place in the
+    result window (``semantic_guarantee``). Ordinary queries are unaffected.
     """
     start_time = time.time()
 
@@ -205,6 +210,7 @@ async def hybrid_search(request: Request, search_request: SearchRequest):
 
     try:
         identifiers = detect_identifiers(search_request.query)
+        text_plan = plan_text_stage(search_request.query, identifiers, index=settings.mongodb_text_index)
         if identifiers:
             fetch_count = identifier_fetch_count(search_request.match_count)
             num_candidates = vector_num_candidates(fetch_count)
@@ -256,18 +262,9 @@ async def hybrid_search(request: Request, search_request: SearchRequest):
         async for doc in cursor:
             semantic_results.append(doc)
         
-        # Run text search
+        # Run text search (the fuzzy operator, or the phrase/compound of a statute query)
         text_pipeline = [
-            {
-                "$search": {
-                    "index": settings.mongodb_text_index,
-                    "text": {
-                        "query": search_request.query,
-                        "path": "content",
-                        "fuzzy": {"maxEdits": 2, "prefixLength": 3}
-                    }
-                }
-            },
+            {"$search": text_plan.operator},
             {"$limit": fetch_count},
             {
                 "$lookup": {
@@ -330,10 +327,14 @@ async def hybrid_search(request: Request, search_request: SearchRequest):
                 docs_collection=settings.mongodb_collection_documents,
                 documents=db.documents_collection,
             )
-            final_results = merge_identifier_results(exact_hits, fused, search_request.match_count)
+            guaranteed = semantic_guarantee(identifiers, semantic_results)
+            final_results = merge_identifier_results(
+                exact_hits, fused, search_request.match_count, guaranteed=guaranteed
+            )
             logger.info(
-                "Identifier query %s: %d exact hit(s), %d fused candidates",
-                [identifier.canonical for identifier in identifiers], len(exact_hits), len(fused),
+                "Identifier query %s: %s, %d exact hit(s), %d fused candidates, %d vector result(s) guaranteed",
+                [identifier.canonical for identifier in identifiers], text_plan.describe(),
+                len(exact_hits), len(fused), len(guaranteed),
             )
         else:
             final_results = fused[:search_request.match_count]
