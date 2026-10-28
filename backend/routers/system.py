@@ -1708,9 +1708,11 @@ async def save_ingestion_performance_config(request: Request, config: IngestionP
             "updated_at": datetime.now().isoformat(),
         }
         
-        await collection.replace_one(
+        # $set, not replace: the same document carries the timeout_config the
+        # /ingestion-timeout-config endpoint saves (a replace dropped it on every save)
+        await collection.update_one(
             {"_id": INGESTION_CONFIG_DOC_ID},
-            update_doc,
+            {"$set": update_doc},
             upsert=True
         )
         
