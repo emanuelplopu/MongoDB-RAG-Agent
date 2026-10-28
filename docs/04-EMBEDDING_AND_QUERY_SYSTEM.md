@@ -133,6 +133,7 @@ settings surfaces, passed through by `docker-compose.yml`; evidence in
 | `OCR_OMP_THREAD_LIMIT` | derived | OpenMP threads per Tesseract process. Default: the cores shared evenly across the pool, 1-4; `0` leaves OpenMP free. Applied through a generated wrapper command (`tesseract_command()` in `src/ingestion/ocr_tesseract.py`), so it never caps PyTorch in the ingestion process. |
 | `INGEST_PROCESS_ISOLATION` | `true` | Convert in worker processes the concurrent loop kills when a file's budget runs out (`src/ingestion/conversion_workers.py`). Runs started by the API or the ingestion worker take the Configuration page's "Process isolation" (`process_isolation_enabled`) instead; this is the fallback for runs without a stored performance config (CLI). See "Timed-out conversions" below. |
 | `INGEST_STATS_FLUSH_FILES`, `INGEST_STATS_FLUSH_SECONDS` | `25`, `60` | How often the per-file stats of a run are written to `ingestion_stats` / `failed_documents`: every N recorded files or every M seconds, whichever comes first (and once more when the run ends). See "Per-file stats during the run" below. |
+| `INGEST_EMBED_BUDGET_FLOOR_SECONDS`, `INGEST_EMBED_BUDGET_MARGIN`, `INGEST_EMBED_BUDGET_MAX_SECONDS` | `600`, `3`, `14400` | Budget of a converted document's chunking + embedding + storing (the conversion budget stops when the conversion returns): MARGIN times the time the embedder's recent throughput predicts for the document's tokens, between FLOOR and MAX seconds. When it runs out the document is stored with the chunks embedded so far and the rest is embedded after the round from the run's embedding backlog. See "Budgets after the conversion" below. |
 
 Converters are cached per worker thread and configuration
 (`create_document_converter()` / `create_image_converter()`); Docling keeps
@@ -194,15 +195,73 @@ read by nothing. Now:
   conversion keeps its slot until its thread ends (a thread cannot be
   interrupted), so the pool never runs more conversions than there are
   slots, and the retry of that file waits for its first thread to end.
-- The budget (`calculate_file_timeout`) starts when the conversion actually
-  starts, not when the file was queued, and is multiplied by
+- The conversion budget (`calculate_file_timeout`) starts when the conversion
+  actually starts, not when the file was queued, stops when the conversion
+  returns (since 2026-10-28; until then it wrapped the whole file, see
+  "Budgets after the conversion" below), and is multiplied by
   `conversion_budget_factor`: the formula describes a conversion that has
   Docling's default 4 threads to itself; with 16 conversions on 20 cores each
   has one thread, so the factor is 4 (8 conversions: 2 threads, factor 2;
   pinned thread counts that oversubscribe the cores count too). The
-  `max_timeout` cap (30 min by default) stays absolute. A file whose
-  conversion has not started within one budget times out all the same, so
-  nothing stuck before the conversion can hold a slot forever.
+  `max_timeout` cap (30 min by default) is absolute for the first attempt;
+  only a retry lifts it (below). A file whose conversion has not started
+  within one budget times out all the same, so nothing stuck before the
+  conversion can hold a slot forever.
+
+**Budgets after the conversion (F44) and the retry of a timeout (F43).** Until
+2026-10-28 the per-file budget wrapped the whole file: conversion, chunking,
+embedding and the MongoDB writes. While the llama.cpp embedder ran at ~1 k
+tokens/s (F29, F47), a 300-page commentary converted within its budget in
+17-20 min and then queued 50-100 k tokens of chunks: 46 of the 49 files that
+timed out in 12 h (tick 23) had already logged "Successfully converted", the
+document was not stored, and the file was re-queued for a retry with the same
+1,800 s cap that failed the same way, so ~46 × 20 min of conversion CPU per 12 h
+were thrown away (tick 28: 10.9 h of Docling time discarded in 3 h). Now:
+
+- The conversion budget stops when the conversion returns
+  (`ConversionHandle.converted`). Chunking, embedding and storing run under
+  their own budget (`indexing_budget` in `src/ingestion/ingest.py`):
+  `INGEST_EMBED_BUDGET_MARGIN` (3) times the time the embedder's recent
+  throughput predicts for the document's tokens, never below
+  `INGEST_EMBED_BUDGET_FLOOR_SECONDS` (600) and never above
+  `INGEST_EMBED_BUDGET_MAX_SECONDS` (14,400). The throughput is the wall time
+  per token of the last 20 chunk batches as one file sees it
+  (`EmbeddingGenerator.throughput`), queueing behind the other files of the run
+  included, so a slow or shared embedder stretches the allowance; 2 s per 1 k
+  tokens are assumed until the first batch. A 100 k-token book at 4 s per 1 k
+  tokens gets 1,200 s; a 450 k-token book behind an embedder at 700 tokens/s
+  shared by 8 files hits the 4 h cap.
+- The budget is checked between embedding batches
+  (`EmbeddingGenerator.embed_chunks_within`), so it overshoots by at most one
+  batch. When it runs out, the document is stored with the chunks embedded so
+  far (`metadata.chunks_count` is the total, `metadata.chunks_pending` the
+  remainder), recorded in `ingestion_stats` as `error_type: partial` with
+  `chunks_pending` (job counter `partial_files`), and the remaining chunks go
+  to the run's embedding backlog. The loop drains the backlog after each round
+  (up to 4 documents at a time, each pass with a fresh work-derived budget, at
+  most 3 passes per document), appends the chunks to the stored document and
+  clears `chunks_pending`; the final record replaces the `partial` one (same
+  `_id`). A document whose remainder is still pending after 3 passes keeps
+  `metadata.chunks_pending` and its `partial` record. Nothing converted is
+  reconverted or thrown away. A task still running past three times its
+  embedding budget (plus 5 min) is cancelled and recorded as an `error` ("hard
+  cap"), not retried.
+- A conversion timeout is recorded at once (`error_type: timeout`,
+  `retry_count: 0`, a `failed_documents` row), so the status counters and the
+  failed-documents page see it while the retry is still queued; every later
+  attempt of the file replaces that `ingestion_stats` row (same `_id`,
+  `retry_count` n) and updates the `failed_documents` row (`retry_count`, or
+  `resolved: true` with a `resolution` when the retry ended otherwise). The
+  job's `timeout_files` counts files, not attempts, and drops when a retry
+  succeeds.
+- A retry gets a larger budget: the cap is lifted by
+  `retry_timeout_multiplier` per attempt (1,800 s → 2,700 s → 4,050 s with the
+  defaults), and the last allowed attempt of a PDF converts without the
+  table-structure stage (`retry_conversion_options`,
+  `ConversionOptions(table_structure=False)`, passed to the conversion worker
+  process; the converter without TableFormer is cached like the others), since
+  TableFormer on the CPU is what pushes table-heavy PDFs past the budget. The
+  log line names both: `Will retry with 2700s timeout (table structure off).`
 
 **Per-file stats during the run.** `ingestion_stats` and `failed_documents`
 were written only after the last file (F2), so during a multi-week job the

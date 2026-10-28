@@ -21,6 +21,8 @@ JOB_COUNTER_FIELDS: Dict[str, str] = {
     "image_only_pdf": "image_only_pdfs",
     "image_only_ocr": "image_only_pdfs_ocr",  # pure scans whose OCR produced text (F9)
     "duplicate": "duplicates_skipped",
+    # stored with part of their chunks while the rest waits in the run's embedding backlog (F44)
+    "partial": "partial_files",
 }
 
 

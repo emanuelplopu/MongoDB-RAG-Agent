@@ -12,7 +12,9 @@ Includes task-type optimization for improved retrieval quality.
 import logging
 import asyncio
 import os
-from typing import List, Optional, Tuple
+import time
+from collections import deque
+from typing import Deque, List, Optional, Tuple
 from datetime import datetime
 from dataclasses import dataclass
 
@@ -170,9 +172,50 @@ async def _check_ollama_available(base_url: str, model: str) -> bool:
         return False
 
 
+class EmbeddingThroughput:
+    """Rolling record of what the last embedding batches cost, as seen by one caller.
+
+    The ingestion loop derives the budget of a document's embedding phase from it
+    (``indexing_budget`` in :mod:`src.ingestion.ingest`): the wall time per token of the
+    recent batches already includes the queueing behind the other files of the run, so a
+    slow or shared embedder stretches the allowance instead of expiring it.
+
+    Args:
+        window: Number of batch calls remembered; older ones fall out, so a recovered
+            embedder is noticed within ``window`` batches.
+    """
+
+    def __init__(self, window: int = 20) -> None:
+        self.window = max(1, int(window))
+        self._samples: Deque[Tuple[int, float]] = deque(maxlen=self.window)
+        self.batches = 0
+
+    def record(self, tokens: int, seconds: float) -> None:
+        """Remember one batch of ``tokens`` tokens that took ``seconds`` of wall time."""
+        if tokens <= 0 or seconds < 0:
+            return
+        self._samples.append((int(tokens), float(seconds)))
+        self.batches += 1
+
+    def seconds_per_1k_tokens(self) -> Optional[float]:
+        """Recent wall seconds per 1,000 tokens, or ``None`` before the first batch."""
+        tokens = sum(t for t, _ in self._samples)
+        if tokens <= 0:
+            return None
+        return 1000.0 * sum(s for _, s in self._samples) / tokens
+
+
+def chunk_tokens(chunk: DocumentChunk) -> int:
+    """Token count of a chunk for budgeting (its counted tokens, else ~4 characters each)."""
+    count = chunk.token_count
+    if count is None:
+        count = len(chunk.content) // 4
+    return max(1, int(count))
+
+
 class EmbeddingGenerator:
     """Generates embeddings for document chunks.
-    
+
     Supports multiple providers:
     - OpenAI (text-embedding-3-small/large)
     - Google Gemini (gemini-embedding-2-preview, gemini-embedding-001)
@@ -199,6 +242,8 @@ class EmbeddingGenerator:
         self.batch_size = batch_size
         self.provider = settings.embedding_provider.lower()
         self.task_type = task_type or _resilience_config.default_task_type
+        #: Wall time per token of the recent chunk batches (see :class:`EmbeddingThroughput`)
+        self.throughput = EmbeddingThroughput()
         
         # Store API keys for different providers
         self._api_keys = {
@@ -766,6 +811,17 @@ class EmbeddingGenerator:
             logger.error(error_msg)
             raise RuntimeError(error_msg)
 
+    def _throughput(self) -> EmbeddingThroughput:
+        """This generator's throughput record (created on demand for instances built without ``__init__``)."""
+        throughput = getattr(self, "throughput", None)
+        if throughput is None:
+            throughput = self.throughput = EmbeddingThroughput()
+        return throughput
+
+    def recent_seconds_per_1k_tokens(self) -> Optional[float]:
+        """Wall seconds per 1,000 tokens of the recent chunk batches (``None`` before the first)."""
+        return self._throughput().seconds_per_1k_tokens()
+
     async def embed_chunks(
         self,
         chunks: List[DocumentChunk],
@@ -781,18 +837,56 @@ class EmbeddingGenerator:
         Returns:
             Chunks with embeddings added
         """
+        embedded, _ = await self.embed_chunks_within(chunks, deadline=None, progress_callback=progress_callback)
+        return embedded
+
+    async def embed_chunks_within(
+        self,
+        chunks: List[DocumentChunk],
+        deadline: Optional[float] = None,
+        progress_callback: Optional[callable] = None,
+    ) -> Tuple[List[DocumentChunk], List[DocumentChunk]]:
+        """Embed ``chunks`` batch by batch until they are done or ``deadline`` has passed.
+
+        The deadline is checked between batches (a batch in flight finishes), so the
+        overshoot is at most one batch. The chunks of the batches not started are returned
+        untouched: the ingestion loop stores the embedded ones with the document and embeds
+        the rest in its embedding backlog instead of discarding the converted document (F44
+        of ``docs/system-validation/INGESTION_PROMPT_TEST_LOG_2026-10-24.md``). Every batch
+        feeds :attr:`throughput`.
+
+        Args:
+            chunks: Chunks to embed, in order.
+            deadline: ``time.monotonic()`` value after which no further batch starts; ``None``
+                embeds everything.
+            progress_callback: ``callback(batch_number, total_batches)`` after each batch.
+
+        Returns:
+            ``(embedded, not_attempted)``: the chunks with embeddings (minus any the embedder
+            rejected) and the chunks whose batch never started.
+        """
         if not chunks:
-            return chunks
+            return list(chunks), []
 
         logger.info(f"Generating embeddings for {len(chunks)} chunks")
 
         # Process chunks in batches
         embedded_chunks = []
         total_batches = (len(chunks) + self.batch_size - 1) // self.batch_size
+        not_attempted: List[DocumentChunk] = []
 
         for i in range(0, len(chunks), self.batch_size):
+            if i > 0 and deadline is not None and time.monotonic() >= deadline:
+                not_attempted = list(chunks[i:])
+                logger.warning(
+                    f"Embedding deadline passed after batch {i // self.batch_size}/{total_batches}: "
+                    f"{len(not_attempted)} chunks left for a later pass"
+                )
+                break
             batch_chunks = chunks[i:i + self.batch_size]
             batch_texts = [chunk.content for chunk in batch_chunks]
+            batch_tokens = sum(chunk_tokens(chunk) for chunk in batch_chunks)
+            batch_started = time.monotonic()
 
             # Generate embeddings for this batch; one rejected input must not cost the
             # whole batch (a llama.cpp server answers 500 for the entire request when a
@@ -834,19 +928,21 @@ class EmbeddingGenerator:
                 embedded_chunk.embedding = embedding
                 embedded_chunks.append(embedded_chunk)
 
+            self._throughput().record(batch_tokens, time.monotonic() - batch_started)
+
             # Progress update
             current_batch = (i // self.batch_size) + 1
             if progress_callback:
                 progress_callback(current_batch, total_batches)
 
             logger.info(f"Processed batch {current_batch}/{total_batches}")
-            
+
             # Yield control to event loop between batches
             # This allows API requests to be processed during heavy ingestion
             await asyncio.sleep(0)
 
         logger.info(f"Generated embeddings for {len(embedded_chunks)} chunks")
-        return embedded_chunks
+        return embedded_chunks, not_attempted
 
     async def embed_query(self, query: str) -> List[float]:
         """

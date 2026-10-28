@@ -765,6 +765,8 @@ export interface IngestionStatus {
   no_chunks_files?: number
   timeout_files?: number
   error_files?: number
+  /** Documents stored with part of their chunks while the rest waits in the run's embedding backlog. */
+  partial_files?: number
 }
 
 /** Remaining work and measured pace of one file extension. */
