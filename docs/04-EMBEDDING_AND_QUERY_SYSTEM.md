@@ -787,8 +787,8 @@ and no index change is needed; the exact query runs on the existing
 | Firmenbuchnummer | `FN 404945h`, `FN404945h`, `FN 404945 h` | with/without spaces, lower/upper check letter, bare `404945h` |
 | Grundbuch | `EZ 52` **together with** `KG 11029` | `EZ 52`/`EZ52` and `KG 11029`/`KG11029`; an EZ or KG alone is not an identifier |
 | Geschäftszahl / Aktenzeichen | `13 U 39/16v`, `13 U 39/16 v`, `17 Cg 114/11a`, `038 C 1199/2017a`, `5 E 1149/20k-12` | check letter with/without the space and in both cases, leading-zero department also without the zeros, ON suffix (`-12`) with and without |
-| Statute citation (Gesetzesstelle) | `§ 1 TKG 2021`, `§ 365 ZPO`, `§ 3 Abs 1 MRG`, `§§ 332, 365 ZPO`, `Art 6 EMRK`, `§ 1 Abs 1 Z 3 lit a UrhG`, `§ 1295 des ABGB` | section number plus statute name, adjacent: `§ 1 TKG 2021` and `§ 1 TKG`; with a subdivision also `§ 3 Abs 1 MRG` / `§ 3 Abs. 1 MRG`; `Art`/`Art.`/`Artikel`. The statute must be an abbreviation with two capitals (`TKG`, `GewO`, `ÄrzteG`, `B-VG`); `§ 5 der Satzung` is not a citation |
-| Statute name with a year | `TKG 2021`, `GewO 1994`, `Telekommunikationsgesetz 2021` | the name with and without the year, as phrases of the text stage only (nothing pinned); an abbreviation needs three letters ending in G/B/O/K/V, so `GJ 2021`, `AG 2021` and `OGH 2021` are not statutes |
+| Statute citation (Gesetzesstelle) | `§ 1 TKG 2021`, `§ 365 ZPO`, `§ 3 Abs 1 MRG`, `§ 1 II ZPO`, `§§ 332, 365 ZPO`, `Art 6 EMRK`, `§ 1 Abs 1 Z 3 lit a UrhG`, `§ 1295 des ABGB` | section number plus statute name, adjacent: `§ 1 TKG 2021` and `§ 1 TKG` (exact, and once more with phrase slop 3 so `§ 1 Abs 1 TKG 2021` / `§ 1 (1) TKG` in ERV or commentary text count too); with a subdivision also `§ 3 Abs 1 MRG` / `§ 3 Abs. 1 MRG`; `Art`/`Art.`/`Artikel`; a roman numeral is an Absatz. The statute must be an abbreviation with two capitals (`TKG`, `GewO`, `ÄrzteG`, `B-VG`, `GmbHG`) that is not a company form, organisation, court or gazette (`GmbH`, `AG`, `MV`, `AGB`, `ÖBB`, `OGH`, `BGBl`, roman numerals); `§ 5 der Satzung`, `§ 5 der GmbH`, `§ 2 Abs. 1 GmbH-Vertrag` are not citations |
+| Statute name with a year | `TKG 2021`, `GewO 1994`, `Telekommunikationsgesetz 2021`, `Strafgesetzbuch 1974` | the name with and without the year, as phrases of the text stage only (nothing pinned); an abbreviation needs three letters ending in G/B/O/K/V and not in the stoplist, so `GJ 2021`, `AG 2021`, `OGH 2021`, `ÖBB 2021` and `AGB 2021` are not statutes; a long name needs a stem before *-gesetz/-ordnung/-verordnung/-novelle/-gesetzbuch* and is not one of the everyday words `Verordnung`, `Bundesgesetz`, `Handbuch`, `Jahrbuch`, `Fahrtenbuch`, `Hausordnung`, `Geschäftsordnung`, `Tagesordnung` |
 
 **Retrieval on this path:**
 
@@ -849,7 +849,9 @@ identifier path above and changes three more things, for these queries only:
    citations: documents whose `source`/`title` carries the statute name (with
    the year when given; the live file name is `TKG\xa02021, Fassung vom
    18.08.2022.pdf` with a no-break space, so any separator is allowed) are
-   matched, and of their chunks only those carrying the cited section marker
+   matched in **one** `documents` query for all citations of the question
+   (`§ 30 MRG und § 1118 ABGB` scans once; the same regexes then decide in
+   Python which statute each document is), and of their chunks only those carrying the cited section marker
    (`§ 1`, not `§ 10`/`§ 1a`) qualify, section headings (`§ 1.` / `§ 1 (1)`,
    the RIS spellings) before mere citations of the section. The TKG's § 1 is
    chunk 16 of a 502-chunk print and the TOC entry chunk 2; both are pinned,
@@ -862,7 +864,11 @@ identifier path above and changes three more things, for these queries only:
    fused score and carry `metadata.semantic_guarantee: true` and
    `metadata.vector_rank`. On the federated path `_deduplicate_and_rank` keeps
    them behind the pinned hits and ahead of ordinary fused results across
-   sources.
+   sources. The guarantee is a place in the window, not a score: on `/search`
+   a promoted result carries its low fused `similarity` ahead of higher-scored
+   rows, and consumers that re-sort by score (the orchestrator's merge in
+   `backend/agent/orchestrator.py`, the Strategy OS rerank) may move it down
+   again within the window.
 
 Queries without a statute (ordinary questions, FN, Grundbuch, Aktenzeichen)
 produce byte-identical pipelines and the same ranking as before. Tests:

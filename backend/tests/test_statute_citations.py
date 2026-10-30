@@ -22,6 +22,7 @@ from backend.services.identifier_search import (
     KIND_STATUTE,
     PINNED_SCORE,
     SEMANTIC_GUARANTEE_COUNT,
+    STATUTE_PHRASE_SLOP,
     TEXT_FUZZY,
     build_exact_search_operator,
     detect_identifiers,
@@ -109,10 +110,40 @@ class TestStatuteDetection:
         "COVID 2020 Maßnahmen",
         "Vertrag 2021",
         "Honorarnote vom 13 U 39/16 vom Gericht",
+        # Review of PR #32: everyday law-firm words that end like a statute ...
+        "Handbuch 2021",
+        "Jahrbuch 2021",
+        "Fahrtenbuch 2021",
+        "Hausordnung 2021",
+        "Geschäftsordnung 2021",
+        "Tagesordnung 2021",
+        "COVID-19 Verordnung 2021",
+        "Bundesgesetz 2021",
+        "Grundbuch 2021",
+        # ... organisations and company forms with two capitals ...
+        "ÖBB 2021",
+        "AGB 2021",
+        "§ 12 AGB",
+        "§ 4 MV",
+        "§ 5 der GmbH",
+        "§ 2 Abs. 1 GmbH-Vertrag",
+        "§ 2 EU-Verordnung",
+        # ... and a roman numeral with nothing behind it.
+        "§ 1 II",
     ])
     def test_ordinary_questions_do_not_trigger(self, query: str) -> None:
         assert detect_identifiers(query) == []
         assert not has_statute_citation([])
+
+    def test_roman_absatz_resolves_to_the_statute_behind_it(self) -> None:
+        (zpo,) = detect_identifiers("§ 1 II ZPO")
+        assert zpo.canonical == "§ 1 II ZPO" and zpo.name_variants == ("ZPO",)
+        assert "§ 1 ZPO" in zpo.variants and "§ 1 II ZPO" in zpo.variants
+        (ugb,) = detect_identifiers("§ 1 IV UGB")
+        assert ugb.name_variants == ("UGB",)
+        # The stoplist stops at the stem: GmbHG and AktG are statutes.
+        assert [i.canonical for i in detect_identifiers("§ 3 GmbHG und § 7 AktG")] == ["§ 3 GmbHG", "§ 7 AktG"]
+        assert detect_identifiers("Strafgesetzbuch 1974")[0].canonical == "Strafgesetzbuch 1974"
 
     def test_aktenzeichen_still_take_the_pr28_path(self) -> None:
         (gz,) = detect_identifiers("Strafsache 13 U 39/16v")
@@ -186,8 +217,10 @@ class TestTextStage:
         assert plan.mode == "statute"
         compound = plan.operator["compound"]
         assert plan.operator["index"] == "text_index" and compound["minimumShouldMatch"] == 1
-        phrases = [c["phrase"]["query"] for c in compound["should"] if "phrase" in c]
+        phrases = [c["phrase"]["query"] for c in compound["should"] if "phrase" in c and "slop" not in c["phrase"]]
         assert phrases == ["§ 1 TKG 2021", "§ 1 TKG", "TKG 2021", "TKG"] == list(plan.phrases)
+        loose = [(c["phrase"]["query"], c["phrase"]["slop"]) for c in compound["should"] if "slop" in c.get("phrase", {})]
+        assert loose == [("§ 1 TKG 2021", STATUTE_PHRASE_SLOP), ("§ 1 TKG", STATUTE_PHRASE_SLOP)]
         (text_clause,) = [c["text"] for c in compound["should"] if "text" in c]
         assert text_clause["query"] == plan.remainder == "Was regelt (Zweck und Ziele) laut dem Gesetzestext in der Fassung vom"
         assert text_clause["fuzzy"] == TEXT_FUZZY == {"maxEdits": 2, "prefixLength": 3}
@@ -201,6 +234,21 @@ class TestTextStage:
         plan = plan_text_stage("§ 365 ZPO", detect_identifiers("§ 365 ZPO"), index="text_index")
         assert all("phrase" in c for c in plan.operator["compound"]["should"])
         assert plan.remainder == ""
+
+    def test_exact_operator_has_exact_clauses_first_then_the_sloppy_ones(self) -> None:
+        """Review of PR #32: `§ 1 TKG` must also reach `§ 1 Abs 1 TKG 2021` / `§ 1 (1) TKG` (ERV, commentary)."""
+        (ident,) = detect_identifiers("§ 3 Abs 1 MRG")
+        should = build_exact_search_operator([ident], index="text_index")["compound"]["should"]
+        exact = [c["phrase"]["query"] for c in should if "slop" not in c["phrase"]]
+        loose = [c["phrase"] for c in should if "slop" in c["phrase"]]
+        assert set(exact) == {"§ 3 MRG", "§ 3 Abs 1 MRG", "§ 3 Abs. 1 MRG"}
+        assert loose == [{"query": "§ 3 MRG", "path": "content", "slop": STATUTE_PHRASE_SLOP}]
+        assert [c for c in should if "slop" not in c["phrase"]] == should[:len(exact)]  # exact ones lead
+        assert ident.loose_variants == ("§ 3 MRG",)
+        assert 2 <= STATUTE_PHRASE_SLOP <= 4
+        # Other identifier kinds have no sloppy clause.
+        fn_should = build_exact_search_operator(detect_identifiers("FN 404945h"), index="text_index")["compound"]["should"]
+        assert all("slop" not in c["phrase"] for c in fn_should)
 
     def test_remainder_keeps_other_identifier_kinds_and_drops_numbers(self) -> None:
         query = "Wie wurde § 52d ÄrzteG in 17 Cg 114/11a am 12.03.2016 angewendet?"
@@ -247,6 +295,25 @@ class TestStatuteTitleHits:
         documents, chunks = _collections([STATUTE_DOCUMENT], [STATUTE_CHUNKS[2]])
         hits = await fetch_title_hits(documents, chunks, detect_identifiers("§ 1 TKG 2021"))
         assert [h["chunk_id"] for h in hits] == ["tkg-29"]
+
+    async def test_two_citations_scan_the_documents_once(self) -> None:
+        """Review of PR #32: one documents query and one chunk query for `§ 30 MRG und § 1118 ABGB`."""
+        mrg_doc = {"_id": "doc-mrg", "title": "MRG", "source": "Gesetzestexte/MRG.pdf", "content_hash": "HM"}
+        abgb_doc = {"_id": "doc-abgb", "title": "ABGB", "source": "Gesetzestexte/ABGB.pdf", "content_hash": "HA"}
+        chunk_rows = [
+            {"_id": "mrg-30", "document_id": "doc-mrg", "chunk_index": 30, "metadata": {}, "content": "Hauptmietzins\n§ 30. (1) Der Vermieter " + "x" * 200},
+            {"_id": "mrg-1118", "document_id": "doc-mrg", "chunk_index": 40, "metadata": {}, "content": "vgl. § 1118 ABGB " + "x" * 200},  # ABGB's marker in the MRG print
+            {"_id": "abgb-1118", "document_id": "doc-abgb", "chunk_index": 900, "metadata": {}, "content": "Auflösung\n§ 1118. Der Bestandgeber " + "x" * 200},
+        ]
+        documents, chunks = _collections([mrg_doc, abgb_doc], chunk_rows)
+        hits = await fetch_title_hits(documents, chunks, detect_identifiers("§ 30 MRG und § 1118 ABGB"))
+        assert [h["chunk_id"] for h in hits] == ["mrg-30", "abgb-1118"]
+        assert documents.find.call_count == 1 and chunks.find.call_count == 1
+        doc_filter, projection = documents.find.call_args.args
+        assert len(doc_filter["$or"]) == 2 and projection == {"title": 1, "source": 1, "content_hash": 1}
+        chunk_filter = chunks.find.call_args.args[0]
+        assert set(chunk_filter["document_id"]["$in"]) == {"doc-mrg", "doc-abgb"}
+        assert chunk_filter["content"]["$regex"].count("|") == 1  # both section markers in one alternation
 
     async def test_bare_statute_name_matches_no_document(self) -> None:
         documents, chunks = _collections([STATUTE_DOCUMENT], STATUTE_CHUNKS)
@@ -403,7 +470,8 @@ class TestHybridEndpoint:
         assert "text" not in text_stage and text_stage["compound"]["minimumShouldMatch"] == 1
         assert pipelines[1][1] == {"$limit": 50}
         exact_stage = pipelines[2][0]["$search"]
-        assert [c["phrase"]["query"] for c in exact_stage["compound"]["should"]] == ["§ 1 TKG 2021", "§ 1 TKG"]
+        assert [c["phrase"]["query"] for c in exact_stage["compound"]["should"]] == ["§ 1 TKG 2021", "§ 1 TKG"] * 2
+        assert [c["phrase"].get("slop") for c in exact_stage["compound"]["should"]] == [None, None, STATUTE_PHRASE_SLOP, STATUTE_PHRASE_SLOP]
 
         results = response.json()["results"]
         ids = [r["chunk_id"] for r in results]
