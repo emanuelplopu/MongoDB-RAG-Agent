@@ -12,6 +12,7 @@ from backend.models.schemas import ChatRequest, ChatResponse, SearchType
 from backend.core.config import settings
 from backend.core.llm_providers import LLMConfig, LLMProvider
 from backend.services.query_embedding import embed_query
+from backend.services.text_query import run_text_search, text_search_stage
 from backend.tools.browser_tool import browse_url, BrowserToolResult
 from backend.agent.tool_gate import ToolGate
 from backend.services.activity_logger import ActivityLogger, NullActivityLogger
@@ -246,42 +247,36 @@ async def perform_search(db, query: str, search_type: SearchType, match_count: i
         if search_type in [SearchType.TEXT, SearchType.HYBRID]:
             # Text search
             text_start = time.time()
-            text_pipeline = [
-                {
-                    "$search": {
-                        "index": settings.mongodb_text_index,
-                        "text": {
-                            "query": query,
-                            "path": "content",
-                            "fuzzy": {"maxEdits": 2, "prefixLength": 3}
+
+            # Bounded fuzzy operator with one retry without fuzziness on
+            # maxClauseCount (backend/services/text_query.py, finding F56)
+            def text_pipeline(fuzzy: bool) -> list:
+                return [
+                    text_search_stage(query, index=settings.mongodb_text_index, fuzzy=fuzzy),
+                    {"$limit": match_count * 2},
+                    {
+                        "$lookup": {
+                            "from": settings.mongodb_collection_documents,
+                            "localField": "document_id",
+                            "foreignField": "_id",
+                            "as": "doc_info"
+                        }
+                    },
+                    {"$unwind": "$doc_info"},
+                    {
+                        "$project": {
+                            "chunk_id": "$_id",
+                            "document_id": 1,
+                            "content": 1,
+                            "similarity": {"$meta": "searchScore"},
+                            "document_title": "$doc_info.title",
+                            "document_source": "$doc_info.source"
                         }
                     }
-                },
-                {"$limit": match_count * 2},
-                {
-                    "$lookup": {
-                        "from": settings.mongodb_collection_documents,
-                        "localField": "document_id",
-                        "foreignField": "_id",
-                        "as": "doc_info"
-                    }
-                },
-                {"$unwind": "$doc_info"},
-                {
-                    "$project": {
-                        "chunk_id": "$_id",
-                        "document_id": 1,
-                        "content": 1,
-                        "similarity": {"$meta": "searchScore"},
-                        "document_title": "$doc_info.title",
-                        "document_source": "$doc_info.source"
-                    }
-                }
-            ]
-            
-            cursor = collection.aggregate(text_pipeline)
+                ]
+
             text_results = []
-            async for doc in cursor:
+            for doc in await run_text_search(collection, text_pipeline, query=query, label="Chat text search"):
                 text_results.append({
                     "chunk_id": str(doc["chunk_id"]),
                     "document_id": str(doc["document_id"]),

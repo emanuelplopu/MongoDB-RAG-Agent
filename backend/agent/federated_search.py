@@ -41,6 +41,7 @@ from backend.services.identifier_search import (
     vector_num_candidates,
 )
 from backend.services.query_embedding import create_embedding_client, embed_query
+from backend.services.text_query import QueryTooLongError, run_text_search, text_search_stage
 
 if TYPE_CHECKING:
     from backend.agent.strategies.base import BaseStrategy
@@ -333,10 +334,16 @@ class FederatedSearch:
                     logger.warning(f"Vector search failed for {database_name}: {e}")
 
             if search_type in ["text", "hybrid"]:
-                # Text search (the fuzzy operator, or the phrase/compound of a statute query)
-                try:
-                    text_pipeline = [
-                        {"$search": text_plan.operator},
+                # Text search: the phrase/compound stage of a statute query as planned (F34),
+                # otherwise the bounded fuzzy operator with one retry without fuzziness on
+                # maxClauseCount (backend/services/text_query.py, F56)
+                def text_pipeline(fuzzy: bool) -> List[Dict[str, Any]]:
+                    if text_plan.mode == "statute":
+                        text_stage: Dict[str, Any] = {"$search": text_plan.operator}
+                    else:
+                        text_stage = text_search_stage(query, index=settings.mongodb_text_index, fuzzy=fuzzy)
+                    return [
+                        text_stage,
                         {"$limit": fetch_count},
                         {
                             "$lookup": {
@@ -361,10 +368,14 @@ class FederatedSearch:
                         }
                     ]
 
-                    cursor = collection.aggregate(text_pipeline)
-                    async for doc in cursor:
+                try:
+                    for doc in await run_text_search(
+                        collection, text_pipeline, query=query, label=f"Text search in {database_name}"
+                    ):
                         doc["search_type"] = "text"
                         results.append(doc)
+                except QueryTooLongError as e:
+                    logger.warning(f"Text search skipped for {database_name}: {e}")
                 except Exception as e:
                     logger.warning(f"Text search failed for {database_name}: {e}")
 

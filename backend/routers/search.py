@@ -20,6 +20,7 @@ from backend.services.identifier_search import (
     vector_num_candidates,
 )
 from backend.services.query_embedding import embed_query
+from backend.services.text_query import QueryTooLongError, run_text_search, text_search_stage
 
 logger = logging.getLogger(__name__)
 
@@ -113,55 +114,47 @@ async def text_search(request: Request, search_request: SearchRequest):
     """
     Perform full-text search.
     
-    Uses keyword and fuzzy matching to find content.
+    Uses keyword and fuzzy matching to find content. Long queries are bounded
+    by ``backend/services/text_query`` (fuzzy on the first 15 distinct terms,
+    at most 60 terms) and retried once without fuzziness when Atlas Search
+    still rejects them with ``maxClauseCount``; a query that fails both ways
+    gets 400 instead of 500.
     """
     start_time = time.time()
-    
+
     db = request.app.state.db
     collection = db.chunks_collection
-    
+
     try:
         # Text search pipeline
-        pipeline = [
-            {
-                "$search": {
-                    "index": settings.mongodb_text_index,
-                    "text": {
-                        "query": search_request.query,
-                        "path": "content",
-                        "fuzzy": {
-                            "maxEdits": 2,
-                            "prefixLength": 3
-                        }
+        def text_pipeline(fuzzy: bool) -> list:
+            return [
+                text_search_stage(search_request.query, index=settings.mongodb_text_index, fuzzy=fuzzy),
+                {"$limit": search_request.match_count},
+                {
+                    "$lookup": {
+                        "from": settings.mongodb_collection_documents,
+                        "localField": "document_id",
+                        "foreignField": "_id",
+                        "as": "doc_info"
+                    }
+                },
+                {"$unwind": "$doc_info"},
+                {
+                    "$project": {
+                        "chunk_id": "$_id",
+                        "document_id": 1,
+                        "content": 1,
+                        "similarity": {"$meta": "searchScore"},
+                        "metadata": 1,
+                        "document_title": "$doc_info.title",
+                        "document_source": "$doc_info.source"
                     }
                 }
-            },
-            {"$limit": search_request.match_count},
-            {
-                "$lookup": {
-                    "from": settings.mongodb_collection_documents,
-                    "localField": "document_id",
-                    "foreignField": "_id",
-                    "as": "doc_info"
-                }
-            },
-            {"$unwind": "$doc_info"},
-            {
-                "$project": {
-                    "chunk_id": "$_id",
-                    "document_id": 1,
-                    "content": 1,
-                    "similarity": {"$meta": "searchScore"},
-                    "metadata": 1,
-                    "document_title": "$doc_info.title",
-                    "document_source": "$doc_info.source"
-                }
-            }
-        ]
-        
+            ]
+
         results = []
-        cursor = collection.aggregate(pipeline)
-        async for doc in cursor:
+        for doc in await run_text_search(collection, text_pipeline, query=search_request.query):
             results.append(SearchResultItem(
                 chunk_id=str(doc["chunk_id"]),
                 document_id=str(doc["document_id"]),
@@ -181,7 +174,9 @@ async def text_search(request: Request, search_request: SearchRequest):
             total_results=len(results),
             processing_time_ms=processing_time
         )
-        
+
+    except QueryTooLongError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Text search failed: {e}")
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
@@ -262,38 +257,46 @@ async def hybrid_search(request: Request, search_request: SearchRequest):
         async for doc in cursor:
             semantic_results.append(doc)
         
-        # Run text search (the fuzzy operator, or the phrase/compound of a statute query)
-        text_pipeline = [
-            {"$search": text_plan.operator},
-            {"$limit": fetch_count},
-            {
-                "$lookup": {
-                    "from": settings.mongodb_collection_documents,
-                    "localField": "document_id",
-                    "foreignField": "_id",
-                    "as": "doc_info"
+        # Run text search: the phrase/compound stage of a statute query as planned (F34),
+        # otherwise the bounded fuzzy operator with one retry without fuzziness on
+        # maxClauseCount (backend/services/text_query.py, F56)
+        def text_pipeline(fuzzy: bool) -> list:
+            if text_plan.mode == "statute":
+                text_stage = {"$search": text_plan.operator}
+            else:
+                text_stage = text_search_stage(
+                    search_request.query, index=settings.mongodb_text_index, fuzzy=fuzzy
+                )
+            return [
+                text_stage,
+                {"$limit": fetch_count},
+                {
+                    "$lookup": {
+                        "from": settings.mongodb_collection_documents,
+                        "localField": "document_id",
+                        "foreignField": "_id",
+                        "as": "doc_info"
+                    }
+                },
+                {"$unwind": "$doc_info"},
+                {
+                    "$project": {
+                        "chunk_id": "$_id",
+                        "document_id": 1,
+                        "content": 1,
+                        "similarity": {"$meta": "searchScore"},
+                        "metadata": 1,
+                        "document_title": "$doc_info.title",
+                        "document_source": "$doc_info.source",
+                        **copy_fields
+                    }
                 }
-            },
-            {"$unwind": "$doc_info"},
-            {
-                "$project": {
-                    "chunk_id": "$_id",
-                    "document_id": 1,
-                    "content": 1,
-                    "similarity": {"$meta": "searchScore"},
-                    "metadata": 1,
-                    "document_title": "$doc_info.title",
-                    "document_source": "$doc_info.source",
-                    **copy_fields
-                }
-            }
-        ]
+            ]
 
-        text_results = []
-        cursor = collection.aggregate(text_pipeline)
-        async for doc in cursor:
-            text_results.append(doc)
-        
+        text_results = await run_text_search(
+            collection, text_pipeline, query=search_request.query, label="Hybrid text search"
+        )
+
         # Apply Reciprocal Rank Fusion
         k = 60  # RRF constant
         rrf_scores = {}
@@ -360,7 +363,9 @@ async def hybrid_search(request: Request, search_request: SearchRequest):
             total_results=len(results),
             processing_time_ms=processing_time
         )
-        
+
+    except QueryTooLongError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Hybrid search failed: {e}")
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
