@@ -511,10 +511,13 @@ class TestHybridEndpoint:
         assert response.status_code == 200, response.text
         pipelines = [call.args[0] for call in collection.aggregate.call_args_list]
         assert len(pipelines) == 2
-        assert pipelines[1][0]["$search"] == {
-            "index": pipelines[1][0]["$search"]["index"],
-            "text": {"query": F34_QUERY_WITHOUT_CITATION, "path": "content", "fuzzy": {"maxEdits": 2, "prefixLength": 3}},
-        }
+        # the ordinary text stage: the bounded fuzzy operator of backend/services/text_query.py
+        # (PR #34, F56), not the statute phrase/compound
+        from backend.services.text_query import text_search_stage
+
+        assert pipelines[1][0]["$search"] == text_search_stage(
+            F34_QUERY_WITHOUT_CITATION, index=pipelines[1][0]["$search"]["index"], fuzzy=True
+        )["$search"]
         assert pipelines[0][0]["$vectorSearch"]["limit"] == 20
         collection.find.assert_not_called()
         results = response.json()["results"]
