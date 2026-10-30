@@ -912,7 +912,7 @@ Where:
 - When query type is uncertain
 - Balancing semantic understanding with keyword precision
 
-### Identifier Queries (FN, EZ/KG, Geschäftszahl)
+### Identifier Queries (FN, EZ/KG, Geschäftszahl, Gesetzesstellen)
 
 Module: `backend/services/identifier_search.py`, used by `hybrid_search` in
 `backend/routers/search.py` and by `FederatedSearch._search_database` (the chat
@@ -938,6 +938,8 @@ and no index change is needed; the exact query runs on the existing
 | Firmenbuchnummer | `FN 404945h`, `FN404945h`, `FN 404945 h` | with/without spaces, lower/upper check letter, bare `404945h` |
 | Grundbuch | `EZ 52` **together with** `KG 11029` | `EZ 52`/`EZ52` and `KG 11029`/`KG11029`; an EZ or KG alone is not an identifier |
 | Geschäftszahl / Aktenzeichen | `13 U 39/16v`, `13 U 39/16 v`, `17 Cg 114/11a`, `038 C 1199/2017a`, `5 E 1149/20k-12` | check letter with/without the space and in both cases, leading-zero department also without the zeros, ON suffix (`-12`) with and without |
+| Statute citation (Gesetzesstelle) | `§ 1 TKG 2021`, `§ 365 ZPO`, `§ 3 Abs 1 MRG`, `§ 1 II ZPO`, `§§ 332, 365 ZPO`, `Art 6 EMRK`, `§ 1 Abs 1 Z 3 lit a UrhG`, `§ 1295 des ABGB` | section number plus statute name, adjacent: `§ 1 TKG 2021` and `§ 1 TKG` (exact, and once more with phrase slop 3 so `§ 1 Abs 1 TKG 2021` / `§ 1 (1) TKG` in ERV or commentary text count too); with a subdivision also `§ 3 Abs 1 MRG` / `§ 3 Abs. 1 MRG`; `Art`/`Art.`/`Artikel`; a roman numeral is an Absatz. The statute must be an abbreviation with two capitals (`TKG`, `GewO`, `ÄrzteG`, `B-VG`, `GmbHG`) that is not a company form, organisation, court or gazette (`GmbH`, `AG`, `MV`, `AGB`, `ÖBB`, `OGH`, `BGBl`, roman numerals); `§ 5 der Satzung`, `§ 5 der GmbH`, `§ 2 Abs. 1 GmbH-Vertrag` are not citations |
+| Statute name with a year | `TKG 2021`, `GewO 1994`, `Telekommunikationsgesetz 2021`, `Strafgesetzbuch 1974` | the name with and without the year, as phrases of the text stage only (nothing pinned); an abbreviation needs three letters ending in G/B/O/K/V and not in the stoplist, so `GJ 2021`, `AG 2021`, `OGH 2021`, `ÖBB 2021` and `AGB 2021` are not statutes; a long name needs a stem before *-gesetz/-ordnung/-verordnung/-novelle/-gesetzbuch* and is not one of the everyday words `Verordnung`, `Bundesgesetz`, `Handbuch`, `Jahrbuch`, `Fahrtenbuch`, `Hausordnung`, `Geschäftsordnung`, `Tagesordnung` |
 
 **Retrieval on this path:**
 
@@ -974,6 +976,55 @@ Pinned results carry `metadata.exact_identifier_match: true` and a
 through `_apply_rrf` as `search_type: "exact"` (they never reach a strategy's
 own RRF), and `_deduplicate_and_rank` keeps pinned documents first and collapses
 copies across sources by the same key, by chunk id when the hash is absent.
+
+**Statute citations** (finding F34, `§ 1 TKG 2021`): a statute asked for by
+its citation was semantic #1 (score 0.895) but absent from the hybrid top 8,
+because the fuzzy text stage matched the tokens `1`, `2021` and `Ziel` in a
+COVID-19 guideline ("Ziel 1: …"), Syndikatsvertrag tables ("GJ 2021 = …") and
+an e-mail's number column, and equal-weight RRF let those displace the semantic
+hits. A query with a statute citation or a statute name with a year takes the
+identifier path above and changes three more things, for these queries only:
+
+1. **Text stage** (`plan_text_stage`): instead of the fuzzy bag of words, a
+   `compound.should` of exact `phrase` clauses on the citation (`§ 1 TKG 2021`,
+   `§ 1 TKG`) and on the statute name (`TKG 2021`, `TKG`), plus one fuzzy
+   `text` clause on the remainder of the question with its pure-number tokens
+   removed (`Was regelt (Zweck und Ziele) laut dem Gesetzestext in der Fassung
+   vom`; `1`, `2021` and `18.08.2022` are gone). No clause is a bare number:
+   under `lucene.standard` the phrase `§ 1` is the single token `1`, which is
+   the F34 noise itself, so every phrase names the statute. The log line says
+   `statute phrase stage [...]`, fuzzy remainder '...'`.
+2. **Exact hits**: the phrase hits are chunks citing the provision (`§ 1 TKG`
+   adjacent). The statute's own text (a RIS print) names the statute in its
+   header, not next to each section, so the title match works differently for
+   citations: documents whose `source`/`title` carries the statute name (with
+   the year when given; the live file name is `TKG\xa02021, Fassung vom
+   18.08.2022.pdf` with a no-break space, so any separator is allowed) are
+   matched in **one** `documents` query for all citations of the question
+   (`§ 30 MRG und § 1118 ABGB` scans once; the same regexes then decide in
+   Python which statute each document is), and of their chunks only those carrying the cited section marker
+   (`§ 1`, not `§ 10`/`§ 1a`) qualify, section headings (`§ 1.` / `§ 1 (1)`,
+   the RIS spellings) before mere citations of the section. The TKG's § 1 is
+   chunk 16 of a 502-chunk print and the TOC entry chunk 2; both are pinned,
+   the section text first because it is also vector #1. A bare statute name
+   pins nothing.
+3. **Semantic guarantee** (`semantic_guarantee`, `SEMANTIC_GUARANTEE_COUNT = 3`):
+   the vector stage's top 3 keep a place in the result window. Those not
+   already pinned follow the pinned block directly, in vector order, and the
+   pinned block is cut to `match_count − 3` so they always fit; they keep their
+   fused score and carry `metadata.semantic_guarantee: true` and
+   `metadata.vector_rank`. On the federated path `_deduplicate_and_rank` keeps
+   them behind the pinned hits and ahead of ordinary fused results across
+   sources. The guarantee is a place in the window, not a score: on `/search`
+   a promoted result carries its low fused `similarity` ahead of higher-scored
+   rows, and consumers that re-sort by score (the orchestrator's merge in
+   `backend/agent/orchestrator.py`, the Strategy OS rerank) may move it down
+   again within the window.
+
+Queries without a statute (ordinary questions, FN, Grundbuch, Aktenzeichen)
+produce byte-identical pipelines and the same ranking as before. Tests:
+`backend/tests/test_statute_citations.py` (detector positives/negatives, text
+stage, title hits, the F34 fusion with and without the citation, both callers).
 
 Limits: the identifier must be spelled closely enough for the regexes (a
 Geschäftszahl needs its check letter), and copies only collapse when the file

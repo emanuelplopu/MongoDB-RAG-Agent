@@ -24,7 +24,28 @@ hybrid retrieval paths (``hybrid_search`` in ``backend/routers/search.py`` and
    ``chunk_index``) into one representative whose ``metadata.locations`` lists
    the other source paths. The remaining slots are filled from the fused list.
 
-Background: findings F25 and F17 of
+Statute citations (``§ 1 TKG 2021``, ``§ 365 ZPO``, ``§ 3 Abs 1 MRG``,
+``Art 6 EMRK``, ``§§ 332, 365 ZPO``) and bare statute names with a year
+(``TKG 2021``, ``Telekommunikationsgesetz 2021``) are identifiers of kind
+:data:`KIND_STATUTE`. They take the identifier path above and change three more
+things, for these queries only (finding F34):
+
+a. The text stage of the hybrid search is not the fuzzy bag of words but a
+   ``compound`` of exact ``phrase`` clauses on the citation (section number plus
+   statute abbreviation) and on the statute name, see :func:`plan_text_stage`.
+b. The rest of the question still runs as a fuzzy ``text`` clause, but without
+   its pure-number tokens (``1``, ``2021``, ``18.08.2022``), which the fuzzy
+   stage matched in unrelated tables and numbered lists.
+c. The vector stage's top :data:`SEMANTIC_GUARANTEE_COUNT` results get a
+   guaranteed place in the fused result window, directly behind the pinned
+   exact hits (``metadata.semantic_guarantee``).
+
+A statute's own text (a RIS print) rarely names the statute next to each
+section, so for citations the chunks of documents whose title or source names
+the statute are matched against the section marker (``§ 1.`` / ``§ 1 (1)``,
+RIS spellings) instead of being taken by position.
+
+Background: findings F25, F17 and F34 of
 ``docs/system-validation/INGESTION_PROMPT_TEST_LOG_2026-10-24.md``.
 """
 
@@ -61,9 +82,17 @@ COPY_FIELDS_PROJECTION: Dict[str, Any] = {
     "content_hash": "$doc_info.content_hash",
 }
 
+# Vector results that keep a place in the fused window on a statute query (F34).
+SEMANTIC_GUARANTEE_COUNT = 3
+# Slop of the loose phrase clause on a citation ("§ 1 TKG" also matches "§ 1 Abs 1 TKG").
+STATUTE_PHRASE_SLOP = 3
+# The fuzzy options of the ordinary text stage; the statute path reuses them for the remainder.
+TEXT_FUZZY: Dict[str, int] = {"maxEdits": 2, "prefixLength": 3}
+
 KIND_FIRMENBUCH = "firmenbuch"
 KIND_GRUNDBUCH = "grundbuch"
 KIND_GESCHAEFTSZAHL = "geschaeftszahl"
+KIND_STATUTE = "statute"
 
 # FN 404945h / FN404945h / FN 404945 h — number plus check letter.
 _FN_RE = re.compile(r"(?<![\w/])FN\s?(\d{4,7})\s?([A-Za-z])(?![\w/])", re.IGNORECASE)
@@ -77,23 +106,100 @@ _GZ_RE = re.compile(
     r"(?<![\w/])(\d{1,3})\s+([A-Za-z]{1,4})\s+(\d{1,5})/(\d{2}(?:\d{2})?)\s?([A-Za-z])(?:-(\d{1,3}))?(?![\w/])"
 )
 
+# Statute citations. Letters of a German statute name or abbreviation.
+_LETTERS = "A-Za-zÄÖÜäöüß"
+# Capitalised tokens that look like statute abbreviations but are not: company
+# forms, organisations, courts, gazettes, everyday abbreviations. A token in this
+# list (alone or as the stem of "GmbH-Vertrag") is never a statute; "GmbHG" is.
+_NOT_A_STATUTE = (
+    "GmbH", "AG", "OG", "KG", "KEG", "OHG", "SE", "MV", "AGB", "ÖBB", "ORF", "WKO", "ÖGB", "AK",
+    "EU", "EG", "EWR", "UN", "USA", "OGH", "VfGH", "VwGH", "EuGH", "EGMR", "BVwG", "LVwG", "BGBl", "LGBl",
+    "UID", "IBAN", "BIC", "ZVR", "DVR", "USt", "MwSt", "ESt", "KSt", "EDV", "IT", "PDF", "ERV", "RIS",
+)
+# Roman numerals (commentary style "§ 1 II ZPO" = Abs 2) are subdivisions, not statute names.
+_ROMAN = r"(?:X{0,3}(?:IX|IV|V?I{0,3}))"
+_NOT_A_STATUTE_LOOKAHEAD = (
+    rf"(?!(?:{'|'.join(_NOT_A_STATUTE)})(?![{_LETTERS}]))"
+    rf"(?!{_ROMAN}(?![{_LETTERS}]))"
+)
+# A statute abbreviation: starts with a capital and has at least two capitals
+# (TKG, ZPO, GewO, UrhG, ÄrzteG, B-VG, EMRK, GmbHG); never Abs, Art, Z, lit, Satz,
+# a company form, an organisation or a roman numeral.
+_ABBREVIATION = (
+    rf"{_NOT_A_STATUTE_LOOKAHEAD}"
+    rf"(?=(?:[{_LETTERS}]|-)*[A-ZÄÖÜ](?:[{_LETTERS}]|-)*[A-ZÄÖÜ])"
+    rf"[A-ZÄÖÜ][{_LETTERS}]*(?:-[{_LETTERS}]+)*"
+)
+# Subdivisions between the section number and the statute: Abs 1, Abs. 2, Z 3, lit a, Satz 2, Nr 4.
+_SUBDIVISION = (
+    r"(?:Abs\.?|Absatz|Z\.?|Ziffer|lit\.?|litera|Satz|Nr\.?|Halbsatz)\s*(?:\d{1,3}|[a-z])"
+    r"(?:\s*(?:,|und|bis|oder|-|–)\s*(?:\d{1,3}|[a-z]))*"
+)
+# § 1 TKG 2021, § 365 ZPO, § 3 Abs 1 MRG, §§ 332, 365 ZPO, Art 6 EMRK, Art. 6 Abs 1 EMRK,
+# § 1295 des ABGB, § 1 II ZPO (roman Absatz).
+_STATUTE_CITATION_RE = re.compile(
+    rf"(?<![{_LETTERS}0-9])"
+    r"(§§?|Artikel|Art\.?|Paragraph(?:en)?)\s*"
+    r"(\d{1,4}[a-z]{0,2}(?:\s*(?:,|und|bis|-|–)\s*\d{1,4}[a-z]{0,2})*)"
+    rf"((?:\s+f{{1,2}}\.?(?=\s))?(?:\s*{_SUBDIVISION})*(?:\s+{_ROMAN}(?=\s))?)"
+    r"(?:\s+(?:des|der|dem))?\s+"
+    rf"({_ABBREVIATION})"
+    r"(?:\s+((?:1[89]|20)\d{2}))?"
+    rf"(?![{_LETTERS}0-9])"
+)
+# Long statute names that end like a statute but are everyday words of a law firm.
+_NOT_A_STATUTE_NAME = (
+    "Verordnung", "Bundesgesetz", "Landesgesetz", "Handbuch", "Jahrbuch", "Fahrtenbuch", "Kassabuch",
+    "Hausordnung", "Geschäftsordnung", "Tagesordnung", "Betriebsordnung", "Schulordnung", "Marktordnung",
+)
+# Bare statute names with a year: TKG 2021, GewO 1994, Telekommunikationsgesetz 2021.
+# An abbreviation needs three letters and the usual ending (…G, …B, …O, …K, …V):
+# "GJ 2021" (Geschäftsjahr), "AG 2021" and "OGH 2021" are not statutes. A long
+# name needs a stem before -gesetz/-ordnung/-verordnung/-novelle/-gesetzbuch
+# ("Telekommunikationsgesetz", not "Verordnung", "Handbuch" or "Hausordnung").
+_STATUTE_NAME_RE = re.compile(
+    rf"(?<![{_LETTERS}0-9§/])"
+    rf"((?:(?=[{_LETTERS}-]{{3,}}(?![{_LETTERS}])){_ABBREVIATION}(?<=[GBOKV]))"
+    rf"|(?:(?!(?:{'|'.join(_NOT_A_STATUTE_NAME)})(?![{_LETTERS}]))"
+    rf"[A-ZÄÖÜ][{_LETTERS}]{{2,}}(?:-[{_LETTERS}]+)*(?:gesetz|ordnung|verordnung|novelle|gesetzbuch)))"
+    r"\s+((?:1[89]|20)\d{2})"
+    rf"(?![{_LETTERS}0-9/])"
+)
+# RIS prints mark a section heading as "§ 1." or "§ 1 (1)"; a citation in running text has neither.
+_HEADING_TAIL_RE = re.compile(r"\.(?!\d)|[^0-9A-Za-z§(]{0,3}\(\d")
+# A token that carries no letter is a pure number (or punctuation) and leaves the fuzzy clause.
+_HAS_LETTER_RE = re.compile(rf"[{_LETTERS}]")
+
 
 @dataclass(frozen=True)
 class LegalIdentifier:
     """One identifier found in a query, with the spellings the exact query matches.
 
     Attributes:
-        kind: One of ``firmenbuch``, ``grundbuch`` or ``geschaeftszahl``.
+        kind: One of ``firmenbuch``, ``grundbuch``, ``geschaeftszahl`` or ``statute``.
         canonical: Normalised display form (``FN 404945h``, ``EZ 52 KG 11029``,
-            ``13 U 39/16v``).
+            ``13 U 39/16v``, ``§ 1 TKG 2021``).
         groups: Spelling variants per part. A chunk must contain one variant of
-            every group: one group for FN and Geschäftszahl, two (EZ, KG) for a
-            Grundbuch entry.
+            every group: one group for FN, Geschäftszahl and statute citations
+            (``§ 1 TKG 2021``, ``§ 1 TKG``), two (EZ, KG) for a Grundbuch entry.
+            Empty for a bare statute name, which pins nothing.
         patterns: Case-insensitive regexes (PCRE and Python compatible) that a
             document's ``source`` or ``title`` must all match; tolerant about
             spaces and about the slash of a Geschäftszahl, which file names
-            replace (``17Cg114_11a``).
+            replace (``17Cg114_11a``). For a statute citation: the statute's
+            name, with its year when the query gives one.
         position: Character offset of the identifier in the query (for ordering).
+        length: Length of the matched text in the query; the statute path blanks
+            the citation out of the fuzzy remainder with it.
+        name_variants: Statute only: the statute name as ``phrase`` clauses of
+            the text stage (``TKG 2021``, ``TKG``).
+        section_patterns: Statute citation only: regexes a chunk of a document
+            named after the statute must match to count as the cited section
+            (``§ 1``, tolerant about the separator, not ``§ 10`` or ``§ 1a``).
+        loose_variants: Statute citation only: the ``§ N Name`` spellings that
+            are also matched as ``phrase`` clauses with :data:`STATUTE_PHRASE_SLOP`,
+            so ``§ 1 Abs 1 TKG 2021`` and ``§ 1 (1) TKG`` in a commentary or ERV
+            text count as citations of ``§ 1 TKG 2021``.
     """
 
     kind: str
@@ -101,11 +207,20 @@ class LegalIdentifier:
     groups: Tuple[Tuple[str, ...], ...]
     patterns: Tuple[str, ...] = ()
     position: int = 0
+    length: int = 0
+    name_variants: Tuple[str, ...] = ()
+    section_patterns: Tuple[str, ...] = ()
+    loose_variants: Tuple[str, ...] = ()
 
     @property
     def variants(self) -> Tuple[str, ...]:
         """All spelling variants across the groups, in order."""
         return tuple(variant for group in self.groups for variant in group)
+
+    @property
+    def end(self) -> int:
+        """Character offset just past the identifier in the query."""
+        return self.position + self.length
 
 
 def _unique(values: Iterable[str]) -> Tuple[str, ...]:
@@ -182,6 +297,137 @@ def _grundbuch_patterns(ez: str, kg: str) -> Tuple[str, str]:
     )
 
 
+def _statute_prefix(prefix: str, sections: Sequence[str]) -> str:
+    """Canonical prefix of a citation: ``§``/``§§`` by section count, ``Art`` for articles."""
+    if prefix.startswith("§"):
+        return "§§" if len(sections) > 1 else "§"
+    if prefix.startswith("Art"):
+        return "Art"
+    return "§§" if len(sections) > 1 else "§"
+
+
+def _statute_subdivision(raw: str) -> str:
+    """Normalised subdivisions (``Abs. 1`` -> ``Abs 1``); empty when there are none."""
+    return " ".join(raw.replace(".", "").split())
+
+
+def _statute_name_variants(name: str, year: Optional[str]) -> Tuple[str, ...]:
+    """The statute name as phrase spellings: with its year first, then bare."""
+    return _unique([f"{name} {year}", name] if year else [name])
+
+
+def _statute_citation_variants(
+    prefix: str, sections: Sequence[str], subdivision: str, name: str, year: Optional[str], raw: str
+) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """Spellings of a citation that a chunk must contain to be an exact hit.
+
+    Section number plus statute name, adjacent: ``§ 1 TKG 2021`` and ``§ 1 TKG``;
+    with a subdivision also ``§ 3 Abs 1 MRG`` / ``§ 3 Abs. 1 MRG``; articles as
+    ``Art``, ``Art.`` and ``Artikel``. Every variant names the statute, because
+    the standard analyzer drops ``§`` and a phrase ``§ 1`` alone would be the
+    bare token ``1`` that matches every numbered list (F34). The RIS heading
+    spellings ``§ 1.`` / ``§ 1 (1)`` are therefore matched in the statute's own
+    text through :attr:`LegalIdentifier.section_patterns`, not as phrases.
+
+    Returns:
+        ``(variants, loose)``: all exact spellings, and the ``§ N Name`` core
+        spellings that also get a sloppy phrase clause (``§ 1 Abs 1 TKG``).
+    """
+    heads: List[str]
+    if prefix == "Art":
+        heads = ["Art", "Art.", "Artikel"]
+    else:
+        heads = ["§"]
+    variants: List[str] = []
+    loose: List[str] = []
+    for section in sections:
+        for head in heads:
+            core = f"{head} {section}"
+            if year:
+                variants.append(f"{core} {name} {year}")
+                loose.append(f"{core} {name} {year}")
+            variants.append(f"{core} {name}")
+            loose.append(f"{core} {name}")
+            if subdivision:
+                variants.append(f"{core} {subdivision} {name}")
+                dotted = re.sub(r"\b(Abs|Z|lit|Nr)\b(?!\.)", r"\1.", subdivision)
+                if dotted != subdivision:
+                    variants.append(f"{core} {dotted} {name}")
+    if len(sections) > 1:
+        # The citation as written, e.g. "§§ 332, 365 ZPO".
+        variants.append(" ".join(raw.replace(",", ", ").split()))
+    return _unique(variants), _unique(loose)
+
+
+def _statute_title_pattern(name: str, year: Optional[str]) -> str:
+    """Regex for the statute name in a file name or title.
+
+    ``TKG 2021`` must also match ``TKG\\xa02021`` (a no-break space, as in the
+    live RIS print's file name) and ``TKG_2021``; without a year the bare name
+    is enough. Case-insensitivity comes from :func:`build_source_filter`.
+    """
+    pattern = rf"(?<![A-Za-z]){re.escape(name)}"
+    if year:
+        pattern += rf"[^0-9A-Za-z]{{0,3}}{re.escape(year)}(?![0-9])"
+    else:
+        pattern += r"(?![A-Za-z])"
+    return pattern
+
+
+def _statute_section_pattern(prefix: str, section: str) -> str:
+    """Regex for the section marker in the statute's own text (``§ 1.``, ``§1 (1)``, ``§§ 1 bis``)."""
+    number = re.escape(section)
+    if prefix == "Art":
+        return rf"Art(?:ikel|\.)?[^0-9A-Za-z]{{0,3}}{number}(?![0-9a-z])"
+    return rf"§{{1,2}}[^0-9A-Za-z§]{{0,3}}{number}(?![0-9a-z])"
+
+
+def _statute_citation(match: "re.Match[str]") -> LegalIdentifier:
+    """Build the identifier of one statute citation match."""
+    raw_prefix, raw_sections, raw_subdivision, name, year = match.groups()
+    sections = re.findall(r"\d{1,4}[a-z]{0,2}", raw_sections)
+    prefix = _statute_prefix(raw_prefix, sections)
+    subdivision = _statute_subdivision(raw_subdivision)
+    section_text = " ".join(raw_sections.replace(",", ", ").split())
+    parts = [prefix, section_text]
+    if subdivision:
+        parts.append(subdivision)
+    parts.append(name)
+    if year:
+        parts.append(year)
+    variants, loose = _statute_citation_variants(prefix, sections, subdivision, name, year, match.group(0))
+    return LegalIdentifier(
+        kind=KIND_STATUTE,
+        canonical=" ".join(parts),
+        groups=(variants,),
+        patterns=(_statute_title_pattern(name, year),),
+        position=match.start(),
+        length=match.end() - match.start(),
+        name_variants=_statute_name_variants(name, year),
+        section_patterns=tuple(_statute_section_pattern(prefix, section) for section in sections),
+        loose_variants=loose,
+    )
+
+
+def _statute_name(match: "re.Match[str]") -> LegalIdentifier:
+    """Build the identifier of a bare statute name with a year (``TKG 2021``).
+
+    It changes the text stage and guarantees the semantic top results, but pins
+    nothing: there is no section to match, and a chunk that merely names the
+    statute is not an exact hit.
+    """
+    name, year = match.groups()
+    return LegalIdentifier(
+        kind=KIND_STATUTE,
+        canonical=f"{name} {year}",
+        groups=(),
+        patterns=(),
+        position=match.start(),
+        length=match.end() - match.start(),
+        name_variants=_statute_name_variants(name, year),
+    )
+
+
 def detect_identifiers(text: str) -> List[LegalIdentifier]:
     """Find Austrian legal identifiers in a query.
 
@@ -205,6 +451,7 @@ def detect_identifiers(text: str) -> List[LegalIdentifier]:
             groups=(_firmenbuch_variants(number, letter),),
             patterns=(_firmenbuch_pattern(number, letter),),
             position=match.start(),
+            length=match.end() - match.start(),
         ))
 
     for match in _GZ_RE.finditer(text):
@@ -218,6 +465,7 @@ def detect_identifiers(text: str) -> List[LegalIdentifier]:
             groups=(_geschaeftszahl_variants(department, kind, number, year, letter, suffix),),
             patterns=(_geschaeftszahl_pattern(department, kind, number, year, letter),),
             position=match.start(),
+            length=match.end() - match.start(),
         ))
 
     ez_matches = list(_EZ_RE.finditer(text))
@@ -233,7 +481,18 @@ def detect_identifiers(text: str) -> List[LegalIdentifier]:
                 groups=_grundbuch_groups(ez, kg),
                 patterns=_grundbuch_patterns(ez, kg),
                 position=min(ez_match.start(), kg_match.start()),
+                length=max(ez_match.end(), kg_match.end()) - min(ez_match.start(), kg_match.start()),
             ))
+
+    citation_spans: List[Tuple[int, int]] = []
+    for match in _STATUTE_CITATION_RE.finditer(text):
+        found.append(_statute_citation(match))
+        citation_spans.append((match.start(), match.end()))
+    for match in _STATUTE_NAME_RE.finditer(text):
+        # "TKG 2021" inside "§ 1 TKG 2021" belongs to the citation.
+        if any(start < match.end() and match.start() < end for start, end in citation_spans):
+            continue
+        found.append(_statute_name(match))
 
     unique: List[LegalIdentifier] = []
     seen: set[str] = set()
@@ -259,6 +518,21 @@ def _phrase_clauses(variants: Sequence[str], path: str) -> List[Dict[str, Any]]:
     return [{"phrase": {"query": variant, "path": path}} for variant in variants]
 
 
+def _loose_phrase_clauses(variants: Sequence[str], path: str, slop: int = STATUTE_PHRASE_SLOP) -> List[Dict[str, Any]]:
+    """One ``phrase`` clause with ``slop`` per spelling, after the exact clauses in a ``should``.
+
+    ``§ 1 TKG`` with slop 3 also matches ``§ 1 Abs 1 TKG`` and ``§ 1 (1) TKG``;
+    the exact clause stays in the same ``should``, so exact citations score
+    higher (both clauses match) and rank first.
+    """
+    return [{"phrase": {"query": variant, "path": path, "slop": slop}} for variant in variants]
+
+
+def statute_phrase_clauses(identifier: LegalIdentifier, path: str) -> List[Dict[str, Any]]:
+    """Exact clauses for every variant of a statute citation, then the sloppy ones."""
+    return _phrase_clauses(identifier.variants, path) + _loose_phrase_clauses(identifier.loose_variants, path)
+
+
 def build_exact_search_operator(
     identifiers: Sequence[LegalIdentifier], *, index: str, path: str = "content"
 ) -> Dict[str, Any]:
@@ -271,7 +545,11 @@ def build_exact_search_operator(
     """
     should: List[Dict[str, Any]] = []
     for identifier in identifiers:
-        if len(identifier.groups) == 1:
+        if not identifier.groups:
+            continue  # a bare statute name pins nothing
+        if identifier.kind == KIND_STATUTE:
+            should.extend(statute_phrase_clauses(identifier, path))
+        elif len(identifier.groups) == 1:
             should.extend(_phrase_clauses(identifier.groups[0], path))
         else:
             should.append({
@@ -348,6 +626,54 @@ def build_source_filter(
     return {"$or": clauses}
 
 
+def _is_section_heading(content: str, section_patterns: Sequence[str]) -> bool:
+    """Whether a chunk carries the cited section as a heading (``§ 1.`` / ``§ 1 (1)``).
+
+    A RIS print writes the section marker that way; ``gemäß § 1 des …`` in
+    running text is a citation of another provision, not the section itself.
+    """
+    for pattern in section_patterns:
+        for match in re.finditer(pattern, content):
+            if _HEADING_TAIL_RE.match(content, match.end()):
+                return True
+    return False
+
+
+def _document_matches(doc: Dict[str, Any], identifier: LegalIdentifier) -> bool:
+    """Whether a document's source or title carries the identifier (the regexes of the Mongo filter, in Python)."""
+    fields = [doc.get(field) or "" for field in TITLE_MATCH_FIELDS]
+    return all(any(re.search(pattern, field, re.IGNORECASE) for field in fields) for pattern in identifier.patterns)
+
+
+def _title_hit(chunk: Dict[str, Any], parent: Dict[str, Any]) -> Dict[str, Any]:
+    """A title-hit row in the shape of the search pipelines' projection."""
+    return {
+        "chunk_id": chunk.get("_id"),
+        "document_id": chunk.get("document_id"),
+        "content": chunk.get("content", ""),
+        "similarity": 0.0,
+        "metadata": chunk.get("metadata") or {},
+        "document_title": parent.get("title") or "Unknown",
+        "document_source": parent.get("source") or "",
+        "chunk_index": chunk.get("chunk_index"),
+        "content_hash": parent.get("content_hash"),
+        "search_type": "exact",
+    }
+
+
+async def _chunks_by_document(
+    chunks: Any, chunk_filter: Dict[str, Any], document_ids: Sequence[Any]
+) -> Dict[Any, List[Dict[str, Any]]]:
+    """The matching chunks of the given documents, by document, in ``chunk_index`` order."""
+    per_document: Dict[Any, List[Dict[str, Any]]] = {doc_id: [] for doc_id in document_ids}
+    cursor = chunks.find(chunk_filter, {"content": 1, "chunk_index": 1, "metadata": 1, "document_id": 1}).sort("chunk_index", 1)
+    async for chunk in cursor:
+        doc_id = chunk.get("document_id")
+        if doc_id in per_document:
+            per_document[doc_id].append(chunk)
+    return per_document
+
+
 async def fetch_title_hits(
     documents: Any,
     chunks: Any,
@@ -358,50 +684,78 @@ async def fetch_title_hits(
 ) -> List[Dict[str, Any]]:
     """Chunks of the documents whose source path or title carries an identifier.
 
-    The regex runs over the documents collection (one row per file, cheap) and
-    the chunks come by the indexed ``document_id``; the rows have the shape of
-    the search pipelines' projection plus ``chunk_index``/``content_hash``.
-    Documents come in find order, their chunks by ``chunk_index``; the merge
-    decides which of them lead.
+    One regex query over the documents collection for all identifiers of the
+    query (``$or`` of their patterns, ``source``/``title`` only, one row per
+    file) and at most two chunk queries by the indexed ``document_id``; the rows
+    have the shape of the search pipelines' projection plus
+    ``chunk_index``/``content_hash``. Documents come in find order, their chunks
+    by ``chunk_index``; the merge decides which of them lead.
+
+    For FN, Grundbuch and Geschäftszahl the first ``chunks_per_document`` chunks
+    of each document are taken. For a statute citation only the chunks that
+    carry the cited section (``section_patterns``, a regex on ``content`` over
+    the matched documents' chunks) qualify, and among them the section heading
+    (``§ 1.`` / ``§ 1 (1)``) beats mere citations of the section: the statute's
+    § 1 is chunk 16 of a 500-chunk RIS print, not among its first eight. Which
+    identifier a document carries is decided with the same regexes in Python,
+    so ``§ 30 MRG und § 1118 ABGB`` scans the documents once and applies each
+    statute's section marker to its own documents. Bare statute names have no
+    patterns and match no document.
     """
-    if not identifiers:
+    with_patterns = [identifier for identifier in identifiers if identifier.patterns]
+    if not with_patterns:
         return []
-    source_filter = build_source_filter(identifiers)
     matched: Dict[Any, Dict[str, Any]] = {}
-    cursor = documents.find(source_filter, {"title": 1, "source": 1, "content_hash": 1}).limit(document_limit)
+    cursor = documents.find(
+        build_source_filter(with_patterns), {"title": 1, "source": 1, "content_hash": 1}
+    ).limit(document_limit)
     async for doc in cursor:
         matched[doc["_id"]] = doc
     if not matched:
         return []
 
-    taken: Dict[Any, int] = {doc_id: 0 for doc_id in matched}
+    # Assign every document the identifiers it carries: positional ones take the
+    # first chunks, sectioned ones (statute citations) the cited section's chunks.
+    positional_ids: List[Any] = []
+    sections_by_doc: Dict[Any, Tuple[str, ...]] = {}
+    for doc_id, doc in matched.items():
+        carried = [identifier for identifier in with_patterns if _document_matches(doc, identifier)]
+        if any(not identifier.section_patterns for identifier in carried):
+            positional_ids.append(doc_id)
+        elif carried:
+            sections_by_doc[doc_id] = _unique(
+                pattern for identifier in carried for pattern in identifier.section_patterns
+            )
+
     hits: List[Dict[str, Any]] = []
-    chunk_cursor = chunks.find(
-        {"document_id": {"$in": list(matched)}},
-        {"content": 1, "chunk_index": 1, "metadata": 1, "document_id": 1},
-    ).sort("chunk_index", 1)
-    async for chunk in chunk_cursor:
-        doc_id = chunk.get("document_id")
-        if doc_id not in taken or taken[doc_id] >= chunks_per_document:
-            continue
-        taken[doc_id] += 1
-        parent = matched[doc_id]
-        hits.append({
-            "chunk_id": chunk.get("_id"),
-            "document_id": doc_id,
-            "content": chunk.get("content", ""),
-            "similarity": 0.0,
-            "metadata": chunk.get("metadata") or {},
-            "document_title": parent.get("title") or "Unknown",
-            "document_source": parent.get("source") or "",
-            "chunk_index": chunk.get("chunk_index"),
-            "content_hash": parent.get("content_hash"),
-            "search_type": "exact",
-        })
+    if positional_ids:
+        per_document = await _chunks_by_document(chunks, {"document_id": {"$in": positional_ids}}, positional_ids)
+        for doc_id, candidates in per_document.items():
+            hits.extend(_title_hit(chunk, matched[doc_id]) for chunk in candidates[:chunks_per_document])
+    if sections_by_doc:
+        all_patterns = _unique(pattern for patterns in sections_by_doc.values() for pattern in patterns)
+        chunk_filter = {
+            "document_id": {"$in": list(sections_by_doc)},
+            "content": {"$regex": "|".join(f"(?:{pattern})" for pattern in all_patterns)},
+        }
+        per_document = await _chunks_by_document(chunks, chunk_filter, list(sections_by_doc))
+        for doc_id, candidates in per_document.items():
+            patterns = sections_by_doc[doc_id]
+            candidates = [c for c in candidates if any(re.search(p, c.get("content", "")) for p in patterns)]
+            # The section's own heading beats chunks that merely cite the section.
+            headings = [c for c in candidates if _is_section_heading(c.get("content", ""), patterns)]
+            hits.extend(_title_hit(chunk, matched[doc_id]) for chunk in (headings or candidates)[:chunks_per_document])
+
     # Keep document order (find order), chunks by index within a document.
     order = {doc_id: position for position, doc_id in enumerate(matched)}
     hits.sort(key=lambda hit: (order[hit["document_id"]], hit["chunk_index"] if hit["chunk_index"] is not None else -1))
-    return hits
+    unique: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for hit in hits:
+        if str(hit.get("chunk_id")) not in seen:
+            seen.add(str(hit.get("chunk_id")))
+            unique.append(hit)
+    return unique
 
 
 async def fetch_exact_hits(
@@ -432,21 +786,22 @@ async def fetch_exact_hits(
     if not identifiers:
         return []
     names = [identifier.canonical for identifier in identifiers]
-    pipeline = build_exact_pipeline(
-        identifiers, text_index=text_index, docs_collection=docs_collection, limit=limit
-    )
     hits: List[Dict[str, Any]] = []
-    try:
-        cursor = collection.aggregate(pipeline)
-        async for doc in cursor:
-            doc["search_type"] = "exact"
-            hits.append(doc)
-    except Exception as exc:  # noqa: BLE001 - the fused list is still a valid answer
-        logger.warning("Exact identifier phrase search failed for %s: %s", names, exc)
+    if any(identifier.groups for identifier in identifiers):
+        pipeline = build_exact_pipeline(
+            identifiers, text_index=text_index, docs_collection=docs_collection, limit=limit
+        )
+        try:
+            cursor = collection.aggregate(pipeline)
+            async for doc in cursor:
+                doc["search_type"] = "exact"
+                hits.append(doc)
+        except Exception as exc:  # noqa: BLE001 - the fused list is still a valid answer
+            logger.warning("Exact identifier phrase search failed for %s: %s", names, exc)
     phrase_count = len(hits)
 
     title_hits: List[Dict[str, Any]] = []
-    if documents is not None:
+    if documents is not None and any(identifier.patterns for identifier in identifiers):
         try:
             title_hits = await fetch_title_hits(documents, collection, identifiers)
         except Exception as exc:  # noqa: BLE001
@@ -462,6 +817,105 @@ async def fetch_exact_hits(
         names, phrase_count, len(title_hits), len(hits),
     )
     return hits
+
+
+def has_statute_citation(identifiers: Sequence[LegalIdentifier]) -> bool:
+    """Whether the query names a statute (citation or bare name): the F34 path applies."""
+    return any(identifier.kind == KIND_STATUTE for identifier in identifiers)
+
+
+def fuzzy_remainder(query: str, identifiers: Sequence[LegalIdentifier]) -> str:
+    """The query without its statute citations and without pure-number tokens.
+
+    ``Was regelt § 1 TKG 2021 (Zweck und Ziele) laut dem Gesetzestext in der
+    Fassung vom 18.08.2022?`` becomes ``Was regelt (Zweck und Ziele) laut dem
+    Gesetzestext in der Fassung vom``: the citation is matched as phrases, and
+    ``1``, ``2021`` and ``18.08.2022`` are the tokens the fuzzy stage found in
+    unrelated tables and numbered lists. Other identifier kinds stay in place.
+    """
+    chars = list(query)
+    for identifier in identifiers:
+        if identifier.kind == KIND_STATUTE and identifier.length:
+            for offset in range(identifier.position, min(identifier.end, len(chars))):
+                chars[offset] = " "
+    tokens = [token for token in "".join(chars).split() if _HAS_LETTER_RE.search(token)]
+    return " ".join(tokens)
+
+
+@dataclass(frozen=True)
+class TextStagePlan:
+    """The ``$search`` operator of the text stage and how it was built.
+
+    Attributes:
+        operator: The ``$search`` stage body (``index`` plus ``text`` or ``compound``).
+        mode: ``fuzzy`` (the ordinary stage, byte-identical to before) or
+            ``statute`` (phrase/compound, F34 path).
+        phrases: Phrase clauses of a ``statute`` plan, in operator order.
+        remainder: The fuzzy remainder of a ``statute`` plan (empty when the
+            query was nothing but the citation and no ``text`` clause was added).
+    """
+
+    operator: Dict[str, Any]
+    mode: str
+    phrases: Tuple[str, ...] = ()
+    remainder: str = ""
+
+    def describe(self) -> str:
+        """One line for the log: which text stage ran and with what."""
+        if self.mode != "statute":
+            return "fuzzy text stage"
+        return f"statute phrase stage {list(self.phrases)}, fuzzy remainder {self.remainder!r}"
+
+
+def plan_text_stage(
+    query: str, identifiers: Sequence[LegalIdentifier], *, index: str, path: str = "content"
+) -> TextStagePlan:
+    """Build the text stage of the hybrid search for a query.
+
+    Without a statute identifier this is the ordinary fuzzy ``text`` operator,
+    unchanged for every other query (FN, Grundbuch and Geschäftszahl queries
+    included). With one, the stage is a ``compound.should`` of exact ``phrase``
+    clauses on the citation spellings (``§ 1 TKG 2021``, ``§ 1 TKG``) and on the
+    statute name (``TKG 2021``, ``TKG``), the same citation spellings once more
+    with :data:`STATUTE_PHRASE_SLOP`, plus one fuzzy ``text`` clause on
+    :func:`fuzzy_remainder` when anything is left of the question. No clause
+    carries a bare number.
+    """
+    if not has_statute_citation(identifiers):
+        return TextStagePlan(
+            operator={"index": index, "text": {"query": query, "path": path, "fuzzy": dict(TEXT_FUZZY)}},
+            mode="fuzzy",
+        )
+    statutes = [identifier for identifier in identifiers if identifier.kind == KIND_STATUTE]
+    phrases = _unique(
+        variant for identifier in statutes for variant in (*identifier.variants, *identifier.name_variants)
+    )
+    loose = _unique(variant for identifier in statutes for variant in identifier.loose_variants)
+    should: List[Dict[str, Any]] = _phrase_clauses(phrases, path) + _loose_phrase_clauses(loose, path)
+    remainder = fuzzy_remainder(query, identifiers)
+    if remainder:
+        should.append({"text": {"query": remainder, "path": path, "fuzzy": dict(TEXT_FUZZY)}})
+    return TextStagePlan(
+        operator={"index": index, "compound": {"should": should, "minimumShouldMatch": 1}},
+        mode="statute",
+        phrases=phrases,
+        remainder=remainder,
+    )
+
+
+def semantic_guarantee(
+    identifiers: Sequence[LegalIdentifier],
+    vector_results: Sequence[Dict[str, Any]],
+    count: int = SEMANTIC_GUARANTEE_COUNT,
+) -> List[Dict[str, Any]]:
+    """The vector results that keep a place in the fused window: the top ``count`` on a statute query.
+
+    Empty for every other query, so :func:`merge_identifier_results` behaves as
+    before for them.
+    """
+    if not has_statute_citation(identifiers):
+        return []
+    return list(vector_results[:count])
 
 
 def copy_group_key(
@@ -498,6 +952,8 @@ def merge_identifier_results(
     exact_hits: Sequence[Dict[str, Any]],
     fused: Sequence[Dict[str, Any]],
     limit: int,
+    *,
+    guaranteed: Sequence[Dict[str, Any]] = (),
 ) -> List[Dict[str, Any]]:
     """Pin exact hits ahead of the fused list and collapse copies.
 
@@ -509,35 +965,80 @@ def merge_identifier_results(
     get ``metadata.exact_identifier_match = True`` and :data:`PINNED_SCORE` as
     their ``similarity``/``rrf_score``.
 
+    ``guaranteed`` (the vector stage's top results on a statute query, see
+    :func:`semantic_guarantee`) keep a place inside the window: those not already
+    pinned follow the pinned block directly, in vector order, and the pinned
+    block is cut to ``limit`` minus their number so they always fit; pinned hits
+    that are among them lead the pinned block by vector rank. They keep their
+    fused score and are marked ``metadata.semantic_guarantee = True``; every
+    representative that is one of them carries ``metadata.vector_rank``
+    (1-based). Empty ``guaranteed`` is the behaviour of every other query.
+
     Args:
         exact_hits: Results of the exact identifier query (search order).
         fused: The RRF-fused vector/text list (best first), not yet truncated.
         limit: Number of results to return.
+        guaranteed: Vector results that must appear in the window, best first.
 
     Returns:
         At most ``limit`` result dicts; the metadata dicts are copies.
     """
+    vector_ranks: Dict[Tuple[Any, ...], int] = {}
+    for rank, doc in enumerate(guaranteed, start=1):
+        vector_ranks.setdefault(_result_group_key(doc), rank)
+
     fused_ids = {str(doc.get("chunk_id")) for doc in fused}
+    # Exact hits the normal search also found lead; among them the vector top
+    # results (statute queries only) by vector rank, so the cited section's text
+    # precedes its table-of-contents entry; then search order.
     pinned = sorted(
         enumerate(exact_hits),
-        key=lambda item: (0 if str(item[1].get("chunk_id")) in fused_ids else 1, item[0]),
+        key=lambda item: (
+            0 if str(item[1].get("chunk_id")) in fused_ids else 1,
+            vector_ranks.get(_result_group_key(item[1]), len(vector_ranks) + 1),
+            item[0],
+        ),
+    )
+    pinned_docs = [doc for _, doc in pinned]
+    pinned_keys = {_result_group_key(doc) for doc in pinned_docs}
+
+    promoted: List[Dict[str, Any]] = []
+    seen_guaranteed: set[Tuple[Any, ...]] = set()
+    for doc in guaranteed:
+        key = _result_group_key(doc)
+        if key in seen_guaranteed:
+            continue
+        seen_guaranteed.add(key)
+        if key not in pinned_keys:
+            promoted.append(doc)
+    cap = max(0, limit - len(promoted)) if promoted else len(pinned_docs)
+
+    PINNED, GUARANTEED, FUSED = "pinned", "guaranteed", "fused"
+    candidates: List[Tuple[Dict[str, Any], str]] = (
+        [(doc, PINNED) for doc in pinned_docs[:cap]]
+        + [(doc, GUARANTEED) for doc in promoted]
+        + [(doc, PINNED) for doc in pinned_docs[cap:]]
+        + [(doc, FUSED) for doc in fused]
     )
 
     representatives: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
     ordered: List[Dict[str, Any]] = []
     collapsed = 0
-    candidates = [(doc, True) for _, doc in pinned] + [(doc, False) for doc in fused]
-    for doc, is_pinned in candidates:
+    for doc, role in candidates:
         key = _result_group_key(doc)
         representative = representatives.get(key)
         if representative is None:
             representative = dict(doc)
             metadata = dict(doc.get("metadata") or {})
             metadata["locations"] = list(metadata.get("locations") or [])
-            if is_pinned:
+            if role == PINNED:
                 metadata["exact_identifier_match"] = True
                 representative["similarity"] = PINNED_SCORE
                 representative["rrf_score"] = PINNED_SCORE
+            elif role == GUARANTEED:
+                metadata["semantic_guarantee"] = True
+            if key in vector_ranks:
+                metadata["vector_rank"] = vector_ranks[key]
             representative["metadata"] = metadata
             representatives[key] = representative
             ordered.append(representative)
@@ -551,7 +1052,7 @@ def merge_identifier_results(
         )
 
     logger.debug(
-        "Identifier merge: %d exact hit(s), %d fused, %d cop(y/ies) collapsed, %d returned",
-        len(exact_hits), len(fused), collapsed, min(len(ordered), limit),
+        "Identifier merge: %d exact hit(s), %d fused, %d guaranteed (%d promoted), %d cop(y/ies) collapsed, %d returned",
+        len(exact_hits), len(fused), len(guaranteed), len(promoted), collapsed, min(len(ordered), limit),
     )
     return ordered[:limit]
