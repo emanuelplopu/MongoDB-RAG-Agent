@@ -529,10 +529,13 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
         # Get existing sources if incremental
         existing_sources = set()
         if incremental and pipeline._initialized:
+            from src.ingestion.ingest import complete_documents_filter
+
             documents_collection = pipeline.db[
                 pipeline.settings.mongodb_collection_documents
             ]
-            cursor = documents_collection.find({}, {"source": 1})
+            # A document stored with part of its chunks (F44) counts as not ingested
+            cursor = documents_collection.find(complete_documents_filter(), {"source": 1})
             async for doc in cursor:
                 if "source" in doc:
                     existing_sources.add(doc["source"])
@@ -1899,14 +1902,16 @@ async def get_pending_files(
         if not all_files:
             return {"files": [], "total": 0, "is_running": False}
         
-        # Get existing sources from DB
+        # Get existing sources from DB (a partially embedded document is still pending, F44)
+        from src.ingestion.ingest import complete_documents_filter
+
         documents_collection = db.documents_collection
         existing_sources = set()
-        cursor = documents_collection.find({}, {"source": 1})
+        cursor = documents_collection.find(complete_documents_filter(), {"source": 1})
         async for doc in cursor:
             if "source" in doc:
                 existing_sources.add(doc["source"])
-        
+
         # Filter to pending files
         files_to_process = []
         for file_path in all_files:

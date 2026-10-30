@@ -20,6 +20,7 @@ import contextlib
 import contextvars
 import time
 from dataclasses import dataclass, field, asdict
+from dataclasses import replace as dataclasses_replace
 from concurrent.futures import ThreadPoolExecutor
 import functools
 import threading
@@ -167,6 +168,10 @@ class IngestionResult:
     chunks_created: int
     processing_time_ms: float
     errors: List[str]
+    #: Chunks of a stored document whose embedding budget ran out (F44): ``chunks_pending``
+    #: of them are not in the database yet; the loop embeds them from its embedding backlog
+    chunks_pending: int = 0
+    pending_chunks: List[Any] = field(default_factory=list, repr=False)
 
 
 @dataclass
@@ -180,7 +185,7 @@ class IngestionFileStats:
     processing_time_ms: float
     chunks_created: int
     success: bool
-    error_type: Optional[str]  # timeout, error, none, no_chunks, image_only_pdf
+    error_type: Optional[str]  # timeout, error, none, no_chunks, image_only_pdf, partial
     error_message: Optional[str]
     timeout_seconds: float
     profile_key: str
@@ -191,10 +196,29 @@ class IngestionFileStats:
     # PDFs only: True when the file has no text layer (a pure scan), so its text came from
     # OCR (success) or OCR found nothing (error_type image_only_pdf); None = not checked (F9)
     image_only_pdf: Optional[bool] = None
+    # Attempt of the file this record describes (0 = first); a timed-out file is recorded
+    # at once and every later attempt replaces that record (same record_id) instead of
+    # adding a row, so the counters and failed_documents see the timeout immediately (F43)
+    retry_count: int = 0
+    # Chunks of a stored document still waiting in the embedding backlog (F44)
+    chunks_pending: int = 0
+    # A timeout whose retry is still queued in this run: not a final failure, so a resumed
+    # job attempts the file again instead of skipping it with the other recorded failures
+    retry_pending: bool = False
+    #: ``_id`` of the ingestion_stats row; shared by every attempt of one file
+    record_id: ObjectId = field(default_factory=ObjectId)
+    #: Outcome key (error type, or "success") of the record this one replaces; None = first
+    supersedes: Optional[str] = None
+
+    @property
+    def outcome(self) -> str:
+        """The outcome key this record counts under (its error type, else ``success``)."""
+        return self.error_type or "success"
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for MongoDB storage."""
         result = {
+            "_id": self.record_id,
             "file_path": self.file_path,
             "file_name": self.file_name,
             "file_size_bytes": self.file_size_bytes,
@@ -210,11 +234,16 @@ class IngestionFileStats:
             "content_hash": self.content_hash,
             "file_modified_at": self.file_modified_at.isoformat() if self.file_modified_at else None,
             "classification": self.classification,
+            "retry_count": self.retry_count,
         }
         if self.job_id:
             result["job_id"] = self.job_id
         if self.image_only_pdf is not None:
             result["image_only_pdf"] = self.image_only_pdf
+        if self.chunks_pending or self.error_type == "partial" or self.supersedes == "partial":
+            result["chunks_pending"] = self.chunks_pending
+        if self.retry_pending:
+            result["retry_pending"] = True
         return result
 
 
@@ -311,10 +340,14 @@ def calculate_file_timeout(
     - Per MB: 30 seconds per megabyte (configurable)
     - PDF multiplier: 1.5x for standard PDFs, 2x+ for complex PDFs
     - Max: 1800 seconds (30 minutes, configurable)
-    - Retry multiplier: Each retry increases timeout
+    - Retry multiplier: Each retry increases timeout, and lifts the cap by the same
+      factor (a retry with the same 1,800 s cap failed the same way, F43)
     - Concurrency factor: the CPU share of one conversion at the run's concurrency
       (:func:`conversion_budget_factor`); the formula describes a conversion with
       Docling's default 4 threads to itself
+
+    Since 2026-10-28 this is the budget of the conversion alone; chunking, embedding and
+    storing have their own (:func:`indexing_budget`).
 
     Args:
         file_size_bytes: Size of the file in bytes
@@ -323,13 +356,17 @@ def calculate_file_timeout(
         config: Optional TimeoutConfig (uses global if not provided)
         retry_attempt: Retry attempt number (0 = first try)
         concurrency_factor: Multiplier >= 1 for the concurrency of the run (1 = no scaling);
-            applied before the ``max_timeout`` cap, which stays absolute
+            applied before the ``max_timeout`` cap, which it never lifts
 
     Returns:
         Timeout in seconds
     """
     cfg = config or _timeout_config
     max_timeout = max_timeout_seconds or cfg.max_timeout
+    if retry_attempt > 0:
+        # The cap is absolute for the first attempt; a retry must be allowed more than the
+        # attempt that just timed out, or it is the same attempt again
+        max_timeout *= cfg.retry_timeout_multiplier ** retry_attempt
     
     size_mb = file_size_bytes / (1024 * 1024)
     calculated_timeout = cfg.base_timeout + (size_mb * cfg.seconds_per_mb)
@@ -900,6 +937,18 @@ def retry_error_types(config: Optional[Dict[str, Any]]) -> frozenset:
     return frozenset(error_type for flag, error_type in RETRY_FLAG_ERROR_TYPES.items() if config.get(flag))
 
 
+def complete_documents_filter() -> Dict[str, Any]:
+    """Query clause for stored documents that have all their chunks.
+
+    A document stored with part of its chunks (its embedding budget ran out, F44) carries
+    ``metadata.chunks_pending > 0`` until the run's embedding backlog appends the rest. The
+    backlog lives in memory, so after a restart (or when the backlog gave up on the
+    document) nothing would finish it; the incremental filters therefore treat such a
+    document as not ingested, and the file is converted again and replaces it.
+    """
+    return {"metadata.chunks_pending": {"$not": {"$gt": 0}}}
+
+
 async def failed_paths_of_job(db: Any, job_id: Optional[str], retry_types: frozenset = frozenset()) -> Dict[str, str]:
     """``file_path -> error_type`` of the failures a job recorded that its resume must not redo.
 
@@ -907,7 +956,8 @@ async def failed_paths_of_job(db: Any, job_id: Optional[str], retry_types: froze
     errored or produced no chunks before the restart looked new and was processed again
     (F23: 553 timeouts on 451 files in the first 4 h after a resume). The failures the run
     wrote to ``failed_documents`` (F2) are skipped unless the job's ``retry_*`` flags ask for
-    that error type or the record was resolved.
+    that error type or the record was resolved. A timeout whose retry was still queued when
+    the run ended (``retry_pending``) is not a final failure and is attempted again.
 
     Args:
         db: The profile's database (``failed_documents`` collection), or ``None``.
@@ -918,7 +968,8 @@ async def failed_paths_of_job(db: Any, job_id: Optional[str], retry_types: froze
         return {}
     skip: Dict[str, str] = {}
     cursor = db["failed_documents"].find(
-        {"job_id": job_id, "resolved": {"$ne": True}}, {"file_path": 1, "error_type": 1}
+        {"job_id": job_id, "resolved": {"$ne": True}, "retry_pending": {"$ne": True}},
+        {"file_path": 1, "error_type": 1},
     )
     async for doc in cursor:
         error_type = doc.get("error_type") or "error"
@@ -951,6 +1002,177 @@ def stats_flush_config() -> Tuple[int, float]:
         max(1, int(files or DEFAULT_STATS_FLUSH_FILES)),
         max(1.0, float(seconds or DEFAULT_STATS_FLUSH_SECONDS)),
     )
+
+
+# ---------------------------------------------------------------------------
+# Budget of the steps after the conversion (chunking, embedding, storing), F44
+# ---------------------------------------------------------------------------
+#
+# Until 2026-10-28 the per-file budget (calculate_file_timeout) wrapped the whole file:
+# conversion, chunking, embedding and the MongoDB writes. While the embedder was slow, a
+# document whose conversion had finished within its budget timed out in the embedder queue,
+# was not stored, and its 20 minutes of conversion were re-queued for a retry that failed
+# the same way (46 of 49 timeouts in 12 h). The conversion now has that budget to itself;
+# the steps after it get one derived from the amount of work.
+
+DEFAULT_EMBED_BUDGET_FLOOR_SECONDS = 600.0
+DEFAULT_EMBED_BUDGET_MARGIN = 3.0
+DEFAULT_EMBED_BUDGET_MAX_SECONDS = 14400.0
+#: Assumed until the embedder has measured anything: ~500 tokens/s as seen by one file.
+DEFAULT_EMBED_SECONDS_PER_1K_TOKENS = 2.0
+#: Passes the embedding backlog gives one document before its remainder is left as partial.
+MAX_EMBEDDING_BACKLOG_PASSES = 3
+#: The hard cap on a task after its conversion is this many embedding budgets plus a grace; a safety
+#: net for a task that hangs, never reached by an embedding that merely runs late (the cooperative
+#: deadline overshoots by at most one batch, which the same throughput measurement predicts).
+INDEXING_HARD_CAP_BUDGETS = 3
+INDEXING_HARD_CAP_GRACE_SECONDS = 300.0
+
+
+@dataclass(frozen=True)
+class EmbeddingBudgetConfig:
+    """How the budget of a document's chunking + embedding + storing phase is derived.
+
+    Attributes:
+        floor_seconds: Least budget, whatever the work.
+        margin: Multiplier on the time the embedder's recent throughput predicts.
+        max_seconds: Cap; a document that needs more is stored partially and finished
+            from the embedding backlog.
+        default_seconds_per_1k_tokens: Assumed throughput before the embedder measured any.
+    """
+
+    floor_seconds: float = DEFAULT_EMBED_BUDGET_FLOOR_SECONDS
+    margin: float = DEFAULT_EMBED_BUDGET_MARGIN
+    max_seconds: float = DEFAULT_EMBED_BUDGET_MAX_SECONDS
+    default_seconds_per_1k_tokens: float = DEFAULT_EMBED_SECONDS_PER_1K_TOKENS
+
+
+def embedding_budget_config() -> EmbeddingBudgetConfig:
+    """The embedding budget settings of this process.
+
+    ``INGEST_EMBED_BUDGET_FLOOR_SECONDS`` / ``INGEST_EMBED_BUDGET_MARGIN`` /
+    ``INGEST_EMBED_BUDGET_MAX_SECONDS`` win, then the settings fields of the same names,
+    then 600 s / 3 / 4 h.
+    """
+    floor = _positive_float_env("INGEST_EMBED_BUDGET_FLOOR_SECONDS")
+    margin = _positive_float_env("INGEST_EMBED_BUDGET_MARGIN")
+    cap = _positive_float_env("INGEST_EMBED_BUDGET_MAX_SECONDS")
+    if floor is None or margin is None or cap is None:
+        try:
+            configured = load_settings(use_profile=False)
+        except Exception:  # settings need MONGODB_URI etc.; the harness has none
+            configured = None
+        if configured is not None:
+            floor = floor or getattr(configured, "ingest_embed_budget_floor_seconds", None)
+            margin = margin or getattr(configured, "ingest_embed_budget_margin", None)
+            cap = cap or getattr(configured, "ingest_embed_budget_max_seconds", None)
+    floor = float(floor or DEFAULT_EMBED_BUDGET_FLOOR_SECONDS)
+    cap = float(cap or DEFAULT_EMBED_BUDGET_MAX_SECONDS)
+    return EmbeddingBudgetConfig(
+        floor_seconds=floor,
+        margin=float(margin or DEFAULT_EMBED_BUDGET_MARGIN),
+        max_seconds=max(floor, cap),
+    )
+
+
+@dataclass
+class IndexingBudget:
+    """The budget of one document's steps after its conversion, counted from chunking's end.
+
+    Attributes:
+        tokens: Tokens of the chunks to embed.
+        seconds: Budget in seconds (:func:`indexing_budget`).
+        seconds_per_1k_tokens: Embedder throughput the budget was derived from.
+        started_at: ``time.monotonic()`` when the embedding started.
+    """
+
+    tokens: int
+    seconds: float
+    seconds_per_1k_tokens: float
+    started_at: float = field(default_factory=time.monotonic)
+
+    @property
+    def deadline(self) -> float:
+        """When the embedding stops starting new batches (cooperative, checked between batches)."""
+        return self.started_at + self.seconds
+
+    @property
+    def hard_deadline(self) -> float:
+        """When the loop cancels a task that is still running after its conversion: a safety net."""
+        return self.started_at + INDEXING_HARD_CAP_BUDGETS * self.seconds + INDEXING_HARD_CAP_GRACE_SECONDS
+
+
+def indexing_budget(
+    tokens: int,
+    seconds_per_1k_tokens: Optional[float],
+    config: Optional[EmbeddingBudgetConfig] = None,
+) -> IndexingBudget:
+    """Budget for chunking + embedding + storing ``tokens`` tokens of chunks.
+
+    ``margin`` times the time the embedder's recent throughput predicts (as one file sees
+    it, queueing behind the other files included), never below the floor and never above the
+    cap. A slow embedder therefore stretches the allowance; only when even the cap runs out
+    is the document stored with the chunks embedded so far (F44).
+
+    Args:
+        tokens: Tokens to embed (sum of the chunks' token counts).
+        seconds_per_1k_tokens: Recent wall seconds per 1,000 tokens
+            (``EmbeddingGenerator.recent_seconds_per_1k_tokens``); the default when ``None``.
+        config: Floor, margin and cap; :func:`embedding_budget_config` when omitted.
+    """
+    cfg = config or embedding_budget_config()
+    rate = seconds_per_1k_tokens if seconds_per_1k_tokens and seconds_per_1k_tokens > 0 else cfg.default_seconds_per_1k_tokens
+    predicted = max(0, int(tokens)) / 1000.0 * rate
+    seconds = min(cfg.max_seconds, max(cfg.floor_seconds, predicted * cfg.margin))
+    return IndexingBudget(tokens=max(0, int(tokens)), seconds=seconds, seconds_per_1k_tokens=rate)
+
+
+@dataclass(frozen=True)
+class ConversionOptions:
+    """Per-attempt options of one conversion (picklable: they travel to the worker process).
+
+    Attributes:
+        table_structure: Run Docling's table-structure stage (TableFormer) for this file;
+            ``None`` keeps the run's setting. The last retry of a timed-out PDF turns it
+            off: TableFormer on the CPU is what pushes table-heavy PDFs past the budget
+            (F43), and a document without Markdown tables beats no document at all.
+    """
+
+    table_structure: Optional[bool] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """The options that differ from the run's defaults, as keyword arguments."""
+        return {key: value for key, value in asdict(self).items() if value is not None}
+
+    def describe(self) -> str:
+        """Short log form (``"table structure off"``), empty when nothing differs."""
+        parts = []
+        if self.table_structure is False:
+            parts.append("table structure off")
+        elif self.table_structure is True:
+            parts.append("table structure on")
+        return ", ".join(parts)
+
+
+def retry_conversion_options(file_path: str, retry_attempt: int, max_retries: int) -> Optional[ConversionOptions]:
+    """What a retry of a timed-out conversion does differently.
+
+    Every retry gets a larger budget (:func:`calculate_file_timeout` lifts its cap per
+    attempt); the last allowed attempt of a PDF also drops the table-structure stage.
+
+    Args:
+        file_path: The file being retried.
+        retry_attempt: Attempt number (0 = first try; retries start at 1).
+        max_retries: The run's retry count (``TimeoutConfig.max_retries``).
+
+    Returns:
+        The options of that attempt, or ``None`` for the run's defaults.
+    """
+    if retry_attempt <= 0 or retry_attempt < max_retries:
+        return None
+    if not file_path.lower().endswith(".pdf"):
+        return None
+    return ConversionOptions(table_structure=False)
 
 
 # Keep page headers and footers (Docling's "furniture" content layer) in the stored content
@@ -1836,7 +2058,7 @@ def get_effective_device() -> str:
     return cfg.device
 
 
-def create_document_converter(ocr_config: Optional[OcrConfig] = None):
+def create_document_converter(ocr_config: Optional[OcrConfig] = None, table_structure: Optional[bool] = None):
     """
     Create (or reuse) a DocumentConverter with optimal settings for the current environment.
 
@@ -1847,19 +2069,24 @@ def create_document_converter(ocr_config: Optional[OcrConfig] = None):
 
     Args:
         ocr_config: OCR engine selection; resolved from settings when omitted.
+        table_structure: Run the table-structure stage (TableFormer); the run's setting
+            (``INGEST_TABLE_STRUCTURE``) when omitted. The retry of a timed-out PDF passes
+            ``False`` (:func:`retry_conversion_options`); that converter is cached too.
 
     Returns:
         Configured DocumentConverter instance
     """
     ocr_config = ocr_config or resolve_ocr_config()
+    tables = table_structure_enabled() if table_structure is None else bool(table_structure)
     key = (
         "pdf", ocr_config, get_effective_device(), _accelerator_config.enable_ocr_acceleration,
         docling_num_threads(),  # a resized pool rebuilds the converters with the new thread count
+        tables,
     )
-    return _cached_converter(key, lambda: _build_document_converter(ocr_config))
+    return _cached_converter(key, lambda: _build_document_converter(ocr_config, tables))
 
 
-def _build_document_converter(ocr_config: OcrConfig):
+def _build_document_converter(ocr_config: OcrConfig, table_structure: Optional[bool] = None):
     try:
         from docling.document_converter import DocumentConverter, PdfFormatOption
         from docling.datamodel.pipeline_options import PdfPipelineOptions
@@ -1886,7 +2113,9 @@ def _build_document_converter(ocr_config: OcrConfig):
         # Enable OCR with acceleration if configured
         if cfg.enable_ocr_acceleration:
             pipeline_options.do_ocr = True
-        pipeline_options.do_table_structure = table_structure_enabled()
+        pipeline_options.do_table_structure = (
+            table_structure_enabled() if table_structure is None else bool(table_structure)
+        )
 
         # Select the OCR engine (tesseract deu+eng by default; auto keeps Docling's choice)
         # and the OCR raster resolution for PDF pages (OCR_SCAN_DPI).
@@ -1898,7 +2127,7 @@ def _build_document_converter(ocr_config: OcrConfig):
                 pipeline_options=pipeline_options
             )
         }
-        
+
         converter = DocumentConverter(format_options=format_options)
         return converter
         
@@ -2057,25 +2286,65 @@ def map_error_type_to_classification(error_type: Optional[str], chunks_created: 
         return "no_chunks"
 
 
+class IndexingTimeoutError(RuntimeError):
+    """A file task kept running long after its conversion, past three times its embedding budget.
+
+    Not an ``asyncio.TimeoutError``: the conversion succeeded, so re-queueing the file for
+    another conversion would only redo that work. The loop records it as an error.
+    """
+
+
 @dataclass
 class ConversionHandle:
-    """What the concurrent loop needs to know about one file's conversion step.
+    """What the concurrent loop needs to know about one file's steps.
 
     ``started`` is set when the conversion actually begins (a pool thread picked it up, or a
-    conversion worker process acknowledged it): the file's budget starts there, not when the
-    file was queued. ``thread_future`` is the pool future of a thread-mode conversion; after a
-    timeout it tells the loop whether the thread is still running (a thread cannot be
-    interrupted, so its slot stays reserved until it ends).
+    conversion worker process acknowledged it): the conversion budget starts there, not when
+    the file was queued, and it ends when ``converted`` is set (the conversion returned).
+    ``thread_future`` is the pool future of a thread-mode conversion; after a timeout it
+    tells the loop whether the thread is still running (a thread cannot be interrupted, so
+    its slot stays reserved until it ends). ``options`` are this attempt's conversion
+    options (a retry of a timed-out PDF drops the table-structure stage). After the
+    conversion the task sets ``indexing_budget`` once chunking is done, so the loop's hard
+    cap follows the work-derived embedding budget (F44).
     """
 
     started: asyncio.Event = field(default_factory=asyncio.Event)
     started_at: Optional[float] = None
     thread_future: Optional[concurrent.futures.Future] = None
+    converted: asyncio.Event = field(default_factory=asyncio.Event)
+    converted_at: Optional[float] = None
+    options: Optional[ConversionOptions] = None
+    indexing_budget: Optional[IndexingBudget] = None
+    budget_known: asyncio.Event = field(default_factory=asyncio.Event)
 
     def mark_started(self) -> None:
         if self.started_at is None:
             self.started_at = time.monotonic()
             self.started.set()
+
+    def mark_converted(self) -> None:
+        """The conversion returned: the conversion budget stops here."""
+        if self.converted_at is None:
+            self.converted_at = time.monotonic()
+            self.converted.set()
+
+    def set_indexing_budget(self, budget: IndexingBudget) -> None:
+        """Chunking is done and the embedding budget is known (lets the loop extend its cap)."""
+        self.indexing_budget = budget
+        self.budget_known.set()
+
+    def hard_deadline(self, floor_seconds: float) -> float:
+        """When the loop gives up on a task that is still running after its conversion.
+
+        ``INDEXING_HARD_CAP_BUDGETS`` embedding budgets plus a grace once the budget is known;
+        until then (the task is chunking) the same multiple of the floor from the end of the
+        conversion.
+        """
+        if self.indexing_budget is not None:
+            return self.indexing_budget.hard_deadline
+        base = self.converted_at if self.converted_at is not None else time.monotonic()
+        return base + INDEXING_HARD_CAP_BUDGETS * floor_seconds + INDEXING_HARD_CAP_GRACE_SECONDS
 
 
 # The concurrent loop sets the handle of the file it is about to process; the per-file task
@@ -2084,6 +2353,30 @@ class ConversionHandle:
 _conversion_handle_var: contextvars.ContextVar[Optional[ConversionHandle]] = contextvars.ContextVar(
     "ingest_conversion_handle", default=None
 )
+
+
+@dataclass
+class EmbeddingBacklogEntry:
+    """A document stored with part of its chunks; the rest is embedded after the round (F44).
+
+    Attributes:
+        file_path: The source file.
+        document_id: The stored document (``_id`` as a string).
+        pending: Its chunks not embedded yet (no embedding).
+        result: The file's :class:`IngestionResult` in the run's results; its counts are
+            updated as chunks are appended.
+        stat: The file's ``partial`` record; the final record replaces it.
+        passes: Backlog passes made so far (at most :data:`MAX_EMBEDDING_BACKLOG_PASSES`).
+        embedded: Chunks appended by the backlog so far.
+    """
+
+    file_path: str
+    document_id: str
+    pending: List[DocumentChunk]
+    result: IngestionResult
+    stat: IngestionFileStats
+    passes: int = 0
+    embedded: int = 0
 
 
 class IngestionStatsRecorder:
@@ -2106,7 +2399,7 @@ class IngestionStatsRecorder:
             counts of the stats written so far), e.g. to update job status counters.
     """
 
-    COUNTED: Tuple[str, ...] = ("timeout", "no_chunks", "error", "image_only_pdf", "duplicate", "success")
+    COUNTED: Tuple[str, ...] = ("timeout", "no_chunks", "error", "image_only_pdf", "duplicate", "partial", "success")
     #: Stats kept in memory while the database refuses writes; the oldest are dropped beyond it.
     MAX_PENDING = 10_000
 
@@ -2135,9 +2428,13 @@ class IngestionStatsRecorder:
 
     @staticmethod
     def _count(counter: Dict[str, int], stat: IngestionFileStats) -> None:
-        key = stat.error_type or "success"
+        if stat.supersedes is not None:
+            # A later attempt (or the backlog finishing a partial document) replaces the
+            # earlier record of the same file: the file moves from that outcome to this one
+            counter[stat.supersedes] = max(0, counter.get(stat.supersedes, 0) - 1)
+        key = stat.outcome
         counter[key] = counter.get(key, 0) + 1
-        if stat.success and stat.image_only_pdf:
+        if stat.success and stat.image_only_pdf and stat.supersedes is None:
             # Pure scans whose OCR produced text (F9): shown next to the skipped/empty ones
             counter["image_only_ocr"] = counter.get("image_only_ocr", 0) + 1
 
@@ -2148,10 +2445,16 @@ class IngestionStatsRecorder:
             return len(self._pending)
 
     def add(self, stat: IngestionFileStats) -> None:
-        """Record one file's stats; schedules a flush once a batch is full."""
+        """Record one file's stats; schedules a flush once a batch is full.
+
+        A stat that ``supersedes`` an earlier record of the same file (same ``record_id``)
+        replaces it in the database and moves the file between the outcome counts; the
+        file is counted once in ``recorded``.
+        """
         with self._lock:
             self._pending.append(stat)
-            self.recorded += 1
+            if stat.supersedes is None:
+                self.recorded += 1
             self._count(self.counts, stat)
             due = len(self._pending) >= self.flush_every_files
         if due:
@@ -2516,18 +2819,23 @@ class DocumentIngestionPipeline:
         
         return sorted_files
 
-    def _read_document(self, file_path: str) -> tuple[str, Optional[Any]]:
+    def _read_document(
+        self, file_path: str, options: Optional[ConversionOptions] = None
+    ) -> tuple[str, Optional[Any]]:
         """
         Read document content from file - supports multiple formats via Docling.
 
         Args:
             file_path: Path to the document file
+            options: Per-attempt conversion options (the last retry of a timed-out PDF turns
+                the table-structure stage off); ``None`` for the run's defaults
 
         Returns:
             Tuple of (markdown_content, docling_document).
             docling_document is None only for text files.
         """
         file_ext = os.path.splitext(file_path)[1].lower()
+        options = options or ConversionOptions()
 
         # Word backups (.wbk) and Word 97 templates (.dot) are the same OLE2 format as .doc
         if file_ext in ('.wbk', '.dot'):
@@ -2668,9 +2976,10 @@ class DocumentIngestionPipeline:
                 logger.info(
                     f"Converting {file_ext} file using Docling: "
                     f"{os.path.basename(file_path)}"
+                    + (f" ({options.describe()})" if options.describe() else "")
                 )
 
-                converter = create_document_converter()
+                converter = create_document_converter(table_structure=options.table_structure)
                 result = converter.convert(file_path)
 
                 # Export to markdown for consistent processing
@@ -3699,11 +4008,12 @@ class DocumentIngestionPipeline:
         content: str,
         chunks: List[DocumentChunk],
         metadata: Dict[str, Any],
-        content_hash: Optional[str] = None
+        content_hash: Optional[str] = None,
+        pending_chunks: int = 0,
     ) -> str:
         """
         Save document and chunks to MongoDB.
-        
+
         Always deletes any existing document with the same source path
         before inserting, preventing duplicates regardless of ingestion mode.
 
@@ -3714,6 +4024,9 @@ class DocumentIngestionPipeline:
             chunks: List of document chunks with embeddings
             metadata: Document metadata
             content_hash: SHA256 hash of original file for deduplication
+            pending_chunks: Chunks of the document not embedded yet (its embedding budget
+                ran out, F44); counted in ``metadata.chunks_count`` and recorded as
+                ``metadata.chunks_pending`` until the embedding backlog appends them
 
         Returns:
             Document ID (ObjectId as string)
@@ -3731,15 +4044,18 @@ class DocumentIngestionPipeline:
         await self._delete_existing_document(source)
 
         # Insert document
+        document_metadata = {
+            **metadata,
+            "chunks_count": len(chunks) + max(0, pending_chunks),  # Store chunks count for efficient retrieval
+        }
+        if pending_chunks > 0:
+            document_metadata["chunks_pending"] = pending_chunks
         document_dict = {
             "title": title,
             "source": source,
             "content": content,
             "content_hash": content_hash,  # Store hash for deduplication
-            "metadata": {
-                **metadata,
-                "chunks_count": len(chunks)  # Store chunks count for efficient retrieval
-            },
+            "metadata": document_metadata,
             "created_at": datetime.now()
         }
 
@@ -3749,18 +4065,7 @@ class DocumentIngestionPipeline:
         logger.info(f"Inserted document with ID: {document_id}")
 
         # Insert chunks with embeddings as Python lists
-        chunk_dicts = []
-        for chunk in chunks:
-            chunk_dict = {
-                "document_id": document_id,
-                "content": chunk.content,
-                "embedding": chunk.embedding,  # Python list, NOT string!
-                "chunk_index": chunk.index,
-                "metadata": chunk.metadata,
-                "token_count": chunk.token_count,
-                "created_at": datetime.now()
-            }
-            chunk_dicts.append(chunk_dict)
+        chunk_dicts = self._chunk_documents(document_id, chunks)
 
         # Batch insert with ordered=False for partial success
         if chunk_dicts:
@@ -3768,6 +4073,53 @@ class DocumentIngestionPipeline:
             logger.info(f"Inserted {len(chunk_dicts)} chunks")
 
         return str(document_id)
+
+    @staticmethod
+    def _chunk_documents(document_id: Any, chunks: List[DocumentChunk]) -> List[Dict[str, Any]]:
+        """The ``chunks`` collection documents of ``chunks`` (embeddings as Python lists)."""
+        return [
+            {
+                "document_id": document_id,
+                "content": chunk.content,
+                "embedding": chunk.embedding,  # Python list, NOT string!
+                "chunk_index": chunk.index,
+                "metadata": chunk.metadata,
+                "token_count": chunk.token_count,
+                "created_at": datetime.now(),
+            }
+            for chunk in chunks
+        ]
+
+    async def _append_chunks_to_document(
+        self, document_id: str, chunks: List[DocumentChunk], remaining: int
+    ) -> None:
+        """Add embedded ``chunks`` to a stored document and update its pending count.
+
+        The embedding backlog calls this after each of its passes over a document that was
+        stored with part of its chunks (F44).
+
+        Args:
+            document_id: The stored document (``_id`` as a string).
+            chunks: Newly embedded chunks to insert.
+            remaining: Chunks still not embedded; 0 clears ``metadata.chunks_pending``.
+        """
+        if self.db is None:
+            return
+        oid = ObjectId(document_id)
+        if chunks:
+            chunks_collection = self.db[self.settings.mongodb_collection_chunks]
+            # Idempotent: a pass whose insert partly succeeded before an error is redone by the
+            # next pass, so drop whatever it left for these chunk indexes first
+            await chunks_collection.delete_many(
+                {"document_id": oid, "chunk_index": {"$in": [chunk.index for chunk in chunks]}}
+            )
+            await chunks_collection.insert_many(self._chunk_documents(oid, chunks), ordered=False)
+        update: Dict[str, Any] = (
+            {"$set": {"metadata.chunks_pending": remaining}}
+            if remaining > 0
+            else {"$unset": {"metadata.chunks_pending": ""}, "$set": {"metadata.embedding_completed_at": datetime.now()}}
+        )
+        await self.db[self.settings.mongodb_collection_documents].update_one({"_id": oid}, update)
 
     async def _clean_databases(self) -> None:
         """Clean existing data from MongoDB collections."""
@@ -3849,9 +4201,12 @@ class DocumentIngestionPipeline:
             ``(markdown_content, docling_document)`` as :meth:`_read_document` returns it.
         """
         handle = handle or _conversion_handle_var.get() or ConversionHandle()
+        options = handle.options.to_dict() if handle.options is not None else None
         pool = self._conversion_pool
         if pool is not None:
-            return await pool.convert(file_path, on_started=handle.mark_started)
+            converted = await pool.convert(file_path, on_started=handle.mark_started, options=options)
+            handle.mark_converted()
+            return converted
         loop = asyncio.get_running_loop()
 
         def read() -> tuple[str, Optional[Any]]:
@@ -3859,28 +4214,56 @@ class DocumentIngestionPipeline:
                 loop.call_soon_threadsafe(handle.mark_started)
             except RuntimeError:  # loop already closed: nothing waits for this conversion
                 pass
+            # Readers with the plain signature (subclasses, tests) are called as before
+            if options:
+                return self._read_document(file_path, handle.options)
             return self._read_document(file_path)
 
         future = self.get_executor().submit(read)
         handle.thread_future = future
-        return await asyncio.wrap_future(future, loop=loop)
+        converted = await asyncio.wrap_future(future, loop=loop)
+        handle.mark_converted()
+        return converted
 
     @staticmethod
-    async def _run_with_budget(coro: Awaitable[Any], handle: ConversionHandle, timeout_seconds: float) -> Any:
-        """Await ``coro`` with ``timeout_seconds`` counted from the moment its conversion starts.
+    async def _cancel(task: asyncio.Task) -> None:
+        task.cancel()
+        with contextlib.suppress(BaseException):
+            await task
+
+    @classmethod
+    async def _run_with_budget(
+        cls,
+        coro: Awaitable[Any],
+        handle: ConversionHandle,
+        timeout_seconds: float,
+        floor_seconds: float = DEFAULT_EMBED_BUDGET_FLOOR_SECONDS,
+    ) -> Any:
+        """Await ``coro`` with ``timeout_seconds`` for its conversion, counted from its start.
 
         Waiting for a pool thread or for a conversion worker's warm-up is not charged to the
-        file: once the conversion starts, the file has the whole budget from that moment. A
-        file whose conversion has not started within one budget times out all the same, so a
-        step stuck before the conversion cannot hold a slot forever. Like ``asyncio.wait_for``,
-        a timeout cancels the inner task first (which kills a conversion worker process) and
-        raises ``asyncio.TimeoutError``.
+        file: once the conversion starts, it has the whole budget from that moment, and the
+        clock stops when the conversion returns (``handle.converted``). A file whose
+        conversion has not started within one budget times out all the same, so a step stuck
+        before the conversion cannot hold a slot forever. Like ``asyncio.wait_for``, a
+        conversion timeout cancels the inner task first (which kills a conversion worker
+        process) and raises ``asyncio.TimeoutError``.
+
+        The steps after the conversion (chunking, embedding, storing) are not under this
+        budget: the task gives them their own, derived from the amount of work
+        (:func:`indexing_budget`) and enforced cooperatively, so a slow embedder stretches the
+        allowance and a document whose embedding runs late is stored with the chunks embedded
+        so far instead of being thrown away (F44). What remains here is a safety net: a task
+        still running past three times that budget (``handle.hard_deadline``) is cancelled
+        with :class:`IndexingTimeoutError`, which the loop records as an error, not as a
+        timeout to retry.
 
         Args:
             coro: The per-file coroutine (``_ingest_single_document``).
             handle: The conversion handle of that file; it is put in the context the task
                 inherits, so the conversion step finds it without a parameter.
-            timeout_seconds: Budget from the conversion start.
+            timeout_seconds: Conversion budget from the conversion start.
+            floor_seconds: Embedding budget floor, for the hard cap while the budget is unknown.
 
         Returns:
             The coroutine's result.
@@ -3890,28 +4273,53 @@ class DocumentIngestionPipeline:
             task = asyncio.ensure_future(coro)  # copies the context: the handle travels with the task
         finally:
             _conversion_handle_var.reset(token)
-        started = asyncio.ensure_future(handle.started.wait())
+
+        async def wait_stage(event: Optional[asyncio.Event], timeout: Optional[float]) -> bool:
+            """Wait for the task or ``event``; True when the task is done, False on ``event``."""
+            waiter = asyncio.ensure_future(event.wait()) if event is not None else None
+            waiting = {task, waiter} if waiter is not None else {task}
+            try:
+                done, _ = await asyncio.wait(waiting, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+            except asyncio.CancelledError:
+                await cls._cancel(task)
+                raise
+            finally:
+                if waiter is not None:
+                    waiter.cancel()
+            if task in done:
+                return True
+            if not done:
+                raise asyncio.TimeoutError()
+            return False
+
         try:
-            done, _ = await asyncio.wait(
-                {task, started}, timeout=timeout_seconds, return_when=asyncio.FIRST_COMPLETED
-            )
-        except asyncio.CancelledError:
-            task.cancel()
-            with contextlib.suppress(BaseException):
-                await task
+            # Stage 1: the conversion must start within one budget
+            if await wait_stage(handle.started, timeout_seconds):
+                return task.result()
+            # Stage 2: the conversion itself, with the budget from its start
+            remaining = max(0.0, (handle.started_at or time.monotonic()) + timeout_seconds - time.monotonic())
+            if await wait_stage(handle.converted, remaining):
+                return task.result()
+        except asyncio.TimeoutError:
+            await cls._cancel(task)
             raise
-        finally:
-            started.cancel()
-        if task in done:
-            return task.result()
-        if not done:
-            # Nothing started within the budget: stuck before the conversion (or never converting)
-            task.cancel()
-            with contextlib.suppress(BaseException):
-                await task
-            raise asyncio.TimeoutError()
-        remaining = max(0.0, (handle.started_at or time.monotonic()) + timeout_seconds - time.monotonic())
-        return await asyncio.wait_for(task, timeout=remaining)
+
+        # Stage 3: chunking, embedding and storing under the task's own budget; only the hard cap here
+        while True:
+            deadline = handle.hard_deadline(floor_seconds)
+            pending_event = None if handle.budget_known.is_set() else handle.budget_known
+            try:
+                if await wait_stage(pending_event, max(0.0, deadline - time.monotonic())):
+                    return task.result()
+            except asyncio.TimeoutError:
+                if handle.hard_deadline(floor_seconds) > deadline:
+                    continue  # the budget became known meanwhile and extended the cap
+                await cls._cancel(task)
+                raise IndexingTimeoutError(
+                    f"still chunking/embedding/storing {deadline - (handle.converted_at or deadline):.0f}s "
+                    f"after the conversion finished (hard cap, {INDEXING_HARD_CAP_BUDGETS}x the embedding budget)"
+                )
+            # The budget became known: loop once more with the extended cap
 
     async def _ingest_single_document(
         self,
@@ -4045,21 +4453,49 @@ class DocumentIngestionPipeline:
         # Yield control to allow API requests between chunking and embedding
         await asyncio.sleep(0)
 
-        # Generate embeddings
+        # Generate embeddings, within a budget derived from the work (F44): the conversion
+        # budget stopped when the conversion returned; a slow embedder stretches this one,
+        # and when it still runs out the document is stored with the chunks embedded so far
+        budget = self._indexing_budget(chunks)
+        handle = _conversion_handle_var.get()
+        if handle is not None:
+            handle.set_indexing_budget(budget)
+        logger.debug(
+            f"Embedding budget for {os.path.basename(file_path)}: {budget.seconds:.0f}s for "
+            f"{budget.tokens} tokens ({budget.seconds_per_1k_tokens:.2f} s per 1k tokens recently)"
+        )
         with telemetry_hooks.step("embed"):
-            embedded_chunks = await self.embedder.embed_chunks(chunks)
-        logger.info(f"Generated embeddings for {len(embedded_chunks)} chunks")
+            embedded_chunks, pending_chunks = await self._embed_chunks(chunks, budget.deadline)
+        if pending_chunks:
+            logger.warning(
+                f"Embedding budget of {budget.seconds:.0f}s ran out for {os.path.basename(file_path)}: "
+                f"storing {len(embedded_chunks)} of {len(chunks)} chunks now, "
+                f"{len(pending_chunks)} go to the embedding backlog"
+            )
+        else:
+            logger.info(f"Generated embeddings for {len(embedded_chunks)} chunks")
 
         # Save to MongoDB
         with telemetry_hooks.step("save"):
-            document_id = await self._save_to_mongodb(
-                document_title,
-                document_source,
-                document_content,
-                embedded_chunks,
-                document_metadata,
-                content_hash
-            )
+            if pending_chunks:
+                document_id = await self._save_to_mongodb(
+                    document_title,
+                    document_source,
+                    document_content,
+                    embedded_chunks,
+                    document_metadata,
+                    content_hash,
+                    pending_chunks=len(pending_chunks),
+                )
+            else:
+                document_id = await self._save_to_mongodb(
+                    document_title,
+                    document_source,
+                    document_content,
+                    embedded_chunks,
+                    document_metadata,
+                    content_hash
+                )
 
         logger.info(f"Saved document to MongoDB with ID: {document_id}")
 
@@ -4071,10 +4507,65 @@ class DocumentIngestionPipeline:
         return IngestionResult(
             document_id=document_id,
             title=document_title,
-            chunks_created=len(chunks),
+            chunks_created=len(chunks) - len(pending_chunks),
             processing_time_ms=processing_time,
-            errors=[]
+            errors=[],
+            chunks_pending=len(pending_chunks),
+            pending_chunks=pending_chunks,
         )
+
+    def _indexing_budget(self, chunks: List[DocumentChunk]) -> IndexingBudget:
+        """The budget of embedding ``chunks``, from the embedder's recent throughput."""
+        tokens = 0
+        for chunk in chunks:
+            count = getattr(chunk, "token_count", None)
+            if count is None:
+                count = len(getattr(chunk, "content", "") or "") // 4
+            tokens += max(1, int(count))
+        recent = getattr(self.embedder, "recent_seconds_per_1k_tokens", None)
+        seconds_per_1k = recent() if callable(recent) else None
+        return indexing_budget(tokens, seconds_per_1k, self._embedding_budget_config())
+
+    def _embedding_budget_config(self) -> EmbeddingBudgetConfig:
+        """This run's embedding budget settings, resolved once."""
+        config = getattr(self, "_embed_budget_config", None)
+        if config is None:
+            config = embedding_budget_config()
+            self._embed_budget_config = config
+        return config
+
+    async def _embed_chunks(
+        self, chunks: List[DocumentChunk], deadline: Optional[float]
+    ) -> Tuple[List[DocumentChunk], List[DocumentChunk]]:
+        """Embed ``chunks`` until ``deadline``; ``(embedded, not attempted)``.
+
+        Embedders without ``embed_chunks_within`` (older stubs) embed everything.
+        """
+        within = getattr(self.embedder, "embed_chunks_within", None)
+        if within is None:
+            return list(await self.embedder.embed_chunks(chunks)), []
+        embedded, pending = await within(chunks, deadline=deadline)
+        return list(embedded), list(pending)
+
+    async def _embed_backlog_chunks(
+        self, document_id: str, chunks: List[DocumentChunk]
+    ) -> Tuple[int, List[DocumentChunk]]:
+        """One embedding-backlog pass over the pending ``chunks`` of a stored document.
+
+        Embeds within a fresh work-derived budget, appends the embedded chunks to the
+        document and updates its ``metadata.chunks_pending``.
+
+        Args:
+            document_id: The stored document.
+            chunks: Its chunks not yet embedded.
+
+        Returns:
+            ``(embedded_count, still_pending)``.
+        """
+        budget = self._indexing_budget(chunks)
+        embedded, pending = await self._embed_chunks(chunks, budget.deadline)
+        await self._append_chunks_to_document(document_id, embedded, remaining=len(pending))
+        return len(embedded), pending
 
     async def _get_existing_sources(self) -> set:
         """
@@ -4086,14 +4577,14 @@ class DocumentIngestionPipeline:
         documents_collection = self.db[
             self.settings.mongodb_collection_documents
         ]
-        
-        # Get all existing sources
-        cursor = documents_collection.find({}, {"source": 1})
+
+        # Get all existing sources; a partially embedded document is not "ingested" (F44)
+        cursor = documents_collection.find(complete_documents_filter(), {"source": 1})
         existing = set()
         async for doc in cursor:
             if "source" in doc:
                 existing.add(doc["source"])
-        
+
         return existing
 
     async def _get_existing_hashes(self) -> Dict[str, str]:
@@ -4110,9 +4601,9 @@ class DocumentIngestionPipeline:
             self.settings.mongodb_collection_documents
         ]
         
-        # Get all existing content hashes
+        # Get all existing content hashes; a partially embedded document is not "ingested" (F44)
         cursor = documents_collection.find(
-            {"content_hash": {"$exists": True, "$ne": None}},
+            {"content_hash": {"$exists": True, "$ne": None}, **complete_documents_filter()},
             {"content_hash": 1, "source": 1}
         )
         existing = {}
@@ -4458,14 +4949,23 @@ class DocumentIngestionPipeline:
         """
         Process documents concurrently using a semaphore with timeout and failure tracking.
 
-        Each file takes one of ``max_concurrent`` slots. Its budget (:func:`calculate_file_timeout`,
-        scaled by :func:`conversion_budget_factor` for the CPU share of one conversion at this
-        concurrency) starts when its conversion actually starts, not when it was queued. On a
-        timeout the conversion is stopped: with process isolation the worker process is killed;
-        on the thread pool the thread cannot be interrupted, so the slot stays reserved until it
-        ends and the pool never runs more conversions than there are slots (F1 of
-        ``docs/system-validation/INGESTION_PROMPT_TEST_LOG_2026-10-24.md``). Timed-out files are
-        retried in later rounds with a larger budget (``max_retries``).
+        Each file takes one of ``max_concurrent`` slots. Its conversion budget
+        (:func:`calculate_file_timeout`, scaled by :func:`conversion_budget_factor` for the CPU
+        share of one conversion at this concurrency) starts when its conversion actually starts,
+        not when it was queued, and stops when the conversion returns. On a timeout the
+        conversion is stopped: with process isolation the worker process is killed; on the
+        thread pool the thread cannot be interrupted, so the slot stays reserved until it ends
+        and the pool never runs more conversions than there are slots (F1 of
+        ``docs/system-validation/INGESTION_PROMPT_TEST_LOG_2026-10-24.md``). The timeout is
+        recorded at once (``retry_count`` 0) and every later attempt replaces that record (F43);
+        timed-out files are retried in later rounds with a larger budget (``max_retries``), the
+        last retry of a PDF without the table-structure stage (:func:`retry_conversion_options`).
+
+        Chunking, embedding and storing have their own budget, derived from the amount of work
+        and the embedder's recent throughput (:func:`indexing_budget`). When it runs out the
+        document is stored with the chunks embedded so far, recorded as ``partial`` with the
+        number of chunks pending, and the rest is embedded after the round from the run's
+        embedding backlog (F44) instead of the file being reconverted.
 
         Per-file stats go to ``ingestion_stats`` / ``failed_documents`` in batches while the run
         is going (:class:`IngestionStatsRecorder`, :func:`stats_flush_config`), not only at the
@@ -4527,8 +5027,12 @@ class DocumentIngestionPipeline:
             on_flush=stats_callback,
         )
 
-        # Timed-out files waiting for a retry round: (index, file_path, content_hash, next attempt)
-        timed_out_files: List[Tuple[int, str, Optional[str], int]] = []
+        # Timed-out files waiting for a retry round:
+        # (index, file_path, content_hash, next attempt, the timeout record of the last attempt)
+        timed_out_files: List[Tuple[int, str, Optional[str], int, IngestionFileStats]] = []
+        # Documents stored with part of their chunks; the rest is embedded after the round (F44)
+        embedding_backlog: List[EmbeddingBacklogEntry] = []
+        embed_floor_seconds = self._embedding_budget_config().floor_seconds
         # Content hash of every file being processed right now -> its path (same-run copies, F4)
         in_flight_hashes: Dict[str, str] = {}
         # Copies of a file in flight, processed once its outcome is known: (index, path, hash)
@@ -4543,8 +5047,13 @@ class DocumentIngestionPipeline:
             file_path: str,
             retry_attempt: int = 0,
             prev_content_hash: Optional[str] = None,
+            prev_stat: Optional[IngestionFileStats] = None,
         ) -> None:
-            """Process a file once; timed-out and deferred files are queued for a later round."""
+            """Process a file once; timed-out and deferred files are queued for a later round.
+
+            ``prev_stat`` is the timeout record of the previous attempt of this file: the
+            records of this attempt replace it (same ``record_id``) instead of adding rows.
+            """
             nonlocal duplicates_skipped, processed_count
 
             await slots.acquire()
@@ -4573,7 +5082,12 @@ class DocumentIngestionPipeline:
                 content_hash: Optional[str] = prev_content_hash or None
 
                 def stat(**overrides: Any) -> IngestionFileStats:
-                    """This file's stats record; ``overrides`` set outcome fields."""
+                    """This file's stats record; ``overrides`` set outcome fields.
+
+                    On a retry the record keeps the ``record_id`` of the previous attempt's
+                    timeout record and names it in ``supersedes``, so the database row is
+                    replaced and the counters move the file to the new outcome.
+                    """
                     completed = datetime.now()
                     values: Dict[str, Any] = dict(
                         file_path=file_path,
@@ -4592,7 +5106,11 @@ class DocumentIngestionPipeline:
                         content_hash=content_hash,
                         file_modified_at=file_modified_at,
                         classification="error",
+                        retry_count=retry_attempt,
                     )
+                    if prev_stat is not None:
+                        values["record_id"] = prev_stat.record_id
+                        values["supersedes"] = prev_stat.outcome
                     values.update(overrides)
                     return IngestionFileStats(**values)
 
@@ -4671,22 +5189,29 @@ class DocumentIngestionPipeline:
                             return
 
                     size_mb = file_size / (1024 * 1024)
+                    options = retry_conversion_options(file_path, retry_attempt, timeout_cfg.max_retries)
                     logger.info(
                         f"Processing file ({processed_count+1}/{total_files}, "
                         f"{progress_percent_label(processed_count + 1, total_files)}): {file_path} "
-                        f"({size_mb:.1f}MB, timeout={timeout_seconds:.0f}s)"
+                        f"({size_mb:.1f}MB, timeout={timeout_seconds:.0f}s"
+                        + (f", attempt {retry_attempt + 1}" if retry_attempt else "")
+                        + (f", {options.describe()}" if options is not None and options.describe() else "")
+                        + ")"
                     )
 
-                    # Process with a budget counted from the start of the conversion
-                    handle = ConversionHandle()
+                    # Convert with a budget counted from the start of the conversion to its end;
+                    # chunking, embedding and storing run under the task's own work-derived budget
+                    handle = ConversionHandle(options=options)
                     result = await self._run_with_budget(
                         self._ingest_single_document(file_path, content_hash),
                         handle,
                         timeout_seconds,
+                        floor_seconds=embed_floor_seconds,
                     )
 
                     chunks_created = result.chunks_created if result else 0
-                    is_no_chunks = chunks_created == 0 and result and not result.document_id
+                    chunks_pending = getattr(result, "chunks_pending", 0) if result else 0
+                    is_no_chunks = chunks_created == 0 and chunks_pending == 0 and result and not result.document_id
                     # Pure scans are recorded as such (F9): OCRed ones carry the flag, ones
                     # whose OCR found nothing count as image_only_pdf instead of no_chunks
                     image_only: Optional[bool] = None
@@ -4713,17 +5238,35 @@ class DocumentIngestionPipeline:
                         elif is_no_chunks:
                             error_type = "no_chunks"
                             error_message = "No content extracted from document"
+                        elif chunks_pending > 0:
+                            # Stored with part of its chunks (F44); the backlog embeds the rest
+                            error_type = "partial"
+                            error_message = (
+                                f"Embedding budget ran out: {chunks_created} of "
+                                f"{chunks_created + chunks_pending} chunks stored, "
+                                f"{chunks_pending} pending in the embedding backlog"
+                            )
                         else:
                             error_type = None
                             error_message = None
-                        recorder.add(stat(
+                        file_stat = stat(
                             chunks_created=chunks_created,
                             success=not is_no_chunks,
                             error_type=error_type,
                             error_message=error_message,
                             classification=map_error_type_to_classification(error_type, chunks_created),
                             image_only_pdf=image_only,
-                        ))
+                            chunks_pending=chunks_pending,
+                        )
+                        recorder.add(file_stat)
+                        if chunks_pending > 0:
+                            embedding_backlog.append(EmbeddingBacklogEntry(
+                                file_path=file_path,
+                                document_id=result.document_id,
+                                pending=list(result.pending_chunks),
+                                result=result,
+                                stat=file_stat,
+                            ))
 
                     if progress_callback:
                         progress_callback(
@@ -4771,22 +5314,41 @@ class DocumentIngestionPipeline:
                             retry_attempt=retry_attempt + 1,
                             concurrency_factor=budget_factor,
                         )
+                        next_options = retry_conversion_options(file_path, retry_attempt + 1, timeout_cfg.max_retries)
+                        next_describe = next_options.describe() if next_options is not None else ""
                         logger.warning(
                             f"TIMEOUT (attempt {retry_attempt + 1}/{timeout_cfg.max_retries + 1}) "
-                            f"processing {file_path}: {timeout_seconds:.0f}s elapsed. "
-                            f"Will retry with {next_timeout:.0f}s timeout."
+                            f"converting {file_path}: {timeout_seconds:.0f}s elapsed. "
+                            f"Will retry with {next_timeout:.0f}s timeout"
+                            + (f" ({next_describe})" if next_describe else "")
+                            + "."
                         )
-                        # Queue for retry with increased timeout
+                        # Record the timeout now (F43), so the counters and failed_documents see
+                        # it; the retry's record replaces this one. Queue for retry with increased
+                        # timeout; not counted as processed yet
                         with results_lock:
-                            timed_out_files.append((index, file_path, content_hash, retry_attempt + 1))
-                        return  # Don't count as processed yet
+                            attempt_stat = stat(
+                                processing_time_ms=processing_time,
+                                error_type="timeout",
+                                error_message=(
+                                    f"Conversion timeout after {timeout_seconds:.0f}s "
+                                    f"(attempt {retry_attempt + 1}/{timeout_cfg.max_retries + 1}, "
+                                    f"file size: {size_mb:.1f}MB); retry queued with {next_timeout:.0f}s"
+                                    + (f", {next_describe}" if next_describe else "")
+                                ),
+                                classification="timeout",
+                                retry_pending=True,
+                            )
+                            recorder.add(attempt_stat)
+                            timed_out_files.append((index, file_path, content_hash, retry_attempt + 1, attempt_stat))
+                        return
 
                     # Max retries exceeded - record as final failure
                     error_msg = (
-                        f"Timeout after {timeout_seconds:.0f}s "
+                        f"Conversion timeout after {timeout_seconds:.0f}s "
                         f"(file size: {size_mb:.1f}MB, retries exhausted: {retry_attempt + 1}/{timeout_cfg.max_retries + 1})"
                     )
-                    logger.error(f"TIMEOUT (final) processing {file_path}: {error_msg}")
+                    logger.error(f"TIMEOUT (final) converting {file_path}: {error_msg}")
 
                     with results_lock:
                         results.append(failed_result(error_msg, processing_time))
@@ -4842,6 +5404,66 @@ class DocumentIngestionPipeline:
             if tasks:
                 raise_if_cancelled(await asyncio.gather(*tasks, return_exceptions=True))
 
+        async def drain_entry(entry: EmbeddingBacklogEntry, slot: asyncio.Semaphore) -> None:
+            """One backlog pass over a partially embedded document."""
+            async with slot:
+                if pause_checkpoint:
+                    await pause_checkpoint()
+                entry.passes += 1
+                try:
+                    embedded_now, still_pending = await self._embed_backlog_chunks(entry.document_id, entry.pending)
+                except Exception as exc:  # noqa: BLE001 - the document stays partial, with its record
+                    logger.error(f"Embedding backlog pass failed for {entry.file_path}: {exc}")
+                    embedded_now, still_pending = 0, entry.pending
+                entry.pending = still_pending
+                entry.embedded += embedded_now
+                done = not still_pending
+                give_up = not done and entry.passes >= MAX_EMBEDDING_BACKLOG_PASSES
+                with results_lock:
+                    entry.result.chunks_created += embedded_now
+                    entry.result.chunks_pending = len(still_pending)
+                    if done or give_up:
+                        completed = datetime.now()
+                        recorder.add(dataclasses_replace(
+                            entry.stat,
+                            completed_at=completed,
+                            processing_time_ms=(completed - entry.stat.started_at).total_seconds() * 1000,
+                            chunks_created=entry.result.chunks_created,
+                            chunks_pending=len(still_pending),
+                            error_type=None if done else "partial",
+                            error_message=None if done else (
+                                f"Embedding backlog gave up after {entry.passes} passes: "
+                                f"{len(still_pending)} chunks not embedded"
+                            ),
+                            supersedes="partial",
+                        ))
+                    else:
+                        embedding_backlog.append(entry)
+                if done:
+                    logger.info(
+                        f"Embedding backlog completed {entry.file_path}: {entry.embedded} chunks appended "
+                        f"in {entry.passes} pass(es)"
+                    )
+                elif give_up:
+                    logger.error(
+                        f"Embedding backlog gave up on {entry.file_path} after {entry.passes} passes: "
+                        f"{len(still_pending)} chunks stay unembedded (documents.metadata.chunks_pending)"
+                    )
+
+        async def drain_embedding_backlog() -> None:
+            """Embed the pending chunks of partially stored documents, after the round (F44)."""
+            while True:
+                with results_lock:
+                    entries, embedding_backlog[:] = list(embedding_backlog), []
+                if not entries:
+                    return
+                logger.info(
+                    f"Embedding backlog: {len(entries)} partially embedded document(s), "
+                    f"{sum(len(e.pending) for e in entries)} chunks to embed"
+                )
+                slot = asyncio.Semaphore(max(1, min(4, max_concurrent)))
+                await run_round([asyncio.create_task(drain_entry(entry, slot)) for entry in entries])
+
         flush_timer = asyncio.create_task(recorder.timer_loop())
         try:
             # First round: every file once
@@ -4849,6 +5471,7 @@ class DocumentIngestionPipeline:
                 asyncio.create_task(process_file_with_retry(i, file_path, retry_attempt=0))
                 for i, file_path in enumerate(document_files)
             ])
+            await drain_embedding_backlog()
 
             # Later rounds: copies deferred behind a file in flight (first attempts), then timed-out
             # files (next attempt, larger budget). Every round settles at least one copy per hash
@@ -4869,7 +5492,7 @@ class DocumentIngestionPipeline:
                 if retries:
                     retry_round += 1
                     still_running = [
-                        orphan_by_file[fpath] for _, fpath, _, _ in retries
+                        orphan_by_file[fpath] for _, fpath, _, _, _ in retries
                         if fpath in orphan_by_file and not orphan_by_file[fpath].done()
                     ]
                     if still_running:
@@ -4886,10 +5509,13 @@ class DocumentIngestionPipeline:
                     )
                     await run_round([
                         asyncio.create_task(
-                            process_file_with_retry(idx, fpath, retry_attempt=attempt, prev_content_hash=chash)
+                            process_file_with_retry(
+                                idx, fpath, retry_attempt=attempt, prev_content_hash=chash, prev_stat=last_stat
+                            )
                         )
-                        for idx, fpath, chash, attempt in retries
+                        for idx, fpath, chash, attempt, last_stat in retries
                     ])
+                await drain_embedding_backlog()
 
             # Log retry summary
             if timeout_cfg.max_retries > 0:
@@ -4905,6 +5531,12 @@ class DocumentIngestionPipeline:
                     f"after the run; they end on their own (process isolation would have stopped them)"
                 )
         finally:
+            if embedding_backlog:
+                logger.warning(
+                    f"{len(embedding_backlog)} partially embedded document(s) with "
+                    f"{sum(len(e.pending) for e in embedding_backlog)} pending chunks were left when the run "
+                    f"ended (documents.metadata.chunks_pending marks them)"
+                )
             # Save stats to database - also when the run is stopped, for the files already processed
             flush_timer.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -4932,40 +5564,83 @@ class DocumentIngestionPipeline:
             return True
 
         try:
-            # Save all stats to ingestion_stats collection
+            # Save all stats to ingestion_stats collection: new records are inserted, the record
+            # of a later attempt (or of the backlog finishing a partial document) replaces the
+            # earlier row of the same file (same _id), so a file keeps one row (F43)
             stats_collection = self.db["ingestion_stats"]
-            stats_docs = [stat.to_dict() for stat in file_stats]
-            if stats_docs:
-                await stats_collection.insert_many(stats_docs)
+            new_docs = [stat.to_dict() for stat in file_stats if stat.supersedes is None]
+            if new_docs:
+                await stats_collection.insert_many(new_docs)
+            for stat in file_stats:
+                if stat.supersedes is not None:
+                    await stats_collection.replace_one({"_id": stat.record_id}, stat.to_dict(), upsert=True)
         except Exception as e:
             logger.error(f"Failed to save ingestion stats: {e}")
             return False
 
         try:
-            # Save failed documents to failed_documents collection
-            failed_stats = [s for s in file_stats if not s.success]
-            if failed_stats:
-                failed_collection = self.db["failed_documents"]
-                failed_docs = []
-                for stat in failed_stats:
-                    doc = {
-                        "file_path": stat.file_path,
-                        "file_name": stat.file_name,
-                        "file_size_bytes": stat.file_size_bytes,
-                        "error_type": stat.error_type,
-                        "error_message": stat.error_message,
-                        "timeout_seconds": stat.timeout_seconds,
-                        "processing_time_ms": stat.processing_time_ms,
-                        "failed_at": stat.completed_at.isoformat() if stat.completed_at else datetime.now().isoformat(),
-                        "profile_key": stat.profile_key,
-                        "resolved": False,
-                        "retry_count": 0
-                    }
-                    if stat.job_id:
-                        doc["job_id"] = stat.job_id
-                    failed_docs.append(doc)
-                await failed_collection.insert_many(failed_docs)
-                logger.warning(f"Recorded {len(failed_docs)} failed documents to database")
+            failed_collection = self.db["failed_documents"]
+            recorded = 0
+            # In recording order, so the retry of a file whose first timeout is in the same
+            # batch finds the row it updates (the first attempt's row is written first)
+            for stat in file_stats:
+                open_timeout: Dict[str, Any] = {"file_path": stat.file_path, "error_type": "timeout", "resolved": False}
+                if stat.job_id:
+                    open_timeout["job_id"] = stat.job_id
+                failed_at = stat.completed_at.isoformat() if stat.completed_at else datetime.now().isoformat()
+
+                if stat.supersedes == "timeout":
+                    # A later attempt of a timed-out file updates its open timeout row: still a
+                    # timeout -> retry_count and the new message; any other outcome -> resolved
+                    if stat.error_type == "timeout":
+                        update = {"$set": {
+                            "retry_count": stat.retry_count,
+                            "error_message": stat.error_message,
+                            "timeout_seconds": stat.timeout_seconds,
+                            "processing_time_ms": stat.processing_time_ms,
+                            "failed_at": failed_at,
+                            "retry_pending": stat.retry_pending,
+                        }}
+                    else:
+                        update = {"$set": {
+                            "retry_count": stat.retry_count,
+                            "resolved": True,
+                            "resolved_at": failed_at,
+                            "resolution": f"retry {stat.retry_count} ended as {stat.outcome}",
+                            "retry_pending": False,
+                        }}
+                    await failed_collection.update_one(open_timeout, update)
+                    if stat.success or stat.error_type == "timeout":
+                        continue
+                    # A retry that failed in a new way gets a row of its own below
+
+                if stat.success:
+                    continue
+                doc = {
+                    "file_path": stat.file_path,
+                    "file_name": stat.file_name,
+                    "file_size_bytes": stat.file_size_bytes,
+                    "error_type": stat.error_type,
+                    "error_message": stat.error_message,
+                    "timeout_seconds": stat.timeout_seconds,
+                    "processing_time_ms": stat.processing_time_ms,
+                    "failed_at": failed_at,
+                    "profile_key": stat.profile_key,
+                    "resolved": False,
+                    "retry_count": stat.retry_count,
+                    "retry_pending": stat.retry_pending,
+                }
+                if stat.job_id:
+                    doc["job_id"] = stat.job_id
+                if stat.error_type == "timeout":
+                    # One open timeout row per (job, file): a resumed run's new first attempt
+                    # merges into the row its earlier run left pending instead of adding one
+                    await failed_collection.update_one(open_timeout, {"$set": doc}, upsert=True)
+                else:
+                    await failed_collection.insert_one(doc)
+                recorded += 1
+            if recorded:
+                logger.warning(f"Recorded {recorded} failed documents to database")
         except Exception as e:
             # The stats are in; do not write them twice for the sake of the failure list
             logger.error(f"Failed to record failed documents: {e}")

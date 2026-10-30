@@ -39,7 +39,12 @@ class _Failed:
 
     def find(self, query: dict, projection: Optional[dict] = None) -> _Cursor:
         self.queries.append(query)
-        rows = [r for r in self.rows if r.get("job_id") == query["job_id"] and r.get("resolved") is not True]
+        rows = [
+            r for r in self.rows
+            if r.get("job_id") == query["job_id"]
+            and r.get("resolved") is not True
+            and (r.get("retry_pending") is not True or "retry_pending" not in query)
+        ]
         return _Cursor(rows)
 
 
@@ -60,8 +65,11 @@ async def test_failed_paths_skip_unresolved_failures_unless_retried() -> None:
         {"job_id": JOB, "file_path": "/a/blank.pdf", "error_type": "no_chunks"},
         {"job_id": JOB, "file_path": "/a/broken.doc", "error_type": "error", "resolved": True},
         {"job_id": "other", "file_path": "/a/other.pdf", "error_type": "timeout"},
+        # A timeout whose retry was still queued when the run ended is attempted again (F43)
+        {"job_id": JOB, "file_path": "/a/retrying.pdf", "error_type": "timeout", "resolved": False, "retry_pending": True},
     ])
     assert await ingest.failed_paths_of_job(db, JOB) == {"/a/slow.pdf": "timeout", "/a/blank.pdf": "no_chunks"}
+    assert db["failed_documents"].queries[-1]["retry_pending"] == {"$ne": True}
     assert await ingest.failed_paths_of_job(db, JOB, frozenset({"timeout"})) == {"/a/blank.pdf": "no_chunks"}
     assert await ingest.failed_paths_of_job(None, JOB) == {}
     assert await ingest.failed_paths_of_job(db, None) == {}

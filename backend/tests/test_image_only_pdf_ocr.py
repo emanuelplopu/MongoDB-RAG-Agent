@@ -263,9 +263,12 @@ def test_ocr_of_a_scan_keeps_the_timeout_retry(corpus: List[str], monkeypatch: p
     results, _ = _run_concurrent(pipe, corpus)
 
     assert pipe.attempts[SCAN_WITH_TEXT] == 2  # timed out once, retried, then succeeded
-    retried = pipe.stat(SCAN_WITH_TEXT)
+    attempts = [s for s in pipe.stats if s.file_name == SCAN_WITH_TEXT]
+    # The timeout is recorded at once and the retry's record replaces it (same row, F43)
+    assert [s.error_type for s in attempts] == ["timeout", None]
+    assert len({s.record_id for s in attempts}) == 1 and attempts[1].supersedes == "timeout"
+    retried = attempts[-1]
     assert (retried.classification, retried.success, retried.chunks_created) == ("normal", True, 3)
-    assert sum(1 for s in pipe.stats if s.file_name == SCAN_WITH_TEXT) == 1  # one stat row per file
     assert any(r.title == SCAN_WITH_TEXT and r.chunks_created == 3 for r in results)
 
 

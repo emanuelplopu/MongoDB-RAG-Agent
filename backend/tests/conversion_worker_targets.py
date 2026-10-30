@@ -12,10 +12,12 @@ import time
 from typing import Any, Tuple
 
 
-def sleepy_reader(file_path: str) -> Tuple[str, Any]:
+def sleepy_reader(file_path: str, **options: Any) -> Tuple[str, Any]:
     """Sleep for the number of seconds written in the file, then return it as the content.
 
     A file holding ``boom`` raises instead, like a reader that fails on a broken document.
+    Per-attempt conversion options (``table_structure=False`` on the last retry of a PDF)
+    are echoed at the end of the content.
     """
     with open(file_path, "r", encoding="utf-8") as handle:
         raw = handle.read().strip()
@@ -23,4 +25,5 @@ def sleepy_reader(file_path: str) -> Tuple[str, Any]:
         raise ValueError(f"cannot read {os.path.basename(file_path)}")
     seconds = float(raw or 0)
     time.sleep(seconds)
-    return f"slept {seconds:.1f} in {os.getpid()}", None
+    echoed = "".join(f" {key}={value}" for key, value in sorted(options.items()))
+    return f"slept {seconds:.1f} in {os.getpid()}{echoed}", None

@@ -41,7 +41,8 @@ READY_TIMEOUT_SECONDS = 900.0
 _POLL_SECONDS = 0.2
 _REAP_SECONDS = 5.0
 
-ReaderTarget = Callable[[str], Tuple[str, Any]]
+#: ``target(file_path, **options)``; targets without options are called as ``target(file_path)``.
+ReaderTarget = Callable[..., Tuple[str, Any]]
 
 
 class ConversionWorkerError(RuntimeError):
@@ -81,13 +82,24 @@ class WorkerInit:
 _reader: Any = None
 
 
-def read_document_in_worker(file_path: str) -> Tuple[str, Any]:
-    """Convert ``file_path`` with a read-only pipeline (the default worker target)."""
+def read_document_in_worker(file_path: str, **options: Any) -> Tuple[str, Any]:
+    """Convert ``file_path`` with a read-only pipeline (the default worker target).
+
+    Args:
+        file_path: Document to convert.
+        **options: Per-attempt conversion options (``ConversionOptions`` fields, e.g.
+            ``table_structure=False`` for the last retry of a timed-out PDF); none for the
+            run's defaults.
+    """
     global _reader
     if _reader is None:
         from src.ingestion.ingest import DocumentIngestionPipeline
 
         _reader = DocumentIngestionPipeline.reader_only()
+    if options:
+        from src.ingestion.ingest import ConversionOptions
+
+        return _reader._read_document(file_path, ConversionOptions(**options))
     return _reader._read_document(file_path)
 
 
@@ -136,8 +148,9 @@ def _worker_main(conn: Connection, target: ReaderTarget, init: WorkerInit) -> No
             if not message or message[0] == "stop":
                 break
             file_path = message[1]
+            options = message[2] if len(message) > 2 else None
             try:
-                content, document = target(file_path)
+                content, document = target(file_path, **options) if options else target(file_path)
             except Exception as exc:  # noqa: BLE001 - reported to the parent as a file error
                 logger.exception("Conversion failed in worker: %s", file_path)
                 conn.send(("error", f"{type(exc).__name__}: {exc}"[:2000]))
@@ -385,12 +398,19 @@ class ConversionProcessPool:
             logger.info("Conversion worker %d ready (pid %s)", worker.index, generation.pid)
         return generation
 
-    async def convert(self, file_path: str, on_started: Optional[Callable[[], None]] = None) -> Tuple[str, Any]:
+    async def convert(
+        self,
+        file_path: str,
+        on_started: Optional[Callable[[], None]] = None,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, Any]:
         """Convert ``file_path`` in the next free worker process.
 
         Args:
             file_path: Document to convert.
             on_started: Called once the worker has the request (the file's budget starts here).
+            options: Per-attempt conversion options passed to the worker target as keyword
+                arguments (``ConversionOptions.to_dict()``); ``None`` for the run's defaults.
 
         Returns:
             ``(markdown_content, docling_document_or_None)`` as ``_read_document`` returns it.
@@ -407,7 +427,7 @@ class ConversionProcessPool:
             try:
                 generation = await self._ready_generation(worker)
                 try:
-                    generation.conn.send(("convert", file_path))
+                    generation.conn.send(("convert", file_path, options) if options else ("convert", file_path))
                 except (OSError, ValueError) as exc:
                     worker.kill("pipe broken")
                     raise ConversionWorkerError(f"conversion worker {worker.index} unreachable: {exc}") from exc

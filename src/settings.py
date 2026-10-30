@@ -258,6 +258,31 @@ class Settings(BaseSettings):
         description="Also write the per-file ingestion stats every this many seconds during a run",
     )
 
+    ingest_embed_budget_floor_seconds: float = Field(
+        default=600.0,
+        description=(
+            "Least time a converted document gets for chunking, embedding and storing "
+            "(INGEST_EMBED_BUDGET_FLOOR_SECONDS); the conversion has its own budget"
+        ),
+    )
+
+    ingest_embed_budget_margin: float = Field(
+        default=3.0,
+        description=(
+            "Embedding budget = this times the time the embedder's recent throughput predicts "
+            "for the document's tokens (INGEST_EMBED_BUDGET_MARGIN), never below the floor"
+        ),
+    )
+
+    ingest_embed_budget_max_seconds: float = Field(
+        default=14400.0,
+        description=(
+            "Cap of the embedding budget (INGEST_EMBED_BUDGET_MAX_SECONDS). When it runs out the "
+            "document is stored with the chunks embedded so far and the rest is embedded after "
+            "the round from the run's embedding backlog"
+        ),
+    )
+
     msg_extract_attachments: bool = Field(
         default=False,
         description=(
@@ -337,6 +362,9 @@ class Settings(BaseSettings):
             'ingest_process_isolation': self.ingest_process_isolation,
             'ingest_stats_flush_files': self.ingest_stats_flush_files,
             'ingest_stats_flush_seconds': self.ingest_stats_flush_seconds,
+            'ingest_embed_budget_floor_seconds': self.ingest_embed_budget_floor_seconds,
+            'ingest_embed_budget_margin': self.ingest_embed_budget_margin,
+            'ingest_embed_budget_max_seconds': self.ingest_embed_budget_max_seconds,
             'ocr_rect_dilation': self.ocr_rect_dilation,
             'ocr_image_noise_gate': self.ocr_image_noise_gate,
             'msg_extract_attachments': self.msg_extract_attachments,

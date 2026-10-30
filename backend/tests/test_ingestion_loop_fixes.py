@@ -246,7 +246,9 @@ async def test_recorder_keeps_a_batch_the_database_refused() -> None:
     recorder.add(_stat("b.pdf"))
     assert await recorder.flush() == 2
     assert [s.file_name for s in written] == ["a.pdf", "b.pdf"]
-    assert snapshots == [{"timeout": 1, "no_chunks": 0, "error": 0, "image_only_pdf": 0, "duplicate": 0, "success": 1, "written": 2}]
+    assert snapshots == [
+        {"timeout": 1, "no_chunks": 0, "error": 0, "image_only_pdf": 0, "duplicate": 0, "partial": 0, "success": 1, "written": 2}
+    ]
 
 
 async def test_recorder_schedules_a_flush_when_a_batch_is_full() -> None:
@@ -273,6 +275,17 @@ async def test_save_ingestion_stats_writes_both_collections_and_reports_failures
                 raise RuntimeError("connection lost")
             self.docs.extend(docs)
 
+        async def insert_one(self, doc: dict) -> None:
+            await self.insert_many([doc])
+
+        async def update_one(self, query: dict, update: dict, upsert: bool = False) -> None:
+            for doc in self.docs:
+                if all(doc.get(key) == value for key, value in query.items()):
+                    doc.update(update["$set"])
+                    return
+            if upsert:
+                self.docs.append({**query, **update["$set"]})
+
     stats, failed = _Collection(), _Collection()
     pipe = _Pipeline()
     pipe.db = {"ingestion_stats": stats, "failed_documents": failed}
@@ -295,7 +308,8 @@ def test_job_counters_follow_the_written_stats() -> None:
     )
     assert job_state == {
         "processed_files": 10, "timeout_files": 3, "no_chunks_files": 3, "error_files": 2,
-        "image_only_pdfs": 4, "image_only_pdfs_ocr": 0, "duplicates_skipped": 5, "failed_files": 8,
+        "image_only_pdfs": 4, "image_only_pdfs_ocr": 0, "duplicates_skipped": 5, "partial_files": 0,
+        "failed_files": 8,
     }
 
 
