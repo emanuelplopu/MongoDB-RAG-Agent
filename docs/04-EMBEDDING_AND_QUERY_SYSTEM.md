@@ -705,8 +705,13 @@ Uses MongoDB Atlas Search with fuzzy matching for keyword-based retrieval.
 
 **Process:**
 1. Query text is tokenized and analyzed
-2. Fuzzy matching allows for typos (max 2 edits, prefix length 3)
+2. Fuzzy matching allows for typos (max 2 edits, prefix length 3, at most 20 variants per term)
 3. Returns chunks containing matching terms
+
+The `text` operator of every text stage (this endpoint, the text half of the
+hybrid search, `FederatedSearch` and the chat router's `perform_search`) is built
+by `backend/services/text_query.py`, which bounds long queries; see "Long
+queries and the clause limit" under Hybrid Search.
 
 **MongoDB Pipeline:**
 ```
@@ -760,6 +765,24 @@ Where:
 - General-purpose queries
 - When query type is uncertain
 - Balancing semantic understanding with keyword precision
+
+**Long queries and the clause limit (F56, 2026-10-30):** Lucene expands every
+fuzzy term into up to `maxExpansions` variants (Atlas default 50) and rejects
+the whole `$search` once the query exceeds 1,024 clauses (`maxClauseCount is
+set to 1024`), which turned a pasted sentence of 26-28 distinct terms into an
+HTTP 500 on `/search/text` and `/search/hybrid`. `backend/services/text_query.py`
+now builds the `text` operator for all text stages: fuzzy options are
+`maxEdits 2, prefixLength 3, maxExpansions 20`; a query with up to 15 distinct
+terms is sent unchanged as one `text` clause, a longer one becomes a
+`compound.should` of a fuzzy clause over its first 15 distinct terms and a
+plain clause over the following terms, with at most 60 distinct terms in total
+(worst case 15 × 20 + 45 = 345 clauses for any query length). If Atlas still
+answers with `maxClauseCount`, the stage is retried once without fuzziness
+(logged at WARNING with the term count); if that fails too, the search
+endpoints return 400 "query too long" instead of 500, the federated search
+keeps its vector results and the chat search reports the error in its thinking
+block. The identifier path's exact `phrase` query carries no fuzziness and is
+unchanged.
 
 ### Identifier Queries (FN, EZ/KG, Geschäftszahl)
 
