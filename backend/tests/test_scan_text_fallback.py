@@ -27,6 +27,7 @@ import pytest
 pytest.importorskip("docling_core")
 from docling_core.types.doc import (  # noqa: E402
     BoundingBox,
+    ContentLayer,
     CoordOrigin,
     DocItemLabel,
     DoclingDocument,
@@ -122,8 +123,7 @@ def _text_pdf(text: str) -> bytes:
     return out.getvalue()
 
 
-@pytest.fixture(scope="module")
-def chunker() -> Any:
+def _make_chunker() -> Any:
     """The pipeline's HybridChunker (needs the MiniLM tokenizer in the local Hugging Face cache)."""
     from src.ingestion.chunker import ChunkingConfig, DoclingHybridChunker
 
@@ -131,6 +131,11 @@ def chunker() -> Any:
         return DoclingHybridChunker(ChunkingConfig())
     except Exception as exc:  # noqa: BLE001 - no tokenizer offline
         pytest.skip(f"chunker tokenizer unavailable: {exc}")
+
+
+@pytest.fixture(scope="module")
+def chunker() -> Any:
+    return _make_chunker()
 
 
 def _chunks(chunker: Any, doc: DoclingDocument) -> List[Any]:
@@ -190,7 +195,7 @@ def test_picture_children_text_is_copied_into_the_body_and_chunked(chunker: Any)
     doc = _picture_only_document()
     assert _body(doc) == [("PictureItem", "")]
     assert doc.export_to_markdown().strip() == "<!-- image -->"  # the F35 symptom
-    assert _chunks(chunker, doc) == []
+    assert _chunks(chunker, doc) == []  # with page furniture on or off (see the placeholder test)
 
     recovery = fallback.recover_scan_text(doc, pdf_path=None)
 
@@ -208,6 +213,28 @@ def test_picture_children_text_is_copied_into_the_body_and_chunked(chunker: Any)
     # the § repair is a separate step after the conversion; it reaches the recovered items
     assert repair_docling_document(doc) >= 1
     assert any("§ 49 ÄrzteG" in text for _, text in _body(doc))
+
+
+@pytest.mark.parametrize("furniture", ["true", "false"])
+def test_picture_only_document_yields_no_image_placeholder_chunk(furniture: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The furniture-aware serializer must not turn a picture into a ``<!-- image -->`` chunk."""
+    from src.ingestion import chunker as chunker_module
+
+    monkeypatch.setenv("INGEST_PAGE_FURNITURE", furniture)
+    params = chunker_module.furniture_serializer_params()
+    if furniture == "true":
+        assert params is not None and params.image_placeholder == ""
+        assert params.layers == {ContentLayer.BODY, ContentLayer.FURNITURE}
+    else:
+        assert params is None
+    chunker = _make_chunker()
+    doc = _picture_only_document()
+    assert _chunks(chunker, doc) == []
+    # and a page footer is chunked only when furniture is on
+    doc.add_text(label=DocItemLabel.PAGE_FOOTER, text="Seite 1 von 1", prov=_prov(1), content_layer=ContentLayer.FURNITURE)
+    texts = [chunk.content for chunk in _chunks(chunker, doc)]
+    assert ("Seite 1 von 1" in " ".join(texts)) is (furniture == "true")
+    assert not any("<!-- image -->" in text for text in texts)
 
 
 def test_picture_children_are_copied_once_per_picture_and_keep_their_page() -> None:
@@ -317,6 +344,55 @@ def test_full_page_ocr_that_finds_nothing_leaves_the_document_empty(tmp_path: Pa
 
     assert fallback.recover_scan_text(doc, str(pdf), ocr_page=lambda image: "  \n\n ") is None
     assert not doc.texts and not doc.pages  # still the image_only_pdf record of PR #29
+
+
+def test_full_page_failure_after_picture_children_reports_the_partial_recovery(tmp_path: Path) -> None:
+    pytest.importorskip("pypdfium2")
+    pdf = tmp_path / "partial.pdf"
+    _image_only_pdf(pdf, pages=2)
+    doc = DoclingDocument(name="partial")
+    for page_no in (1, 2):
+        doc.add_page(page_no=page_no, size=Size(width=200, height=280))
+    _add_hidden_picture(doc, 1, ["Seite eins im Bild"])  # page 1: variant A; page 2: nothing -> variant B
+
+    def broken_tesseract(image: Any) -> None:
+        raise subprocess.CalledProcessError(1, ["tesseract"], stderr=b"Error opening data file deu.traineddata")
+
+    recovery = fallback.recover_scan_text(doc, str(pdf), ocr_page=broken_tesseract)
+
+    assert recovery is not None  # the copied text is in the document, so it is reported
+    assert recovery.pages == {1: "picture_children"} and recovery.fallback == "picture_children"
+    assert recovery.error is not None and "CalledProcessError" in recovery.error
+    assert "full-page pass failed afterwards" in recovery.describe()
+    assert _body(doc) == [("PictureItem", ""), ("TextItem", "Seite eins im Bild")]
+
+    # with nothing recovered before the failure, the error propagates as before
+    empty = DoclingDocument(name="empty")
+    with pytest.raises(subprocess.CalledProcessError):
+        fallback.recover_scan_text(empty, str(pdf), ocr_page=broken_tesseract)
+
+
+def test_read_document_records_the_partial_recovery(
+    tmp_path: Path, fake_converter: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    pytest.importorskip("pypdfium2")
+    pdf = tmp_path / "partial.pdf"
+    _image_only_pdf(pdf, pages=2)
+    doc = DoclingDocument(name="partial")
+    for page_no in (1, 2):
+        doc.add_page(page_no=page_no, size=Size(width=200, height=280))
+    _add_hidden_picture(doc, 1, ["Seite eins im Bild"])
+
+    def broken(image: Any) -> None:
+        raise RuntimeError("pdfium exploded")
+
+    fake_converter(doc, page_ocr=broken)
+    with caplog.at_level("INFO"), ingest.conversion_notes() as notes:
+        content, _ = _ReaderPipeline()._read_document(str(pdf))
+
+    assert "Seite eins im Bild" in content
+    assert notes == {"ocr_fallback": "picture_children"}
+    assert "full-page pass failed" in caplog.text and "pdfium exploded" in caplog.text
 
 
 def test_paragraphs_fold_lines_and_drop_blank_blocks() -> None:
@@ -572,6 +648,7 @@ def test_full_page_tesseract_command_mirrors_the_pipeline_options(monkeypatch: p
         "--psm", "6", "/tmp/page.png", "stdout",
     ]
     assert captured["kwargs"]["check"] is True and captured["kwargs"]["shell"] is False
+    assert captured["kwargs"]["stderr"] is subprocess.PIPE  # a failure's message reaches the log
     assert captured["kwargs"]["timeout"] == ocr.FULL_PAGE_OCR_TIMEOUT_SECONDS
     assert text.startswith("Zahlungsanweisung")
 
@@ -583,6 +660,23 @@ def test_full_page_tesseract_command_mirrors_the_pipeline_options(monkeypatch: p
 
     monkeypatch.setattr(ocr.subprocess, "run", slow)
     assert ocr.ocr_image_file("/tmp/p.png", ("deu",)) == ""  # a timeout costs the page, not the file
+
+
+def test_full_page_tesseract_failure_logs_its_stderr(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    ocr = pytest.importorskip("src.ingestion.ocr_tesseract")
+    monkeypatch.setattr(ocr, "tesseract_command", lambda *a, **k: "tesseract")
+
+    def failing(cmd: List[str], **kwargs: Any) -> None:
+        raise subprocess.CalledProcessError(
+            1, cmd, output=b"", stderr=b"Error opening data file /usr/share/tessdata/deu.traineddata\nPlease make sure the TESSDATA_PREFIX environment variable is set\n"
+        )
+
+    monkeypatch.setattr(ocr.subprocess, "run", failing)
+    with caplog.at_level("WARNING"), pytest.raises(subprocess.CalledProcessError):
+        ocr.ocr_image_file("/tmp/p.png", ("deu", "eng"))
+    assert "exit 1" in caplog.text and "deu.traineddata | Please make sure" in caplog.text
+    assert ocr._stderr_tail(None) == "(no stderr)"
+    assert ocr._stderr_tail(b"x" * 500).endswith("x") and len(ocr._stderr_tail(b"x" * 500)) == 400
 
 
 def test_ocr_pil_image_writes_a_temporary_png(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -215,7 +215,7 @@ count as text). Two variants, applied in page order:
 | variant | trigger | what happens | `ocr_fallback` |
 |---|---|---|---|
 | picture children | the page has `PictureItem`s whose descendants (captions excluded) carry text | each child's text is inserted into the body as a plain text item right after its picture, in the children's order, with the child's own provenance; the picture and its children stay as they are | `picture_children` |
-| full page | the page has no item at all, no native text layer (< 50 characters, the `is_image_only_pdf` threshold) and at least one image object | the page is rendered with pypdfium2 at the pipeline's OCR scale (`OCR_SCAN_DPI`, `OcrConfig.pdf_scale()`) and read with one Tesseract pass (`deu+eng` / the configured languages, `OCR_PSM`, `OCR_TESSDATA_PATH`, through the `OCR_OMP_THREAD_LIMIT` wrapper of `src/ingestion/ocr_tesseract.py`, `ocr_image_file`); Tesseract's paragraphs become text items of that page, inserted where the page belongs in the body | `full_page` |
+| full page | the page has no item at all, no native text layer (< 50 characters, the `is_image_only_pdf` threshold) and at least one image object | the page is rendered with pypdfium2 at the pipeline's OCR scale (`OCR_SCAN_DPI`, `OcrConfig.pdf_scale()`) and read with one Tesseract pass (`deu+eng` / the configured languages, `OCR_PSM`, `OCR_TESSDATA_PATH`, through the `OCR_OMP_THREAD_LIMIT` wrapper of `src/ingestion/ocr_tesseract.py`, `ocr_image_file`); Tesseract's paragraphs become text items of that page, inserted where the page belongs in the body. One pass, no orientation detection: Docling's per-page OSD (`RecallHubTesseractCliOcrModel`) does not run here, so a rotated scan on this path is read unrotated | `full_page` |
 
 A document with both variants records `picture_children+full_page`. The Markdown is exported
 from the repaired document, so the stored `content`, the title extraction and the chunker all see
@@ -223,7 +223,16 @@ the recovered text, and the § repair (`src/ingestion/ocr_repair.py`), which run
 conversion on the whole document, covers the recovered items too. pdfium is opened only when
 Docling listed a page without any item (or no page at all); a document whose pages all hold
 something never pays for it. Without a `tesseract` binary only the first variant runs. A failure
-inside the fallback is logged and the conversion result stands as Docling returned it.
+inside the fallback is logged and the conversion result stands as Docling returned it; when the
+full-page pass fails after picture children were already copied, those pages are still recorded
+(`ocr_fallback` set, a warning with the error, Tesseract's stderr tail in the log).
+
+A side fix found by the review of this change: the furniture-aware chunking serializer
+(`_furniture_serializer_provider` in `src/ingestion/chunker.py`) was built from bare
+`MarkdownParams`, whose `image_placeholder` is `<!-- image -->`, while `ChunkingDocSerializer`'s
+own default is `""`; with `INGEST_PAGE_FURNITURE` on (the default) every picture therefore became
+a `<!-- image -->` chunk. The provider now starts from the chunker's own defaults and only
+switches the content layers.
 
 What is recorded: one INFO line per file (`OCR fallback for <file> (picture_children: 1,568
 characters from 1 picture(s) on page(s) 1)`), the per-file stat `ocr_fallback` in

@@ -2537,6 +2537,12 @@ class DocumentIngestionPipeline:
         if recovery is None:
             return None
         logger.info(f"OCR fallback for {os.path.basename(file_path)} ({recovery.describe()})")
+        if recovery.error:
+            # the picture-children text is in the document; only the full-page pass failed
+            logger.warning(
+                f"Scan text fallback: full-page pass failed for {os.path.basename(file_path)} "
+                f"after {recovery.characters:,} characters were recovered: {recovery.error}"
+            )
         note_conversion(ocr_fallback=recovery.fallback)
         return recovery
 

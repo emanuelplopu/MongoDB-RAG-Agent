@@ -76,6 +76,9 @@ class ScanTextRecovery:
     pages: Dict[int, str] = field(default_factory=dict)
     characters: int = 0
     pictures: int = 0
+    #: Set when the full-page pass failed after the picture-children copy had already changed
+    #: the document: what was recovered up to then is reported, the error alongside it.
+    error: Optional[str] = None
 
     @property
     def fallback(self) -> str:
@@ -89,7 +92,10 @@ class ScanTextRecovery:
         parts = [f"{self.characters:,} characters"]
         if self.pictures:
             parts.append(f"{self.pictures} picture(s)")
-        return f"{self.fallback}: {' from '.join(parts)} on page(s) {pages}"
+        text = f"{self.fallback}: {' from '.join(parts)} on page(s) {pages}"
+        if self.error:
+            text += f"; full-page pass failed afterwards: {self.error}"
+        return text
 
 
 @dataclass
@@ -310,6 +316,12 @@ def recover_scan_text(
 
     Returns:
         What was recovered, or ``None`` when nothing was (the document is then unchanged).
+        When the full-page pass fails after picture children were already copied, the
+        recovery of those pages is returned with ``error`` set instead of raising, so the
+        text that is now in the document is reported.
+
+    Raises:
+        Exception: whatever pdfium or the OCR raised, when nothing had been recovered before.
     """
     states = _analyse(doc)
     recovery = ScanTextRecovery()
@@ -333,6 +345,11 @@ def recover_scan_text(
         not (state.items or state.body_text or state.hidden) for state in states.values()
     )
     if empty_pages and pdf_path and ocr_page is not None:
-        _full_page_ocr(doc, pdf_path, states, scale, ocr_page, recovery)
+        try:
+            _full_page_ocr(doc, pdf_path, states, scale, ocr_page, recovery)
+        except Exception as exc:  # noqa: BLE001 - the document already holds what was recovered
+            if not recovery.pages:
+                raise
+            recovery.error = f"{type(exc).__name__}: {exc}"
 
     return recovery if recovery.pages else None

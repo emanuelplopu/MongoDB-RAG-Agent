@@ -556,7 +556,7 @@ def ocr_image_file(
         output = subprocess.run(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
             check=True,
             shell=False,
@@ -565,7 +565,22 @@ def ocr_image_file(
     except subprocess.TimeoutExpired:
         _log.warning("Full-page Tesseract pass on %s exceeded %.0f s; giving up on the page", image_path, timeout)
         return ""
+    except subprocess.CalledProcessError as exc:
+        _log.warning(
+            "Full-page Tesseract pass on %s failed (exit %s): %s",
+            image_path, exc.returncode, _stderr_tail(exc.stderr),
+        )
+        raise
     return output.stdout.decode("utf-8", errors="replace")
+
+
+def _stderr_tail(data: Any, limit: int = 400) -> str:
+    """The last ``limit`` characters of a process's stderr, one line, for a log message."""
+    if not data:
+        return "(no stderr)"
+    text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else str(data)
+    text = " | ".join(line.strip() for line in text.strip().splitlines() if line.strip())
+    return text[-limit:] if len(text) > limit else text
 
 
 def ocr_pil_image(
