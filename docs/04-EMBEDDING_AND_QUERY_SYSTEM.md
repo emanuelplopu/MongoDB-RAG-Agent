@@ -165,6 +165,88 @@ Windows: Docker Desktop gets a fraction of the host's RAM, and each conversion
 thread needs ~0.6 GB on top of MongoDB's cache), then watch `docker stats`
 during the first minutes of a run.
 
+**Load profiles (office hours).** A machine that stands in the office is loud
+and hot at 16 conversions around the clock (2026-10-27: an Ultra 9 285HX held at
+90 W, hottest core 92-94 °C, for four days). The performance config therefore
+carries a `load_profile` (Configuration page → Ingestion → "Load Profile";
+`backend/services/ingestion_schedule.py`):
+
+- `server_room` (default): `max_concurrent_files` files at once around the
+  clock, as before.
+- `office`: on the office days (`office_hours.weekdays`, 0 = Monday) between
+  `office_hours.start` and `office_hours.end` (wall-clock time in
+  `office_hours.timezone`, default `INGESTION_OFFICE_TIMEZONE` =
+  `Europe/Vienna`) a run converts at most `office_hours.max_concurrent_files`
+  files at once (default 8, never above `max_concurrent_files`); at night, from
+  the end of the last office day to the start of the next (Friday evening to
+  Monday morning with the default days) it uses the full `max_concurrent_files`.
+- `office_lite`: the same hours and days with
+  `office_hours.lite_max_concurrent_files` (default 4) files at once, for a
+  machine that stands next to the people working.
+
+The limit follows the clock inside a running job: the concurrent loop takes it
+from a `SlotLimiter` (`src/ingestion/ingest.py`) whose `limit()` callable is
+`ConcurrencyController.current` (`slot_limit` of `ingest_documents`), read
+before every file. A lowered limit takes effect as the running files finish
+(nothing is interrupted), a raised one admits waiting files at once. The API
+runner and the ingestion worker re-read `performance_config` every minute, so
+switching the profile or its hours on the Configuration page reaches the
+running job without a restart. The thread pool, the per-conversion CPU threads
+and the conversion worker processes stay sized for `max_concurrent_files`,
+which is why a raised `max_concurrent_files` still needs a new run; idle
+worker processes cost memory, not CPU. The job status (`/api/v1/ingestion/status`)
+reports `load_period` (`server_room`, `office_hours`, `off_hours`) and
+`concurrency_slots`, and the Ingestion page shows "office hours: N files at
+once" next to the ETA while the lower limit is in force. Jobs run from the
+CLI pass no `slot_limit` and use every slot.
+
+Why a profile and not simply a smaller `max_concurrent_files`: the CPU threads
+of each conversion are the cores shared across the pool (`docling_num_threads`,
+`OCR_OMP_THREAD_LIMIT`, table above), so a run started with 8 slots gives every
+conversion three threads and loads the CPU like 16 slots with one. Measured on
+the client's MS-02 Ultra (Ultra 9 285HX, 24 threads, host agent samples,
+diejuristin corpus, 2026-10-27/28): 16 slots 96 % CPU, 88 W package, 87 °C
+package, hottest core 88 °C average / 96 °C peak; 8 slots (a new run sized for
+8) 96 %, 88 W, 87 °C, the same; `office_lite` with 4 of 16 slots 43-51 % CPU,
+65-74 W, 81-84 °C package, hottest core 82-86 °C average / 92 °C peak, the API
+container down from 13 to 3-5 cores. Power and load halve; the temperature
+falls less, because the few busy cores run at their boost clock. Going quieter
+than that is a matter of the CPU power limit (BIOS or the Windows power plan's
+maximum processor state), not of the ingestion settings. The host agent records
+no CPU or case fan speed on this board (LibreHardwareMonitor finds no Super I/O
+on it); only the GPU fan is sampled, as a percentage.
+
+**Clock cap (tested 2026-10-28; available per office hours, costly).** `scripts/Set-CpuBoostCap.ps1
+-Apply` (elevated) sets the active Windows power plan to 99 % maximum processor
+state with the boost mode disabled, `-Restore` undoes it; the office profiles'
+`office_hours.cap_cpu_boost` lets the host agent do the same during office hours
+and lift it afterwards (`docs/12-TELEMETRY_SYSTEM.md`, "Power plan control"). On the MS-02 Ultra the
+CPU then sits at 2.24 GHz: 28-35 W instead of 83-88 W, package 54-58 °C instead
+of 78-87 °C, hottest core 58-62 °C instead of 92-96 °C, within 15 s. But the
+conversions slow down far more than the clock ratio suggests: the big scanned
+PDFs that take 250-400 s at full speed no longer fit their budget, and the run
+indexed 5 pages/min at 16 slots × 1 thread, 5 pages/min at 8 slots × 2 threads
+(3,600 s `max_timeout`), with most files cancelled at their budget, against
+91-130 pages/min uncapped. A profile of fewer slots keeps 75-90 % of the pace at
+a few degrees less; the cap keeps the machine cool at a tenth of the pace. For a
+cool *and* productive machine the lever is a sustained power limit (PL1) in the
+BIOS, which keeps the boost for short bursts, not the Windows plan's all-or-
+nothing boost switch. Measured rows (pages/min, files finished, CPU, package
+power, package temperature, hottest-core peak):
+
+| Run | pages/min | files ok | CPU | W | pkg °C | core peak °C |
+|---|---|---|---|---|---|---|
+| 16 slots × 1 thread, no cap | 91-130 | 566 of 657 | 87-96 % | 87-88 | 80-87 | 90-96 |
+| 8 of 16 slots × 1 thread, no cap | 120 | 25 of 44 | 73 % | 83 | 78 | 92 |
+| 4 of 16 slots × 1 thread, no cap (`office_lite`) | 15-46 | 19 of 118 | 51-60 % | 75-78 | 80-82 | 92 |
+| 8 of 16 slots × 1 thread, cap | 65 (files begun uncapped) | 5 of 21 | 49 % | 28 | 54 | 58 |
+| 16 of 16 slots × 1 thread, cap | 5 | 2 of 39 | 81 % | 35 | 58 | 62 |
+| 8 slots × 2 threads, cap, 3,600 s budget | 5 | 4 of 58 | 74 % | 33 | 56 | 58 |
+
+The same test found that `POST /api/v1/system/ingestion-performance` replaced
+the whole `performance_config` document and so dropped the `timeout_config`
+saved by `/ingestion-timeout-config`; it now merges (`$set`).
+
 **Timed-out conversions (process isolation).** Until 2026-10-24 the per-file
 timeout of the concurrent loop cancelled an asyncio future while the thread
 converting the file kept running: the slot went to the next file, more

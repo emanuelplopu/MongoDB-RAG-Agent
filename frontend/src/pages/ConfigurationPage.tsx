@@ -29,7 +29,7 @@ import {
   Profile, SystemStats, CustomEndpoint, NetworkScanResult, ConfigOptions,
   LLMModel, EmbeddingModel, LLMProviderConfigResponse, LLMProviderConfigRequest,
   ProviderModelInfo, FetchModelsResponse, ProviderTestResponse,
-  AgentTool, ToolTestResponse, IngestionPerformanceConfig,
+  AgentTool, ToolTestResponse, IngestionPerformanceConfig, IngestionLoadProfile, IngestionOfficeHours, PowerPlanStatus,
   ModelTestResult, ModelCapability
 } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
@@ -133,10 +133,21 @@ export default function ConfigurationPage() {
       thread_pool_workers: 4,
       embedding_requests_per_minute: 3000,
       file_processing_timeout: 300,
-      job_poll_interval_seconds: 1.0
+      job_poll_interval_seconds: 1.0,
+      load_profile: 'server_room',
+      office_hours: {
+        timezone: 'Europe/Vienna',
+        start: '08:00',
+        end: '18:00',
+        weekdays: [0, 1, 2, 3, 4],
+        max_concurrent_files: 8,
+        lite_max_concurrent_files: 4,
+        cap_cpu_boost: false,
+      },
     })
     const [isSavingIngestionConfig, setIsSavingIngestionConfig] = useState(false)
     const [ingestionConfigErrors, setIngestionConfigErrors] = useState<Record<string, string>>({})
+    const [powerPlan, setPowerPlan] = useState<PowerPlanStatus | null>(null)
 
     // Model Capability Testing state
     const [modelCapabilities, setModelCapabilities] = useState<ModelCapability[]>([])
@@ -172,6 +183,41 @@ export default function ConfigurationPage() {
       setIngestionConfigErrors(prev => ({ ...prev, [field]: error }))
     }
 
+    // Office hours of the "office" load profile (fewer files at once while people work)
+    const weekdayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    const officeInputClass = 'w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-primary-900 dark:text-gray-200 focus:border-primary focus:outline-hidden'
+
+    const updateOfficeHours = (patch: Partial<IngestionOfficeHours>) => {
+      setIngestionConfig(prev => ({ ...prev, office_hours: { ...prev.office_hours, ...patch } }))
+      setIngestionConfigErrors(prev => ({ ...prev, office_hours: '' }))
+    }
+
+    const isOfficeProfile = ingestionConfig.load_profile === 'office' || ingestionConfig.load_profile === 'office_lite'
+    const officeFilesAtOnce = ingestionConfig.load_profile === 'office_lite'
+      ? ingestionConfig.office_hours.lite_max_concurrent_files
+      : ingestionConfig.office_hours.max_concurrent_files
+    const setOfficeFilesAtOnce = (value: number) => updateOfficeHours(
+      ingestionConfig.load_profile === 'office_lite' ? { lite_max_concurrent_files: value } : { max_concurrent_files: value },
+    )
+
+    const toggleOfficeDay = (day: number, on: boolean) => {
+      const days = ingestionConfig.office_hours.weekdays.filter(d => d !== day)
+      updateOfficeHours({ weekdays: (on ? [...days, day] : days).sort((a, b) => a - b) })
+    }
+
+    const validateOfficeHours = (cfg: IngestionPerformanceConfig): string => {
+      if (cfg.load_profile !== 'office' && cfg.load_profile !== 'office_lite') return ''
+      const office = cfg.office_hours
+      const filesAtOnce = cfg.load_profile === 'office_lite' ? office.lite_max_concurrent_files : office.max_concurrent_files
+      if (isNaN(filesAtOnce) || filesAtOnce < 1 || filesAtOnce > cfg.max_concurrent_files) {
+        return `Files at once in office hours must be between 1 and ${cfg.max_concurrent_files} (the Concurrent Files setting)`
+      }
+      if (office.weekdays.length === 0) return 'Pick at least one office day'
+      if (!office.start || !office.end || office.start >= office.end) return 'Office hours must end after they start'
+      if (!office.timezone.trim()) return 'Timezone is required'
+      return ''
+    }
+
     // Check if there are any ingestion validation errors
     const hasIngestionConfigErrors = (): boolean => {
       const errors: Record<string, string> = {}
@@ -180,6 +226,8 @@ export default function ConfigurationPage() {
         const error = validateIngestionField(field, value)
         if (error) errors[field] = error
       }
+      const officeError = validateOfficeHours(ingestionConfig)
+      if (officeError) errors.office_hours = officeError
       setIngestionConfigErrors(errors)
       return Object.keys(errors).length > 0
     }
@@ -282,9 +330,21 @@ export default function ConfigurationPage() {
       // Fetch ingestion performance config
       try {
         const ingestionConfigRes = await systemApi.getIngestionPerformanceConfig()
-        setIngestionConfig(ingestionConfigRes)
+        // Older backends answer without the load profile: keep the defaults for what is missing
+        setIngestionConfig(prev => ({
+          ...prev,
+          ...ingestionConfigRes,
+          load_profile: ingestionConfigRes.load_profile ?? prev.load_profile,
+          office_hours: { ...prev.office_hours, ...(ingestionConfigRes.office_hours ?? {}) },
+        }))
       } catch (ingestionErr) {
         console.error('Error fetching ingestion config:', ingestionErr)
+      }
+      // CPU clock cap status (host agent); absent when telemetry history is off
+      try {
+        setPowerPlan(await systemApi.getPowerPlanStatus())
+      } catch {
+        setPowerPlan(null)
       }
       // Fetch model capabilities
       try {
@@ -379,7 +439,7 @@ export default function ConfigurationPage() {
     setMessage(null)
     try {
       await systemApi.saveIngestionPerformanceConfig(ingestionConfig)
-      setMessage({ type: 'success', text: 'Ingestion performance configuration saved. Changes apply on next job start.' })
+      setMessage({ type: 'success', text: 'Ingestion performance configuration saved. The load profile reaches a running job within a minute; the other settings apply on the next job start.' })
     } catch (err) {
       setMessage({ type: 'error', text: 'Failed to save ingestion configuration' })
     } finally {
@@ -2776,6 +2836,134 @@ export default function ConfigurationPage() {
                   <p className="mt-1 text-xs text-red-500">{ingestionConfigErrors.job_poll_interval_seconds}</p>
                 )}
               </div>
+            </div>
+
+            {/* Load profile: files at once by time of day */}
+            <div className="mt-6 rounded-xl bg-surface-variant dark:bg-gray-700 p-4" data-testid="ingestion-load-profile">
+              <label htmlFor="ingestion-load-profile" className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">
+                Load Profile
+              </label>
+              <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                Server room: the configured number of concurrent files around the clock. Office: fewer files at once
+                during office hours so the machine stays quiet, the full number at night and on the other days.
+                Office lite: the same hours with an even smaller number, for a machine next to the people working.
+                A running job follows a change within a minute.
+              </p>
+              <select
+                id="ingestion-load-profile"
+                value={ingestionConfig.load_profile}
+                onChange={(e) => {
+                  const load_profile = e.target.value as IngestionLoadProfile
+                  setIngestionConfig(prev => ({ ...prev, load_profile }))
+                  setIngestionConfigErrors(prev => ({ ...prev, office_hours: '' }))
+                }}
+                className={`md:w-1/2 ${officeInputClass}`}
+              >
+                <option value="server_room">Server room (full speed around the clock)</option>
+                <option value="office">Office (quieter during office hours)</option>
+                <option value="office_lite">Office lite (quietest during office hours)</option>
+              </select>
+              {isOfficeProfile && (
+                <div className="mt-4 space-y-4" data-testid="ingestion-office-hours">
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                    <div>
+                      <label htmlFor="office-hours-start" className="block text-xs font-medium text-primary-900 dark:text-gray-200 mb-1">
+                        Office hours start
+                      </label>
+                      <input
+                        id="office-hours-start"
+                        type="time"
+                        value={ingestionConfig.office_hours.start}
+                        onChange={(e) => updateOfficeHours({ start: e.target.value })}
+                        className={officeInputClass}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="office-hours-end" className="block text-xs font-medium text-primary-900 dark:text-gray-200 mb-1">
+                        Office hours end
+                      </label>
+                      <input
+                        id="office-hours-end"
+                        type="time"
+                        value={ingestionConfig.office_hours.end}
+                        onChange={(e) => updateOfficeHours({ end: e.target.value })}
+                        className={officeInputClass}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="office-hours-files" className="block text-xs font-medium text-primary-900 dark:text-gray-200 mb-1">
+                        Files at once in office hours
+                      </label>
+                      <input
+                        id="office-hours-files"
+                        type="number"
+                        min={1}
+                        max={ingestionConfig.max_concurrent_files}
+                        value={officeFilesAtOnce}
+                        onChange={(e) => setOfficeFilesAtOnce(Number(e.target.value))}
+                        className={officeInputClass}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="office-hours-timezone" className="block text-xs font-medium text-primary-900 dark:text-gray-200 mb-1">
+                        Timezone
+                      </label>
+                      <input
+                        id="office-hours-timezone"
+                        type="text"
+                        placeholder="Europe/Vienna"
+                        value={ingestionConfig.office_hours.timezone}
+                        onChange={(e) => updateOfficeHours({ timezone: e.target.value })}
+                        className={officeInputClass}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <span className="block text-xs font-medium text-primary-900 dark:text-gray-200 mb-2">Office days</span>
+                    <div className="flex flex-wrap gap-4">
+                      {weekdayLabels.map((label, day) => (
+                        <label key={label} className="inline-flex items-center gap-1.5 text-sm text-primary-900 dark:text-gray-200">
+                          <input
+                            type="checkbox"
+                            aria-label={`Office day ${label}`}
+                            checked={ingestionConfig.office_hours.weekdays.includes(day)}
+                            onChange={(e) => toggleOfficeDay(day, e.target.checked)}
+                            className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                          />
+                          {label}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <label className="inline-flex items-start gap-2 text-sm text-primary-900 dark:text-gray-200">
+                    <input
+                      type="checkbox"
+                      aria-label="Cap the CPU clock during office hours"
+                      checked={ingestionConfig.office_hours.cap_cpu_boost}
+                      onChange={(e) => updateOfficeHours({ cap_cpu_boost: e.target.checked })}
+                      className="mt-0.5 h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                    />
+                    <span>
+                      Cap the CPU clock during office hours (Windows power plan: boost off). The host agent applies it and
+                      lifts it afterwards; the machine stays cool and quiet, at a fraction of the indexing pace.
+                    </span>
+                  </label>
+                  {powerPlan && (
+                    <p className="text-xs text-secondary dark:text-gray-500" data-testid="power-plan-status">
+                      Host agent: {powerPlan.agent_seen && powerPlan.agent
+                        ? `plan ${powerPlan.agent.state}${powerPlan.agent.applied_at ? ` since ${new Date(powerPlan.agent.applied_at).toLocaleString()}` : ''}`
+                        : 'not reporting (service not installed or stopped)'}
+                      {' · '}this tenant asks for {powerPlan.desired} ({powerPlan.reason})
+                    </p>
+                  )}
+                  <p className="text-xs text-secondary dark:text-gray-500">
+                    Outside these hours and on the other days a run uses the full {ingestionConfig.max_concurrent_files} concurrent files.
+                  </p>
+                  {ingestionConfigErrors.office_hours && (
+                    <p className="mt-1 text-xs text-red-500">{ingestionConfigErrors.office_hours}</p>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 

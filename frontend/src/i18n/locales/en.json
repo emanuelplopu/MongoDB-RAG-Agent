@@ -635,6 +635,7 @@
     "elapsed": "Elapsed",
     "eta": "ETA",
     "etaByExtension": "Remaining by file type",
+    "officeHoursSlots": "office hours: {{count}} files at once",
     "currentFile": "Current File",
     "logs": "Logs",
     "streamLogs": "Stream",

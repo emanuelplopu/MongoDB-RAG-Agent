@@ -220,6 +220,7 @@ const apiMocks = vi.hoisted(() => ({
     getAgentPerformanceConfig: vi.fn(),
     saveAgentPerformanceConfig: vi.fn(),
     getIngestionPerformanceConfig: vi.fn(),
+    getPowerPlanStatus: vi.fn(),
     saveIngestionPerformanceConfig: vi.fn(),
     getModelCapabilities: vi.fn(),
     testModelCapability: vi.fn(),
@@ -599,6 +600,16 @@ function resetApiMocks() {
     embedding_requests_per_minute: 3000,
     file_processing_timeout: 300,
     job_poll_interval_seconds: 1.0,
+    load_profile: 'server_room',
+    office_hours: { timezone: 'Europe/Vienna', start: '08:00', end: '18:00', weekdays: [0, 1, 2, 3, 4], max_concurrent_files: 8, lite_max_concurrent_files: 4, cap_cpu_boost: false },
+  })
+  apiMocks.systemApi.getPowerPlanStatus.mockResolvedValue({
+    desired: 'normal',
+    reason: 'server room, load profile server_room',
+    tenants: [],
+    agent: { state: 'normal', applied_at: null, updated_at: '2026-10-28T10:00:00Z' },
+    agent_seen: true,
+    stale_after_seconds: 600,
   })
   apiMocks.systemApi.getModelCapabilities.mockResolvedValue({ models: modelCapabilities })
   apiMocks.systemApi.saveLLMProviderConfig.mockResolvedValue({ success: true })
@@ -1655,6 +1666,71 @@ describe('large workflow page coverage smoke tests', () => {
     await user.click(screen.getByRole('button', { name: 'Save Configuration' }))
     await waitFor(() => expect(apiMocks.systemApi.saveConfigToDb).toHaveBeenCalledWith(expect.objectContaining({ default_match_count: 20 })))
   }, 30000)
+
+  it('switches the ingestion load profile to office hours, validates it and saves it', async () => {
+    const user = userEvent.setup()
+    const saveCallsBefore = apiMocks.systemApi.saveIngestionPerformanceConfig.mock.calls.length
+    renderRoute(<ConfigurationPage />)
+    expect(await screen.findByText('config.title')).toBeInTheDocument()
+    await waitFor(() => expect(apiMocks.systemApi.getIngestionPerformanceConfig).toHaveBeenCalled())
+
+    await user.click(screen.getByText('config.tabs.ingestion'))
+    const profile = await screen.findByLabelText('Load Profile')
+    expect(profile).toHaveValue('server_room')
+    expect(screen.queryByTestId('ingestion-office-hours')).not.toBeInTheDocument()
+
+    await user.selectOptions(profile, 'office')
+    expect(screen.getByTestId('ingestion-office-hours')).toBeInTheDocument()
+    expect(screen.getByLabelText('Office hours start')).toHaveValue('08:00')
+    expect(screen.getByLabelText('Office hours end')).toHaveValue('18:00')
+    expect(screen.getByLabelText('Timezone')).toHaveValue('Europe/Vienna')
+    expect(screen.getByLabelText('Office day Mon')).toBeChecked()
+    expect(screen.getByLabelText('Office day Sat')).not.toBeChecked()
+
+    // Saturday becomes an office day, Friday a free one; the clock cap goes on
+    await user.click(screen.getByLabelText('Office day Sat'))
+    await user.click(screen.getByLabelText('Office day Fri'))
+    expect(screen.getByLabelText('Cap the CPU clock during office hours')).not.toBeChecked()
+    await user.click(screen.getByLabelText('Cap the CPU clock during office hours'))
+    expect(screen.getByTestId('power-plan-status')).toHaveTextContent('plan normal')
+
+    // More files at once than the Concurrent Files setting (2 in the mock) is rejected
+    const files = screen.getByLabelText('Files at once in office hours')
+    await user.clear(files)
+    await user.type(files, '4')
+    await user.click(screen.getByRole('button', { name: /Save Ingestion Configuration/i }))
+    expect(await screen.findByText(/Files at once in office hours must be between 1 and 2/)).toBeInTheDocument()
+    expect(apiMocks.systemApi.saveIngestionPerformanceConfig.mock.calls.length).toBe(saveCallsBefore)
+
+    await user.clear(files)
+    await user.type(files, '1')
+    await user.click(screen.getByRole('button', { name: /Save Ingestion Configuration/i }))
+    await waitFor(() =>
+      expect(apiMocks.systemApi.saveIngestionPerformanceConfig.mock.calls.length).toBe(saveCallsBefore + 1),
+    )
+    const saved = apiMocks.systemApi.saveIngestionPerformanceConfig.mock.calls[saveCallsBefore][0]
+    expect(saved.load_profile).toBe('office')
+    expect(saved.office_hours).toEqual({
+      timezone: 'Europe/Vienna',
+      start: '08:00',
+      end: '18:00',
+      weekdays: [0, 1, 2, 3, 5],
+      max_concurrent_files: 1,
+      lite_max_concurrent_files: 4,
+      cap_cpu_boost: true,
+    })
+    expect(await screen.findByText(/load profile reaches a running job/)).toBeInTheDocument()
+
+    // Office lite shares the hours and days but has its own number of files
+    await user.selectOptions(screen.getByLabelText('Load Profile'), 'office_lite')
+    expect(screen.getByTestId('ingestion-office-hours')).toBeInTheDocument()
+    expect(screen.getByLabelText('Files at once in office hours')).toHaveValue(4)
+    expect(screen.getByLabelText('Office day Sat')).toBeChecked()
+
+    // Back to the server room the office fields disappear
+    await user.selectOptions(screen.getByLabelText('Load Profile'), 'server_room')
+    expect(screen.queryByTestId('ingestion-office-hours')).not.toBeInTheDocument()
+  })
 
   it('renders chat session details and opens chat controls', async () => {
     const user = userEvent.setup()

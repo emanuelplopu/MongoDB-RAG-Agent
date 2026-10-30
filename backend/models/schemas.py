@@ -330,6 +330,8 @@ class IngestionStatusResponse(BaseModel):
     discovery_progress: Optional[DiscoveryProgress] = None
     processing_rate: float = 0.0  # files per minute
     runner: Optional[str] = None  # "api" (in-process) or "worker" (ingestion worker container)
+    load_period: Optional[str] = None  # load profile period in force: server_room, office_hours, off_hours
+    concurrency_slots: Optional[int] = None  # file slots in use right now (office hours may lower them)
     # Per-outcome counters, updated from the per-file stats while the job runs (F2/F3/F9)
     image_only_pdfs: int = 0  # pure scans skipped or OCRed to nothing
     image_only_pdfs_ocr: int = 0  # pure scans whose OCR produced text

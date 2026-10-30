@@ -818,6 +818,8 @@ export default function IngestionManagementPage() {
                 {(streamEvent?.metrics?.estimated_remaining_seconds || ingestionStatus.estimated_remaining_seconds) &&
                   ` • ETA: ${formatDuration(streamEvent?.metrics?.estimated_remaining_seconds || ingestionStatus.estimated_remaining_seconds || 0)}`}
                 {ingestionStatus.runner === 'worker' && ' • worker'}
+                {ingestionStatus.load_period === 'office_hours' && ingestionStatus.concurrency_slots != null &&
+                  ` • ${t('ingestion.officeHoursSlots', { count: ingestionStatus.concurrency_slots })}`}
               </span>
             </div>
             {etaRows(streamEvent?.metrics?.eta || ingestionStatus.eta).length > 0 && (

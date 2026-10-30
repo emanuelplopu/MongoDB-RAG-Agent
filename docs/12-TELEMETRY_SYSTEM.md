@@ -298,6 +298,26 @@ Configuration precedence: `appsettings.json` next to the exe < the ProgramData o
 command line (`--Agent:IntervalSeconds=10`). While MongoDB is down the agent buffers up to
 `BufferMaxSamples` (default 720 = 1 h) in memory.
 
+### Power plan control (`host_control`)
+
+Since agent 1.1.0 (2026-10-28) the service also applies the **CPU clock cap** the backends ask
+for. The ingestion load profiles `office` / `office_lite` carry `office_hours.cap_cpu_boost`
+(Configuration page → Ingestion → Load Profile): during office hours the Windows power plan is
+set to 99 % maximum processor state with the boost mode disabled, outside them to 100 % /
+aggressive. The API container cannot change the plan (administrator rights), so every tenant
+backend publishes its desire into the host-wide collection `recallhub_telemetry.host_control`
+(`_id: "power_plan:<tenant>"`, `desired: capped|normal`, `reason`, `updated_at`, every
+minute and on shutdown; `backend/services/power_plan_control.py`, `PowerPlanPublisher` started
+in the API lifespan). The agent (`PowerPlanControl.cs`, `Agent:PowerPlan` options: `Enabled`,
+`CheckSeconds` 15, `DesiredFreshSeconds` 600) checks the desires every 15 s, caps when any fresh
+one says `capped`, restores otherwise, and writes what it did to `_id: "power_plan"` (`state`,
+`desired`, `reasons[]`, `max_state_ac/dc`, `boost_mode_ac/dc`, `applied_at`, `error`,
+`agent_version`, `updated_at`). A desire older than `DesiredFreshSeconds` counts as normal, so a
+stopped backend never leaves the machine capped. `GET /api/v1/system/power-plan` (superadmin)
+returns this tenant's desire, every tenant's and the agent's report; the Configuration page shows
+it under the office-hours settings. `scripts/Set-CpuBoostCap.ps1` does the same by hand
+(elevated). Measured effect and cost: `docs/04-EMBEDDING_AND_QUERY_SYSTEM.md`, "Clock cap".
+
 ### `host_samples` (time-series, schema 1)
 
 `timeField` `ts`, `metaField` `meta` (`host`, `source: host-agent`, `agent_version`, `schema`),

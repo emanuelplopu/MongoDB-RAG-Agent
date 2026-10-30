@@ -302,6 +302,14 @@ class BackendSettings(BaseSettings):
         ge=0.5, le=10.0,
         description="Interval in seconds for worker to poll for new jobs"
     )
+    ingestion_office_timezone: str = Field(
+        default="Europe/Vienna",
+        description=(
+            "IANA timezone of the office hours of the ingestion load profile 'office' "
+            "(Configuration page; backend/services/ingestion_schedule.py): the default of "
+            "its timezone field"
+        ),
+    )
 
     # OCR Settings (Docling, scanned PDFs and image files; applied in
     # src/ingestion/ingest.py). Must stay identical to src/settings.py.
