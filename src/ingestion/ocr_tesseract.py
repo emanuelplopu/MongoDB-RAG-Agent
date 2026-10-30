@@ -41,7 +41,7 @@ import subprocess
 import tempfile
 import threading
 from dataclasses import dataclass
-from typing import ClassVar, Dict, List, Literal, Optional, Tuple, Type
+from typing import Any, ClassVar, Dict, List, Literal, Optional, Sequence, Tuple, Type
 
 import pandas as pd
 from docling.datamodel.base_models import Page
@@ -501,3 +501,102 @@ def tesseract_command(real_command: Optional[str] = None, directory: Optional[st
         if not explicit:
             _wrapper_path = path
         return path
+
+
+# ---------------------------------------------------------------------------
+# One-pass full-page OCR (the ``full_page`` fallback of scan_text_fallback.py)
+# ---------------------------------------------------------------------------
+
+#: A full page at OCR_SCAN_DPI takes Tesseract a few seconds; a phone photo up to a minute.
+#: The conversion budget kills a stuck worker anyway; this only bounds the thread-mode case.
+FULL_PAGE_OCR_TIMEOUT_SECONDS = 600.0
+
+
+def tesseract_available() -> bool:
+    """Whether a ``tesseract`` binary is on PATH (the wrapper of :func:`tesseract_command` needs one)."""
+    return shutil.which("tesseract") is not None
+
+
+def ocr_image_file(
+    image_path: str,
+    languages: Sequence[str],
+    psm: Optional[int] = None,
+    tessdata_path: Optional[str] = None,
+    timeout: float = FULL_PAGE_OCR_TIMEOUT_SECONDS,
+) -> str:
+    """One plain-text Tesseract pass over an image file, through the thread-limit wrapper.
+
+    Mirrors the command Docling's CLI model runs (``-l``, ``--tessdata-dir``, ``--psm``), with
+    ``stdout`` as a text file instead of ``tsv``, so the recognised lines keep Tesseract's own
+    paragraph breaks. ``OCR_OMP_THREAD_LIMIT`` applies through :func:`tesseract_command`.
+
+    Args:
+        image_path: The rendered page (PNG/TIFF/JPEG).
+        languages: Tesseract language codes in priority order, e.g. ``("deu", "eng")``.
+        psm: Page segmentation mode, or ``None`` for Tesseract's default.
+        tessdata_path: ``--tessdata-dir``, or ``None`` for the installed default.
+        timeout: Seconds before the pass is abandoned (returns ``""``).
+
+    Returns:
+        The recognised text; empty when Tesseract found nothing or timed out.
+
+    Raises:
+        FileNotFoundError: No Tesseract binary.
+        subprocess.CalledProcessError: Tesseract exited with an error.
+    """
+    cmd: List[str] = [tesseract_command()]
+    if languages:
+        cmd += ["-l", "+".join(languages)]
+    if tessdata_path:
+        cmd += ["--tessdata-dir", tessdata_path]
+    if psm is not None:
+        cmd += ["--psm", str(int(psm))]
+    cmd += [image_path, "stdout"]
+    try:
+        output = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            check=True,
+            shell=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        _log.warning("Full-page Tesseract pass on %s exceeded %.0f s; giving up on the page", image_path, timeout)
+        return ""
+    except subprocess.CalledProcessError as exc:
+        _log.warning(
+            "Full-page Tesseract pass on %s failed (exit %s): %s",
+            image_path, exc.returncode, _stderr_tail(exc.stderr),
+        )
+        raise
+    return output.stdout.decode("utf-8", errors="replace")
+
+
+def _stderr_tail(data: Any, limit: int = 400) -> str:
+    """The last ``limit`` characters of a process's stderr, one line, for a log message."""
+    if not data:
+        return "(no stderr)"
+    text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else str(data)
+    text = " | ".join(line.strip() for line in text.strip().splitlines() if line.strip())
+    return text[-limit:] if len(text) > limit else text
+
+
+def ocr_pil_image(
+    image: Any,
+    languages: Sequence[str],
+    psm: Optional[int] = None,
+    tessdata_path: Optional[str] = None,
+) -> str:
+    """:func:`ocr_image_file` for an in-memory ``PIL.Image.Image`` (written to a temporary PNG)."""
+    fd, path = tempfile.mkstemp(prefix="recallhub-page-", suffix=".png")
+    os.close(fd)
+    try:
+        image.save(path, "PNG")
+        return ocr_image_file(path, languages, psm=psm, tessdata_path=tessdata_path)
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass

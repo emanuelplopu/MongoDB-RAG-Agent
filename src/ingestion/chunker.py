@@ -52,12 +52,30 @@ def _furniture_serializer_provider() -> Optional[Any]:
         logger.warning(f"Page furniture chunking not available ({exc}); chunking the body layer only")
         return None
 
+    # ChunkingDocSerializer is a Markdown serializer whose own default params differ from a
+    # bare MarkdownParams: its image_placeholder is "" where MarkdownParams renders
+    # "<!-- image -->", so a serializer built from bare params turned every picture into a
+    # "<!-- image -->" chunk whenever page furniture was on. Start from the chunker's own
+    # defaults and only switch the content layers.
+    default_params = ChunkingDocSerializer.model_fields["params"].default
+    if hasattr(default_params, "model_copy"):
+        params = default_params.model_copy(update={"layers": layers})
+    else:  # no usable default on this docling-core: the two fields that matter
+        params = MarkdownParams(layers=layers, image_placeholder="")
+
     class _FurnitureSerializerProvider(ChunkingSerializerProvider):
         def get_serializer(self, doc: DoclingDocument) -> ChunkingDocSerializer:
-            # ChunkingDocSerializer is a Markdown serializer; its params carry the content layers
-            return ChunkingDocSerializer(doc=doc, params=MarkdownParams(layers=layers))
+            return ChunkingDocSerializer(doc=doc, params=params)
 
     return _FurnitureSerializerProvider()
+
+
+def furniture_serializer_params() -> Optional[Any]:
+    """The serializer params the furniture-aware chunker uses, or ``None`` (diagnostics/tests)."""
+    provider = _furniture_serializer_provider()
+    if provider is None:
+        return None
+    return provider.get_serializer(DoclingDocument(name="probe")).params
 
 
 @dataclass

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Tuple
+from typing import Any, Dict, Tuple
 
 
 def sleepy_reader(file_path: str, **options: Any) -> Tuple[str, Any]:
@@ -27,3 +27,10 @@ def sleepy_reader(file_path: str, **options: Any) -> Tuple[str, Any]:
     time.sleep(seconds)
     echoed = "".join(f" {key}={value}" for key, value in sorted(options.items()))
     return f"slept {seconds:.1f} in {os.getpid()}{echoed}", None
+
+
+def noting_reader(file_path: str, **options: Any) -> Tuple[str, Any, Dict[str, Any]]:
+    """Return the file's text plus reader notes, like ``read_document_in_worker`` does."""
+    with open(file_path, "r", encoding="utf-8") as handle:
+        raw = handle.read().strip()
+    return raw, None, {"ocr_fallback": "full_page", "pid": os.getpid()}

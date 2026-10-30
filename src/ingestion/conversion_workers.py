@@ -9,9 +9,10 @@ and their retries redid the work. A thread cannot be interrupted; a process can.
 With the performance config's ``process_isolation_enabled`` flag on, every file slot of a
 run owns one long-lived worker process (``spawn`` context, so CUDA and the Docling models
 start cleanly) that converts files on request. The parent sends a file path, the child
-answers with the converted Markdown and the ``DoclingDocument``; on a timeout or a stop the
-parent kills the child and the next file on that slot starts a fresh one. Chunking,
-embedding and the MongoDB writes stay in the parent.
+answers with the converted Markdown, the ``DoclingDocument`` and the reader's notes about
+the conversion (``note_conversion`` in ``ingest.py``, e.g. which scan-text fallback fired);
+on a timeout or a stop the parent kills the child and the next file on that slot starts a
+fresh one. Chunking, embedding and the MongoDB writes stay in the parent.
 
 The child applies the parent's CPU-thread sharing (``docling_num_threads``, the Tesseract
 OpenMP limit) and the stored accelerator config before its first file, and warms up the
@@ -42,7 +43,9 @@ _POLL_SECONDS = 0.2
 _REAP_SECONDS = 5.0
 
 #: ``target(file_path, **options)``; targets without options are called as ``target(file_path)``.
-ReaderTarget = Callable[..., Tuple[str, Any]]
+#: Returns ``(markdown, document)`` or ``(markdown, document, notes)``; the notes travel back
+#: to the parent.
+ReaderTarget = Callable[..., Tuple[Any, ...]]
 
 
 class ConversionWorkerError(RuntimeError):
@@ -82,7 +85,7 @@ class WorkerInit:
 _reader: Any = None
 
 
-def read_document_in_worker(file_path: str, **options: Any) -> Tuple[str, Any]:
+def read_document_in_worker(file_path: str, **options: Any) -> Tuple[str, Any, Dict[str, Any]]:
     """Convert ``file_path`` with a read-only pipeline (the default worker target).
 
     Args:
@@ -90,17 +93,26 @@ def read_document_in_worker(file_path: str, **options: Any) -> Tuple[str, Any]:
         **options: Per-attempt conversion options (``ConversionOptions`` fields, e.g.
             ``table_structure=False`` for the last retry of a timed-out PDF); none for the
             run's defaults.
+
+    Returns:
+        ``(markdown_content, docling_document, notes)``; the notes are what the reader recorded
+        with ``note_conversion`` (e.g. ``ocr_fallback``) and travel back to the parent.
     """
     global _reader
+    from src.ingestion.ingest import conversion_notes
+
     if _reader is None:
         from src.ingestion.ingest import DocumentIngestionPipeline
 
         _reader = DocumentIngestionPipeline.reader_only()
-    if options:
-        from src.ingestion.ingest import ConversionOptions
+    with conversion_notes() as notes:
+        if options:
+            from src.ingestion.ingest import ConversionOptions
 
-        return _reader._read_document(file_path, ConversionOptions(**options))
-    return _reader._read_document(file_path)
+            content, document = _reader._read_document(file_path, ConversionOptions(**options))
+        else:
+            content, document = _reader._read_document(file_path)
+    return content, document, dict(notes)
 
 
 def _apply_init(init: WorkerInit) -> None:
@@ -150,19 +162,22 @@ def _worker_main(conn: Connection, target: ReaderTarget, init: WorkerInit) -> No
             file_path = message[1]
             options = message[2] if len(message) > 2 else None
             try:
-                content, document = target(file_path, **options) if options else target(file_path)
+                outcome = target(file_path, **options) if options else target(file_path)
+                content, document = outcome[0], outcome[1]
+                # a target may add the reader's notes about the conversion as a third item
+                notes = dict(outcome[2]) if len(outcome) > 2 and outcome[2] else {}
             except Exception as exc:  # noqa: BLE001 - reported to the parent as a file error
                 logger.exception("Conversion failed in worker: %s", file_path)
                 conn.send(("error", f"{type(exc).__name__}: {exc}"[:2000]))
                 continue
             try:
-                conn.send(("ok", content, document))
+                conn.send(("ok", content, document, notes))
             except Exception as exc:  # noqa: BLE001 - unpicklable document: send its JSON form
                 export = getattr(document, "export_to_dict", None)
                 if export is None:
                     conn.send(("error", f"result not transferable: {type(exc).__name__}: {exc}"))
                 else:
-                    conn.send(("ok_dict", content, export()))
+                    conn.send(("ok_dict", content, export(), notes))
     except (EOFError, OSError, KeyboardInterrupt):
         pass
     finally:
@@ -419,6 +434,28 @@ class ConversionProcessPool:
             ConversionWorkerError: The worker died or reported a failure.
             asyncio.CancelledError: The caller was cancelled; the worker process was killed first.
         """
+        content, document, _notes = await self.convert_with_notes(
+            file_path, on_started=on_started, options=options
+        )
+        return content, document
+
+    async def convert_with_notes(
+        self,
+        file_path: str,
+        on_started: Optional[Callable[[], None]] = None,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, Any, Dict[str, Any]]:
+        """:meth:`convert`, plus the notes the reader recorded about the conversion.
+
+        Args:
+            file_path: Document to convert.
+            on_started: Called once the worker has the request (the file's budget starts here).
+            options: Per-attempt conversion options for the worker target; see :meth:`convert`.
+
+        Returns:
+            ``(markdown_content, docling_document_or_None, notes)``; ``notes`` is empty for a
+            target that returns only the content and the document.
+        """
         if self._closed:
             raise ConversionWorkerError("conversion pool is closed")
         queue = self._queue()
@@ -442,10 +479,11 @@ class ConversionProcessPool:
             except _Aborted as exc:
                 raise ConversionWorkerError(f"conversion worker {worker.index} was killed while converting") from exc
             kind = message[0] if message else None
+            notes = message[3] if message and len(message) > 3 and isinstance(message[3], dict) else {}
             if kind == "ok":
-                return message[1], message[2]
+                return message[1], message[2], notes
             if kind == "ok_dict":
-                return message[1], _document_from_dict(message[2])
+                return message[1], _document_from_dict(message[2]), notes
             if kind == "error":
                 raise ConversionWorkerError(message[1])
             worker.kill("protocol error")
