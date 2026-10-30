@@ -201,6 +201,9 @@ class IngestionFileStats:
     retry_count: int = 0
     # Chunks of a stored document still waiting in the embedding backlog (F44)
     chunks_pending: int = 0
+    # A timeout whose retry is still queued in this run: not a final failure, so a resumed
+    # job attempts the file again instead of skipping it with the other recorded failures
+    retry_pending: bool = False
     #: ``_id`` of the ingestion_stats row; shared by every attempt of one file
     record_id: ObjectId = field(default_factory=ObjectId)
     #: Outcome key (error type, or "success") of the record this one replaces; None = first
@@ -238,6 +241,8 @@ class IngestionFileStats:
             result["image_only_pdf"] = self.image_only_pdf
         if self.chunks_pending or self.error_type == "partial" or self.supersedes == "partial":
             result["chunks_pending"] = self.chunks_pending
+        if self.retry_pending:
+            result["retry_pending"] = True
         return result
 
 
@@ -849,6 +854,18 @@ def retry_error_types(config: Optional[Dict[str, Any]]) -> frozenset:
     return frozenset(error_type for flag, error_type in RETRY_FLAG_ERROR_TYPES.items() if config.get(flag))
 
 
+def complete_documents_filter() -> Dict[str, Any]:
+    """Query clause for stored documents that have all their chunks.
+
+    A document stored with part of its chunks (its embedding budget ran out, F44) carries
+    ``metadata.chunks_pending > 0`` until the run's embedding backlog appends the rest. The
+    backlog lives in memory, so after a restart (or when the backlog gave up on the
+    document) nothing would finish it; the incremental filters therefore treat such a
+    document as not ingested, and the file is converted again and replaces it.
+    """
+    return {"metadata.chunks_pending": {"$not": {"$gt": 0}}}
+
+
 async def failed_paths_of_job(db: Any, job_id: Optional[str], retry_types: frozenset = frozenset()) -> Dict[str, str]:
     """``file_path -> error_type`` of the failures a job recorded that its resume must not redo.
 
@@ -856,7 +873,8 @@ async def failed_paths_of_job(db: Any, job_id: Optional[str], retry_types: froze
     errored or produced no chunks before the restart looked new and was processed again
     (F23: 553 timeouts on 451 files in the first 4 h after a resume). The failures the run
     wrote to ``failed_documents`` (F2) are skipped unless the job's ``retry_*`` flags ask for
-    that error type or the record was resolved.
+    that error type or the record was resolved. A timeout whose retry was still queued when
+    the run ended (``retry_pending``) is not a final failure and is attempted again.
 
     Args:
         db: The profile's database (``failed_documents`` collection), or ``None``.
@@ -867,7 +885,8 @@ async def failed_paths_of_job(db: Any, job_id: Optional[str], retry_types: froze
         return {}
     skip: Dict[str, str] = {}
     cursor = db["failed_documents"].find(
-        {"job_id": job_id, "resolved": {"$ne": True}}, {"file_path": 1, "error_type": 1}
+        {"job_id": job_id, "resolved": {"$ne": True}, "retry_pending": {"$ne": True}},
+        {"file_path": 1, "error_type": 1},
     )
     async for doc in cursor:
         error_type = doc.get("error_type") or "error"
@@ -4005,9 +4024,13 @@ class DocumentIngestionPipeline:
             return
         oid = ObjectId(document_id)
         if chunks:
-            await self.db[self.settings.mongodb_collection_chunks].insert_many(
-                self._chunk_documents(oid, chunks), ordered=False
+            chunks_collection = self.db[self.settings.mongodb_collection_chunks]
+            # Idempotent: a pass whose insert partly succeeded before an error is redone by the
+            # next pass, so drop whatever it left for these chunk indexes first
+            await chunks_collection.delete_many(
+                {"document_id": oid, "chunk_index": {"$in": [chunk.index for chunk in chunks]}}
             )
+            await chunks_collection.insert_many(self._chunk_documents(oid, chunks), ordered=False)
         update: Dict[str, Any] = (
             {"$set": {"metadata.chunks_pending": remaining}}
             if remaining > 0
@@ -4471,14 +4494,14 @@ class DocumentIngestionPipeline:
         documents_collection = self.db[
             self.settings.mongodb_collection_documents
         ]
-        
-        # Get all existing sources
-        cursor = documents_collection.find({}, {"source": 1})
+
+        # Get all existing sources; a partially embedded document is not "ingested" (F44)
+        cursor = documents_collection.find(complete_documents_filter(), {"source": 1})
         existing = set()
         async for doc in cursor:
             if "source" in doc:
                 existing.add(doc["source"])
-        
+
         return existing
 
     async def _get_existing_hashes(self) -> Dict[str, str]:
@@ -4495,9 +4518,9 @@ class DocumentIngestionPipeline:
             self.settings.mongodb_collection_documents
         ]
         
-        # Get all existing content hashes
+        # Get all existing content hashes; a partially embedded document is not "ingested" (F44)
         cursor = documents_collection.find(
-            {"content_hash": {"$exists": True, "$ne": None}},
+            {"content_hash": {"$exists": True, "$ne": None}, **complete_documents_filter()},
             {"content_hash": 1, "source": 1}
         )
         existing = {}
@@ -5219,6 +5242,7 @@ class DocumentIngestionPipeline:
                                     + (f", {next_describe}" if next_describe else "")
                                 ),
                                 classification="timeout",
+                                retry_pending=True,
                             )
                             recorder.add(attempt_stat)
                             timed_out_files.append((index, file_path, content_hash, retry_attempt + 1, attempt_stat))
@@ -5461,59 +5485,67 @@ class DocumentIngestionPipeline:
 
         try:
             failed_collection = self.db["failed_documents"]
-            # A later attempt of a timed-out file updates its failed_documents row: still a
-            # timeout -> retry_count and the new message; any other outcome -> resolved
+            recorded = 0
+            # In recording order, so the retry of a file whose first timeout is in the same
+            # batch finds the row it updates (the first attempt's row is written first)
             for stat in file_stats:
-                if stat.supersedes != "timeout":
-                    continue
-                query: Dict[str, Any] = {"file_path": stat.file_path, "error_type": "timeout", "resolved": False}
+                open_timeout: Dict[str, Any] = {"file_path": stat.file_path, "error_type": "timeout", "resolved": False}
                 if stat.job_id:
-                    query["job_id"] = stat.job_id
+                    open_timeout["job_id"] = stat.job_id
                 failed_at = stat.completed_at.isoformat() if stat.completed_at else datetime.now().isoformat()
-                if stat.error_type == "timeout":
-                    update = {"$set": {
-                        "retry_count": stat.retry_count,
-                        "error_message": stat.error_message,
-                        "timeout_seconds": stat.timeout_seconds,
-                        "processing_time_ms": stat.processing_time_ms,
-                        "failed_at": failed_at,
-                    }}
-                else:
-                    update = {"$set": {
-                        "retry_count": stat.retry_count,
-                        "resolved": True,
-                        "resolved_at": failed_at,
-                        "resolution": f"retry {stat.retry_count} ended as {stat.outcome}",
-                    }}
-                await failed_collection.update_one(query, update)
 
-            # Save failed documents to failed_documents collection (a retry that failed in a
-            # new way gets its own row; a retry that timed out again updated its row above)
-            failed_stats = [
-                s for s in file_stats
-                if not s.success and not (s.supersedes == "timeout" and s.error_type == "timeout")
-            ]
-            if failed_stats:
-                failed_docs = []
-                for stat in failed_stats:
-                    doc = {
-                        "file_path": stat.file_path,
-                        "file_name": stat.file_name,
-                        "file_size_bytes": stat.file_size_bytes,
-                        "error_type": stat.error_type,
-                        "error_message": stat.error_message,
-                        "timeout_seconds": stat.timeout_seconds,
-                        "processing_time_ms": stat.processing_time_ms,
-                        "failed_at": stat.completed_at.isoformat() if stat.completed_at else datetime.now().isoformat(),
-                        "profile_key": stat.profile_key,
-                        "resolved": False,
-                        "retry_count": stat.retry_count,
-                    }
-                    if stat.job_id:
-                        doc["job_id"] = stat.job_id
-                    failed_docs.append(doc)
-                await failed_collection.insert_many(failed_docs)
-                logger.warning(f"Recorded {len(failed_docs)} failed documents to database")
+                if stat.supersedes == "timeout":
+                    # A later attempt of a timed-out file updates its open timeout row: still a
+                    # timeout -> retry_count and the new message; any other outcome -> resolved
+                    if stat.error_type == "timeout":
+                        update = {"$set": {
+                            "retry_count": stat.retry_count,
+                            "error_message": stat.error_message,
+                            "timeout_seconds": stat.timeout_seconds,
+                            "processing_time_ms": stat.processing_time_ms,
+                            "failed_at": failed_at,
+                            "retry_pending": stat.retry_pending,
+                        }}
+                    else:
+                        update = {"$set": {
+                            "retry_count": stat.retry_count,
+                            "resolved": True,
+                            "resolved_at": failed_at,
+                            "resolution": f"retry {stat.retry_count} ended as {stat.outcome}",
+                            "retry_pending": False,
+                        }}
+                    await failed_collection.update_one(open_timeout, update)
+                    if stat.success or stat.error_type == "timeout":
+                        continue
+                    # A retry that failed in a new way gets a row of its own below
+
+                if stat.success:
+                    continue
+                doc = {
+                    "file_path": stat.file_path,
+                    "file_name": stat.file_name,
+                    "file_size_bytes": stat.file_size_bytes,
+                    "error_type": stat.error_type,
+                    "error_message": stat.error_message,
+                    "timeout_seconds": stat.timeout_seconds,
+                    "processing_time_ms": stat.processing_time_ms,
+                    "failed_at": failed_at,
+                    "profile_key": stat.profile_key,
+                    "resolved": False,
+                    "retry_count": stat.retry_count,
+                    "retry_pending": stat.retry_pending,
+                }
+                if stat.job_id:
+                    doc["job_id"] = stat.job_id
+                if stat.error_type == "timeout":
+                    # One open timeout row per (job, file): a resumed run's new first attempt
+                    # merges into the row its earlier run left pending instead of adding one
+                    await failed_collection.update_one(open_timeout, {"$set": doc}, upsert=True)
+                else:
+                    await failed_collection.insert_one(doc)
+                recorded += 1
+            if recorded:
+                logger.warning(f"Recorded {recorded} failed documents to database")
         except Exception as e:
             # The stats are in; do not write them twice for the sake of the failure list
             logger.error(f"Failed to record failed documents: {e}")

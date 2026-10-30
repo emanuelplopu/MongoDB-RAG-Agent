@@ -275,6 +275,17 @@ async def test_save_ingestion_stats_writes_both_collections_and_reports_failures
                 raise RuntimeError("connection lost")
             self.docs.extend(docs)
 
+        async def insert_one(self, doc: dict) -> None:
+            await self.insert_many([doc])
+
+        async def update_one(self, query: dict, update: dict, upsert: bool = False) -> None:
+            for doc in self.docs:
+                if all(doc.get(key) == value for key, value in query.items()):
+                    doc.update(update["$set"])
+                    return
+            if upsert:
+                self.docs.append({**query, **update["$set"]})
+
     stats, failed = _Collection(), _Collection()
     pipe = _Pipeline()
     pipe.db = {"ingestion_stats": stats, "failed_documents": failed}

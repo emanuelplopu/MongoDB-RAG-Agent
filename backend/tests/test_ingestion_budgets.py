@@ -302,7 +302,9 @@ async def test_timeout_is_recorded_on_the_first_attempt(tmp_path: Path, monkeypa
     first, final = pipe.stats_of("slow.txt")
     assert (first.retry_count, first.error_type, first.supersedes) == (0, "timeout", None)
     assert "retry queued" in first.error_message
+    assert first.retry_pending is True and first.to_dict()["retry_pending"] is True  # not final: a resume re-attempts it
     assert (final.retry_count, final.error_type, final.supersedes) == (1, "timeout", "timeout")
+    assert final.retry_pending is False and "retry_pending" not in final.to_dict()
     assert final.record_id == first.record_id
     assert "retries exhausted: 2/2" in final.error_message
     assert [s["timeout"] for s in snapshots] == [1, 1]  # one file, counted once
@@ -358,69 +360,211 @@ def test_recorder_moves_a_file_between_outcomes_when_a_record_is_superseded() ->
     assert set(recorder.snapshot()) == set(ingest.IngestionStatsRecorder.COUNTED) | {"written"}
 
 
+def _matches(doc: dict, query: dict) -> bool:
+    """Enough of MongoDB's query semantics for the filters these writers and readers use."""
+    for key, expected in query.items():
+        value: Any = doc
+        for part in key.split("."):
+            value = value.get(part) if isinstance(value, dict) else None
+        if isinstance(expected, dict):
+            for op, operand in expected.items():
+                if op == "$ne" and value == operand:
+                    return False
+                if op == "$exists" and (value is not None) != bool(operand):
+                    return False
+                if op == "$not" and isinstance(operand, dict) and "$gt" in operand:
+                    if value is not None and value > operand["$gt"]:
+                        return False
+                if op == "$in" and value not in operand:
+                    return False
+        elif value != expected:
+            return False
+    return True
+
+
+class _Cursor:
+    def __init__(self, rows: List[dict]) -> None:
+        self.rows = rows
+
+    def __aiter__(self):
+        return self._iter()
+
+    async def _iter(self):
+        for row in self.rows:
+            yield row
+
+
 class _Collection:
-    """Records the write calls ``_save_ingestion_stats`` makes."""
+    """An in-memory collection with the write semantics ``_save_ingestion_stats`` relies on."""
 
-    def __init__(self) -> None:
-        self.inserted: List[dict] = []
-        self.replaced: List[Tuple[dict, dict, bool]] = []
-        self.updated: List[Tuple[dict, dict]] = []
+    def __init__(self, docs: Optional[List[dict]] = None) -> None:
+        self.docs: List[dict] = [dict(d) for d in docs or []]
+        self.ops: List[Tuple[str, Any]] = []
 
-    async def insert_many(self, docs: List[dict]) -> None:
-        self.inserted.extend(docs)
+    def find(self, query: dict, projection: Optional[dict] = None) -> _Cursor:
+        self.ops.append(("find", query))
+        return _Cursor([d for d in self.docs if _matches(d, query)])
+
+    async def insert_many(self, docs: List[dict], ordered: bool = True) -> None:
+        self.ops.append(("insert_many", [d.get("error_type", d.get("chunk_index")) for d in docs]))
+        self.docs.extend(dict(d) for d in docs)
+
+    async def insert_one(self, doc: dict) -> None:
+        self.ops.append(("insert_one", doc.get("error_type")))
+        self.docs.append(dict(doc))
 
     async def replace_one(self, query: dict, doc: dict, upsert: bool = False) -> None:
-        self.replaced.append((query, doc, upsert))
+        self.ops.append(("replace_one", query))
+        for i, existing in enumerate(self.docs):
+            if _matches(existing, query):
+                self.docs[i] = dict(doc)
+                return
+        if upsert:
+            self.docs.append(dict(doc))
 
-    async def update_one(self, query: dict, update: dict) -> None:
-        self.updated.append((query, update))
+    async def update_one(self, query: dict, update: dict, upsert: bool = False) -> None:
+        self.ops.append(("update_one", query, upsert))
+        for existing in self.docs:
+            if _matches(existing, query):
+                existing.update(update.get("$set", {}))
+                for key in update.get("$unset", {}):
+                    existing.pop(key, None)
+                return
+        if upsert:
+            self.docs.append({**query, **update.get("$set", {})})
+
+    async def delete_many(self, query: dict) -> None:
+        self.ops.append(("delete_many", query))
+        self.docs = [d for d in self.docs if not _matches(d, query)]
+
+
+def _attempt_stat(error_type: Optional[str], retry_count: int, supersedes: Optional[str] = None, record_id=None, retry_pending: bool = False) -> Any:
+    now = datetime.now()
+    values = dict(
+        file_path="/docs/a.pdf", file_name="a.pdf", file_size_bytes=10, started_at=now, completed_at=now,
+        processing_time_ms=1.0, chunks_created=0 if error_type else 5, success=error_type is None,
+        error_type=error_type, error_message=f"{error_type} {retry_count}", timeout_seconds=1800.0,
+        profile_key="p", job_id="job-1", retry_count=retry_count, supersedes=supersedes, retry_pending=retry_pending,
+    )
+    if record_id is not None:
+        values["record_id"] = record_id
+    return ingest.IngestionFileStats(**values)
 
 
 async def test_save_ingestion_stats_replaces_the_record_of_a_retried_file() -> None:
-    now = datetime.now()
-
-    def stat(error_type: Optional[str], retry_count: int, supersedes: Optional[str] = None, record_id=None) -> Any:
-        values = dict(
-            file_path="/docs/a.pdf", file_name="a.pdf", file_size_bytes=10, started_at=now, completed_at=now,
-            processing_time_ms=1.0, chunks_created=0 if error_type else 5, success=error_type is None,
-            error_type=error_type, error_message=f"{error_type} {retry_count}", timeout_seconds=1800.0,
-            profile_key="p", job_id="job-1", retry_count=retry_count, supersedes=supersedes,
-        )
-        if record_id is not None:
-            values["record_id"] = record_id
-        return ingest.IngestionFileStats(**values)
-
     stats, failed = _Collection(), _Collection()
     pipe = _BudgetPipeline()
     pipe.db = {"ingestion_stats": stats, "failed_documents": failed}
     save = ingest.DocumentIngestionPipeline._save_ingestion_stats
 
-    first = stat("timeout", 0)
+    first = _attempt_stat("timeout", 0, retry_pending=True)
     assert await save(pipe, [first]) is True
-    assert [d["_id"] for d in stats.inserted] == [first.record_id]
-    assert [(d["error_type"], d["retry_count"], d["resolved"]) for d in failed.inserted] == [("timeout", 0, False)]
+    assert [d["_id"] for d in stats.docs] == [first.record_id]
+    assert [(d["error_type"], d["retry_count"], d["resolved"], d["retry_pending"]) for d in failed.docs] == [("timeout", 0, False, True)]
 
-    again = stat("timeout", 1, supersedes="timeout", record_id=first.record_id)
+    again = _attempt_stat("timeout", 1, supersedes="timeout", record_id=first.record_id, retry_pending=True)
     assert await save(pipe, [again]) is True
-    assert len(stats.inserted) == 1 and [q for q, _, _ in stats.replaced] == [{"_id": first.record_id}]
-    assert stats.replaced[0][1]["retry_count"] == 1 and stats.replaced[0][2] is True
-    assert len(failed.inserted) == 1, "a repeated timeout must not add a second failed_documents row"
-    query, update = failed.updated[-1]
-    assert query == {"file_path": "/docs/a.pdf", "error_type": "timeout", "resolved": False, "job_id": "job-1"}
-    assert update["$set"]["retry_count"] == 1 and update["$set"]["error_message"] == "timeout 1"
+    assert [d["retry_count"] for d in stats.docs] == [1], "the retry replaces the row instead of adding one"
+    assert [(d["retry_count"], d["error_message"], d["retry_pending"]) for d in failed.docs] == [(1, "timeout 1", True)]
 
-    done = stat(None, 2, supersedes="timeout", record_id=first.record_id)
+    done = _attempt_stat(None, 2, supersedes="timeout", record_id=first.record_id)
     assert await save(pipe, [done]) is True
-    assert stats.replaced[-1][1]["success"] is True and stats.replaced[-1][1]["retry_count"] == 2
-    _, update = failed.updated[-1]
-    assert update["$set"]["resolved"] is True and update["$set"]["resolution"] == "retry 2 ended as success"
-    assert len(failed.inserted) == 1
+    assert [(d["success"], d["retry_count"]) for d in stats.docs] == [(True, 2)]
+    (row,) = failed.docs
+    assert (row["resolved"], row["resolution"], row["retry_pending"]) == (True, "retry 2 ended as success", False)
 
     # A retry that fails in a new way resolves the timeout row and gets a row of its own
-    broken = stat("error", 1, supersedes="timeout", record_id=first.record_id)
-    assert await save(pipe, [broken]) is True
-    assert failed.updated[-1][1]["$set"]["resolved"] is True
-    assert [d["error_type"] for d in failed.inserted] == ["timeout", "error"]
+    stats, failed = _Collection(), _Collection()
+    pipe.db = {"ingestion_stats": stats, "failed_documents": failed}
+    first = _attempt_stat("timeout", 0, retry_pending=True)
+    broken = _attempt_stat("error", 1, supersedes="timeout", record_id=first.record_id)
+    assert await save(pipe, [first]) is True and await save(pipe, [broken]) is True
+    assert [(d["error_type"], d["resolved"]) for d in failed.docs] == [("timeout", True), ("error", False)]
+
+
+async def test_save_ingestion_stats_handles_an_attempt_and_its_retry_in_one_batch() -> None:
+    """Review B: the first attempt's row must exist before the retry's update looks for it."""
+    stats, failed = _Collection(), _Collection()
+    pipe = _BudgetPipeline()
+    pipe.db = {"ingestion_stats": stats, "failed_documents": failed}
+    save = ingest.DocumentIngestionPipeline._save_ingestion_stats
+
+    first = _attempt_stat("timeout", 0, retry_pending=True)
+    again = _attempt_stat("timeout", 1, supersedes="timeout", record_id=first.record_id, retry_pending=True)
+    done = _attempt_stat(None, 2, supersedes="timeout", record_id=first.record_id)
+    assert await save(pipe, [first, again, done]) is True
+
+    assert [(d["retry_count"], d["success"]) for d in stats.docs] == [(2, True)]
+    (row,) = failed.docs
+    assert (row["retry_count"], row["resolved"], row["retry_pending"]) == (2, True, False)
+
+    # A resumed run's new first attempt merges into the row its earlier run left pending
+    stats, failed = _Collection(), _Collection()
+    pipe.db = {"ingestion_stats": stats, "failed_documents": failed}
+    earlier = _attempt_stat("timeout", 1, retry_pending=True)
+    assert await save(pipe, [earlier]) is True
+    fresh = _attempt_stat("timeout", 0, retry_pending=True)
+    assert await save(pipe, [fresh]) is True
+    assert len(failed.docs) == 1 and failed.docs[0]["retry_count"] == 0 and failed.docs[0]["retry_pending"] is True
+
+
+# --------------------------------------------------------------------------- review A/D: partial documents
+
+
+def _db_pipeline(documents: List[dict], chunks: Optional[List[dict]] = None) -> Tuple[Any, _Collection, _Collection]:
+    from types import SimpleNamespace
+
+    pipe = _BudgetPipeline()
+    docs, chunk_rows = _Collection(documents), _Collection(chunks or [])
+    pipe.db = {"documents": docs, "chunks": chunk_rows}
+    pipe.settings = SimpleNamespace(mongodb_collection_documents="documents", mongodb_collection_chunks="chunks")
+    return pipe, docs, chunk_rows
+
+
+async def test_incremental_filters_treat_a_partially_embedded_document_as_not_ingested() -> None:
+    """Review A: a resume must redo a document whose backlog never finished (restart, give-up)."""
+    pipe, docs, _ = _db_pipeline([
+        {"source": "done.pdf", "content_hash": "h-done", "metadata": {"chunks_count": 3}},
+        {"source": "finished.pdf", "content_hash": "h-fin", "metadata": {"chunks_count": 9, "embedding_completed_at": "x"}},
+        {"source": "partial.pdf", "content_hash": "h-part", "metadata": {"chunks_count": 9, "chunks_pending": 4}},
+        {"source": "settled.pdf", "content_hash": "h-set", "metadata": {"chunks_count": 2, "chunks_pending": 0}},
+    ])
+    base = ingest.DocumentIngestionPipeline
+
+    assert await base._get_existing_sources(pipe) == {"done.pdf", "finished.pdf", "settled.pdf"}
+    assert await base._get_existing_hashes(pipe) == {"h-done": "done.pdf", "h-fin": "finished.pdf", "h-set": "settled.pdf"}
+    assert ingest.complete_documents_filter() == {"metadata.chunks_pending": {"$not": {"$gt": 0}}}
+    assert all(op[1].get("metadata.chunks_pending") == {"$not": {"$gt": 0}} for op in docs.ops if op[0] == "find")
+
+
+def test_api_resume_queue_uses_the_same_filter() -> None:
+    source = Path(pytest.importorskip("backend.routers.ingestion").__file__).read_text(encoding="utf-8")
+    assert source.count("documents_collection.find(complete_documents_filter(), {\"source\": 1})") == 2
+    assert 'documents_collection.find({}, {"source": 1})' not in source
+
+
+async def test_appending_backlog_chunks_is_idempotent() -> None:
+    """Review D: a pass redone after a failed append must not leave duplicate chunk rows."""
+    from bson import ObjectId
+
+    oid = ObjectId()
+    pipe, docs, chunk_rows = _db_pipeline(
+        [{"_id": oid, "source": "book.pdf", "metadata": {"chunks_count": 4, "chunks_pending": 2}}],
+        [{"document_id": oid, "chunk_index": 0}, {"document_id": oid, "chunk_index": 1}, {"document_id": oid, "chunk_index": 2}],  # 2 was left by a failed pass
+    )
+    pending = [DocumentChunk(content=f"c{i}", index=i, start_char=0, end_char=2, metadata={}, token_count=5, embedding=[0.1]) for i in (2, 3)]
+    append = ingest.DocumentIngestionPipeline._append_chunks_to_document
+
+    await append(pipe, str(oid), pending[:1], remaining=1)
+    assert [op[0] for op in chunk_rows.ops] == ["delete_many", "insert_many"]
+    assert chunk_rows.ops[0][1] == {"document_id": oid, "chunk_index": {"$in": [2]}}
+    assert sorted(d["chunk_index"] for d in chunk_rows.docs) == [0, 1, 2]  # no duplicate of index 2
+    assert docs.ops[-1][:2] == ("update_one", {"_id": oid})
+
+    await append(pipe, str(oid), pending[1:], remaining=0)
+    assert sorted(d["chunk_index"] for d in chunk_rows.docs) == [0, 1, 2, 3]
+    unset_op = docs.ops[-1]
+    assert unset_op[0] == "update_one" and unset_op[1] == {"_id": oid}
 
 
 # --------------------------------------------------------------------------- F43: the retry itself

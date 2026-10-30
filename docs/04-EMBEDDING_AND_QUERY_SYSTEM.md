@@ -241,11 +241,17 @@ were thrown away (tick 28: 10.9 h of Docling time discarded in 3 h). Now:
   (up to 4 documents at a time, each pass with a fresh work-derived budget, at
   most 3 passes per document), appends the chunks to the stored document and
   clears `chunks_pending`; the final record replaces the `partial` one (same
-  `_id`). A document whose remainder is still pending after 3 passes keeps
-  `metadata.chunks_pending` and its `partial` record. Nothing converted is
-  reconverted or thrown away. A task still running past three times its
-  embedding budget (plus 5 min) is cancelled and recorded as an `error` ("hard
-  cap"), not retried.
+  `_id`). The backlog lives in memory: a document whose remainder is still
+  pending after 3 passes, or when the run is stopped, keeps
+  `metadata.chunks_pending` and its `partial` record, and the incremental
+  filters (`_get_existing_sources` / `_get_existing_hashes`, the API's queue
+  build and pending-files listing: `complete_documents_filter()`) treat it as
+  not ingested, so the next run converts it again and replaces it. Within a
+  run nothing converted is reconverted or thrown away. Each backlog pass
+  deletes the chunk rows of the indexes it appends before inserting them, so a
+  pass redone after a failed write leaves no duplicates. A task still running
+  past three times its embedding budget (plus 5 min) is cancelled and recorded
+  as an `error` ("hard cap"), not retried.
 - A conversion timeout is recorded at once (`error_type: timeout`,
   `retry_count: 0`, a `failed_documents` row), so the status counters and the
   failed-documents page see it while the retry is still queued; every later
@@ -253,7 +259,11 @@ were thrown away (tick 28: 10.9 h of Docling time discarded in 3 h). Now:
   `retry_count` n) and updates the `failed_documents` row (`retry_count`, or
   `resolved: true` with a `resolution` when the retry ended otherwise). The
   job's `timeout_files` counts files, not attempts, and drops when a retry
-  succeeds.
+  succeeds. A timeout whose retry is still queued carries `retry_pending:
+  true`; a resumed job attempts such a file again (`failed_paths_of_job` skips
+  only final failures), and its new first attempt merges into that row instead
+  of adding one. The rows of one flush are written in recording order, so a
+  first attempt and its retry in the same batch end as one row.
 - A retry gets a larger budget: the cap is lifted by
   `retry_timeout_multiplier` per attempt (1,800 s → 2,700 s → 4,050 s with the
   defaults), and the last allowed attempt of a PDF converts without the
