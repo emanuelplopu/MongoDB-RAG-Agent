@@ -318,6 +318,58 @@ returns this tenant's desire, every tenant's and the agent's report; the Configu
 it under the office-hours settings. `scripts/Set-CpuBoostCap.ps1` does the same by hand
 (elevated). Measured effect and cost: `docs/04-EMBEDDING_AND_QUERY_SYSTEM.md`, "Clock cap".
 
+### Embedder watchdog (`host_control`, agent 1.2.0)
+
+Since agent 1.2.0 (2026-10-31) the service also watches the llama.cpp embedding servers of the
+stack and restarts one that has degraded. The known failure (seen 2026-10-26, -28 and -30 after a
+day or two of uptime): `rag-embedder-gpu` pins one CPU core, grows to 8-10 GB RSS and falls from
+13-16k tokens/s on the GPU to a few hundred, so every file's embedding step takes 50-110 minutes
+instead of seconds and the conversion slots idle behind it; `docker restart` cures it within a
+minute (`docs/04-EMBEDDING_AND_QUERY_SYSTEM.md`, "Is the embedder on the GPU?"). The API
+container has no Docker socket, so the agent does it (`EmbedderWatchdog.cs`,
+`Agent:EmbedderWatchdog` options):
+
+- **Probe.** Every `CheckSeconds` (60) it embeds a fixed `ProbeWords` (120, ~150 tokens) text
+  through each target's published port (`Targets`, default `embedder` =
+  `http://127.0.0.1:11090/v1/embeddings` → containers `rag-embedder-gpu` | `rag-embedder`, and
+  `embedder-query` = `…:11091` → `rag-embedder-query`; the first container of the list that is
+  running is the one probed and restarted) and times the round trip. In the same tick it inspects
+  the container (state, `StartedAt`, health) and reads its one-shot stats, so the CPU figure is the
+  container's mean use since the previous probe. A healthy server answers in tens of
+  milliseconds, at most a few seconds while ingestion batches are queued ahead of the probe; a
+  degraded one needs tens of seconds to minutes, and a probe that outlives
+  `ProbeTimeoutSeconds` (30) counts as slow.
+- **Rule.** Restart when `ConsecutiveChecks` (5) probes in a row were slow (≥ `SlowMs`, 5000),
+  those probes span at least `WindowSeconds` (240 — five one-minute probes; a burst of
+  re-checks cannot trigger it), and the container's mean CPU over them is at least `MinCpuCores`
+  (0.5; the degraded server spins on one core, a server merely waiting on something else does not;
+  `0` ignores CPU, as does the rule when the Docker pipe is unreachable — then nothing can be
+  restarted anyway). One fast answer resets the run. Nothing is judged for `WarmupSeconds` (300)
+  after a container start (model load, CUDA warm-up), a 503 "Loading model" answer is
+  `warming_up`, a connection error is `unreachable`, not slow (Docker's own `restart:
+  unless-stopped` covers crashes), and a stopped or missing container is `absent`.
+- **Action.** `POST /containers/{name}/restart?t=10` over the Engine pipe, logged at warning
+  level in the Windows event log, at most one restart per container per
+  `MinRestartIntervalSeconds` (1800; a failed engine call counts too, so a flapping pipe cannot
+  cause a restart storm). The probe history starts over after a restart.
+- **Report.** After every tick the agent upserts `host_control` `_id: "embedder_watchdog"`:
+  `enabled`, `check_seconds`, `thresholds{slow_ms, probe_timeout_seconds, consecutive_checks,
+  window_seconds, min_cpu_cores, warmup_seconds, min_restart_interval_seconds, probe_words}`,
+  `targets[{name, url, containers[], container, container_state, container_health, started_at,
+  state, reason, slow_checks, latency_ms, prompt_tokens, tokens_per_second, cpu_cores, mem_bytes,
+  last_check, last_error, last_restart, last_restart_reason, restart_count,
+  next_restart_allowed_at}]`, `agent_version`, `host`, `updated_at`. `state` is one of `healthy`,
+  `slow` (slow probes, rule not met yet — the reason says what is missing), `degraded` (restart
+  due), `cooldown` (due but rate-limited), `warming_up`, `unreachable`, `absent`, `unknown`.
+  `GET /api/v1/system/embedder-watchdog` (superadmin; `backend/services/embedder_watchdog.py`;
+  503 while telemetry history is off) returns the report typed, with `reported` (ever written)
+  and `agent_seen` (younger than 5 min); the Configuration page shows one line per target under
+  Ingestion → Embedding Settings ("embedder healthy, 38 ms, 0.12 cores, 1 restart, last …").
+
+Decision logic tests: `installer/host-agent.Tests/EmbedderWatchdogTests.cs`. The watchdog runs
+only as a service (not in `--once` / `--dry-run`); `"EmbedderWatchdog": { "Enabled": false }` in
+the ProgramData override turns it off, a `Targets` list there replaces the defaults.
+
 ### `host_samples` (time-series, schema 1)
 
 `timeField` `ts`, `metaField` `meta` (`host`, `source: host-agent`, `agent_version`, `schema`),

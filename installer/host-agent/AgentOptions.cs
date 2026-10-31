@@ -40,6 +40,8 @@ public sealed class AgentOptions
 
     public PowerPlanOptions PowerPlan { get; set; } = new();
 
+    public EmbedderWatchdogOptions EmbedderWatchdog { get; set; } = new();
+
     /// <summary>Fills list defaults after binding (the binder appends to pre-filled lists).</summary>
     public AgentOptions Normalize()
     {
@@ -48,6 +50,7 @@ public sealed class AgentOptions
         {
             Docker.Pipes.AddRange(new[] { "dockerDesktopLinuxEngine", "docker_engine" });
         }
+        EmbedderWatchdog.Normalize();
         return this;
     }
 }
@@ -92,4 +95,86 @@ public sealed class PowerPlanOptions
 
     /// <summary>A tenant's desire older than this counts as "normal" (a stopped backend never leaves the cap on).</summary>
     public int DesiredFreshSeconds { get; set; } = 600;
+}
+
+/// <summary>One llama.cpp embedding server the watchdog probes and may restart.</summary>
+public sealed class EmbedderWatchdogTarget
+{
+    /// <summary>Short name in logs and the status document (e.g. "embedder").</summary>
+    public string Name { get; set; } = "";
+
+    /// <summary>OpenAI-compatible embeddings endpoint on the host loopback (the container's published port).</summary>
+    public string Url { get; set; } = "";
+
+    /// <summary>Container names behind the URL; the running one is probed and restarted (the CPU and GPU variants share a port).</summary>
+    public List<string> Containers { get; set; } = new();
+}
+
+/// <summary>
+/// Restarts a llama.cpp embedding server that has degraded (seen three times on the client's
+/// machine after a day or two of uptime: one CPU core pinned, 8-10 GB RSS, a few hundred tokens/s
+/// instead of 13-16k on the GPU, every file's embedding step taking an hour). See EmbedderWatchdog.cs.
+/// </summary>
+public sealed class EmbedderWatchdogOptions
+{
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>Seconds between probes.</summary>
+    public int CheckSeconds { get; set; } = 60;
+
+    /// <summary>A probe answered later than this counts as slow (a healthy server answers in tens of milliseconds).</summary>
+    public int SlowMs { get; set; } = 5000;
+
+    /// <summary>Seconds the probe waits before it gives up; a timeout counts as slow.</summary>
+    public int ProbeTimeoutSeconds { get; set; } = 30;
+
+    /// <summary>Restart only after this many consecutive slow probes ...</summary>
+    public int ConsecutiveChecks { get; set; } = 5;
+
+    /// <summary>... spanning at least this many seconds.</summary>
+    public int WindowSeconds { get; set; } = 240;
+
+    /// <summary>The container's mean CPU use over the slow window must reach this many cores (0 = ignore CPU).</summary>
+    public double MinCpuCores { get; set; } = 0.5;
+
+    /// <summary>Seconds after a container start during which nothing is judged (model load, CUDA warm-up).</summary>
+    public int WarmupSeconds { get; set; } = 300;
+
+    /// <summary>At most one restart per container in this many seconds.</summary>
+    public int MinRestartIntervalSeconds { get; set; } = 1800;
+
+    /// <summary>Approximate size of the probe text in words (~1.3 tokens each).</summary>
+    public int ProbeWords { get; set; } = 120;
+
+    /// <summary>Servers to watch; empty = the compose stack's `embedder` (11090) and `embedder-query` (11091).</summary>
+    public List<EmbedderWatchdogTarget> Targets { get; set; } = new();
+
+    public EmbedderWatchdogOptions Normalize()
+    {
+        CheckSeconds = Math.Clamp(CheckSeconds, 10, 3600);
+        SlowMs = Math.Max(100, SlowMs);
+        ProbeTimeoutSeconds = Math.Clamp(ProbeTimeoutSeconds, 1, 600);
+        ConsecutiveChecks = Math.Max(1, ConsecutiveChecks);
+        WindowSeconds = Math.Max(0, WindowSeconds);
+        MinCpuCores = Math.Max(0, MinCpuCores);
+        WarmupSeconds = Math.Max(0, WarmupSeconds);
+        MinRestartIntervalSeconds = Math.Max(0, MinRestartIntervalSeconds);
+        ProbeWords = Math.Clamp(ProbeWords, 1, 2000);
+        if (Targets.Count == 0)
+        {
+            Targets.Add(new EmbedderWatchdogTarget
+            {
+                Name = "embedder",
+                Url = "http://127.0.0.1:11090/v1/embeddings",
+                Containers = { "rag-embedder-gpu", "rag-embedder" },
+            });
+            Targets.Add(new EmbedderWatchdogTarget
+            {
+                Name = "embedder-query",
+                Url = "http://127.0.0.1:11091/v1/embeddings",
+                Containers = { "rag-embedder-query" },
+            });
+        }
+        return this;
+    }
 }
