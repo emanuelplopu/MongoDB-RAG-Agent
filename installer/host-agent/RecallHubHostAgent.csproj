@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>RecallHubHostAgent</AssemblyName>
     <RootNamespace>RecallHub.HostAgent</RootNamespace>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <Authors>RecallHub</Authors>
     <Description>RecallHub host agent: samples Windows host, GPU, container and sensor telemetry into MongoDB.</Description>
     <ApplicationIcon>..\assets\icon.ico</ApplicationIcon>

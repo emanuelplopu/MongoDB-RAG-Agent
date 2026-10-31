@@ -221,6 +221,7 @@ const apiMocks = vi.hoisted(() => ({
     saveAgentPerformanceConfig: vi.fn(),
     getIngestionPerformanceConfig: vi.fn(),
     getPowerPlanStatus: vi.fn(),
+    getEmbedderWatchdogStatus: vi.fn(),
     saveIngestionPerformanceConfig: vi.fn(),
     getModelCapabilities: vi.fn(),
     testModelCapability: vi.fn(),
@@ -610,6 +611,28 @@ function resetApiMocks() {
     agent: { state: 'normal', applied_at: null, updated_at: '2026-10-28T10:00:00Z' },
     agent_seen: true,
     stale_after_seconds: 600,
+  })
+  apiMocks.systemApi.getEmbedderWatchdogStatus.mockResolvedValue({
+    reported: true,
+    agent_seen: true,
+    enabled: true,
+    check_seconds: 60,
+    thresholds: { slow_ms: 5000, consecutive_checks: 5, window_seconds: 240, min_cpu_cores: 0.5, warmup_seconds: 300, min_restart_interval_seconds: 1800 },
+    targets: [
+      {
+        name: 'embedder', url: 'http://127.0.0.1:11090/v1/embeddings', containers: ['rag-embedder-gpu', 'rag-embedder'],
+        container: 'rag-embedder-gpu', container_state: 'running', state: 'healthy', reason: '38 ms', slow_checks: 0,
+        latency_ms: 38.2, prompt_tokens: 153, tokens_per_second: 4005.2, cpu_cores: 0.12, restart_count: 1,
+        last_restart: '2026-10-30T11:00:00Z', last_restart_reason: '5 slow probe(s) over 4 min',
+      },
+      {
+        name: 'embedder-query', url: 'http://127.0.0.1:11091/v1/embeddings', containers: ['rag-embedder-query'],
+        state: 'absent', reason: 'no configured container is running', slow_checks: 0, restart_count: 0,
+      },
+    ],
+    updated_at: '2026-10-30T14:00:00Z',
+    agent_version: '1.2.0',
+    stale_after_seconds: 300,
   })
   apiMocks.systemApi.getModelCapabilities.mockResolvedValue({ models: modelCapabilities })
   apiMocks.systemApi.saveLLMProviderConfig.mockResolvedValue({ success: true })
@@ -1678,6 +1701,11 @@ describe('large workflow page coverage smoke tests', () => {
     const profile = await screen.findByLabelText('Load Profile')
     expect(profile).toHaveValue('server_room')
     expect(screen.queryByTestId('ingestion-office-hours')).not.toBeInTheDocument()
+
+    // The host agent's embedder watchdog report under Embedding Settings
+    const watchdog = screen.getByTestId('embedder-watchdog-status')
+    expect(watchdog).toHaveTextContent('embedder healthy, 38 ms, 0.12 cores, 1 restart')
+    expect(watchdog).toHaveTextContent('embedder-query absent (no container running)')
 
     await user.selectOptions(profile, 'office')
     expect(screen.getByTestId('ingestion-office-hours')).toBeInTheDocument()

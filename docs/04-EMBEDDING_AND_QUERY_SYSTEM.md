@@ -702,9 +702,26 @@ a four-text request of 3,468 tokens took 106 s. Restarting the container
 assigned to device CUDA0"; llama.cpp disables flash attention for this model,
 which is expected). The offload flags (`-ngl 999`, `-b 8192 -ub 8192`) are
 therefore correct; the slow state was a degradation of the long-running
-server, not CPU compute. Watch the embedder's tokens per minute (its
-`stop processing: n_tokens = …` log lines) and restart it when the per-request
-rate collapses; the query instance keeps searches responsive either way.
+server, not CPU compute. The same degradation recurred on 2026-10-28 and
+2026-10-30, each time after a day or two of uptime, each time cured by a
+restart; the query instance keeps searches responsive either way.
+
+**Embedder watchdog (2026-10-31).** The RecallHub host agent (service 1.2.0,
+`installer/host-agent/EmbedderWatchdog.cs`) now restarts a degraded server
+by itself: it embeds a fixed ~150-token text through the published port
+(11090, and 11091 for the query instance) every minute, and restarts the
+container through the Docker Engine API when five probes in a row over at
+least four minutes took 5 s or longer (or timed out after 30 s) while the
+container averaged at least 0.5 CPU cores, never within five minutes of a
+container start, never while the server reports "Loading model", and at
+most once per container per 30 minutes. A healthy server answers the probe
+in 20-40 ms; under a queue of ingestion batches it may take a few seconds,
+never five minutes of it (the pipeline is conversion-bound at ~1k tokens/s
+against 13k). The agent reports every check to `host_control`
+(`_id: "embedder_watchdog"`), `GET /api/v1/system/embedder-watchdog`
+returns it and the Configuration page (Ingestion → Embedding Settings) shows
+it. Thresholds, states and the report schema: `docs/12-TELEMETRY_SYSTEM.md`,
+"Embedder watchdog".
 The log also showed `400 … ill-formed UTF-8` answers to some ingestion
 batches: chunk text with invalid UTF-8 reaches the server and the whole
 batch is rejected (the F27 "HTTP 500" of the prompt-test log); not fixed here.
