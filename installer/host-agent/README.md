@@ -4,7 +4,10 @@ A small .NET 8 Windows service that samples the real host every 5 seconds into M
 (`recallhub_telemetry.host_samples`): CPU, RAM, drives, disk and network I/O, CPU package power
 (Windows RAPL counters), GPU via `nvidia-smi`, per-container use via the Docker Engine pipe,
 Ollama models, backend `/health` latency and — with the opt-in PawnIO driver — CPU, board and
-NVMe temperatures. The machine-stats widget and System → Telemetry History read it.
+NVMe temperatures. The machine-stats widget and System → Telemetry History read it. As a service
+it also applies the CPU clock cap the backends ask for (`PowerPlanControl.cs`) and restarts a
+degraded llama.cpp embedding server (`EmbedderWatchdog.cs`: a timed embedding probe every minute,
+restart through the Engine API after five slow minutes with the container's CPU pinned).
 
 Full documentation (schema, sources, caveats, analysis): `docs/12-TELEMETRY_SYSTEM.md`,
 section "Host Telemetry History".
@@ -25,7 +28,10 @@ dotnet publish -c Release                # self-contained single file in bin\Rel
 | `Probes/SystemProbe.cs` | CPU, memory, drives, disk/network I/O, uptime (performance counters, Win32) |
 | `Probes/RaplPowerProbe.cs` | CPU package / core / iGPU / DRAM power from `\Energy Meter(RAPL_*)` |
 | `Probes/NvidiaSmiProbe.cs` | GPU via `nvidia-smi` (field-set detection, throttle reasons) |
+| `Probes/DockerEngine.cs` | the Engine API connection over Docker Desktop's named pipe, shared by the probe and the watchdog |
 | `Probes/DockerProbe.cs` | per-container CPU cores, memory, I/O, restarts, health (Engine API over a named pipe) |
+| `PowerPlanControl.cs` | applies the CPU clock cap the backends publish in `host_control` (`powercfg`) |
+| `EmbedderWatchdog.cs` | probes the embedding servers, restarts a degraded container, reports to `host_control` |
 | `Probes/HttpProbes.cs` | Ollama `/api/ps`, backend `/health` latency |
 | `Probes/HardwareSensors.cs` | LibreHardwareMonitor + PawnIO temperatures and fans (opt-in); drive temperature selection |
 | `Probes/SensorDiagnostics.cs` | `--sensors`: lists every sensor (name, type, value) and marks which drive temperatures are used |

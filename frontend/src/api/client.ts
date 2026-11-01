@@ -721,6 +721,58 @@ export interface PowerPlanStatus {
   stale_after_seconds: number
 }
 
+/** One llama.cpp embedding server watched by the host agent's watchdog (host_control "embedder_watchdog"). */
+export interface EmbedderWatchdogTarget {
+  name: string
+  url: string
+  containers: string[]
+  /** The container found running behind the URL. */
+  container?: string | null
+  container_state?: string | null
+  container_health?: string | null
+  started_at?: string | null
+  /** "healthy", "slow", "degraded", "cooldown", "warming_up", "unreachable", "absent" or "unknown". */
+  state: string
+  reason: string
+  slow_checks: number
+  latency_ms?: number | null
+  prompt_tokens?: number | null
+  tokens_per_second?: number | null
+  cpu_cores?: number | null
+  mem_bytes?: number | null
+  last_check?: string | null
+  last_error?: string | null
+  last_restart?: string | null
+  last_restart_reason?: string | null
+  restart_count: number
+  next_restart_allowed_at?: string | null
+}
+
+/** GET /system/embedder-watchdog: the host agent's last watchdog report. */
+export interface EmbedderWatchdogStatus {
+  /** The agent has ever written a report. */
+  reported: boolean
+  /** The report is younger than stale_after_seconds. */
+  agent_seen: boolean
+  enabled?: boolean | null
+  check_seconds?: number | null
+  thresholds?: {
+    slow_ms?: number | null
+    probe_timeout_seconds?: number | null
+    consecutive_checks?: number | null
+    window_seconds?: number | null
+    min_cpu_cores?: number | null
+    warmup_seconds?: number | null
+    min_restart_interval_seconds?: number | null
+    probe_words?: number | null
+  } | null
+  targets: EmbedderWatchdogTarget[]
+  updated_at?: string | null
+  agent_version?: string | null
+  host?: string | null
+  stale_after_seconds: number
+}
+
 export interface IngestionPerformanceConfig {
   process_isolation_enabled: boolean
   max_concurrent_files: number
@@ -1656,6 +1708,12 @@ export const systemApi = {
   // CPU clock cap (load profile office hours), applied by the host agent
   getPowerPlanStatus: async (): Promise<PowerPlanStatus> => {
     const response = await api.get('/system/power-plan')
+    return response.data
+  },
+
+  // Embedder watchdog (host agent restarts a degraded llama.cpp embedding server)
+  getEmbedderWatchdogStatus: async (): Promise<EmbedderWatchdogStatus> => {
+    const response = await api.get('/system/embedder-watchdog')
     return response.data
   },
 

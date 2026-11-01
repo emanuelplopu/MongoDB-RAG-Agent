@@ -1,4 +1,3 @@
-using System.IO.Pipes;
 using System.Text.Json;
 using MongoDB.Bson;
 
@@ -24,25 +23,23 @@ internal sealed record ContainerCounters(
 /// </summary>
 public sealed class DockerProbe : IDisposable
 {
-    private static readonly TimeSpan ReconnectBackoff = TimeSpan.FromSeconds(30);
-
     private readonly ILogger _logger;
     private readonly DockerOptions _options;
+    private readonly DockerEngine _engine;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (ulong Total, ulong System)> _previous = new();
-    private HttpClient? _client;
-    private DateTime _nextConnectAttempt = DateTime.MinValue;
 
     public DockerProbe(ILogger logger, DockerOptions options)
     {
         _logger = logger;
         _options = options;
+        _engine = new DockerEngine(logger, options.Pipes);
     }
 
     /// <summary>One entry per running container (null when Docker is disabled or unreachable).</summary>
     public async Task<BsonArray?> SampleAsync(BsonDocument errors, CancellationToken ct)
     {
         if (!_options.Enabled) return null;
-        var client = await EnsureClientAsync(ct);
+        var client = await _engine.EnsureClientAsync(ct);
         if (client is null)
         {
             errors["docker"] = "Docker engine pipe unreachable";
@@ -50,7 +47,7 @@ public sealed class DockerProbe : IDisposable
         }
         try
         {
-            using var list = await GetJsonAsync(client, ContainersPath(), ct);
+            using var list = await DockerEngine.GetJsonAsync(client, ContainersPath(), ct);
             var containers = list.RootElement.EnumerateArray()
                 .Select(c => (Id: c.GetProperty("Id").GetString() ?? "", Name: ContainerName(c)))
                 .Where(c => c.Id.Length > 0)
@@ -63,7 +60,7 @@ public sealed class DockerProbe : IDisposable
         {
             if (ct.IsCancellationRequested) throw;
             errors["docker"] = ex.Message;
-            ResetClient();
+            _engine.Reset();
             return null;
         }
     }
@@ -72,8 +69,8 @@ public sealed class DockerProbe : IDisposable
     {
         try
         {
-            var statsTask = GetJsonAsync(client, $"containers/{id}/stats?stream=false&one-shot=true", ct);
-            var inspectTask = GetJsonAsync(client, $"containers/{id}/json", ct);
+            var statsTask = DockerEngine.GetJsonAsync(client, $"containers/{id}/stats?stream=false&one-shot=true", ct);
+            var inspectTask = DockerEngine.GetJsonAsync(client, $"containers/{id}/json", ct);
             using var stats = await statsTask;
             using var inspect = await inspectTask;
 
@@ -208,73 +205,5 @@ public sealed class DockerProbe : IDisposable
         return "containers/json?filters=" + Uri.EscapeDataString(filter);
     }
 
-    private static async Task<JsonDocument> GetJsonAsync(HttpClient client, string path, CancellationToken ct)
-    {
-        using var response = await client.GetAsync(path, ct);
-        response.EnsureSuccessStatusCode();
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        return await JsonDocument.ParseAsync(stream, cancellationToken: ct);
-    }
-
-    private async Task<HttpClient?> EnsureClientAsync(CancellationToken ct)
-    {
-        if (_client is not null) return _client;
-        if (DateTime.UtcNow < _nextConnectAttempt) return null;
-        _nextConnectAttempt = DateTime.UtcNow + ReconnectBackoff;
-        foreach (var pipe in _options.Pipes)
-        {
-            var client = CreatePipeClient(pipe);
-            try
-            {
-                using var ping = await client.GetAsync("_ping", ct);
-                if (ping.IsSuccessStatusCode)
-                {
-                    _logger.LogInformation("Docker engine reachable on pipe {Pipe}", pipe);
-                    _client = client;
-                    return client;
-                }
-            }
-            catch (Exception ex) when (ex is HttpRequestException or IOException or TaskCanceledException or UnauthorizedAccessException or TimeoutException)
-            {
-                if (ct.IsCancellationRequested) throw;
-                _logger.LogDebug("Docker pipe {Pipe} not usable: {Message}", pipe, ex.Message);
-            }
-            client.Dispose();
-        }
-        _logger.LogWarning("No Docker engine pipe reachable ({Pipes}); retrying in {Seconds}s",
-            string.Join(", ", _options.Pipes), ReconnectBackoff.TotalSeconds);
-        return null;
-    }
-
-    private static HttpClient CreatePipeClient(string pipe)
-    {
-        var handler = new SocketsHttpHandler
-        {
-            ConnectCallback = async (_, token) =>
-            {
-                var stream = new NamedPipeClientStream(".", pipe, PipeDirection.InOut, PipeOptions.Asynchronous);
-                try
-                {
-                    await stream.ConnectAsync(2000, token);
-                    return stream;
-                }
-                catch
-                {
-                    await stream.DisposeAsync();
-                    throw;
-                }
-            },
-            PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-        };
-        return new HttpClient(handler) { BaseAddress = new Uri("http://docker/"), Timeout = TimeSpan.FromSeconds(4) };
-    }
-
-    private void ResetClient()
-    {
-        _client?.Dispose();
-        _client = null;
-        _nextConnectAttempt = DateTime.UtcNow;
-    }
-
-    public void Dispose() => _client?.Dispose();
+    public void Dispose() => _engine.Dispose();
 }

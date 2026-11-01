@@ -11,7 +11,8 @@ using RecallHub.HostAgent.Storage;
 //   RecallHubHostAgent.exe --sensors    list every LibreHardwareMonitor sensor and the derived temperatures, then exit
 //                                       (no write, no configuration; run elevated)
 //
-// As a service it also applies the CPU clock cap the backends ask for (host_control, PowerPlanControl.cs).
+// As a service it also applies the CPU clock cap the backends ask for (host_control, PowerPlanControl.cs)
+// and restarts a degraded llama.cpp embedding server (EmbedderWatchdog.cs).
 //
 // Configuration precedence: appsettings.json next to the exe < %ProgramData%\RecallHub\HostAgent\appsettings.json
 // < RECALLHUB_AGENT_* environment variables (e.g. RECALLHUB_AGENT_Agent__IntervalSeconds=10) < command line.
@@ -73,6 +74,15 @@ if (mode == OutputMode.Mongo && options.PowerPlan.Enabled)
         options.PowerPlan,
         mongo,
         new PowercfgApplier(sp.GetRequiredService<ILogger<PowercfgApplier>>())));
+}
+if (mode == OutputMode.Mongo && options.EmbedderWatchdog.Enabled)
+{
+    // Probes the llama.cpp embedding servers and restarts a degraded one (EmbedderWatchdog.cs)
+    builder.Services.AddHostedService(sp => new EmbedderWatchdogWorker(
+        sp.GetRequiredService<ILogger<EmbedderWatchdogWorker>>(),
+        options.EmbedderWatchdog,
+        options.Docker,
+        mongo));
 }
 
 using var host = builder.Build();

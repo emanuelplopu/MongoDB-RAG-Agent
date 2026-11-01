@@ -21,6 +21,7 @@ from backend.services.ingestion_schedule import (
     load_profile_from,
     office_hours_from,
 )
+from backend.services.embedder_watchdog import EmbedderWatchdogStatusResponse, embedder_watchdog_status
 from backend.services.power_plan_control import HOST_CONTROL, PowerPlanStatusResponse, power_plan_status
 
 logger = logging.getLogger(__name__)
@@ -629,6 +630,22 @@ async def get_power_plan_status(request: Request, admin: UserResponse = Depends(
     db = request.app.state.db
     config = await db.db[INGESTION_CONFIG_COLLECTION].find_one({"_id": INGESTION_CONFIG_DOC_ID}) or {}
     return await power_plan_status(store.db[HOST_CONTROL], settings.tenant_id, config)
+
+
+@router.get("/embedder-watchdog", response_model=EmbedderWatchdogStatusResponse)
+async def get_embedder_watchdog_status(request: Request, admin: UserResponse = Depends(require_admin)) -> EmbedderWatchdogStatusResponse:
+    """What the host agent's embedder watchdog last reported.
+
+    Superadmin only. The agent probes the llama.cpp embedding servers every minute and restarts
+    a degraded container (``backend/services/embedder_watchdog.py``,
+    ``installer/host-agent/EmbedderWatchdog.cs``); its report lives in ``host_control``.
+    ``reported`` is false while the agent has never written one. 503 while telemetry history is
+    disabled.
+    """
+    store = getattr(request.app.state, "telemetry_store", None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="Telemetry history is disabled; no host control channel")
+    return await embedder_watchdog_status(store.db[HOST_CONTROL])
 
 
 @router.get("/host-stats", response_model=HostStatsResponse)

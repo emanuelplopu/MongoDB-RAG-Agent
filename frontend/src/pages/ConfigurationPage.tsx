@@ -30,7 +30,7 @@ import {
   LLMModel, EmbeddingModel, LLMProviderConfigResponse, LLMProviderConfigRequest,
   ProviderModelInfo, FetchModelsResponse, ProviderTestResponse,
   AgentTool, ToolTestResponse, IngestionPerformanceConfig, IngestionLoadProfile, IngestionOfficeHours, PowerPlanStatus,
-  ModelTestResult, ModelCapability
+  EmbedderWatchdogStatus, EmbedderWatchdogTarget, ModelTestResult, ModelCapability
 } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -49,6 +49,29 @@ const NETWORK_PRESETS = [
   { name: 'Corporate 172.16.x.x', range: '172.16.0.1-254', description: '172.16.0.x private' },
   { name: 'Corporate 172.31.x.x', range: '172.31.0.1-254', description: '172.31.0.x private' },
 ]
+
+/** One watched embedding server in a few words: state, last probe, last restart. */
+function describeEmbedderWatchdogTarget(t: EmbedderWatchdogTarget): string {
+  const parts: string[] = [`${t.name} ${t.state}`]
+  if (t.state === 'absent') parts[0] += ' (no container running)'
+  if (t.latency_ms != null && t.state !== 'absent') parts.push(`${Math.round(t.latency_ms)} ms`)
+  if (t.cpu_cores != null && t.state !== 'absent') parts.push(`${t.cpu_cores.toFixed(2)} cores`)
+  if (t.restart_count > 0) {
+    parts.push(`${t.restart_count} restart${t.restart_count === 1 ? '' : 's'}${t.last_restart ? `, last ${new Date(t.last_restart).toLocaleString()}` : ''}`)
+  }
+  return parts.join(', ')
+}
+
+/** The watchdog line under Embedding Settings. */
+function describeEmbedderWatchdog(status: EmbedderWatchdogStatus): string {
+  if (!status.reported) return 'no report yet (host agent not installed, older than 1.2.0, or watchdog disabled)'
+  if (!status.agent_seen) {
+    return `last report ${status.updated_at ? new Date(status.updated_at).toLocaleString() : 'unknown'} (agent not reporting)`
+  }
+  if (status.enabled === false) return 'disabled in the agent'
+  if (status.targets.length === 0) return 'no servers configured'
+  return status.targets.map(describeEmbedderWatchdogTarget).join(' · ')
+}
 
 export default function ConfigurationPage() {
   const navigate = useNavigate()
@@ -148,6 +171,7 @@ export default function ConfigurationPage() {
     const [isSavingIngestionConfig, setIsSavingIngestionConfig] = useState(false)
     const [ingestionConfigErrors, setIngestionConfigErrors] = useState<Record<string, string>>({})
     const [powerPlan, setPowerPlan] = useState<PowerPlanStatus | null>(null)
+    const [embedderWatchdog, setEmbedderWatchdog] = useState<EmbedderWatchdogStatus | null>(null)
 
     // Model Capability Testing state
     const [modelCapabilities, setModelCapabilities] = useState<ModelCapability[]>([])
@@ -345,6 +369,12 @@ export default function ConfigurationPage() {
         setPowerPlan(await systemApi.getPowerPlanStatus())
       } catch {
         setPowerPlan(null)
+      }
+      // Embedder watchdog report (host agent); absent when telemetry history is off
+      try {
+        setEmbedderWatchdog(await systemApi.getEmbedderWatchdogStatus())
+      } catch {
+        setEmbedderWatchdog(null)
       }
       // Fetch model capabilities
       try {
@@ -2976,6 +3006,11 @@ export default function ConfigurationPage() {
             <p className="text-sm text-secondary dark:text-gray-400 mb-6">
               Configure embedding API batching and rate limits.
             </p>
+            {embedderWatchdog && (
+              <p className="text-xs text-secondary dark:text-gray-500 -mt-4 mb-6" data-testid="embedder-watchdog-status">
+                Embedder watchdog (host agent): {describeEmbedderWatchdog(embedderWatchdog)}
+              </p>
+            )}
 
             <div className="grid gap-6 md:grid-cols-2">
               {/* Embedding Batch Size */}
