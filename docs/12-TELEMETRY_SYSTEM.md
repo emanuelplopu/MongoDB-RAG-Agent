@@ -318,7 +318,7 @@ returns this tenant's desire, every tenant's and the agent's report; the Configu
 it under the office-hours settings. `scripts/Set-CpuBoostCap.ps1` does the same by hand
 (elevated). Measured effect and cost: `docs/04-EMBEDDING_AND_QUERY_SYSTEM.md`, "Clock cap".
 
-### Embedder watchdog (`host_control`, agent 1.2.0)
+### Embedder watchdog (`host_control`, agent 1.2.0 / 1.3.0)
 
 Since agent 1.2.0 (2026-10-31) the service also watches the llama.cpp embedding servers of the
 stack and restarts one that has degraded. The known failure (seen 2026-10-26, -28 and -30 after a
@@ -339,28 +339,51 @@ container has no Docker socket, so the agent does it (`EmbedderWatchdog.cs`,
   milliseconds, at most a few seconds while ingestion batches are queued ahead of the probe; a
   degraded one needs tens of seconds to minutes, and a probe that outlives
   `ProbeTimeoutSeconds` (30) counts as slow.
-- **Rule.** Restart when `ConsecutiveChecks` (5) probes in a row were slow (≥ `SlowMs`, 5000),
-  those probes span at least `WindowSeconds` (240 — five one-minute probes; a burst of
-  re-checks cannot trigger it), and the container's mean CPU over them is at least `MinCpuCores`
-  (0.5; the degraded server spins on one core, a server merely waiting on something else does not;
-  `0` ignores CPU, as does the rule when the Docker pipe is unreachable — then nothing can be
-  restarted anyway). One fast answer resets the run. Nothing is judged for `WarmupSeconds` (300)
-  after a container start (model load, CUDA warm-up), a 503 "Loading model" answer is
-  `warming_up`, a connection error is `unreachable`, not slow (Docker's own `restart:
-  unless-stopped` covers crashes), and a stopped or missing container is `absent`.
+- **Rule 1, `slow_probes`.** Restart when `ConsecutiveChecks` (5) probes in a row were slow
+  (≥ `SlowMs`, 5000), those probes span at least `WindowSeconds` (240 — five one-minute probes;
+  a burst of re-checks cannot trigger it), and the container's mean CPU over them is at least
+  `MinCpuCores` (0.5; the degraded server spins on one core, a server merely waiting on something
+  else does not; `0` ignores CPU, as does the rule when the Docker pipe is unreachable — then
+  nothing can be restarted anyway). One fast answer resets the run. Nothing is judged for
+  `WarmupSeconds` (300) after a container start (model load, CUDA warm-up), a 503 "Loading
+  model" answer is `warming_up`, a connection error is `unreachable`, not slow (Docker's own
+  `restart: unless-stopped` covers crashes), and a stopped or missing container is `absent`.
+- **Rule 2, `sustained_cpu` (agent 1.3.0).** Under the firm's ingestion load the degradation
+  came every 1-2 hours in November 2026 and rule 1 lagged the CPU signal by 20-30 minutes:
+  single probes slip between the backend's batches, so a degraded server answers them in
+  0.8-20 s and only now and then slower than 5 s, while its CPU has been pinned for 20 minutes
+  and the conversion throughput has already dropped by 25-50 % (2026-11-01 23:30: the report
+  said "healthy, 2930 ms, cpu 0.942" with the embedder at 0.9-1.0 cores for 20 min). Measured
+  signatures: healthy busy 0.34-0.71 cores at 15-30 % GPU, degraded 0.95-1.05 cores at 6-16 %
+  GPU; memory 5-10 GB in both states, so it is not used. The rule therefore restarts when, over
+  the probes of the last `SustainedWindowSeconds` (600), the container's mean CPU reached
+  `SustainedCpuCores` (0.85), the mean GPU utilisation stayed below `SustainedMaxGpuUtilPct`
+  (40; a busy GPU means real work; unknown — no nvidia-smi — counts as not busy), and the probes
+  were not all fast (at least one ≥ `SlowMs`, a timeout included, or a mean latency above
+  `SustainedSlowMs`, 2500). The probes must cover the window (span ≥ window − `CheckSeconds`),
+  so the rule cannot fire right after a warm-up or a restart; a window without any CPU figure is
+  not judged. The GPU figure is the mean of the sample collector's nvidia-smi readings between
+  two probes, shared in-process (`GpuUtilFeed.cs`), so the watchdog reads neither MongoDB nor a
+  second nvidia-smi. `SustainedEnabled: false` switches the rule off. When both rules hold, rule 1
+  is the one named. Reason text, e.g. `sustained: 0.96 cores over 10 min, GPU 13 %, probes
+  0.8-8.9 s`.
 - **Action.** `POST /containers/{name}/restart?t=10` over the Engine pipe, logged at warning
   level in the Windows event log, at most one restart per container per
   `MinRestartIntervalSeconds` (1800; a failed engine call counts too, so a flapping pipe cannot
   cause a restart storm). The probe history starts over after a restart.
 - **Report.** After every tick the agent upserts `host_control` `_id: "embedder_watchdog"`:
   `enabled`, `check_seconds`, `thresholds{slow_ms, probe_timeout_seconds, consecutive_checks,
-  window_seconds, min_cpu_cores, warmup_seconds, min_restart_interval_seconds, probe_words}`,
-  `targets[{name, url, containers[], container, container_state, container_health, started_at,
-  state, reason, slow_checks, latency_ms, prompt_tokens, tokens_per_second, cpu_cores, mem_bytes,
-  last_check, last_error, last_restart, last_restart_reason, restart_count,
+  window_seconds, min_cpu_cores, warmup_seconds, min_restart_interval_seconds, probe_words,
+  sustained_enabled, sustained_window_seconds, sustained_cpu_cores, sustained_max_gpu_util_pct,
+  sustained_slow_ms}`, `targets[{name, url, containers[], container, container_state,
+  container_health, started_at, state, reason, rule, slow_checks, latency_ms, prompt_tokens,
+  tokens_per_second, cpu_cores, gpu_util_pct, sustained_gpu_util_pct, mem_bytes, last_check,
+  last_error, last_restart, last_restart_reason, last_restart_rule, restart_count,
   next_restart_allowed_at}]`, `agent_version`, `host`, `updated_at`. `state` is one of `healthy`,
   `slow` (slow probes, rule not met yet — the reason says what is missing), `degraded` (restart
-  due), `cooldown` (due but rate-limited), `warming_up`, `unreachable`, `absent`, `unknown`.
+  due), `cooldown` (due but rate-limited), `warming_up`, `unreachable`, `absent`, `unknown`;
+  `rule` (and `last_restart_rule` for the last restart) names the rule behind a `degraded` or
+  `cooldown` state, `slow_probes` or `sustained_cpu` (agent 1.3.0; null before).
   `GET /api/v1/system/embedder-watchdog` (superadmin; `backend/services/embedder_watchdog.py`;
   503 while telemetry history is off) returns the report typed, with `reported` (ever written)
   and `agent_seen` (younger than 5 min); the Configuration page shows one line per target under

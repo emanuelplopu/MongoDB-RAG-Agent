@@ -146,6 +146,26 @@ public sealed class EmbedderWatchdogOptions
     /// <summary>Approximate size of the probe text in words (~1.3 tokens each).</summary>
     public int ProbeWords { get; set; } = 120;
 
+    /// <summary>
+    /// Second, earlier rule (agent 1.3.0): restart when the container's CPU stayed high while the GPU
+    /// stayed idle over a longer window, even if the probes never ran slow five times in a row. The
+    /// degraded server pins a core at 10-20 % GPU; single probes slip between batches and only hit the
+    /// slow threshold now and then, so the consecutive rule lagged the CPU signal by 20-30 minutes.
+    /// </summary>
+    public bool SustainedEnabled { get; set; } = true;
+
+    /// <summary>Length of the sustained window; the probes must cover it (no judgement right after a warm-up or restart).</summary>
+    public int SustainedWindowSeconds { get; set; } = 600;
+
+    /// <summary>Mean container CPU over the sustained window must reach this many cores (healthy busy: 0.3-0.7).</summary>
+    public double SustainedCpuCores { get; set; } = 0.85;
+
+    /// <summary>Mean GPU utilisation over the window must stay below this (healthy busy: 15-30 %, degraded: 6-16 %); unknown counts as not busy.</summary>
+    public double SustainedMaxGpuUtilPct { get; set; } = 40;
+
+    /// <summary>The window must hold one probe slower than SlowMs or a mean probe latency above this (ms).</summary>
+    public int SustainedSlowMs { get; set; } = 2500;
+
     /// <summary>Servers to watch; empty = the compose stack's `embedder` (11090) and `embedder-query` (11091).</summary>
     public List<EmbedderWatchdogTarget> Targets { get; set; } = new();
 
@@ -160,6 +180,10 @@ public sealed class EmbedderWatchdogOptions
         WarmupSeconds = Math.Max(0, WarmupSeconds);
         MinRestartIntervalSeconds = Math.Max(0, MinRestartIntervalSeconds);
         ProbeWords = Math.Clamp(ProbeWords, 1, 2000);
+        SustainedWindowSeconds = Math.Clamp(SustainedWindowSeconds, 2 * CheckSeconds, 86400);
+        SustainedCpuCores = Math.Max(0.01, SustainedCpuCores);
+        SustainedMaxGpuUtilPct = Math.Clamp(SustainedMaxGpuUtilPct, 0, 100);
+        SustainedSlowMs = Math.Max(0, SustainedSlowMs);
         if (Targets.Count == 0)
         {
             Targets.Add(new EmbedderWatchdogTarget

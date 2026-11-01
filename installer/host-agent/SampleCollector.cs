@@ -25,11 +25,13 @@ public sealed class SampleCollector : IDisposable
     private readonly HealthProbe _health;
     private readonly ActivityReader? _activity;
     private readonly IHardwareSensorProbe _sensors;
+    private readonly GpuUtilFeed? _gpuFeed;
     private readonly BsonDocument _meta;
 
-    public SampleCollector(ILoggerFactory loggers, AgentOptions options, MongoContext? mongo, IHardwareSensorProbe sensors)
+    public SampleCollector(ILoggerFactory loggers, AgentOptions options, MongoContext? mongo, IHardwareSensorProbe sensors, GpuUtilFeed? gpuFeed = null)
     {
         _options = options;
+        _gpuFeed = gpuFeed;
         _system = new SystemProbe(loggers.CreateLogger<SystemProbe>(), options.PrimaryDrive);
         _rapl = new RaplPowerProbe(loggers.CreateLogger<RaplPowerProbe>());
         _gpu = new NvidiaSmiProbe(loggers.CreateLogger<NvidiaSmiProbe>(), options.Nvidia);
@@ -95,7 +97,15 @@ public sealed class SampleCollector : IDisposable
         }
         if (power.ElementCount > 0) doc["power"] = power;
         if (temp.ElementCount > 0) doc["temp"] = temp;
-        if (gpu.Doc.ElementCount > 0) doc["gpu"] = gpu.Doc;
+        if (gpu.Doc.ElementCount > 0)
+        {
+            doc["gpu"] = gpu.Doc;
+            // Shared with the embedder watchdog's sustained-CPU rule (GpuUtilFeed).
+            if (_gpuFeed is not null && gpu.Doc.TryGetValue("util_pct", out var util) && util.IsNumeric)
+            {
+                _gpuFeed.Record(DateTime.UtcNow, util.ToDouble());
+            }
+        }
         if (dockerTask.Result is BsonArray containers) doc["containers"] = containers;
         if (ollamaTask.Result is BsonDocument ollamaDoc) doc["ollama"] = ollamaDoc;
         if (healthTask.Result is BsonArray health) doc["health"] = health;
