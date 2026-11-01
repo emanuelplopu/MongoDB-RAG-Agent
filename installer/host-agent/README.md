@@ -7,7 +7,9 @@ Ollama models, backend `/health` latency and — with the opt-in PawnIO driver �
 NVMe temperatures. The machine-stats widget and System → Telemetry History read it. As a service
 it also applies the CPU clock cap the backends ask for (`PowerPlanControl.cs`) and restarts a
 degraded llama.cpp embedding server (`EmbedderWatchdog.cs`: a timed embedding probe every minute,
-restart through the Engine API after five slow minutes with the container's CPU pinned).
+restart through the Engine API after five slow minutes with the container's CPU pinned, or — since
+1.3.0 — after ten minutes at ≥ 0.85 cores with the GPU below 40 % and probes that are not all fast;
+the GPU figure comes from the sample collector through `GpuUtilFeed.cs`).
 
 Full documentation (schema, sources, caveats, analysis): `docs/12-TELEMETRY_SYSTEM.md`,
 section "Host Telemetry History".

@@ -50,6 +50,11 @@ class EmbedderWatchdogThresholds(BaseModel):
     warmup_seconds: Optional[int] = Field(default=None, description="No judgement this long after a container start")
     min_restart_interval_seconds: Optional[int] = None
     probe_words: Optional[int] = None
+    sustained_enabled: Optional[bool] = Field(default=None, description="Agent 1.3.0: the sustained-CPU rule is on")
+    sustained_window_seconds: Optional[int] = Field(default=None, description="Window of the sustained-CPU rule")
+    sustained_cpu_cores: Optional[float] = Field(default=None, description="Mean container CPU over the window that fires it")
+    sustained_max_gpu_util_pct: Optional[float] = Field(default=None, description="Mean GPU utilisation must stay below this")
+    sustained_slow_ms: Optional[int] = Field(default=None, description="Mean probe latency above this counts as not fast")
 
 
 class EmbedderWatchdogTarget(BaseModel):
@@ -74,8 +79,11 @@ class EmbedderWatchdogTarget(BaseModel):
     last_error: Optional[str] = None
     last_restart: Optional[datetime] = None
     last_restart_reason: Optional[str] = None
+    last_restart_rule: Optional[str] = Field(default=None, description="Rule behind the last restart: slow_probes or sustained_cpu")
     restart_count: int = 0
     next_restart_allowed_at: Optional[datetime] = None
+    rule: Optional[str] = Field(default=None, description="Rule behind a degraded/cooldown state (agent 1.3.0)")
+    gpu_util_pct: Optional[float] = Field(default=None, description="Mean host GPU utilisation since the previous probe")
 
 
 class EmbedderWatchdogStatusResponse(BaseModel):
@@ -115,8 +123,11 @@ def target_from_doc(doc: Mapping[str, Any]) -> EmbedderWatchdogTarget:
         last_error=doc.get("last_error"),
         last_restart=_aware(doc.get("last_restart")),
         last_restart_reason=doc.get("last_restart_reason"),
+        last_restart_rule=doc.get("last_restart_rule"),
         restart_count=_int(doc.get("restart_count")) or 0,
         next_restart_allowed_at=_aware(doc.get("next_restart_allowed_at")),
+        rule=doc.get("rule"),
+        gpu_util_pct=_float(doc.get("gpu_util_pct")),
     )
 
 
@@ -137,6 +148,11 @@ def status_from_doc(doc: Optional[Mapping[str, Any]], now: Optional[datetime] = 
         warmup_seconds=_int(thresholds_doc.get("warmup_seconds")),
         min_restart_interval_seconds=_int(thresholds_doc.get("min_restart_interval_seconds")),
         probe_words=_int(thresholds_doc.get("probe_words")),
+        sustained_enabled=thresholds_doc.get("sustained_enabled") if isinstance(thresholds_doc.get("sustained_enabled"), bool) else None,
+        sustained_window_seconds=_int(thresholds_doc.get("sustained_window_seconds")),
+        sustained_cpu_cores=_float(thresholds_doc.get("sustained_cpu_cores")),
+        sustained_max_gpu_util_pct=_float(thresholds_doc.get("sustained_max_gpu_util_pct")),
+        sustained_slow_ms=_int(thresholds_doc.get("sustained_slow_ms")),
     ) if thresholds_doc else None
     return EmbedderWatchdogStatusResponse(
         reported=True,

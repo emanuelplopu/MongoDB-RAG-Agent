@@ -739,13 +739,19 @@ export interface EmbedderWatchdogTarget {
   prompt_tokens?: number | null
   tokens_per_second?: number | null
   cpu_cores?: number | null
+  /** Mean host GPU utilisation since the previous probe (agent 1.3.0). */
+  gpu_util_pct?: number | null
   mem_bytes?: number | null
   last_check?: string | null
   last_error?: string | null
   last_restart?: string | null
   last_restart_reason?: string | null
+  /** "slow_probes" or "sustained_cpu" (agent 1.3.0). */
+  last_restart_rule?: string | null
   restart_count: number
   next_restart_allowed_at?: string | null
+  /** The rule behind a "degraded" or "cooldown" state (agent 1.3.0). */
+  rule?: string | null
 }
 
 /** GET /system/embedder-watchdog: the host agent's last watchdog report. */
@@ -765,6 +771,11 @@ export interface EmbedderWatchdogStatus {
     warmup_seconds?: number | null
     min_restart_interval_seconds?: number | null
     probe_words?: number | null
+    sustained_enabled?: boolean | null
+    sustained_window_seconds?: number | null
+    sustained_cpu_cores?: number | null
+    sustained_max_gpu_util_pct?: number | null
+    sustained_slow_ms?: number | null
   } | null
   targets: EmbedderWatchdogTarget[]
   updated_at?: string | null
