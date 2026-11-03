@@ -47,7 +47,7 @@ Quellex_v0.8.8_YYYYMMDD_HHMMSS/
 │   ├── recallhub/               (shared auth DB)
 │   └── rag_parhelion/           (tenant data)
 ├── config/
-│   ├── .env                     (tenant-specific)
+│   ├── .env                     (tenant-specific; login signing keys blanked)
 │   ├── docker-compose.yml
 │   └── profiles.yaml            (tenant profiles)
 ├── source/                      (complete source code)
@@ -122,7 +122,7 @@ The installer runs in 3 phases:
 
 1. Reads tenant from `manifest.json` (e.g., `quellex` or `recallhub`)
 2. Copies source code from `source/` to `InstallPath` (default: `C:\<Tenant>`)
-3. Writes `.env` and `.env.docker` with tenant-specific configuration
+3. Writes `.env` and `.env.docker` with tenant-specific configuration, and the login signing keys (`RECALLHUB_JWT_SECRET_KEY`, `QUELLEX_JWT_SECRET_KEY`): the install's existing keys are kept, missing ones are generated (see "Login signing keys")
 4. Loads tenant Docker images from `images/*.tar` via `docker load` (including the llama.cpp embedder image when bundled)
 5. Starts MongoDB container
 6. Restores tenant databases from `mongodb/dump/` via `mongorestore`
@@ -240,6 +240,54 @@ A valid per-tenant backup must contain:
 - `mongodb/dump/` — tenant databases + shared auth DB
 - `config/` — tenant `.env`, `docker-compose.yml`, `profiles.yaml`
 
+## Login signing keys
+
+Each tenant backend signs login tokens with a key of its own and refuses to
+start without one (`JWT_SECRET_REQUIRED=true` in `docker-compose.yml`; missing,
+shorter than 32 characters or the public default of releases before 2026-10 all
+count as missing). The keys live in the install's `.env`:
+
+| Variable | Passed to | As |
+|----------|-----------|----|
+| `QUELLEX_JWT_SECRET_KEY` | `backend-quellex` | `JWT_SECRET_KEY` |
+| `RECALLHUB_JWT_SECRET_KEY` | `backend` | `JWT_SECRET_KEY` |
+
+Tokens also carry the tenant id (`tid`), so a token of one tenant never works on
+the other, even on a dev box where both run. Tokens without `tid` (issued before
+this change) are rejected: users sign in once more after the update.
+
+Who creates and keeps them (`installer/scripts/RecallHub-Secrets.psm1`; no
+script prints or logs a key, the output only says *kept*, *restored* or
+*generated*):
+
+- **`full-backup.ps1`** blanks both keys in the package (`config/.env` and
+  `source/.env`). The keys belong to the install, not to the package, so a
+  package installed on another machine never shares the source machine's keys.
+- **`full-restore.ps1`** (and `INSTALL.ps1`) captures the install's existing
+  keys before the source and config copies overwrite `.env`, writes them back
+  afterwards and generates only missing ones. Re-running `INSTALL.ps1` with a
+  newer package (upgrade) or `-Repair` therefore keeps everyone signed in; a
+  restore onto a wiped or new machine generates new keys.
+- **`scripts/dev-setup.ps1`** fills missing keys into a dev checkout's `.env`.
+- **Hardened installer** (`installer/build.ps1` + `setup.iss`): the single key
+  is `JWT_SECRET_KEY` in `<app>\secrets.env`, the second `env_file` of
+  `docker-compose.hardened.yml`. `setup.iss` runs
+  `scripts\Initialize-JwtSecrets.ps1 -Hardened` after copying files; `secrets.env`
+  is never part of the installer, so upgrades (which replace `.env`) keep it,
+  and uninstall deletes it. `build.ps1` refuses to package an env file that
+  contains a key.
+
+Add keys to an existing install by hand (an older install, or one whose `.env`
+was edited), then recreate the backend; its users have to sign in again:
+
+```powershell
+.\installer\scripts\Initialize-JwtSecrets.ps1 -InstallPath C:\Quellex
+docker compose up -d --no-build --no-deps backend-quellex   # from C:\Quellex
+```
+
+Rotating a key on purpose: delete its value in `.env`, run the script, recreate
+the backend.
+
 ## Uninstallation
 
 The uninstaller reads the tenant from the install manifest and removes only that tenant's components:
@@ -336,6 +384,9 @@ Get-Content $env:LOCALAPPDATA\RecallHub\config.json
 # 5. Tray app start path works end to end
 & $env:LOCALAPPDATA\RecallHub\scripts\Start-Services.ps1 -Wait; $LASTEXITCODE   # must be 0
 Get-Content $env:LOCALAPPDATA\RecallHub\logs\tray-app.log -Tail 20
+# 5b. The tenant backend has its own signing key (prints the names only, never the values)
+Select-String -Path C:\Quellex\.env -Pattern '^(QUELLEX|RECALLHUB)_JWT_SECRET_KEY=.{32,}' | ForEach-Object { $_.Line.Split('=')[0] }
+docker logs rag-backend-quellex 2>&1 | Select-String "JWT signing key validated"
 # 6. Network access: gateway answers with TLS, API refuses guests, name is announced
 curl.exe -k --resolve quellex.local:443:127.0.0.1 -I https://quellex.local/          # HTTP/1.1 200
 curl.exe -k --resolve quellex.local:443:127.0.0.1 https://quellex.local/api/v1/ingestion/documents   # 401
@@ -458,6 +509,8 @@ Some antivirus solutions flag PowerShell automation. Temporarily disable real-ti
 | `scripts/backup-ollama-models.ps1` | Export Ollama model files |
 | `scripts/export-embedder-models.ps1` | Archive the llama.cpp GGUF cache volume (`recallhub_embedder_models`) into `embedder/embedder-models.tar` (`-WhatIf`) |
 | `installer/scripts/Import-EmbedderModels.ps1` | Seed that volume from the archive on the target (used by `full-restore.ps1`, `INSTALL.ps1` and the hardened installer) |
+| `installer/scripts/RecallHub-Secrets.psm1` | Login signing keys: generate once, keep across restores, blank in packages (used by `full-backup.ps1`, `full-restore.ps1`, `INSTALL.ps1`, `dev-setup.ps1`, `build.ps1`) |
+| `installer/scripts/Initialize-JwtSecrets.ps1` | Add missing signing keys to an install by hand (`-InstallPath`), or `<app>\secrets.env` for the hardened installer (`-Hardened`, run by `setup.iss`) |
 
 ## Version History
 
@@ -467,3 +520,4 @@ Some antivirus solutions flag PowerShell automation. Temporarily disable real-ti
 | v0.8.8 | 2026-10-10 | Pinned Compose project/image names, tenant-aware tray config, start scripts no longer abort on Docker stderr, install verified by health check, package completeness check |
 | v0.8.8 | 2026-10-10 | Optional llama.cpp embedder in the package (`-IncludeEmbedder`): server image export, `embedder_models` volume export/import, `-Embedder` restore switch, hardened installer `embedder` config |
 | v0.8.8 | 2026-10-15 | Docling models (layout, TableFormer, RapidOCR) baked into the backend/worker base image (`DOCLING_ARTIFACTS_PATH`); scanned documents no longer need huggingface.co at runtime |
+| v0.8.8 | 2026-10-19 | Per-tenant login signing keys generated once per install and kept across upgrades/restores, blanked in packages; backends refuse to start without them; tokens carry and check the tenant id |

@@ -536,9 +536,31 @@ function Create-Assets {
     }
 }
 
+function Assert-NoShippedJwtSecret {
+    # Login signing keys are generated per install (scripts\Initialize-JwtSecrets.ps1
+    # writes {app}\secrets.env). A key in a shipped env file would be shared by
+    # every install of this build, so refuse to package one.
+    Import-Module (Join-Path $ScriptsDir "RecallHub-Secrets.psm1") -Force
+    $names = @("JWT_SECRET_KEY") + @(Get-JwtSecretNames)
+    $shipped = @(Get-ChildItem -Path (Join-Path $SCRIPT_DIR "config") -Filter "*.env" -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    $shipped += (Join-Path $BUILD_DIR ".env")
+    foreach ($file in $shipped) {
+        if (-not (Test-Path $file)) { continue }
+        if ((Split-Path $file -Leaf) -eq "secrets.env") { throw "Refusing to package ${file}: secrets.env is generated per install" }
+        foreach ($name in $names) {
+            if (-not [string]::IsNullOrWhiteSpace((Get-EnvFileValue -Path $file -Name $name))) {
+                throw "Refusing to package a login signing key: $name is set in $file (it is generated per install)"
+            }
+        }
+    }
+    Write-Success "No login signing key in the shipped configuration"
+}
+
 function Build-Installer {
     Write-Step "Building Windows installer..."
-    
+
+    Assert-NoShippedJwtSecret
+
     $isccPath = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
     $setupScript = Join-Path $SCRIPT_DIR "setup.iss"
     

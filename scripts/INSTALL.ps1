@@ -293,14 +293,30 @@ if ($Repair -or $RepairFull) {
         Write-Host "  [WARN] Docker not available, skipping container/image cleanup" -ForegroundColor Yellow
     }
 
-    # Remove source code directory
+    # Remove source code directory. The login signing keys in its .env belong to
+    # this install: carry them (in memory) into a fresh .env that full-restore.ps1
+    # picks up again, so a repair does not sign every user out.
     if (Test-Path $InstallPath) {
+        $repairJwtSecrets = @{}
+        $secretsModule = Join-Path (Join-Path $BackupDir "source") "installer\scripts\RecallHub-Secrets.psm1"
+        if (Test-Path $secretsModule) {
+            Import-Module $secretsModule -Force
+            $repairJwtSecrets = Get-JwtSecrets -EnvPath (Join-Path $InstallPath ".env")
+        }
         Write-Host "  Removing source code: $InstallPath" -ForegroundColor Gray
         try {
             Remove-Item $InstallPath -Recurse -Force
             Write-Host "  [OK] Source code removed" -ForegroundColor Green
         } catch {
             Write-Host "  [WARN] Failed to remove $InstallPath`: $_" -ForegroundColor Yellow
+        }
+        if ($repairJwtSecrets.Count -gt 0) {
+            try {
+                $null = Initialize-JwtSecrets -EnvPath (Join-Path $InstallPath ".env") -Names @($repairJwtSecrets.Keys) -Preserve $repairJwtSecrets
+                Write-Host "  [OK] Kept the install's login signing keys" -ForegroundColor Green
+            } catch {
+                Write-Host "  [WARN] Could not keep the login signing keys ($($_.Exception.Message)); new ones will be generated and users must sign in again" -ForegroundColor Yellow
+            }
         }
     }
 

@@ -66,6 +66,9 @@ services:
     container_name: recallhub-backend
     env_file:
       - ./.env
+      # JWT_SECRET_KEY, generated once per install by scripts\Initialize-JwtSecrets.ps1
+      # (setup.iss); never shipped, so upgrades that replace .env keep it.
+      - ./secrets.env
     volumes:
       - documents_data:/app/documents:ro
       - projects_data:/app/projects:ro

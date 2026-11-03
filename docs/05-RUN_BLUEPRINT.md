@@ -119,7 +119,7 @@ The build uses a **two-stage architecture**: a shared base image (`recallhub-bac
 |---|---|---|
 | `LLM_API_KEY` | Yes | API key for your LLM provider |
 | `EMBEDDING_API_KEY` | Yes | API key for embeddings (OpenAI, etc.) |
-| `JWT_SECRET_KEY` | Production | Change from default for production use |
+| `RECALLHUB_JWT_SECRET_KEY` / `QUELLEX_JWT_SECRET_KEY` | Yes (Docker) | Per-tenant login signing keys, 32+ chars; `scripts/dev-setup.ps1` and the installers generate them, otherwise the backend refuses to start |
 | `LLM_PROVIDER` | No | `openai` (default), `openrouter`, `ollama`, `gemini`, `anthropic` |
 | `EMBEDDING_PROVIDER` | No | `openai` (default), `google`, `voyageai`, `ollama` |
 | `REGISTRATION_MODE` | No | `open` (default), `invite`, `closed` |
