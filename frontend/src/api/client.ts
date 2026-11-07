@@ -784,6 +784,22 @@ export interface IngestionPerformanceConfig {
   /** server_room: max_concurrent_files around the clock; office / office_lite: office_hours.max_concurrent_files / lite_max_concurrent_files during office hours. */
   load_profile: IngestionLoadProfile
   office_hours: IngestionOfficeHours
+  /** Audio/video transcription; omitted on save keeps the stored section (set through the API or quellexctl). */
+  media?: IngestionMediaConfig
+}
+
+/** The performance config's media section (backend/services/media_config.py). */
+export interface IngestionMediaConfig {
+  max_concurrent: number
+  threads: number
+  device: 'auto' | 'cpu' | 'cuda'
+  model: string
+  language: string
+  defer: boolean
+  video: boolean
+  budget_per_media_second: number
+  min_budget_seconds: number
+  max_budget_seconds: number
 }
 
 export interface LLMProviderConfigResponse {
@@ -2386,6 +2402,8 @@ export interface QueuedIngestionJob {
   retry_timeouts?: boolean
   retry_errors?: boolean
   retry_no_chunks?: boolean
+  /** Media run: transcribe only the audio/video files (deferred or never reached). */
+  retry_media?: boolean
   skip_image_only_pdfs?: boolean
 }
 
@@ -2408,6 +2426,8 @@ export interface ScheduledIngestionJob {
   retry_timeouts?: boolean
   retry_errors?: boolean
   retry_no_chunks?: boolean
+  /** Media run: transcribe only the audio/video files (deferred or never reached). */
+  retry_media?: boolean
   skip_image_only_pdfs?: boolean
 }
 
@@ -2428,6 +2448,8 @@ export interface QueueRequest {
   retry_timeouts?: boolean
   retry_errors?: boolean
   retry_no_chunks?: boolean
+  /** Media run: transcribe only the audio/video files (deferred or never reached). */
+  retry_media?: boolean
   skip_image_only_pdfs?: boolean
 }
 
@@ -2444,6 +2466,8 @@ export interface ScheduleRequest {
   retry_timeouts?: boolean
   retry_errors?: boolean
   retry_no_chunks?: boolean
+  /** Media run: transcribe only the audio/video files (deferred or never reached). */
+  retry_media?: boolean
   skip_image_only_pdfs?: boolean
 }
 

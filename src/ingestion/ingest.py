@@ -23,6 +23,10 @@ from dataclasses import dataclass, field, asdict
 from dataclasses import replace as dataclasses_replace
 from concurrent.futures import ThreadPoolExecutor
 import functools
+import gc
+import shutil
+import subprocess
+import tempfile
 import threading
 from collections import deque
 
@@ -146,9 +150,30 @@ SUPPORTED_INGESTION_EXTENSIONS: frozenset[str] = frozenset({
     ".msg",  # Outlook email
     ".eml",  # RFC 5322 email
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif",  # Images
-    ".mp3", ".wav", ".m4a", ".flac",  # Audio formats
-    ".mp4", ".avi", ".mkv", ".mov", ".webm",  # Video formats
+    ".mp3", ".wav", ".m4a", ".flac",  # Audio formats (transcribed; AUDIO_EXTENSIONS)
+    ".mp4", ".avi", ".mkv", ".mov", ".webm", ".wmv",  # Video formats (audio track transcribed; VIDEO_EXTENSIONS)
 })
+
+#: Audio files, transcribed with Whisper (docs/04, "Media transcription")
+AUDIO_EXTENSIONS: frozenset = frozenset({".mp3", ".wav", ".m4a", ".flac", ".ogg"})
+#: Video files whose audio track is transcribed (ffmpeg extracts it first)
+VIDEO_EXTENSIONS: frozenset = frozenset({".mp4", ".avi", ".mkv", ".mov", ".webm", ".wmv"})
+MEDIA_EXTENSIONS: frozenset = AUDIO_EXTENSIONS | VIDEO_EXTENSIONS
+
+
+def media_kind(file_path: str) -> Optional[str]:
+    """``"audio"`` or ``"video"`` for a media file, ``None`` for anything else."""
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in AUDIO_EXTENSIONS:
+        return "audio"
+    if ext in VIDEO_EXTENSIONS:
+        return "video"
+    return None
+
+
+def is_media_file(file_path: str) -> bool:
+    """Whether ``file_path`` is an audio or video file (transcribed, not converted)."""
+    return media_kind(file_path) is not None
 
 
 @dataclass
@@ -718,6 +743,400 @@ def docling_accelerator_options(device: Optional[str] = None, num_threads: Optio
 
 
 # ---------------------------------------------------------------------------
+# Media transcription (audio files and the audio track of videos; Whisper via Docling)
+# ---------------------------------------------------------------------------
+#
+# A transcription is not a document conversion: it runs for minutes to hours, scales with
+# its torch thread count and is an order of magnitude faster on a GPU. With one thread per
+# file slot (the Docling thread share) and the model downloaded at runtime, 16 slots of the
+# 2026-11-06 live run stalled for an hour on the first lecture recordings. The media config
+# (the performance config's ``media`` section, else INGEST_MEDIA_* / the settings) gives
+# transcriptions their own thread count and device, limits how many run at once so they
+# never take every file slot, sizes their budget from the media duration, and can defer
+# media files to a dedicated run (``retry_media``) instead of transcribing them inline.
+# The Whisper model is baked into the base image under DOCLING_ARTIFACTS_PATH
+# (backend/Dockerfile.base); a model that is not there is an error, never a download.
+
+#: Error type of a media file recorded for a later media run (``retry_media``)
+MEDIA_DEFERRED = "media_deferred"
+MEDIA_MAX_CONCURRENT_CAP = 8
+MEDIA_MAX_THREADS = 32
+MEDIA_DEVICES: Tuple[str, ...] = ("auto", "cpu", "cuda")
+MEDIA_ENV_PREFIX = "INGEST_MEDIA_"
+#: Seconds of media per MB when ffprobe cannot tell the duration (~128 kbit/s audio, ~1 Mbit/s video)
+_MEDIA_SECONDS_PER_MB = {"audio": 60.0, "video": 8.0}
+
+
+@dataclass
+class MediaConfig:
+    """How a run transcribes audio and video files.
+
+    Attributes:
+        max_concurrent: Transcriptions at once (each also holds one file slot), 1..8.
+        threads: Torch CPU threads per transcription; 0 = the cores shared among
+            ``max_concurrent`` transcriptions, at most ``MEDIA_MAX_THREADS``.
+        device: ``auto`` (CUDA when the container sees a GPU, else the CPU), ``cpu`` or ``cuda``.
+        model: Whisper model name (``turbo``, ``small``, ...); it must be baked into the image.
+        language: ISO 639-1 code of the recordings (``de``); empty lets Whisper detect it
+            from the first 30 seconds.
+        defer: Record media files as ``media_deferred`` instead of transcribing them; a run
+            with ``retry_media`` transcribes them later.
+        video: Transcribe the audio track of video files; off records them as skipped.
+        budget_per_media_second: Conversion budget per second of media (a CPU transcription
+            with a few threads runs near real time, a GPU one 20-40x faster).
+        min_budget_seconds: Least budget of a transcription (model load, short clips).
+        max_budget_seconds: Cap of the budget.
+    """
+
+    max_concurrent: int = 2
+    threads: int = 0
+    device: str = "auto"
+    model: str = "turbo"
+    language: str = ""
+    defer: bool = False
+    video: bool = True
+    budget_per_media_second: float = 4.0
+    min_budget_seconds: float = 600.0
+    max_budget_seconds: float = 14400.0
+
+    def resolved_threads(self, cpu_count: Optional[int] = None) -> int:
+        """CPU threads of one transcription: ``threads``, or the cores shared among ``max_concurrent``."""
+        if self.threads > 0:
+            return max(1, min(MEDIA_MAX_THREADS, int(self.threads)))
+        cores = int(cpu_count) if cpu_count is not None else available_cpu_count()
+        return max(1, min(MEDIA_MAX_THREADS, cores // max(1, int(self.max_concurrent))))
+
+    def resolved_device(self) -> str:
+        """``cpu`` or ``cuda``: the configured device, ``auto`` resolved against the hardware."""
+        if self.device in ("cpu", "cuda"):
+            return self.device
+        return "cuda" if detect_available_device() == "cuda" else "cpu"
+
+    def language_or_none(self) -> Optional[str]:
+        """The configured language code, ``None`` for auto-detection."""
+        code = (self.language or "").strip().lower()
+        return code or None
+
+    def describe(self) -> str:
+        """One log line: ``2 at once, device auto, 10 threads, model turbo, language auto``."""
+        return (
+            f"{self.max_concurrent} at once, device {self.device}, {self.resolved_threads()} threads, "
+            f"model {self.model}, language {self.language_or_none() or 'auto'}"
+            + (", video off" if not self.video else "")
+            + (", deferred to a media run" if self.defer else "")
+        )
+
+
+def _media_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("1", "true", "yes", "on"):
+            return True
+        if lowered in ("0", "false", "no", "off"):
+            return False
+    return None
+
+
+def coerce_media_value(key: str, value: Any) -> Any:
+    """``value`` for the :class:`MediaConfig` field ``key``, or ``None`` when it is not usable.
+
+    Integers and numbers are clamped to their caps; ``device`` must be one of
+    ``MEDIA_DEVICES``; ``model`` is a non-empty name; ``language`` a code or empty.
+    """
+    if value is None:
+        return None
+    try:
+        if key == "max_concurrent":
+            return max(1, min(MEDIA_MAX_CONCURRENT_CAP, int(value)))
+        if key == "threads":
+            return max(0, min(MEDIA_MAX_THREADS, int(value)))
+        if key == "device":
+            device = str(value).strip().lower()
+            return device if device in MEDIA_DEVICES else None
+        if key == "model":
+            model = str(value).strip()
+            return model or None
+        if key == "language":
+            return str(value).strip().lower()
+        if key in ("defer", "video"):
+            return _media_bool(value)
+        if key in ("budget_per_media_second", "min_budget_seconds", "max_budget_seconds"):
+            number = float(value)
+            return number if number > 0 else None
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def resolve_media_config(raw: Optional[Dict[str, Any]] = None) -> MediaConfig:
+    """The media config of a run.
+
+    ``raw`` (the performance config's ``media`` section) wins over the ``INGEST_MEDIA_*``
+    environment, which wins over the ``ingest_media_*`` settings and the defaults. Unknown
+    keys and unusable values are ignored with a warning.
+
+    Args:
+        raw: The stored ``media`` mapping, or ``None``.
+    """
+    fields = {f.name for f in MediaConfig.__dataclass_fields__.values()}
+    values: Dict[str, Any] = {}
+    try:
+        configured = load_settings(use_profile=False)
+    except Exception:  # settings need MONGODB_URI etc.; the harness has none
+        configured = None
+    if configured is not None:
+        for key in fields:
+            setting = getattr(configured, f"ingest_media_{key}", None)
+            if setting is not None:
+                coerced = coerce_media_value(key, setting)
+                if coerced is not None:
+                    values[key] = coerced
+    for key in fields:
+        env_value = os.getenv(MEDIA_ENV_PREFIX + key.upper())
+        if env_value is None or env_value.strip() == "":
+            continue
+        coerced = coerce_media_value(key, env_value)
+        if coerced is None:
+            logger.warning(f"Ignoring {MEDIA_ENV_PREFIX + key.upper()}={env_value!r}")
+            continue
+        values[key] = coerced
+    for key, value in (raw or {}).items():
+        if key not in fields:
+            logger.warning(f"Ignoring unknown media setting {key!r}")
+            continue
+        coerced = coerce_media_value(key, value)
+        if coerced is None:
+            if value not in (None, ""):
+                logger.warning(f"Ignoring unusable media setting {key}={value!r}")
+            continue
+        values[key] = coerced
+    config = MediaConfig(**values)
+    if config.max_budget_seconds < config.min_budget_seconds:
+        config.max_budget_seconds = config.min_budget_seconds
+    return config
+
+
+# The media config in force in this process: the run's (set by ingest_documents), or the one a
+# conversion worker process received from its parent (WorkerInit.media), else the defaults
+_media_config: MediaConfig = MediaConfig()
+
+
+def get_media_config() -> MediaConfig:
+    """The media config in force in this process."""
+    return _media_config
+
+
+def update_media_config(**fields: Any) -> MediaConfig:
+    """Replace the media config in force (``fields`` are :class:`MediaConfig` fields)."""
+    global _media_config
+    known = {f.name for f in MediaConfig.__dataclass_fields__.values()}
+    _media_config = MediaConfig(**{k: v for k, v in fields.items() if k in known})
+    return _media_config
+
+
+def media_duration_seconds(file_path: str, timeout: float = 30.0) -> Optional[float]:
+    """Length of a media file in seconds from ``ffprobe``; ``None`` when it cannot be told."""
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe is None:
+        return None
+    try:
+        completed = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", file_path],
+            capture_output=True, text=True, timeout=timeout, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug(f"ffprobe failed for {file_path}: {exc}")
+        return None
+    try:
+        value = float(completed.stdout.strip().splitlines()[0])
+    except (IndexError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def media_budget_seconds(
+    file_path: str, size_bytes: int, config: MediaConfig, duration: Optional[float] = None
+) -> float:
+    """Conversion budget of a media file: its duration times ``budget_per_media_second``, clamped.
+
+    Args:
+        file_path: The media file (its kind decides the size-based fallback).
+        size_bytes: Its size, for the fallback when the duration is unknown.
+        config: The run's media config.
+        duration: Seconds of media when already known; probed with ffprobe when ``None``.
+    """
+    if duration is None:
+        duration = media_duration_seconds(file_path)
+    if duration is None:
+        per_mb = _MEDIA_SECONDS_PER_MB.get(media_kind(file_path) or "audio", 60.0)
+        duration = (max(0, size_bytes) / (1024 * 1024)) * per_mb
+    budget = duration * config.budget_per_media_second
+    return max(config.min_budget_seconds, min(config.max_budget_seconds, budget))
+
+
+def whisper_checkpoint_path(model: str, artifacts_path: Optional[str]) -> Optional[str]:
+    """Where Whisper loads ``model`` from under ``artifacts_path`` (``large-v3-turbo.pt`` for ``turbo``).
+
+    Returns:
+        The checkpoint path, or ``None`` when there is no artifacts path or ``model`` is not a
+        name openai-whisper knows (a path or Hugging Face id is loaded as given).
+    """
+    if not artifacts_path:
+        return None
+    try:
+        from whisper import _MODELS  # type: ignore[attr-defined]
+    except ImportError:
+        return None
+    url = _MODELS.get(model)
+    if not url:
+        return None
+    return os.path.join(artifacts_path, url.rsplit("/", 1)[-1])
+
+
+# Checkpoints this process verified: path -> (size, mtime); a worker process checks each once
+_verified_checkpoints: Dict[str, Tuple[int, float]] = {}
+
+
+def whisper_checkpoint_problem(model: str, artifacts_path: Optional[str]) -> Optional[str]:
+    """Why ``model`` cannot be loaded from ``artifacts_path`` without a download, or ``None``.
+
+    openai-whisper re-downloads a checkpoint whose SHA-256 does not match the one it pins
+    (the live container of 2026-11-06 held a partial 893 MB ``large-v3-turbo.pt``, so every
+    load started the 1.6 GB download again). The hash is checked once per process and file
+    (size and mtime); a missing or corrupt checkpoint is reported, never fetched.
+
+    Args:
+        model: Whisper model name (``turbo``).
+        artifacts_path: ``DOCLING_ARTIFACTS_PATH``; ``None`` means whisper's own cache (no check).
+
+    Returns:
+        A sentence for the error placeholder, or ``None`` when the checkpoint is fine or the
+        name is not one whisper downloads (a local path or Hugging Face id).
+    """
+    checkpoint = whisper_checkpoint_path(model, artifacts_path)
+    if checkpoint is None:
+        return None
+    if not os.path.exists(checkpoint):
+        return f"Whisper model {model} is not available under {artifacts_path} ({os.path.basename(checkpoint)} is missing)"
+    try:
+        stat_result = os.stat(checkpoint)
+        fingerprint = (stat_result.st_size, stat_result.st_mtime)
+        if _verified_checkpoints.get(checkpoint) == fingerprint:
+            return None
+        from whisper import _MODELS  # type: ignore[attr-defined]
+
+        expected = _MODELS[model].split("/")[-2]
+        digest = hashlib.sha256()
+        with open(checkpoint, "rb") as handle:
+            for block in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+                digest.update(block)
+    except (OSError, ImportError, KeyError) as exc:
+        return f"Whisper model {model} under {artifacts_path} cannot be checked: {exc}"
+    if digest.hexdigest() != expected:
+        return (
+            f"Whisper model {model} under {artifacts_path} is corrupt or a partial download "
+            f"({os.path.basename(checkpoint)}, {stat_result.st_size / (1024 * 1024):.0f} MB, SHA-256 mismatch)"
+        )
+    _verified_checkpoints[checkpoint] = fingerprint
+    return None
+
+
+def extract_audio_track(video_path: str, wav_path: str, timeout: float = 3600.0) -> None:
+    """Write the audio track of ``video_path`` to ``wav_path`` as 16 kHz mono PCM (what Whisper wants).
+
+    Raises:
+        RuntimeError: ffmpeg is missing, failed or the file has no audio track.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise RuntimeError("ffmpeg is not installed")
+    command = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+        "-i", video_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", wav_path,
+    ]
+    try:
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"ffmpeg did not finish within {timeout:.0f}s") from exc
+    if completed.returncode != 0 or not os.path.exists(wav_path) or os.path.getsize(wav_path) == 0:
+        detail = (completed.stderr or "").strip().splitlines()
+        raise RuntimeError(
+            "ffmpeg could not extract the audio track"
+            + (f": {detail[-1][:300]}" if detail else " (no audio stream?)")
+        )
+
+
+@contextlib.contextmanager
+def torch_thread_limit(threads: Optional[int]) -> Iterator[None]:
+    """Run the block with torch limited to ``threads`` CPU threads (``None`` leaves it alone)."""
+    if not threads:
+        yield
+        return
+    try:
+        import torch
+    except ImportError:
+        yield
+        return
+    previous = torch.get_num_threads()
+    try:
+        torch.set_num_threads(int(threads))
+    except (RuntimeError, ValueError):
+        yield
+        return
+    try:
+        yield
+    finally:
+        try:
+            torch.set_num_threads(previous)
+        except (RuntimeError, ValueError):
+            pass
+
+
+# Dedicated media workers keep their Whisper converter (and so the model) between files;
+# every other process loads it per file and drops it (see enable_media_model_cache)
+_media_model_cache_enabled: bool = False
+_whisper_converters: Dict[Tuple[str, str, int], Any] = {}
+
+
+def enable_media_model_cache(enabled: bool) -> None:
+    """Keep Whisper converters between files in this process (the run's media workers).
+
+    A media file lands on whichever conversion worker is free, and a model cached in each of
+    16 worker processes (3.2 GB on the CPU, 1.6 GB of VRAM) would not fit the box, so the
+    conversion workers load it per file (about 30 s: 1.6 GB from disk plus the checksum).
+    The run therefore starts ``media.max_concurrent`` dedicated media worker processes
+    (:meth:`DocumentIngestionPipeline._start_conversion_pool`), which only transcribe and
+    cache the converter; a media run pays the load once per worker.
+    """
+    global _media_model_cache_enabled
+    _media_model_cache_enabled = bool(enabled)
+    if not enabled:
+        _whisper_converters.clear()
+
+
+def media_model_cache_enabled() -> bool:
+    """Whether this process keeps Whisper converters between files."""
+    return _media_model_cache_enabled
+
+
+def release_torch_memory() -> None:
+    """Drop what a transcription left behind (the model is loaded per file, see MediaConfig)."""
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:  # noqa: BLE001 - best effort
+        pass
+
+
+# ---------------------------------------------------------------------------
 # OCR engine configuration (Docling; scanned PDFs and image files)
 # ---------------------------------------------------------------------------
 
@@ -935,6 +1354,7 @@ RETRY_FLAG_ERROR_TYPES: Dict[str, str] = {
     "retry_errors": "error",
     "retry_no_chunks": "no_chunks",
     "retry_image_only_pdfs": "image_only_pdf",
+    "retry_media": "media_deferred",  # audio/video deferred to a media run (MEDIA_DEFERRED)
 }
 
 
@@ -2317,6 +2737,8 @@ def map_error_type_to_classification(error_type: Optional[str], chunks_created: 
         return "no_chunks"
     elif error_type == "duplicate":
         return "normal"  # Duplicates are considered normal (already processed)
+    elif error_type == MEDIA_DEFERRED:
+        return MEDIA_DEFERRED
     elif chunks_created > 0:
         return "normal"
     else:
@@ -2603,6 +3025,11 @@ class DocumentIngestionPipeline:
     _executor_workers: int = 0
     # Conversion worker processes of the run in progress (process isolation); None = thread pool
     _conversion_pool: Optional[Any] = None
+    # How this run transcribes audio/video (resolved by ingest_documents; see MediaConfig)
+    media_config: MediaConfig = MediaConfig()
+    # Dedicated media worker processes of the run (process isolation, media files present);
+    # None = media files convert in the conversion pool or on the thread pool
+    _media_pool: Optional[Any] = None
 
     @classmethod
     def get_executor(cls) -> ThreadPoolExecutor:
@@ -2992,23 +3419,14 @@ class DocumentIngestionPipeline:
         if file_ext == '.doc':
             return self._read_doc_file(file_path)
 
-        # Audio formats - transcribe with Whisper ASR
-        audio_formats = ['.mp3', '.wav', '.m4a', '.flac']
-        if file_ext in audio_formats:
+        # Audio formats - transcribe with Whisper ASR (docs/04, "Media transcription")
+        if file_ext in AUDIO_EXTENSIONS:
             # Returns tuple: (markdown_content, docling_document)
             return self._transcribe_audio(file_path)
 
-        # Video formats - skip with placeholder (no transcription pipeline yet)
-        video_formats = ['.mp4', '.avi', '.mkv', '.mov', '.webm', '.wmv']
-        if file_ext in video_formats:
-            logger.warning(
-                f"Skipping video file (no video transcription pipeline): "
-                f"{os.path.basename(file_path)}"
-            )
-            return (
-                f"[Video: {os.path.basename(file_path)} - video transcription not yet supported]",
-                None
-            )
+        # Video formats - transcribe the audio track (ffmpeg extracts it) unless media.video is off
+        if file_ext in VIDEO_EXTENSIONS:
+            return self._transcribe_video(file_path)
 
         # Image formats - convert via Docling with OCR
         image_formats = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.tif']
@@ -3661,7 +4079,33 @@ class DocumentIngestionPipeline:
             logger.error(f"Failed to extract .eml file {file_path}: {e}")
             return (f"[Error: Could not read email {os.path.basename(file_path)}: {e}]", None)
 
-    def _transcribe_audio(self, file_path: str) -> tuple[str, Optional[Any]]:
+    def _transcribe_video(self, file_path: str) -> tuple[str, Optional[Any]]:
+        """Transcribe the audio track of a video file.
+
+        ffmpeg writes the track to a temporary 16 kHz mono WAV named after the video, which
+        then goes through :meth:`_transcribe_audio` like a recording. With the media
+        config's ``video`` off the file is recorded as skipped (never stored as a stub).
+
+        Args:
+            file_path: The video file.
+
+        Returns:
+            ``(markdown_content, docling_document)``, or an error/skip placeholder.
+        """
+        name = os.path.basename(file_path)
+        if not get_media_config().video:
+            logger.info(f"Skipping video (media.video is off): {name}")
+            return (f"[Skipped: video transcription is off ({name})]", None)
+        with tempfile.TemporaryDirectory(prefix="recallhub_video_") as tmp_dir:
+            wav_path = os.path.join(tmp_dir, Path(file_path).stem + ".wav")
+            try:
+                extract_audio_track(file_path, wav_path)
+            except Exception as exc:  # noqa: BLE001 - recorded as a failed read
+                logger.warning(f"Could not extract the audio track of {name}: {exc}")
+                return (f"[Error: Could not extract the audio track of {name}: {exc}]", None)
+            return self._transcribe_audio(wav_path, display_name=name)
+
+    def _transcribe_audio(self, file_path: str, display_name: Optional[str] = None) -> tuple[str, Optional[Any]]:
         """
         Transcribe audio file using the best available method.
         
@@ -3674,6 +4118,7 @@ class DocumentIngestionPipeline:
 
         Args:
             file_path: Path to the audio file
+            display_name: Name to log and record (the video a WAV was extracted from)
 
         Returns:
             Tuple of (markdown_content, None) - no DoclingDocument for API transcription
@@ -3683,7 +4128,7 @@ class DocumentIngestionPipeline:
         
         if offline_audio_enabled:
             logger.info("Offline mode enabled - using local Whisper transcription")
-            return self._transcribe_audio_local(file_path)
+            return self._transcribe_audio_local(file_path, display_name=display_name)
         
         # Try cloud-based transcription
         try:
@@ -3764,7 +4209,7 @@ class DocumentIngestionPipeline:
             except Exception as e2:
                 logger.error(f"Chunked transcription also failed: {e2}")
                 logger.info("Falling back to local Whisper transcription...")
-                return self._transcribe_audio_local(file_path)
+                return self._transcribe_audio_local(file_path, display_name=display_name)
 
     def _check_offline_audio_mode(self) -> bool:
         """
@@ -3934,79 +4379,137 @@ class DocumentIngestionPipeline:
             except Exception:
                 pass
 
-    def _transcribe_audio_local(self, file_path: str) -> tuple[str, Optional[Any]]:
-        """
-        Fallback: Transcribe audio file using local Whisper via Docling.
-        Used when OpenAI API fails or file is too large.
+    def _transcribe_audio_local(
+        self, file_path: str, display_name: Optional[str] = None
+    ) -> tuple[str, Optional[Any]]:
+        """Transcribe ``file_path`` with Whisper through Docling's ASR pipeline.
+
+        The media config (:func:`get_media_config`) gives the model, the device and the CPU
+        thread count. The model is loaded from ``DOCLING_ARTIFACTS_PATH`` for every file and
+        released afterwards: the file lands on whichever conversion worker is free, and a
+        cached model in each of 16 worker processes would not fit the box. A model that is not
+        under the artifacts path is an error (the image bakes it, nothing downloads at run
+        time). A failure on the GPU (out of memory next to the embedders and the chat model)
+        is retried once on the CPU.
 
         Args:
-            file_path: Path to the audio file
+            file_path: The audio file (or the WAV extracted from a video).
+            display_name: Name to log and record; the file's own name when omitted.
 
         Returns:
-            Tuple of (markdown_content, docling_document)
+            ``(markdown_content, docling_document)``, or an ``[Error: ...]`` placeholder.
         """
+        config = get_media_config()
+        name = display_name or os.path.basename(file_path)
+        if not os.path.exists(file_path):
+            return (f"[Error: Audio file not found: {name}]", None)
+
+        artifacts_path = os.getenv("DOCLING_ARTIFACTS_PATH") or None
+        problem = whisper_checkpoint_problem(config.model, artifacts_path)
+        if problem is not None:
+            logger.error(
+                f"{problem}; bake it into backend/Dockerfile.base (WHISPER_MODELS) - nothing is downloaded at run time"
+            )
+            return (f"[Error: {problem} (bake it into the image); cannot transcribe {name}]", None)
+
+        device = config.resolved_device()
+        threads = config.resolved_threads()
         try:
-            from pathlib import Path
-            from docling.document_converter import (
-                DocumentConverter,
-                AudioFormatOption
-            )
-            from docling.datamodel.pipeline_options import AsrPipelineOptions
-            from docling.datamodel.base_models import InputFormat
-            from docling.pipeline.asr_pipeline import AsrPipeline
-            from docling.datamodel.pipeline_options_asr_model import (
-                InlineAsrNativeWhisperOptions,
-                InferenceAsrFramework
-            )
-            from docling.datamodel.accelerator_options import AcceleratorDevice
+            return self._run_whisper(file_path, name, config, device, threads)
+        except Exception as exc:  # noqa: BLE001 - one retry on the CPU, then a failed read
+            if device != "cuda":
+                logger.error(f"Local Whisper failed for {name}: {exc}")
+                return (f"[Error: Could not transcribe audio file {name}: {exc}]", None)
+            logger.warning(f"Whisper failed on the GPU for {name} ({exc}); retrying on the CPU with {threads} threads")
+            try:
+                return self._run_whisper(file_path, name, config, "cpu", threads)
+            except Exception as cpu_exc:  # noqa: BLE001
+                logger.error(f"Local Whisper failed for {name}: {cpu_exc}")
+                return (f"[Error: Could not transcribe audio file {name}: {cpu_exc}]", None)
 
-            audio_path = Path(file_path).resolve()
-            logger.info(
-                f"Transcribing audio locally with Whisper: {audio_path.name}"
-            )
+    def _run_whisper(
+        self, file_path: str, name: str, config: MediaConfig, device: str, threads: int
+    ) -> tuple[str, Optional[Any]]:
+        """One transcription through Docling's ``AsrPipeline`` on ``device`` with ``threads``.
 
-            if not audio_path.exists():
-                raise FileNotFoundError(f"Audio file not found: {audio_path}")
+        Records ``media_seconds``, ``media_device`` and ``media_realtime`` (seconds of media
+        per second of wall clock) with :func:`note_conversion`.
 
-            # Configure with default English (auto-detect not supported with None)
-            asr_options = InlineAsrNativeWhisperOptions(
-                repo_id="turbo",
-                language="en",  # Default to English
-                timestamps=True,
-                word_timestamps=True,
-                verbose=True,
-                temperature=0.0,
-                max_new_tokens=256,
-                max_time_chunk=30.0,
-                inference_framework=InferenceAsrFramework.WHISPER,
-                supported_devices=[AcceleratorDevice.CPU, AcceleratorDevice.CUDA],
-            )
+        Raises:
+            RuntimeError: The pipeline reported a failure.
+        """
+        from docling.datamodel.accelerator_options import AcceleratorDevice, AcceleratorOptions
+        from docling.datamodel.base_models import ConversionStatus, InputFormat
+        from docling.datamodel.pipeline_options import AsrPipelineOptions
+        from docling.datamodel.pipeline_options_asr_model import (
+            InferenceAsrFramework,
+            InlineAsrNativeWhisperOptions,
+        )
+        from docling.document_converter import AudioFormatOption, DocumentConverter
+        from docling.pipeline.asr_pipeline import AsrPipeline
 
-            pipeline_options = AsrPipelineOptions()
-            pipeline_options.asr_options = asr_options
+        asr_options = InlineAsrNativeWhisperOptions(
+            repo_id=config.model,
+            language=config.language_or_none(),
+            timestamps=True,
+            word_timestamps=False,  # the chunker needs segments, not word alignment (slower)
+            verbose=False,
+            temperature=0.0,
+            max_new_tokens=256,
+            max_time_chunk=30.0,
+            inference_framework=InferenceAsrFramework.WHISPER,
+            supported_devices=[AcceleratorDevice.CPU, AcceleratorDevice.CUDA],
+        )
+        pipeline_options = AsrPipelineOptions()
+        pipeline_options.asr_options = asr_options
+        pipeline_options.accelerator_options = AcceleratorOptions(device=device, num_threads=threads)
 
-            converter = DocumentConverter(
-                format_options={
-                    InputFormat.AUDIO: AudioFormatOption(
-                        pipeline_cls=AsrPipeline,
-                        pipeline_options=pipeline_options,
+        duration = media_duration_seconds(file_path)
+        logger.info(
+            f"Transcribing {name} with Whisper {config.model} on {device} "
+            f"({threads} CPU threads, language {config.language_or_none() or 'auto'}"
+            + (f", {duration / 60:.1f} min" if duration else "")
+            + ")"
+        )
+        started = time.monotonic()
+        cache_key = (config.model, device, threads)
+        cached = media_model_cache_enabled()
+        converter: Optional[Any] = _whisper_converters.get(cache_key) if cached else None
+        try:
+            with torch_thread_limit(threads if device == "cpu" else None):
+                if converter is None:
+                    converter = DocumentConverter(
+                        format_options={
+                            InputFormat.AUDIO: AudioFormatOption(
+                                pipeline_cls=AsrPipeline,
+                                pipeline_options=pipeline_options,
+                            )
+                        }
                     )
-                }
-            )
-
-            result = converter.convert(audio_path)
+                    if cached:
+                        _whisper_converters[cache_key] = converter
+                result = converter.convert(Path(file_path), raises_on_error=False)
+            elapsed = time.monotonic() - started
+            if result.status == ConversionStatus.FAILURE:
+                _whisper_converters.pop(cache_key, None)
+                detail = "; ".join(err.error_message for err in result.errors if getattr(err, "error_message", None))
+                raise RuntimeError(f"Docling's ASR pipeline failed on {device}" + (f": {detail}" if detail else " (see the log)"))
             markdown_content = export_document_markdown(result.document)
-            logger.info(f"Successfully transcribed {audio_path.name} locally")
-
-            return (markdown_content, result.document)
-
-        except Exception as e:
-            logger.error(f"Local Whisper failed for {file_path}: {e}")
-            return (
-                f"[Error: Could not transcribe audio file "
-                f"{os.path.basename(file_path)}]",
-                None
+            realtime = (duration / elapsed) if duration and elapsed > 0 else None
+            note_conversion(media_seconds=duration, media_device=device, media_realtime=realtime)
+            logger.info(
+                f"Transcribed {name} in {elapsed:.0f}s on {device}"
+                + (f" ({realtime:.1f}x real time)" if realtime else "")
+                + f": {len(markdown_content)} characters"
             )
+            return (markdown_content, result.document)
+        except BaseException:
+            _whisper_converters.pop(cache_key, None)
+            raise
+        finally:
+            converter = None
+            if not cached:
+                release_torch_memory()
 
     def _extract_title(self, content: str, file_path: str) -> str:
         """
@@ -4259,14 +4762,19 @@ class DocumentIngestionPipeline:
 
     # -- Conversion step: thread pool or worker processes --------------------------------
 
-    def _start_conversion_pool(self, size: int) -> Any:
+    def _start_conversion_pool(self, size: int, media_workers: int = 0) -> Any:
         """Create this run's conversion worker processes (started on their first file).
 
         The CPU threads (Docling models, Tesseract) are shared across the ``size`` worker
         processes instead of the thread pool, which then only hashes and discovers files.
+        With ``media_workers`` the run also gets that many dedicated media worker processes
+        (:attr:`_media_pool`): audio/video files convert there, each worker keeps its Whisper
+        model loaded between files (:func:`enable_media_model_cache`), and the document
+        workers never load it.
 
         Args:
             size: Number of worker processes, one per file slot (``max_concurrent_files``).
+            media_workers: Dedicated media workers (the media config's ``max_concurrent``), 0 = none.
 
         Returns:
             The ``ConversionProcessPool`` now set as :attr:`_conversion_pool`.
@@ -4282,6 +4790,7 @@ class DocumentIngestionPipeline:
         init = WorkerInit(
             pool_workers=size,
             accelerator=asdict(_accelerator_config),
+            media=asdict(get_media_config()),
             log_level=logging.getLogger().getEffectiveLevel() or logging.INFO,
         )
         self._conversion_pool = ConversionProcessPool(size, init=init)
@@ -4289,10 +4798,21 @@ class DocumentIngestionPipeline:
             f"Process isolation on: {size} conversion worker processes (each started on its first "
             f"file), Docling threads per model: {docling_num_threads(size)}"
         )
+        if media_workers > 0:
+            media_init = dataclasses_replace(init, media_worker=True, warm_up=False)
+            self._media_pool = ConversionProcessPool(int(media_workers), init=media_init)
+            logger.info(
+                f"{int(media_workers)} dedicated media worker process(es) for audio/video "
+                f"(Whisper {get_media_config().model} cached per worker)"
+            )
         return self._conversion_pool
 
     async def _stop_conversion_pool(self) -> None:
         """End this run's conversion worker processes, if any (off the event loop)."""
+        media_pool = self._media_pool
+        self._media_pool = None
+        if media_pool is not None:
+            await asyncio.get_running_loop().run_in_executor(None, media_pool.shutdown)
         pool = self._conversion_pool
         self._conversion_pool = None
         if pool is None:
@@ -4320,7 +4840,8 @@ class DocumentIngestionPipeline:
         """
         handle = handle or _conversion_handle_var.get() or ConversionHandle()
         options = handle.options.to_dict() if handle.options is not None else None
-        pool = self._conversion_pool
+        # Audio/video go to the run's dedicated media workers when it has them
+        pool = self._media_pool if self._media_pool is not None and is_media_file(file_path) else self._conversion_pool
         if pool is not None:
             content, document, notes = await pool.convert_with_notes(
                 file_path, on_started=handle.mark_started, options=options
@@ -4768,6 +5289,8 @@ class DocumentIngestionPipeline:
         retry_failed_types: Optional[frozenset] = None,
         queue_callback: Optional[Callable[[List[str]], None]] = None,
         slot_limit: Optional[Callable[[], int]] = None,
+        media_config: Optional[Dict[str, Any]] = None,
+        media_only: bool = False,
     ) -> List[IngestionResult]:
         """Ingest all documents; see :meth:`_ingest_documents_impl` for the arguments.
 
@@ -4788,6 +5311,8 @@ class DocumentIngestionPipeline:
                 retry_failed_types=retry_failed_types,
                 queue_callback=queue_callback,
                 slot_limit=slot_limit,
+                media_config=media_config,
+                media_only=media_only,
             )
         finally:
             if token is not None:
@@ -4806,11 +5331,19 @@ class DocumentIngestionPipeline:
         retry_failed_types: Optional[frozenset] = None,
         queue_callback: Optional[Callable[[List[str]], None]] = None,
         slot_limit: Optional[Callable[[], int]] = None,
+        media_config: Optional[Dict[str, Any]] = None,
+        media_only: bool = False,
     ) -> List[IngestionResult]:
         """
         Ingest all documents from the documents folder.
 
         Args:
+            media_config: The performance config's ``media`` section (how audio/video files
+                are transcribed: transcriptions at once, threads, device, model, language,
+                ``defer``); :func:`resolve_media_config` fills the rest from INGEST_MEDIA_*
+                and the settings.
+            media_only: A media run (``retry_media``): only audio/video files are
+                processed, and they are transcribed even when the media config defers them.
             retry_failed_types: Error types the job asks to retry (:func:`retry_error_types`).
                 In incremental mode with a ``job_id``, files the same job already recorded in
                 ``failed_documents`` are skipped unless their error type is listed here (F23).
@@ -4848,6 +5381,16 @@ class DocumentIngestionPipeline:
         # Size the shared pool for this run: conversions, hashing and discovery run on it
         self.configure_executor(resolve_thread_pool_workers(thread_pool_workers, max_concurrent_files))
 
+        # How this run transcribes audio/video; the readers (pool threads, worker processes)
+        # read the module-level config, the loop reads the attribute
+        self.media_config = resolve_media_config(media_config)
+        update_media_config(**asdict(self.media_config))
+        # Media files are deferred to a media run unless this is one or the job retries them
+        defer_media = (
+            self.media_config.defer and not media_only
+            and MEDIA_DEFERRED not in (retry_failed_types or frozenset())
+        )
+
         # Clean existing data if requested
         if self.clean_before_ingest:
             await self._clean_databases()
@@ -4883,6 +5426,11 @@ class DocumentIngestionPipeline:
             return []
 
         logger.info(f"Found {len(document_files)} document files to process")
+
+        if media_only:
+            before = len(document_files)
+            document_files = [f for f in document_files if is_media_file(f)]
+            logger.info(f"Media run: {len(document_files)} audio/video file(s) of {before}")
 
         # Filter out already-ingested files in incremental mode
         if incremental and existing_sources:
@@ -4939,7 +5487,11 @@ class DocumentIngestionPipeline:
             # Killable conversions (process isolation) for the loop with per-file timeouts
             use_processes = process_isolation_enabled(process_isolation)
             if use_processes:
-                self._start_conversion_pool(max_concurrent_files)
+                # Media files get their own workers (model cached per worker) unless deferred
+                media_workers = 0
+                if not defer_media and any(is_media_file(f) for f in document_files):
+                    media_workers = min(int(self.media_config.max_concurrent), max_concurrent_files)
+                self._start_conversion_pool(max_concurrent_files, media_workers=media_workers)
             try:
                 results, duplicates_skipped = await self._ingest_documents_concurrent(
                     document_files=document_files,
@@ -4951,6 +5503,7 @@ class DocumentIngestionPipeline:
                     pause_checkpoint=pause_checkpoint,
                     stats_callback=stats_callback,
                     slot_limit=slot_limit,
+                    defer_media=defer_media,
                 )
             finally:
                 if use_processes:
@@ -4962,7 +5515,8 @@ class DocumentIngestionPipeline:
                 existing_hashes=existing_hashes,
                 incremental=incremental,
                 progress_callback=progress_callback,
-                pause_checkpoint=pause_checkpoint
+                pause_checkpoint=pause_checkpoint,
+                defer_media=defer_media,
             )
 
         # Log summary
@@ -4983,7 +5537,8 @@ class DocumentIngestionPipeline:
         existing_hashes: Dict[str, str],
         incremental: bool,
         progress_callback: Optional[callable] = None,
-        pause_checkpoint: Optional[Callable[[], Awaitable[None]]] = None
+        pause_checkpoint: Optional[Callable[[], Awaitable[None]]] = None,
+        defer_media: bool = False,
     ) -> Tuple[List[IngestionResult], int]:
         """
         Process documents sequentially (original behavior).
@@ -4994,6 +5549,7 @@ class DocumentIngestionPipeline:
             incremental: Whether to skip duplicates
             progress_callback: Optional progress callback
             pause_checkpoint: Optional coroutine function awaited before each file
+            defer_media: Skip audio/video files (left to a media run, ``retry_media``)
 
         Returns:
             Tuple of (results list, duplicates skipped count)
@@ -5012,6 +5568,16 @@ class DocumentIngestionPipeline:
             # Call progress callback BEFORE processing
             if progress_callback:
                 progress_callback(i, len(document_files), file_path)
+
+            if defer_media and is_media_file(file_path):
+                logger.info(f"Deferring media file to a media run (media.defer): {file_path}")
+                results.append(IngestionResult(
+                    document_id="", title=os.path.basename(file_path), chunks_created=0,
+                    processing_time_ms=0, errors=["Deferred to a media run (retry_media)"],
+                ))
+                if progress_callback:
+                    progress_callback(i + 1, len(document_files), file_path, 0)
+                continue
             
             try:
                 # Compute file hash for content-based deduplication
@@ -5087,9 +5653,15 @@ class DocumentIngestionPipeline:
         pause_checkpoint: Optional[Callable[[], Awaitable[None]]] = None,
         stats_callback: Optional[Callable[[Dict[str, int]], None]] = None,
         slot_limit: Optional[Callable[[], int]] = None,
+        defer_media: bool = False,
     ) -> Tuple[List[IngestionResult], int]:
         """
         Process documents concurrently using a semaphore with timeout and failure tracking.
+
+        Audio/video files (:func:`is_media_file`) take one of the media config's
+        ``max_concurrent`` media slots before a file slot, so transcriptions never occupy
+        every slot, and their budget is :func:`media_budget_seconds` (duration based). With
+        ``defer_media`` they are recorded as ``media_deferred`` for a later media run instead.
 
         Each file takes one of ``max_concurrent`` slots. Its conversion budget
         (:func:`calculate_file_timeout`, scaled by :func:`conversion_budget_factor` for the CPU
@@ -5150,6 +5722,15 @@ class DocumentIngestionPipeline:
         timeout_cfg = get_timeout_config()
         # Resolved once per run; scans are OCRed unless INGEST_SKIP_IMAGE_ONLY_PDF is set
         skip_image_only_pdfs = skip_image_only_pdf_enabled()
+        # Media slots: transcriptions at once (each also takes a file slot below)
+        media_cfg = self.media_config
+        media_slots = asyncio.Semaphore(max(1, int(media_cfg.max_concurrent)))
+        media_files = sum(1 for f in document_files if is_media_file(f))
+        if media_files:
+            logger.info(
+                f"{media_files} audio/video file(s): "
+                + ("deferred to a media run (retry_media)" if defer_media else f"transcription {media_cfg.describe()}")
+            )
         pool = self._conversion_pool
         # Budget scaling for the CPU share of one conversion: worker processes share the cores
         # among themselves, pool threads according to the pool size in force
@@ -5198,7 +5779,18 @@ class DocumentIngestionPipeline:
             """
             nonlocal duplicates_skipped, processed_count
 
-            await slots.acquire()
+            # A transcription waits for a media slot first, holding no file slot meanwhile
+            kind = media_kind(file_path)
+            media_slot_held = False
+            if kind and not defer_media:
+                await media_slots.acquire()
+                media_slot_held = True
+            try:
+                await slots.acquire()
+            except BaseException:
+                if media_slot_held:
+                    media_slots.release()
+                raise
             release_slot = True
             claimed_hash: Optional[str] = None
             handle: Optional[ConversionHandle] = None
@@ -5211,13 +5803,22 @@ class DocumentIngestionPipeline:
                 file_start_time = datetime.now()
                 file_size = get_file_size_safe(file_path)
                 file_modified_at = get_file_modified_time_safe(file_path)
-                # Adaptive budget: file size and type, retry round, CPU share at this concurrency
-                timeout_seconds = calculate_file_timeout(
-                    file_size,
-                    file_path=file_path,
-                    retry_attempt=retry_attempt,
-                    concurrency_factor=budget_factor,
-                )
+                # Adaptive budget: file size and type, retry round, CPU share at this concurrency;
+                # a media file's budget follows its duration (its threads and device are its own)
+                if kind:
+                    media_duration = await loop.run_in_executor(
+                        self.get_executor(), media_duration_seconds, file_path
+                    )
+                    timeout_seconds = media_budget_seconds(file_path, file_size, media_cfg, media_duration)
+                    if retry_attempt > 0:
+                        timeout_seconds *= timeout_cfg.retry_timeout_multiplier ** retry_attempt
+                else:
+                    timeout_seconds = calculate_file_timeout(
+                        file_size,
+                        file_path=file_path,
+                        retry_attempt=retry_attempt,
+                        concurrency_factor=budget_factor,
+                    )
 
                 # Initialize content_hash before try block to avoid NameError
                 # in exception handlers if hash computation itself times out
@@ -5268,6 +5869,26 @@ class DocumentIngestionPipeline:
                 # Progress callback before processing
                 if progress_callback:
                     progress_callback(processed_count, total_files, file_path)
+
+                if kind and defer_media:
+                    # Left to a media run (performance config media.defer): recorded so the
+                    # resumed job skips it and a run with retry_media picks it up
+                    logger.info(f"Deferring {kind} file to a media run (media.defer): {file_path}")
+                    with results_lock:
+                        processed_count += 1
+                        results.append(failed_result("Deferred to a media run (retry_media)", 0))
+                        recorder.add(stat(
+                            success=False,
+                            error_type=MEDIA_DEFERRED,
+                            error_message=(
+                                f"Deferred: {kind} transcription is off for this run (performance config "
+                                f"media.defer); start a run with retry_media to transcribe it"
+                            ),
+                            classification=MEDIA_DEFERRED,
+                        ))
+                    if progress_callback:
+                        progress_callback(processed_count, total_files, file_path, 0)
+                    return
 
                 try:
                     # Compute file hash with timeout (reuse from previous attempt if retrying)
@@ -5533,6 +6154,8 @@ class DocumentIngestionPipeline:
                             del in_flight_hashes[claimed_hash]
                 if release_slot:
                     slots.release()
+                if media_slot_held:
+                    media_slots.release()
 
         def raise_if_cancelled(outcomes: List[Any]) -> None:
             # gather(return_exceptions=True) keeps one failing file from ending the run, but it

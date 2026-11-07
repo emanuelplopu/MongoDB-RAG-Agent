@@ -430,6 +430,7 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
     - retry_timeouts: Only process timed-out files
     - retry_errors: Only process errored files
     - retry_no_chunks: Only process files with 0 chunks
+    - retry_media: A media run - only audio/video files (the pipeline transcribes just those)
     - skip_image_only_pdfs: Skip known image-only PDFs
     """
     global _pending_files_queue
@@ -441,9 +442,11 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
     retry_timeouts = config.get("retry_timeouts", False) if config else False
     retry_errors = config.get("retry_errors", False) if config else False
     retry_no_chunks = config.get("retry_no_chunks", False) if config else False
+    retry_media = bool(config.get("retry_media", False)) if config else False
     skip_image_only_pdfs = config.get("skip_image_only_pdfs", False) if config else False
     
-    any_retry_filter = retry_image_only_pdfs or retry_timeouts or retry_errors or retry_no_chunks
+    any_retry_filter = retry_image_only_pdfs or retry_timeouts or retry_errors or retry_no_chunks or retry_media
+    from src.ingestion.ingest import is_media_file
     profile_key = config.get("profile", "") if config else ""
     
     # Initialize file registry service if db is available
@@ -572,6 +575,8 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
                     classifications_to_retry.append(FileClassification.ERROR.value)
                 if retry_no_chunks:
                     classifications_to_retry.append(FileClassification.NO_CHUNKS.value)
+                if retry_media:
+                    classifications_to_retry.append(FileClassification.MEDIA_DEFERRED.value)
                 
                 for path, entry in registry_by_path.items():
                     if entry.get("classification") in classifications_to_retry:
@@ -611,10 +616,15 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
                     document_source = os.path.relpath(file_path, folder)
                     break
             
+            # A media run processes audio/video files only (the pipeline filters the same way)
+            if retry_media and not is_media_file(file_path):
+                skipped_by_registry += 1
+                continue
+
             # If retry filters are active and incremental is NOT checked:
             # Only process files that match retry criteria
             if any_retry_filter and not incremental:
-                if file_path in files_to_retry:
+                if file_path in files_to_retry or (retry_media and is_media_file(file_path)):
                     files_to_process.append(file_path)
                     retry_filter_count += 1
                 else:
@@ -1044,6 +1054,7 @@ async def run_ingestion(
         "no_chunks_files": 0,  # Files that produced 0 chunks after processing
         "timeout_files": 0,  # Files that timed out
         "error_files": 0,  # Files with processing errors
+        "media_deferred_files": 0,  # Audio/video left to a media run (retry_media)
         "avg_processing_time_ms": 0.0,
         "total_size_bytes": 0,
         "files_per_hour": 0.0,
@@ -1273,10 +1284,15 @@ async def run_ingestion(
         thread_pool_workers = int(perf_config.get("thread_pool_workers", settings.ingestion_thread_pool_workers))
         # Killable conversions: the stored flag was saved by the Configuration page but read by nothing
         process_isolation = bool(perf_config.get("process_isolation_enabled", settings.ingestion_process_isolation))
+        # Audio/video transcription (the stored media section; the pipeline fills the rest from
+        # INGEST_MEDIA_* / the settings) and whether this is a media run (retry_media)
+        media_config = perf_config.get("media")
+        media_only = bool(config.get("retry_media"))
 
         logger.info(
             f"Running ingestion with max_concurrent_files={max_concurrent}, "
             f"thread_pool_workers={thread_pool_workers}, process_isolation={process_isolation}"
+            + (", media run (audio/video only)" if media_only else "")
         )
 
         # Load profile: the slot limit the file loop reads before every file (the office
@@ -1334,6 +1350,8 @@ async def run_ingestion(
                 retry_failed_types=retry_error_types(config),
                 queue_callback=queue_callback,
                 slot_limit=slot_controller.current,
+                media_config=media_config,
+                media_only=media_only,
             )
         finally:
             config_refresh.cancel()
@@ -1381,6 +1399,7 @@ async def run_ingestion(
             no_chunks_files=extended_metrics.get("no_chunks", 0),
             timeout_files=extended_metrics.get("timeout", 0),
             error_files=extended_metrics.get("error", 0),
+            media_deferred_files=extended_metrics.get("media_deferred", 0),
             avg_processing_time_ms=extended_metrics.get("avg_processing_time_ms", 0),
             total_size_bytes=extended_metrics.get("total_size_bytes", 0),
             files_per_hour=files_per_hour,
@@ -1826,6 +1845,7 @@ async def list_ingestion_runs(
             no_chunks_files=doc.get("no_chunks_files", 0),
             timeout_files=doc.get("timeout_files", 0),
             error_files=doc.get("error_files", 0),
+            media_deferred_files=doc.get("media_deferred_files", 0),
             avg_processing_time_ms=doc.get("avg_processing_time_ms", 0.0),
             total_size_bytes=doc.get("total_size_bytes", 0),
             files_per_hour=doc.get("files_per_hour", 0.0),

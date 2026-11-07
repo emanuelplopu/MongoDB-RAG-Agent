@@ -270,6 +270,8 @@ class IngestionWorker:
                     # Load profile (backend/services/ingestion_schedule.py), resolved per file
                     "load_profile": config_doc.get("load_profile"),
                     "office_hours": config_doc.get("office_hours"),
+                    # Audio/video transcription (src/ingestion/ingest.py, MediaConfig)
+                    "media": config_doc.get("media"),
                 })
                 new_concurrent = self.config.get("max_concurrent_files", 1)
                 if old_concurrent != new_concurrent:
@@ -662,6 +664,8 @@ class IngestionWorker:
                     retry_failed_types=retry_error_types(config),
                     queue_callback=queue_callback,
                     slot_limit=slot_controller.current,
+                    media_config=self.config.get("media"),
+                    media_only=bool(config.get("retry_media")),
                 )
             finally:
                 config_refresh.cancel()

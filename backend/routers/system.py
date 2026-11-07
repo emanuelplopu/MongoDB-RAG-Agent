@@ -14,6 +14,7 @@ from backend.models.schemas import (
 from backend.core.config import settings
 from backend.routers.auth import require_admin, UserResponse
 from backend.services import host_stats
+from backend.services.media_config import MediaTranscriptionConfig, media_config_from
 from backend.services.ingestion_schedule import (
     DEFAULT_LOAD_PROFILE,
     LoadProfile,
@@ -1670,6 +1671,13 @@ class IngestionPerformanceConfig(BaseModel):
         default_factory=OfficeHoursConfig,
         description="Office hours of the office profile: timezone, start, end, weekdays, files at once",
     )
+    media: Optional[MediaTranscriptionConfig] = Field(
+        default=None,
+        description=(
+            "Audio/video transcription (backend/services/media_config.py): transcriptions at once, "
+            "threads, device, model, language, defer; the stored section is kept when omitted"
+        ),
+    )
 
 
 @router.get("/ingestion-performance")
@@ -1697,6 +1705,7 @@ async def get_ingestion_performance_config(request: Request):
                 "job_poll_interval_seconds": doc.get("job_poll_interval_seconds", settings.ingestion_job_poll_interval),
                 "load_profile": load_profile_from(doc),
                 "office_hours": office_hours_from(doc).model_dump(),
+                "media": media_config_from(doc).model_dump(),
             }
     except Exception as e:
         logger.warning(f"Failed to load ingestion config from database: {e}")
@@ -1712,6 +1721,7 @@ async def get_ingestion_performance_config(request: Request):
         "job_poll_interval_seconds": settings.ingestion_job_poll_interval,
         "load_profile": DEFAULT_LOAD_PROFILE,
         "office_hours": OfficeHoursConfig().model_dump(),
+        "media": MediaTranscriptionConfig().model_dump(),
     }
 
 
@@ -1741,6 +1751,9 @@ async def save_ingestion_performance_config(request: Request, config: IngestionP
             "office_hours": config.office_hours.model_dump(),
             "updated_at": datetime.now().isoformat(),
         }
+        if config.media is not None:
+            # Omitted by a client that does not know the section (the Configuration page): kept as stored
+            update_doc["media"] = config.media.model_dump()
         
         # $set, not replace: the same document carries the timeout_config the
         # /ingestion-timeout-config endpoint saves (a replace dropped it on every save)

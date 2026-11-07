@@ -246,6 +246,7 @@ export default function IngestionManagementPage() {
   const [retryTimeouts, setRetryTimeouts] = useState(false)
   const [retryErrors, setRetryErrors] = useState(false)
   const [retryNoChunks, setRetryNoChunks] = useState(false)
+  const [retryMedia, setRetryMedia] = useState(false)
   const [skipImageOnlyPdfs, setSkipImageOnlyPdfs] = useState(false)
   
   // Safeguards - operation locking and cooldown
@@ -445,6 +446,7 @@ export default function IngestionManagementPage() {
         retry_timeouts: retryTimeouts,
         retry_errors: retryErrors,
         retry_no_chunks: retryNoChunks,
+        retry_media: retryMedia,
         skip_image_only_pdfs: skipImageOnlyPdfs
       }))
       await ingestionQueueApi.addMultipleToQueue(jobs)
@@ -1013,7 +1015,7 @@ export default function IngestionManagementPage() {
                 </div>
                 
                 {/* Info message when retry filters are active without incremental */}
-                {!incremental && (retryImageOnlyPdfs || retryTimeouts || retryErrors || retryNoChunks) && (
+                {!incremental && (retryImageOnlyPdfs || retryTimeouts || retryErrors || retryNoChunks || retryMedia) && (
                   <div className="mb-2 p-2 rounded-lg bg-blue-50 dark:bg-blue-900/30 text-xs text-blue-700 dark:text-blue-300 flex items-start gap-2">
                     <InformationCircleIcon className="h-4 w-4 shrink-0 mt-0.5" />
                     <span>{t('ingestion.filters.retryModeInfo', 'Retry mode: Only files matching the selected retry filters will be processed.')}</span>
@@ -1059,6 +1061,15 @@ export default function IngestionManagementPage() {
                         className="rounded-sm text-amber-500" 
                       />
                       <span className="text-xs text-primary-900 dark:text-gray-200">{t('ingestion.filters.retryNoChunks', 'Retry No-Chunks')}</span>
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input 
+                        type="checkbox" 
+                        checked={retryMedia} 
+                        onChange={e => setRetryMedia(e.target.checked)} 
+                        className="rounded-sm text-amber-500" 
+                      />
+                      <span className="text-xs text-primary-900 dark:text-gray-200">{t('ingestion.filters.retryMedia', 'Transcribe Media (audio/video only)')}</span>
                     </label>
                   </div>
                 </div>
@@ -1107,6 +1118,7 @@ export default function IngestionManagementPage() {
               if (job.retry_timeouts) activeFilters.push(t('ingestion.filters.retryTimeouts'))
               if (job.retry_errors) activeFilters.push(t('ingestion.filters.retryErrors'))
               if (job.retry_no_chunks) activeFilters.push(t('ingestion.filters.retryNoChunks'))
+              if (job.retry_media) activeFilters.push(t('ingestion.filters.retryMedia'))
               if (job.skip_image_only_pdfs) activeFilters.push(t('ingestion.filters.skipImagePdfs'))
               
               return (

@@ -651,6 +651,7 @@
       "retryTimeouts": "Zeitüberschreitungen wiederholen",
       "retryErrors": "Fehler wiederholen",
       "retryNoChunks": "Leere Chunks wiederholen",
+      "retryMedia": "Medien transkribieren (nur Audio/Video)",
       "skipImagePdfs": "Bild-PDFs überspringen",
       "retryModeInfo": "Wiederholungsmodus: Nur Dateien, die den ausgewählten Filtern entsprechen, werden verarbeitet.",
       "activeFilters": "Aktive Filter"

@@ -23,6 +23,8 @@ JOB_COUNTER_FIELDS: Dict[str, str] = {
     "duplicate": "duplicates_skipped",
     # stored with part of their chunks while the rest waits in the run's embedding backlog (F44)
     "partial": "partial_files",
+    # audio/video left to a media run (retry_media); not a failure
+    "media_deferred": "media_deferred_files",
 }
 
 

@@ -283,6 +283,59 @@ class Settings(BaseSettings):
         ),
     )
 
+    ingest_media_max_concurrent: int = Field(
+        default=2,
+        description=(
+            "Audio/video transcriptions at once (INGEST_MEDIA_MAX_CONCURRENT), each also holding a "
+            "file slot; the performance config's media.max_concurrent wins. See docs/04, Media transcription"
+        ),
+    )
+
+    ingest_media_threads: int = Field(
+        default=0,
+        description=(
+            "Torch CPU threads per transcription (INGEST_MEDIA_THREADS); 0 = the cores shared among "
+            "the transcriptions running at once"
+        ),
+    )
+
+    ingest_media_device: str = Field(
+        default="auto",
+        description=(
+            "Transcription device (INGEST_MEDIA_DEVICE): auto (CUDA when the container sees a GPU, "
+            "else the CPU), cpu or cuda"
+        ),
+    )
+
+    ingest_media_model: str = Field(
+        default="turbo",
+        description=(
+            "Whisper model (INGEST_MEDIA_MODEL); it must be baked into the image under "
+            "DOCLING_ARTIFACTS_PATH (backend/Dockerfile.base), nothing downloads at run time"
+        ),
+    )
+
+    ingest_media_language: str = Field(
+        default="",
+        description=(
+            "ISO 639-1 language of the recordings (INGEST_MEDIA_LANGUAGE, e.g. de); empty lets "
+            "Whisper detect it from the first 30 seconds"
+        ),
+    )
+
+    ingest_media_defer: bool = Field(
+        default=False,
+        description=(
+            "Record audio/video files as media_deferred instead of transcribing them inline "
+            "(INGEST_MEDIA_DEFER); a run started with retry_media transcribes them"
+        ),
+    )
+
+    ingest_media_video: bool = Field(
+        default=True,
+        description="Transcribe the audio track of video files (INGEST_MEDIA_VIDEO); off records them as skipped",
+    )
+
     msg_extract_attachments: bool = Field(
         default=False,
         description=(
@@ -365,6 +418,13 @@ class Settings(BaseSettings):
             'ingest_embed_budget_floor_seconds': self.ingest_embed_budget_floor_seconds,
             'ingest_embed_budget_margin': self.ingest_embed_budget_margin,
             'ingest_embed_budget_max_seconds': self.ingest_embed_budget_max_seconds,
+            'ingest_media_max_concurrent': self.ingest_media_max_concurrent,
+            'ingest_media_threads': self.ingest_media_threads,
+            'ingest_media_device': self.ingest_media_device,
+            'ingest_media_model': self.ingest_media_model,
+            'ingest_media_language': self.ingest_media_language,
+            'ingest_media_defer': self.ingest_media_defer,
+            'ingest_media_video': self.ingest_media_video,
             'ocr_rect_dilation': self.ocr_rect_dilation,
             'ocr_image_noise_gate': self.ocr_image_noise_gate,
             'msg_extract_attachments': self.msg_extract_attachments,

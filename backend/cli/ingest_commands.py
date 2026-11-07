@@ -266,3 +266,77 @@ if HAS_TYPER:
             )
         if result.dry_run and result.documents_found:
             console.print("[dim]Dry run: pass --apply to delete them.[/dim]")
+
+
+    @ingest_app.command("queue-media")
+    def queue_media(
+        profile: str = typer.Option(..., "--profile", "-p", help="Profile whose audio/video files to transcribe"),
+        tenant: Optional[str] = typer.Option(
+            None, "--tenant", help="Tenant the job is recorded under (the backend's TENANT_ID, e.g. quellex)"
+        ),
+        database: str = typer.Option(
+            os.environ.get("MONGODB_DATABASE", "rag_db"),
+            "--database",
+            "-d",
+            help="Database holding ingestion_jobs (the tenant's MONGODB_DATABASE)",
+        ),
+        mongodb_uri: str = typer.Option(
+            os.environ.get("MONGODB_URI", "mongodb://localhost:11017/?directConnection=true"), "--mongodb-uri"
+        ),
+        full: bool = typer.Option(False, "--full", help="Transcribe media files that are already ingested again"),
+    ) -> None:
+        """Queue a media run for the ingestion worker: transcribe the profile's audio/video files.
+
+        The job is the Ingestion page's "Transcribe media (audio/video only)" option
+        (``retry_media``): the pipeline processes only audio and video files, the ones a
+        document run recorded as ``media_deferred`` and the ones it never reached, skipping
+        media already ingested unless --full is given. It is queued PENDING for the
+        ingestion worker (docs/04, "Media transcription"); the worker's performance config
+        (``media`` section) sets the device, threads and transcriptions at once. Refused
+        while another job is pending, running or paused in that database.
+        """
+        fmt = OutputFormatter(app.state.get("format", "table") if hasattr(app, "state") else "table")
+
+        try:
+            from src.profile import get_profile_manager
+
+            pm = get_profile_manager()
+            if profile not in pm.list_profiles():
+                available = ", ".join(sorted(pm.list_profiles())) or "(none)"
+                fmt.print_error(f"Profile '{profile}' not found. Available: {available}")
+                raise typer.Exit(code=1)
+        except typer.Exit:
+            raise
+        except Exception as exc:  # noqa: BLE001 - CLI boundary
+            fmt.print_error(f"Could not load profile manager: {exc}")
+            raise typer.Exit(code=1)
+
+        async def _run():
+            from pymongo import AsyncMongoClient
+
+            from backend.services.media_run import queue_media_run
+
+            client = AsyncMongoClient(mongodb_uri, serverSelectionTimeoutMS=8000)
+            try:
+                return await queue_media_run(client[database], profile, tenant=tenant, incremental=not full)
+            finally:
+                await client.close()
+
+        try:
+            job = run_async(_run())
+        except Exception as exc:  # noqa: BLE001 - CLI boundary
+            fmt.print_error(str(exc))
+            raise typer.Exit(code=1)
+
+        if fmt.format == "json":
+            print(json.dumps(job, indent=2, default=str))
+            return
+        rows = [
+            ["Job", job["job_id"]],
+            ["Profile", profile],
+            ["Database", database],
+            ["Tenant", job.get("tenant") or "(worker default)"],
+            ["Mode", "all media files" if full else "media files not yet ingested"],
+            ["Status", f"{job['status']} - waiting for the ingestion worker"],
+        ]
+        fmt.print_table(["Field", "Value"], rows, title="Media run queued")

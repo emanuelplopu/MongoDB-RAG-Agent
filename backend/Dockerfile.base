@@ -4,6 +4,7 @@
 # - PyTorch, Transformers, Whisper, Docling (~8GB)
 # - Playwright + Chromium browser (~400MB)
 # - Docling models: layout, TableFormer, RapidOCR (~0.8GB, see below)
+# - Whisper model(s) for audio/video transcription (turbo, 1.6GB, see below)
 # - API dependencies (FastAPI, etc.)
 #
 # Build this image ONCE and reuse it:
@@ -12,7 +13,7 @@
 # Then use Dockerfile.fast for quick code-only rebuilds
 #
 # VERSION: Update this when changing dependencies
-ARG BASE_VERSION=1.1.0
+ARG BASE_VERSION=1.2.0
 
 FROM python:3.11-slim AS builder
 
@@ -118,11 +119,25 @@ COPY --from=builder /root/.cache/ms-playwright /root/.cache/ms-playwright
 ENV DOCLING_ARTIFACTS_PATH=/opt/docling-models
 RUN docling-tools models download -o /opt/docling-models layout tableformer rapidocr     && rm -rf /root/.cache/huggingface /opt/docling-models/.cache
 
+# Whisper checkpoint(s) for audio/video transcription (src/ingestion/ingest.py,
+# MediaConfig). Docling's ASR pipeline calls whisper.load_model(name,
+# download_root=DOCLING_ARTIFACTS_PATH), so the checkpoint must sit directly in
+# the artifacts directory under openai-whisper's own file name (turbo =
+# large-v3-turbo.pt). Without this layer every conversion worker downloaded the
+# 1.6 GB at its first recording (an hour of stalled slots on a throttled uplink,
+# 2026-11-06); the pipeline now records a missing model as an error instead of
+# downloading. Bake other sizes the media config may select with
+#   --build-arg WHISPER_MODELS="turbo small"
+# (names from whisper._MODELS: tiny, base, small, medium, large, turbo, ...).
+ARG WHISPER_MODELS="turbo"
+RUN python -c "import os, whisper; root = os.environ['DOCLING_ARTIFACTS_PATH']; [whisper._download(whisper._MODELS[name], root, False) for name in '${WHISPER_MODELS}'.split()]" \
+    && ls -la /opt/docling-models/*.pt
+
 # Create app directories
 RUN mkdir -p /app/projects /app/data /app/documents /app/src /app/backend
 
 # Label for version tracking
-ARG BASE_VERSION=1.1.0
+ARG BASE_VERSION=1.2.0
 LABEL recallhub.base.version="${BASE_VERSION}" \
       recallhub.base.description="Pre-built base image with ML deps + Playwright"
 

@@ -69,8 +69,8 @@ Supported-extension files: **390,192**; unsupported: **26,171** (mostly noise �
 | **images (.jpg/.png/.bmp)** | ~21k | **works for document photos; noisy for real photos** | Docling OCR; MPO and 0-dpi files are re-saved correctly (`prepare_image_for_docling`). Live runs with `OCR_IMAGE_NOISE_GATE=false`, so photos that OCR to letter-soup are indexed as noise (the scale-test noise gate exists but is off in the live `.env`). |
 | **.tif / .tiff** | 242 | **lossy** | **Multi-page TIFFs are flattened to page 1** (3/10 sampled had 3–8 frames). Separately, **every** TIFF is unnecessarily re-saved because its DPI tag is a PIL `IFDRational`, which fails the `isinstance(v,(int,float))` check in `prepare_image_for_docling` → `bad_dpi=True`. |
 | **.gif** | 852 | **works (static)** | Animated GIFs would use frame 0 only (none animated in sample; rare). |
-| **video (.mp4/.mov/.avi)** | ~340 / ~30 GB | **not ingested (by design)** | Returns `"[Video: … not yet supported]"`. No transcription pipeline. `.wmv` is additionally absent from `SUPPORTED_INGESTION_EXTENSIONS`, so `.wmv` is not even walked. |
-| **audio (.mp3/.m4a/.wav)** | ~66 / ~5 GB | **broken offline** | With no OpenAI key (the live config) the path uses local Whisper via Docling, whose **`turbo` model is not baked into the image** — first use downloads **1.51 GB** (fails in an offline/air-gapped install). Language is **hard-coded `"en"`**, so German audio is mis-transcribed. `faster_whisper` is not importable, but the code uses openai-whisper, so that is moot. |
+| **video (.mp4/.mov/.avi)** | ~340 / ~30 GB | **not ingested (by design)** | Returns `"[Video: … not yet supported]"`. No transcription pipeline. `.wmv` is additionally absent from `SUPPORTED_INGESTION_EXTENSIONS`, so `.wmv` is not even walked. *2026-11-07: the audio track is transcribed (ffmpeg extraction, `media.video`), `.wmv` is walked; see docs/04, "Media transcription".* |
+| **audio (.mp3/.m4a/.wav)** | ~66 / ~5 GB | **broken offline** | With no OpenAI key (the live config) the path uses local Whisper via Docling, whose **`turbo` model is not baked into the image** — first use downloads **1.51 GB** (fails in an offline/air-gapped install). Language is **hard-coded `"en"`**, so German audio is mis-transcribed. `faster_whisper` is not importable, but the code uses openai-whisper, so that is moot. *2026-11-07: the checkpoint is baked into the base image (`WHISPER_MODELS`), the language is configurable (`media.language`, default detect), transcriptions have their own threads/device/slots and budget, and a media run (`retry_media`) transcribes the deferred files; see docs/04, "Media transcription".* |
 
 ### Structure / robustness (all pass)
 
@@ -184,7 +184,7 @@ from `SUPPORTED_INGESTION_EXTENSIONS` (`_supported_file_patterns()` in
 `backend/routers/ingestion.py`); the hand-written list had already drifted (no `.tif`).
 
 Items 3, 5 and 6 above are therefore done; item 2 is enabled for the diejuristin ingest
-(`MSG_EXTRACT_ATTACHMENTS=true` in the live `.env`); items 4 and 7 (audio/video) stay open.
+(`MSG_EXTRACT_ATTACHMENTS=true` in the live `.env`); items 4 and 7 (audio/video) were addressed on 2026-11-07 (docs/04, "Media transcription").
 
 ## Follow-up 2026-10-28: scanned pages whose OCR text Docling keeps inside a picture (F35)
 
