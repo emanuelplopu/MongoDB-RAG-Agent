@@ -10,7 +10,6 @@ from backend.models.schemas import (
 from backend.core.config import settings
 from backend.services.identifier_search import (
     COPY_FIELDS_PROJECTION,
-    DEFAULT_NUM_CANDIDATES,
     detect_identifiers,
     fetch_exact_hits,
     identifier_fetch_count,
@@ -20,6 +19,12 @@ from backend.services.identifier_search import (
     vector_num_candidates,
 )
 from backend.services.query_embedding import embed_query
+from backend.services.search_results import (
+    ORDINARY_FETCH_FACTOR,
+    document_lookup_stage,
+    drop_placeholder_results,
+    fused_order,
+)
 from backend.services.text_query import QueryTooLongError, run_text_search, text_search_stage
 
 logger = logging.getLogger(__name__)
@@ -55,18 +60,11 @@ async def semantic_search(request: Request, search_request: SearchRequest):
                     "index": settings.mongodb_vector_index,
                     "queryVector": query_embedding,
                     "path": "embedding",
-                    "numCandidates": 100,
+                    "numCandidates": vector_num_candidates(search_request.match_count),
                     "limit": search_request.match_count
                 }
             },
-            {
-                "$lookup": {
-                    "from": settings.mongodb_collection_documents,
-                    "localField": "document_id",
-                    "foreignField": "_id",
-                    "as": "doc_info"
-                }
-            },
+            document_lookup_stage(settings.mongodb_collection_documents),
             {"$unwind": "$doc_info"},
             {
                 "$project": {
@@ -83,7 +81,8 @@ async def semantic_search(request: Request, search_request: SearchRequest):
         
         results = []
         cursor = collection.aggregate(pipeline)
-        async for doc in cursor:
+        found = [doc async for doc in cursor]
+        for doc in drop_placeholder_results(found):
             results.append(SearchResultItem(
                 chunk_id=str(doc["chunk_id"]),
                 document_id=str(doc["document_id"]),
@@ -131,14 +130,7 @@ async def text_search(request: Request, search_request: SearchRequest):
             return [
                 text_search_stage(search_request.query, index=settings.mongodb_text_index, fuzzy=fuzzy),
                 {"$limit": search_request.match_count},
-                {
-                    "$lookup": {
-                        "from": settings.mongodb_collection_documents,
-                        "localField": "document_id",
-                        "foreignField": "_id",
-                        "as": "doc_info"
-                    }
-                },
+                document_lookup_stage(settings.mongodb_collection_documents),
                 {"$unwind": "$doc_info"},
                 {
                     "$project": {
@@ -154,7 +146,7 @@ async def text_search(request: Request, search_request: SearchRequest):
             ]
 
         results = []
-        for doc in await run_text_search(collection, text_pipeline, query=search_request.query):
+        for doc in drop_placeholder_results(await run_text_search(collection, text_pipeline, query=search_request.query)):
             results.append(SearchResultItem(
                 chunk_id=str(doc["chunk_id"]),
                 document_id=str(doc["document_id"]),
@@ -192,11 +184,17 @@ async def hybrid_search(request: Request, search_request: SearchRequest):
     A query that names a legal identifier (``FN 404945h``, ``EZ 52 KG 11029``,
     ``13 U 39/16v``) takes the identifier path of
     ``backend/services/identifier_search``: wider candidate windows, one exact
-    phrase query pinned ahead of the fused list, copies collapsed. A statute
+    phrase query pinned ahead of the fused list. A statute
     citation (``§ 1 TKG 2021``, ``Art 6 EMRK``) or a statute name with a year
     additionally replaces the fuzzy text stage with phrase clauses
     (``plan_text_stage``) and guarantees the vector top-3 a place in the
-    result window (``semantic_guarantee``). Ordinary queries are unaffected.
+    result window (``semantic_guarantee``).
+
+    Every query (since 2026-11-11, ``docs/27-POST_INGESTION_VALIDATION.md``): copies of the
+    same file collapse into one result whose ``metadata.locations`` lists the other paths
+    (``backend/services/search_results``), stored reader placeholders are dropped, the
+    vector stage looks at ``20 x limit`` candidates, and the join to ``documents`` reads
+    title, source and content hash instead of the whole document.
     """
     start_time = time.time()
 
@@ -208,13 +206,11 @@ async def hybrid_search(request: Request, search_request: SearchRequest):
         text_plan = plan_text_stage(search_request.query, identifiers, index=settings.mongodb_text_index)
         if identifiers:
             fetch_count = identifier_fetch_count(search_request.match_count)
-            num_candidates = vector_num_candidates(fetch_count)
-            copy_fields = dict(COPY_FIELDS_PROJECTION)
         else:
-            # Fetch more results for RRF
-            fetch_count = search_request.match_count * 2
-            num_candidates = DEFAULT_NUM_CANDIDATES
-            copy_fields = {}
+            # Fetch more results for RRF; copies and placeholders leave the list afterwards
+            fetch_count = search_request.match_count * ORDINARY_FETCH_FACTOR
+        num_candidates = vector_num_candidates(fetch_count)
+        copy_fields = dict(COPY_FIELDS_PROJECTION)
 
         # Run semantic search
         query_embedding = await get_embedding(search_request.query)
@@ -229,14 +225,7 @@ async def hybrid_search(request: Request, search_request: SearchRequest):
                     "limit": fetch_count
                 }
             },
-            {
-                "$lookup": {
-                    "from": settings.mongodb_collection_documents,
-                    "localField": "document_id",
-                    "foreignField": "_id",
-                    "as": "doc_info"
-                }
-            },
+            document_lookup_stage(settings.mongodb_collection_documents),
             {"$unwind": "$doc_info"},
             {
                 "$project": {
@@ -270,14 +259,7 @@ async def hybrid_search(request: Request, search_request: SearchRequest):
             return [
                 text_stage,
                 {"$limit": fetch_count},
-                {
-                    "$lookup": {
-                        "from": settings.mongodb_collection_documents,
-                        "localField": "document_id",
-                        "foreignField": "_id",
-                        "as": "doc_info"
-                    }
-                },
+                document_lookup_stage(settings.mongodb_collection_documents),
                 {"$unwind": "$doc_info"},
                 {
                     "$project": {
@@ -313,14 +295,15 @@ async def hybrid_search(request: Request, search_request: SearchRequest):
             if chunk_id not in result_map:
                 result_map[chunk_id] = doc
         
-        # Sort by RRF score
-        sorted_results = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
+        # Sort by RRF score; on a tie the text hit precedes a vector-only hit (fused_order)
+        text_ids = {str(doc["chunk_id"]) for doc in text_results}
 
         fused = []
-        for chunk_id, score in sorted_results:
+        for chunk_id in fused_order(rrf_scores, text_ids):
             doc = result_map[chunk_id]
-            doc["similarity"] = score
+            doc["similarity"] = rrf_scores[chunk_id]
             fused.append(doc)
+        fused = drop_placeholder_results(fused)
 
         if identifiers:
             exact_hits = await fetch_exact_hits(
@@ -340,7 +323,8 @@ async def hybrid_search(request: Request, search_request: SearchRequest):
                 len(exact_hits), len(fused), len(guaranteed),
             )
         else:
-            final_results = fused[:search_request.match_count]
+            # No pinned hits: the merge only collapses copies (metadata.locations)
+            final_results = merge_identifier_results([], fused, search_request.match_count)
 
         results = []
         for doc in final_results:

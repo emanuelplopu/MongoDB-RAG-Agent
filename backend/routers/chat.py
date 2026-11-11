@@ -191,6 +191,8 @@ async def perform_search(db, query: str, search_type: SearchType, match_count: i
                         "from": settings.mongodb_collection_documents,
                         "localField": "document_id",
                         "foreignField": "_id",
+                        # title, source and content hash only: a plain $lookup loads the whole document, content included
+                        "pipeline": [{"$project": {"title": 1, "source": 1, "content_hash": 1}}],
                         "as": "doc_info"
                     }
                 },
@@ -259,6 +261,8 @@ async def perform_search(db, query: str, search_type: SearchType, match_count: i
                             "from": settings.mongodb_collection_documents,
                             "localField": "document_id",
                             "foreignField": "_id",
+                            # title, source and content hash only: a plain $lookup loads the whole document, content included
+                            "pipeline": [{"$project": {"title": 1, "source": 1, "content_hash": 1}}],
                             "as": "doc_info"
                         }
                     },

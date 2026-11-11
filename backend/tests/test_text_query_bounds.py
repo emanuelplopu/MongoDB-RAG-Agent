@@ -353,7 +353,7 @@ class TestEndpoints:
         pipelines = [call.args[0] for call in mock_db.chunks_collection.aggregate.call_args_list]
         assert [_stage_kind(p) for p in pipelines] == ["vector", "text", "text"]
         assert "compound" in pipelines[1][0]["$search"] and "fuzzy" not in str(pipelines[2][0])
-        assert pipelines[1][1] == pipelines[2][1] == {"$limit": 6}
+        assert pipelines[1][1] == pipelines[2][1] == {"$limit": 9}
 
     def test_hybrid_endpoint_returns_400_when_both_attempts_fail(self, client: TestClient, mock_db, embedding) -> None:
         mock_db.chunks_collection.aggregate = _failing_then({"vector": [_doc("v1")], "text": []}, text_failures=2)

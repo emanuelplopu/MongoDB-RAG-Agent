@@ -484,12 +484,50 @@ class TestHybridEndpoint:
         response = client.post("/api/v1/search/hybrid", json={"query": "Geschäftszweig ALPO CONSULT GmbH", "match_count": 10})
         assert response.status_code == 200, response.text
         pipelines = [call.args[0] for call in aggregate.call_args_list]
-        assert [_pipeline_kind(p) for p in pipelines] == ["vector", "text"]
+        assert [_pipeline_kind(p) for p in pipelines] == ["vector", "text"], "no exact identifier query"
         vector_stage = pipelines[0][0]["$vectorSearch"]
-        assert vector_stage == {**vector_stage, "numCandidates": 100, "limit": 20}
-        assert pipelines[1][1] == {"$limit": 20}
-        assert "content_hash" not in pipelines[0][-1]["$project"]
-        assert "content_hash" not in pipelines[1][-1]["$project"]
+        # three times the requested results per index (copies and placeholders leave the list
+        # afterwards), and 20 candidates per returned vector result
+        assert vector_stage == {**vector_stage, "numCandidates": 600, "limit": 30}
+        assert pipelines[1][1] == {"$limit": 30}
+        # the copy fields are projected on every query, so copies collapse on every query
+        assert pipelines[0][-1]["$project"]["content_hash"] == "$doc_info.content_hash"
+        assert pipelines[1][-1]["$project"]["chunk_index"] == 1
+
+    def test_every_pipeline_joins_the_document_without_its_content(self, client: TestClient, mock_db, embedding) -> None:
+        """A plain $lookup loaded the whole parent document (megabytes of content) for each hit."""
+        aggregate = mock_db.chunks_collection.aggregate
+        aggregate.reset_mock()
+        for path in ("hybrid", "semantic", "text"):
+            assert client.post(f"/api/v1/search/{path}", json={"query": "Mietvertrag Kündigung", "match_count": 5}).status_code == 200
+        lookups = [stage["$lookup"] for call in aggregate.call_args_list for stage in call.args[0] if "$lookup" in stage]
+        assert len(lookups) == 4
+        for lookup in lookups:
+            assert lookup["pipeline"] == [{"$project": {"title": 1, "source": 1, "content_hash": 1}}]
+            assert (lookup["localField"], lookup["foreignField"], lookup["as"]) == ("document_id", "_id", "doc_info")
+
+    def test_ordinary_query_collapses_copies_and_drops_placeholders(self, client: TestClient, mock_db, embedding) -> None:
+        """The attachment next to its e-mail, the same letter in two matters, and stored image placeholders."""
+        vector = [
+            _doc("brief-a", source="FP-ROHR/Korrespondenz/Brief.pdf", content_hash="H1", chunk_index=0, similarity=0.9),
+            _doc("logo", source="FP-ROHR/Attachements/image001.jpg", content_hash="H9", chunk_index=0, similarity=0.8),
+            _doc("brief-b", source="FP-ROHR/Attachements/Brief.pdf", content_hash="H1", chunk_index=0, similarity=0.7),
+            _doc("other", source="ERZBI/Vertrag.docx", content_hash="H2", chunk_index=3, similarity=0.6),
+        ]
+        vector[1]["content"] = "[Image: image001.jpg - OCR extracted minimal text]"
+        canned = {"vector": vector, "text": []}
+        aggregate = mock_db.chunks_collection.aggregate
+        aggregate.reset_mock()
+        aggregate.side_effect = lambda pipeline: _AsyncCursor(canned[_pipeline_kind(pipeline)])
+        try:
+            response = client.post("/api/v1/search/hybrid", json={"query": "Schreiben an die Hausverwaltung", "match_count": 10})
+        finally:
+            aggregate.side_effect = None
+        assert response.status_code == 200, response.text
+        results = response.json()["results"]
+        assert [r["chunk_id"] for r in results] == ["brief-a", "other"], "one result per copy group, no placeholder"
+        assert results[0]["metadata"]["locations"] == ["FP-ROHR/Attachements/Brief.pdf"]
+        assert results[1]["metadata"]["locations"] == []
 
     def test_identifier_query_pins_exact_hits_and_collapses_copies(self, client: TestClient, mock_db, embedding) -> None:
         canned = _canned_results()
