@@ -615,7 +615,11 @@ used to fail the search outright. `backend/services/query_embedding.py` now
   request; 4xx answers other than 429 are not retried), and
 - embeds queries at `QUERY_EMBEDDING_URL` when it is set, e.g. the
   `embedder-query` compose service: the same image and model on host port
-  `11091` (`-np 2`, 8k context, ~0.9 GB VRAM), alias `embedder-query`, started
+  `11091` (`-np 2`, 8k context; measured 2026-10-31 on the live stack with `-c 4096`:
+  1.7 GB VRAM with the audio/vision mmproj the GGUF ships, 0.5 GB with
+  `--no-mmproj -b 2048 -ub 2048` (same vectors), 0.13-0.3 s per query, 0.2-0.8 s with four back-to-back
+  100-chunk batches on the ingestion instance, while that instance
+  needed 38 s for a single query), alias `embedder-query`, started
   with `--profile embedder-query`. Ingestion keeps `EMBEDDING_BASE_URL`.
 
 ```powershell
