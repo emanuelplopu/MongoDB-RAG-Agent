@@ -14,15 +14,19 @@ Benefits over custom chunking:
 - Battle-tested (maintained by Docling team)
 """
 
+import contextlib
+import contextvars
 import os
 import logging
-from typing import List, Dict, Any, Optional
+import time
+from typing import Callable, Iterator, List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 from transformers import AutoTokenizer
 from docling.chunking import HybridChunker
-from docling_core.types.doc import DoclingDocument
+from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
+from docling_core.types.doc import DoclingDocument, TableCell, TableData, TableItem
 
 # Load environment variables
 load_dotenv()
@@ -76,6 +80,218 @@ def furniture_serializer_params() -> Optional[Any]:
     if provider is None:
         return None
     return provider.get_serializer(DoclingDocument(name="probe")).params
+
+
+class ChunkingDeadlineExceeded(RuntimeError):
+    """Chunking ran past the deadline it was given (see :func:`chunking_deadline`)."""
+
+
+#: ``time.monotonic()`` value after which the chunker aborts, for the task/thread chunking now.
+_chunking_deadline: contextvars.ContextVar[Optional[float]] = contextvars.ContextVar(
+    "chunking_deadline", default=None
+)
+
+
+@contextlib.contextmanager
+def chunking_deadline(deadline: Optional[float]) -> Iterator[None]:
+    """Make every token count inside the block check ``deadline`` (``time.monotonic()``).
+
+    The HybridChunker's splitting loops count tokens at every step, so a deadline checked
+    there ends a pathological split from the inside, wherever docling-core is spinning:
+    :class:`DeadlineTokenizer` raises :class:`ChunkingDeadlineExceeded` on the first count
+    after the deadline. ``None`` disables the check.
+    """
+    token = _chunking_deadline.set(deadline)
+    try:
+        yield
+    finally:
+        _chunking_deadline.reset(token)
+
+
+def check_chunking_deadline() -> None:
+    """Raise :class:`ChunkingDeadlineExceeded` when the current chunking deadline has passed."""
+    deadline = _chunking_deadline.get()
+    if deadline is not None and time.monotonic() > deadline:
+        raise ChunkingDeadlineExceeded(
+            f"chunking ran past its deadline by {time.monotonic() - deadline:.0f}s"
+        )
+
+
+class DeadlineTokenizer(HuggingFaceTokenizer):
+    """The HybridChunker's tokenizer, checking the chunking deadline on every count.
+
+    docling-core's table and text splitting is built on ``count_tokens``; a 2,670 x 32 cell
+    spreadsheet (2.7 MB of Markdown) made ``_split_table_by_columns`` re-tokenize the whole
+    table over and over for hours on the event-loop thread (2026-11-02/03). Checking the
+    deadline here costs one clock read per count and aborts any such loop cooperatively.
+    """
+
+    def count_tokens(self, text: str) -> int:
+        check_chunking_deadline()
+        return super().count_tokens(text)
+
+
+#: A table estimated above this many times ``max_tokens`` is split into row windows before
+#: the HybridChunker sees it (:func:`presplit_large_tables`).
+TABLE_PRESPLIT_FACTOR = 2
+#: Row windows are packed to this share of ``max_tokens``, so that most of them fit one chunk
+#: as the chunker serializes them (its own split of a window is correct but costs a few
+#: hundred token counts per window).
+TABLE_WINDOW_FILL = 0.8
+
+
+def _table_rows(table: TableItem) -> List[List[TableCell]]:
+    """The table's cells grouped by their starting row, in row/column order."""
+    rows: Dict[int, List[TableCell]] = {}
+    for cell in table.data.table_cells:
+        rows.setdefault(cell.start_row_offset_idx, []).append(cell)
+    return [sorted(cells, key=lambda c: c.start_col_offset_idx) for _, cells in sorted(rows.items())]
+
+
+def _row_text(cells: List[TableCell]) -> str:
+    return "| " + " | ".join(cell.text for cell in cells) + " |"
+
+
+def _rebased_cells(rows: List[List[TableCell]], first_row: int, offset: int) -> List[TableCell]:
+    """Copies of the cells of ``rows``, their row offsets moved from ``first_row`` to ``offset``."""
+    out: List[TableCell] = []
+    last_row = first_row + len(rows)
+    for row_cells in rows:
+        for cell in row_cells:
+            end_row = min(cell.end_row_offset_idx, last_row)
+            out.append(cell.model_copy(update={
+                "start_row_offset_idx": cell.start_row_offset_idx - first_row + offset,
+                "end_row_offset_idx": end_row - first_row + offset,
+                "row_span": max(1, end_row - cell.start_row_offset_idx),
+            }))
+    return out
+
+
+def _row_weights(rows: List[List[TableCell]], serialized_tokens: Optional[int]) -> List[float]:
+    """Estimated tokens of each row as the chunker will serialize it.
+
+    With ``serialized_tokens`` (the token count of the chunker's own serialization of the
+    whole table, triplets by default) the rows share it in proportion to their text; without
+    it the Markdown row text is counted by the caller instead.
+    """
+    chars = [sum(len(cell.text) + 3 for cell in row) for row in rows]
+    total_chars = max(1, sum(chars))
+    if serialized_tokens is None:
+        return [float(c) for c in chars]
+    return [serialized_tokens * c / total_chars for c in chars]
+
+
+def presplit_large_tables(
+    doc: DoclingDocument,
+    max_tokens: int,
+    count_tokens: Callable[[str], int],
+    serializer_provider: Optional[Any] = None,
+) -> Tuple[DoclingDocument, int]:
+    """Replace every oversized table by row-window sub-tables, each with the header rows.
+
+    The HybridChunker handles a table that does not fit a chunk by splitting it by columns
+    and re-tokenizing the whole table at every step of that search, then feeding every
+    column slice to a line chunker, and repeating the whole segmentation whenever a piece
+    overflows: 2 s for a 100 x 10 table, 51 s for 200 x 20, hours for 2,670 x 32. Cutting a
+    big table into sub-tables of about ``TABLE_WINDOW_FILL * max_tokens`` tokens first keeps
+    that work linear in the table's size (one token count of the serialized table here, a
+    small table per window there) and gives each window the header rows, which the column
+    split lost anyway.
+
+    Tables whose text is estimated below ``TABLE_PRESPLIT_FACTOR * max_tokens`` tokens are
+    left to the chunker; when nothing needs splitting the document is returned as is,
+    otherwise a copy is modified (the caller's document keeps its tables).
+
+    Args:
+        doc: The converted document.
+        max_tokens: The chunker's token budget per chunk.
+        count_tokens: Token counter of the chunker's tokenizer.
+        serializer_provider: The chunker's serializer provider; with it the windows are
+            sized from the chunker's own serialization of the table (the triplet form is
+            about twice the Markdown), without it from the Markdown rows.
+
+    Returns:
+        ``(document, tables_split)``.
+    """
+    if not doc.tables:
+        return doc, 0
+    threshold_chars = TABLE_PRESPLIT_FACTOR * max_tokens * CHARS_PER_TOKEN
+    oversized = [
+        table.self_ref for table in doc.tables
+        if sum(len(cell.text) + 3 for cell in table.data.table_cells) > threshold_chars
+    ]
+    if not oversized:
+        return doc, 0
+    doc = doc.model_copy(deep=True)
+    serializer = serializer_provider.get_serializer(doc=doc) if serializer_provider is not None else None
+    split = 0
+    for ref in oversized:
+        table = next(t for t in doc.tables if t.self_ref == ref)
+        rows = _table_rows(table)
+        serialized_tokens: Optional[int] = None
+        if serializer is not None:
+            try:
+                serialized_tokens = count_tokens(serializer.serialize(item=table).text)
+            except ChunkingDeadlineExceeded:
+                raise
+            except Exception as exc:  # noqa: BLE001 - size the windows from the Markdown rows instead
+                logger.debug(f"Table serialization for window sizing failed ({exc}); using Markdown rows")
+        header_rows: List[List[TableCell]] = []
+        for row in rows:
+            if row and all(cell.column_header for cell in row):
+                header_rows.append(row)
+            else:
+                break
+        if not header_rows:
+            header_rows = rows[:1]
+        body_rows = rows[len(header_rows):]
+        if serialized_tokens is None:
+            header_tokens = sum(count_tokens(_row_text(r)) for r in header_rows)
+            weights = [float(count_tokens(_row_text(row))) for row in body_rows]
+        else:
+            header_tokens = 0  # the serialized form carries the header inside every row
+            weights = _row_weights(rows, serialized_tokens)[len(header_rows):]
+        budget = max(1.0, TABLE_WINDOW_FILL * max_tokens - header_tokens)
+        windows: List[List[List[TableCell]]] = []
+        window: List[List[TableCell]] = []
+        window_tokens = 0.0
+        for row, tokens in zip(body_rows, weights):
+            if window and window_tokens + tokens > budget:
+                windows.append(window)
+                window, window_tokens = [], 0.0
+            window.append(row)
+            window_tokens += tokens
+        if window:
+            windows.append(window)
+        if len(windows) < 2:
+            continue
+        header_first = header_rows[0][0].start_row_offset_idx
+        sibling = table
+        caption = table.captions[0] if table.captions else None
+        for window in windows:
+            cells = _rebased_cells(header_rows, header_first, 0)
+            cells.extend(_rebased_cells(window, window[0][0].start_row_offset_idx, len(header_rows)))
+            sibling = doc.insert_table(
+                sibling=sibling,
+                data=TableData(
+                    num_rows=len(header_rows) + len(window),
+                    num_cols=table.data.num_cols,
+                    table_cells=cells,
+                ),
+                caption=caption,
+                prov=table.prov[0] if table.prov else None,
+                label=table.label,
+                content_layer=table.content_layer,
+                after=True,
+            )
+            caption = None
+        doc.delete_items(node_items=[table])
+        split += 1
+        logger.info(
+            f"Table of {len(rows)} rows x {table.data.num_cols} columns split into "
+            f"{len(windows)} row windows of <= {max_tokens} tokens before chunking"
+        )
+    return doc, split
 
 
 @dataclass
@@ -148,9 +364,11 @@ class DoclingHybridChunker:
         serializer_provider = _furniture_serializer_provider()
         if serializer_provider is not None:
             chunker_kwargs["serializer_provider"] = serializer_provider
+        # The chunker's tokenizer checks the chunking deadline on every token count, so a
+        # pathological split (a huge table) ends when the file's post-conversion budget does
+        self.deadline_tokenizer = DeadlineTokenizer(tokenizer=self.tokenizer, max_tokens=config.max_tokens)
         self.chunker = HybridChunker(
-            tokenizer=self.tokenizer,
-            max_tokens=config.max_tokens,
+            tokenizer=self.deadline_tokenizer,
             merge_peers=True,  # Merge small adjacent chunks
             **chunker_kwargs,
         )
@@ -163,10 +381,15 @@ class DoclingHybridChunker:
         title: str,
         source: str,
         metadata: Optional[Dict[str, Any]] = None,
-        docling_doc: Optional[DoclingDocument] = None
+        docling_doc: Optional[DoclingDocument] = None,
+        deadline: Optional[float] = None,
     ) -> List[DocumentChunk]:
         """
         Chunk a document using Docling's HybridChunker.
+
+        The work is synchronous (:meth:`chunk_document_sync`); the ingestion pipeline runs
+        it on a thread so the event loop stays responsive, this coroutine form is kept for
+        callers that chunk inline.
 
         Args:
             content: Document content (markdown format)
@@ -174,10 +397,46 @@ class DoclingHybridChunker:
             source: Document source
             metadata: Additional metadata
             docling_doc: Optional pre-converted DoclingDocument (for efficiency)
+            deadline: ``time.monotonic()`` value after which chunking aborts with
+                :class:`ChunkingDeadlineExceeded`; ``None`` for no limit
 
         Returns:
             List of document chunks with contextualized content
         """
+        return self.chunk_document_sync(
+            content=content, title=title, source=source, metadata=metadata,
+            docling_doc=docling_doc, deadline=deadline,
+        )
+
+    def chunk_document_sync(
+        self,
+        content: str,
+        title: str,
+        source: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        docling_doc: Optional[DoclingDocument] = None,
+        deadline: Optional[float] = None,
+    ) -> List[DocumentChunk]:
+        """Chunk a document (the body of :meth:`chunk_document`, callable from a worker thread).
+
+        Oversized tables are cut into row windows first (:func:`presplit_large_tables`), and
+        every token count checks ``deadline``, so neither the HybridChunker's splitting nor
+        this method's own loop can run on unbounded.
+
+        Raises:
+            ChunkingDeadlineExceeded: ``deadline`` passed before the chunks were ready.
+        """
+        with chunking_deadline(deadline):
+            return self._chunk_document(content, title, source, metadata, docling_doc)
+
+    def _chunk_document(
+        self,
+        content: str,
+        title: str,
+        source: str,
+        metadata: Optional[Dict[str, Any]],
+        docling_doc: Optional[DoclingDocument],
+    ) -> List[DocumentChunk]:
         if not content.strip():
             return []
 
@@ -197,6 +456,13 @@ class DoclingHybridChunker:
             return self._simple_fallback_chunk(content, base_metadata)
 
         try:
+            # Big tables are cut into row windows first: the HybridChunker's column split
+            # re-tokenizes the whole table at every step and took hours on a 2,670-row sheet
+            docling_doc, _ = presplit_large_tables(
+                docling_doc, self.config.max_tokens, self.deadline_tokenizer.count_tokens,
+                serializer_provider=self.chunker.serializer_provider,
+            )
+
             # Use HybridChunker to chunk the DoclingDocument
             chunk_iter = self.chunker.chunk(dl_doc=docling_doc)
             chunks = list(chunk_iter)
@@ -206,6 +472,7 @@ class DoclingHybridChunker:
             current_pos = 0
 
             for i, chunk in enumerate(chunks):
+                check_chunking_deadline()
                 # Get contextualized text (includes heading hierarchy)
                 contextualized_text = self.chunker.contextualize(chunk=chunk)
 
@@ -242,6 +509,8 @@ class DoclingHybridChunker:
             logger.info(f"Created {len(document_chunks)} chunks using HybridChunker")
             return document_chunks
 
+        except ChunkingDeadlineExceeded:
+            raise
         except Exception as e:
             logger.error(f"HybridChunker failed: {e}, falling back to simple chunking")
             return self._simple_fallback_chunk(content, base_metadata)
@@ -274,6 +543,7 @@ class DoclingHybridChunker:
         chunk_index = 0
 
         while start < len(content):
+            check_chunking_deadline()
             end = start + chunk_size
 
             if end >= len(content):
