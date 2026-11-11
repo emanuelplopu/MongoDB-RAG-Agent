@@ -407,7 +407,7 @@ class _WorkerJobs:
                 return False
         return True
 
-    async def find_one_and_update(self, query: dict, update: dict, sort=None, return_document=None) -> Optional[dict]:
+    async def find_one_and_update(self, query: dict, update: dict, sort=None, return_document=None, projection=None) -> Optional[dict]:
         for doc in self.docs:
             if self._matches(doc, query):
                 doc.update(update["$set"])

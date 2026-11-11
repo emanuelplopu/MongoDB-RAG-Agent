@@ -8,8 +8,16 @@ error string as its source. The pipeline no longer stores such placeholders
 (:class:`src.ingestion.ingest.UnreadableFileError`); this module cleans up the ones that
 exist (``quellexctl ingest purge-placeholders``).
 
-Each purged document is recorded in ``failed_documents`` (``error_type: error``) so the
-file shows up on the failed-documents page and the "retry errors" option re-queues it.
+Since 2026-11-11 the purge also covers the placeholders the pipeline stored until then:
+``[Image: … - OCR extracted minimal text]`` (8,600 in one corpus), ``[Video: … not yet
+supported]``, ``[Audio: …]`` and ``[Empty email: …]``. The table of prefixes and the
+decision "is this whole content a placeholder" are the pipeline's
+(:mod:`src.ingestion.placeholders`), so the purge removes exactly what a run would no
+longer store.
+
+Each purged document is recorded in ``failed_documents``: ``error_type: error`` for a
+failed read (the "retry errors" option re-queues it), ``no_chunks`` for a file without
+text (``retry_no_chunks``).
 """
 
 from __future__ import annotations
@@ -19,8 +27,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-#: Content that marks a placeholder document (anchored: real text never starts like this).
-PLACEHOLDER_CONTENT_REGEX = r"^\s*\[(Error|Skipped):"
+from src.ingestion.placeholders import PLACEHOLDER_CONTENT_REGEX, placeholder_kind
+
+#: Stored content longer than this is never a placeholder; the query skips it server-side
+_MAX_PLACEHOLDER_CHARS = 2100
 
 __all__ = ["PLACEHOLDER_CONTENT_REGEX", "PurgeResult", "find_placeholder_documents", "purge_placeholder_documents"]
 
@@ -35,6 +45,7 @@ class PurgeResult:
     chunks_deleted: int = 0
     failures_recorded: int = 0
     samples: List[Dict[str, Any]] = field(default_factory=list)  # {id, source, content}
+    by_kind: Dict[str, int] = field(default_factory=dict)  # "error" / "empty" -> documents
 
 
 async def _to_list(cursor: Any) -> List[Dict[str, Any]]:
@@ -43,20 +54,29 @@ async def _to_list(cursor: Any) -> List[Dict[str, Any]]:
 
 
 async def find_placeholder_documents(db: Any, documents_collection: str = "documents") -> List[Dict[str, Any]]:
-    """Documents whose content starts with ``[Error:`` or ``[Skipped:``.
+    """Documents whose whole content is a reader placeholder.
+
+    The anchored regular expression selects the candidates; :func:`placeholder_kind`
+    decides (a real text may start with ``[Image: …]`` and go on).
 
     Args:
         db: The profile's database (Motor or PyMongo Async).
         documents_collection: Name of the documents collection.
 
     Returns:
-        ``{_id, source, content, metadata}`` of every placeholder document.
+        ``{_id, source, content, metadata, kind}`` of every placeholder document, ``kind``
+        being ``"error"`` (failed read) or ``"empty"`` (no text in the file).
     """
     cursor = db[documents_collection].find(
         {"content": {"$regex": PLACEHOLDER_CONTENT_REGEX}},
-        {"_id": 1, "source": 1, "content": 1, "metadata": 1, "title": 1},
+        {"_id": 1, "source": 1, "content": {"$substrCP": ["$content", 0, _MAX_PLACEHOLDER_CHARS]}, "metadata": 1, "title": 1},
     )
-    return await _to_list(cursor)
+    found: List[Dict[str, Any]] = []
+    for doc in await _to_list(cursor):
+        kind = placeholder_kind(doc.get("content"))
+        if kind is not None:
+            found.append({**doc, "kind": kind})
+    return found
 
 
 async def purge_placeholder_documents(
@@ -89,6 +109,8 @@ async def purge_placeholder_documents(
         {"id": str(d.get("_id")), "source": d.get("source"), "content": (d.get("content") or "").strip()[:160]}
         for d in docs[:sample_size]
     ]
+    for d in docs:
+        result.by_kind[d.get("kind", "error")] = result.by_kind.get(d.get("kind", "error"), 0) + 1
     if dry_run or not docs:
         return result
 
@@ -108,7 +130,7 @@ async def purge_placeholder_documents(
                 "file_path": path,
                 "file_name": str(path).replace("\\", "/").rsplit("/", 1)[-1],
                 "file_size_bytes": metadata.get("file_size") or metadata.get("file_size_bytes") or 0,
-                "error_type": "error",
+                "error_type": "error" if d.get("kind", "error") == "error" else "no_chunks",
                 "error_message": (d.get("content") or "").strip()[:500] + " (placeholder document purged)",
                 "timeout_seconds": 0,
                 "processing_time_ms": 0,

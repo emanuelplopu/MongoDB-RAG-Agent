@@ -21,7 +21,7 @@ from backend.core.config import settings
 from src.ingestion.progress import progress_percent_label
 from backend.core.ingestion_jobs import (
     ACTIVE_JOB_STATUSES, API_OWNED, INTERRUPTED_STATUS, RUNNER_API, RUNNER_WORKER, TENANT_FIELD, normalize_status,
-    reached_files, resume_config, status_spellings
+    job_log_tail, reached_files, resume_config, status_spellings
 )
 from backend.routers.auth import require_admin, UserResponse
 from backend.routers.backup import trigger_post_ingestion_backup
@@ -382,7 +382,7 @@ def _find_files_sync(folders: List[str], patterns: List[str]) -> List[str]:
         # Single-pass directory traversal
         for root, dirs, files in os.walk(folder):
             for filename in files:
-                if filename.startswith("._"):
+                if filename.startswith(("._", "~$")):  # AppleDouble forks, Office owner files (is_sidecar_file)
                     continue
                 ext = os.path.splitext(filename)[1].lower()
                 if ext in extensions:
@@ -1495,8 +1495,9 @@ async def run_ingestion(
         if job_id:
             try:
                 collection = await get_jobs_collection(db)
-                # Get final logs list (convert deque to list)
-                final_logs = list(_ingestion_logs)
+                # The job document keeps the tail only: it is rewritten on every progress
+                # update, and 50,000 lines made it 13.5 MB (JOB_DOCUMENT_LOG_LINES)
+                final_logs = job_log_tail(list(_ingestion_logs))
                 await collection.update_one(
                     {"_id": job_id},
                     {"$set": {"logs": final_logs}}

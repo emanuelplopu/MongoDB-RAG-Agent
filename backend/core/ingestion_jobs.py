@@ -31,6 +31,31 @@ FILES_STARTED_FIELD = "files_started_at"
 TENANT_FIELD = "tenant"
 
 
+# Log lines kept in a job document (``logs``). The document is updated about once a second
+# while its job runs (progress, counters, heartbeat) and MongoDB writes the whole document
+# on every update. Until 2026-11-11 the API runner stored its full in-memory log there when
+# a run ended (50,000 lines, 13.5 MB); when the job was resumed, every progress update
+# rewrote 13.5 MB, about a hundred updates queued for up to 17 minutes each, 36,000 write
+# conflicts accumulated, and searches took 4-12 s instead of under one
+# (docs/27-POST_INGESTION_VALIDATION.md). The complete log stays in the container log and,
+# for worker jobs, in the ``ingestion_logs`` collection.
+JOB_DOCUMENT_LOG_LINES = 2000
+
+
+def job_log_tail(lines: List[Any]) -> List[Any]:
+    """The log lines to store in a job document: the last :data:`JOB_DOCUMENT_LOG_LINES`."""
+    return list(lines)[-JOB_DOCUMENT_LOG_LINES:]
+
+
+def trim_job_logs_update() -> Dict[str, Any]:
+    """Update operator that cuts a job document's ``logs`` to :data:`JOB_DOCUMENT_LOG_LINES` lines.
+
+    Merge it into the update that claims or resumes a job: a document written by an older
+    build is cut once, before the run starts updating it every second.
+    """
+    return {"$push": {"logs": {"$each": [], "$slice": -JOB_DOCUMENT_LOG_LINES}}}
+
+
 def reached_files(job: Mapping[str, Any]) -> bool:
     """Return whether the job's run got as far as processing files.
 

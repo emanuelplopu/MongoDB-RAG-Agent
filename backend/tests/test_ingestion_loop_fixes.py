@@ -286,6 +286,12 @@ async def test_save_ingestion_stats_writes_both_collections_and_reports_failures
             if upsert:
                 self.docs.append({**query, **update["$set"]})
 
+        async def update_many(self, query: dict, update: dict) -> None:
+            paths = set(query["file_path"]["$in"])
+            for doc in self.docs:
+                if doc.get("file_path") in paths and doc.get("resolved") is not True:
+                    doc.update(update["$set"])
+
     stats, failed = _Collection(), _Collection()
     pipe = _Pipeline()
     pipe.db = {"ingestion_stats": stats, "failed_documents": failed}

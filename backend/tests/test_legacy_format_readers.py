@@ -111,6 +111,22 @@ def test_discovery_skips_appledouble_sidecars(tmp_path: Path) -> None:
     assert {os.path.basename(f) for f in router._find_files_sync([str(tmp_path)], ["*.rtf", "*.txt"])} == found
 
 
+def test_discovery_skips_office_owner_files(tmp_path: Path) -> None:
+    """``~$Brief.docx`` is Word's 162-byte lock file, not a document (2,500 on one firm's shares)."""
+    (tmp_path / "Brief.docx").write_bytes(b"PK real document")
+    (tmp_path / "~$Brief.docx").write_bytes(b"\x05Weber" + b"\x00" * 156)
+    (tmp_path / "~$-05-13 AV.doc").write_bytes(b"\x05Eggers" + b"\x00" * 155)
+    (tmp_path / "~WRL0001.tmp").write_bytes(b"x")
+    (tmp_path / "~Entwurf.doc").write_bytes(b"a real file whose name starts with a tilde")
+    p = ingest.DocumentIngestionPipeline.__new__(ingest.DocumentIngestionPipeline)
+    p.documents_folders = [str(tmp_path)]
+    found = {os.path.basename(f) for f in p._find_document_files()}
+    assert found == {"Brief.docx", "~Entwurf.doc"}
+    assert ingest.is_sidecar_file("~$Brief.docx") and not ingest.is_sidecar_file("~Entwurf.doc")
+    router = pytest.importorskip("backend.routers.ingestion")
+    assert {os.path.basename(f) for f in router._find_files_sync([str(tmp_path)], ["*.docx", "*.doc"])} == found
+
+
 # ---------------------------------------------------------------------------
 # RTF
 # ---------------------------------------------------------------------------
