@@ -13,6 +13,7 @@ from backend.agent.strategies.base import (
     BaseStrategy, StrategyMetadata, StrategyConfig, StrategyDomain
 )
 from backend.agent.strategies.registry import StrategyRegistry
+from backend.services.search_results import fused_order
 
 
 @StrategyRegistry.register
@@ -354,7 +355,7 @@ Generate a comprehensive technical response:'''
                     rrf_scores[chunk_id] = 0.5 + (normalized * 0.5)
         
         # Sort and return
-        sorted_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
+        sorted_ids = fused_order(rrf_scores, text_ids)  # on a tie the text hit precedes a vector-only hit
         
         merged = []
         for chunk_id in sorted_ids[:limit]:
