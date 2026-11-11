@@ -466,15 +466,15 @@ downloaded at runtime, the 16 slots of the 2026-11-06 live run stalled for an
 hour on the first law-lecture recordings (37 mp3 + 23 m4a + 6 wav + 171 videos
 on the shares). Since 2026-11-07 media files are handled by their own config,
 the `media` section of the performance config (`backend/services/media_config.py`,
-`POST /api/v1/system/ingestion-performance`; the Configuration page does not
-edit the section yet and keeps it as stored), with `INGEST_MEDIA_*` / the
+`POST /api/v1/system/ingestion-performance`, the "Media Transcription" block of
+the Configuration page's ingestion tab), with `INGEST_MEDIA_*` / the
 `ingest_media_*` settings as the defaults for runs without one:
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
 | `max_concurrent` | 2 | Transcriptions at once. A media file takes one of these *media slots* before a file slot, so transcriptions never occupy every slot of a document run and a waiting transcription holds no file slot. |
 | `threads` | 0 | Torch CPU threads per transcription; 0 = the container's cores shared among `max_concurrent` (20 cores, 2 at once: 10 each). Set around the transcription only (`torch_thread_limit`), so the Docling models keep their share. |
-| `device` | `auto` | `auto` = CUDA when the container sees a GPU (`docker-compose.gpu.yml`), else the CPU; `cpu`; `cuda`. A failure on the GPU (out of memory next to the embedders and the chat model) is retried once on the CPU. |
+| `device` | `auto` | `auto` = CUDA when the container sees a GPU (`docker-compose.media-gpu.yml`), else the CPU; `cpu`; `cuda`. A failure on the GPU (out of memory next to the embedders and the chat model) is retried once on the CPU. |
 | `model` | `turbo` | Whisper model; must be baked into the image (`WHISPER_MODELS` build arg). |
 | `language` | (detect) | ISO 639-1 code of the recordings, e.g. `de` for the Austrian lectures; empty lets Whisper detect it from the first 30 seconds (the code hard-coded `en` until 2026-11-07, which mangled German audio). |
 | `defer` | false | Record media files as `media_deferred` (`failed_documents`, job counter `media_deferred_files`) instead of transcribing them; a later media run picks them up. |
@@ -513,9 +513,28 @@ the document ingestion is done, either
 uv run python -m backend.cli ingest queue-media --profile diejuristin --tenant quellex -d rag_diejuristin
 ```
 
-The command refuses while another job is pending, running or paused. Attach the
-GPU layer to the worker (or the API, for UI-run jobs) before the run; the
+The command refuses while another job is pending, running or paused. The
 ingestion worker reads the `media` section at job start.
+
+**GPU.** `docker-compose.media-gpu.yml` attaches the NVIDIA GPU to the ingestion
+worker (add it to `COMPOSE_FILE`) and sets `INGEST_DOCLING_DEVICE=cpu` there:
+`get_effective_device()` honours that pin, so the Docling layout/table models
+of the 16 conversion workers stay on the CPU (with the accelerator config's
+`auto` each of them would load onto the GPU and exhaust its memory) and only
+Whisper, whose device the media config resolves on its own, uses the card. The
+API containers get no GPU on purpose: a container with a device reservation
+does not start when the GPU passthrough is down, which would take the UI with
+it. Media runs therefore belong to the worker: `quellexctl ingest queue-media`
+queues them there, and jobs started on the Ingestion page go to the worker
+whenever one is alive (`INGESTION_UI_JOB_RUNNER=auto`).
+
+**Job statuses.** That hand-over never worked before 2026-11-11: the API stores
+the lower-case states of its schema (`pending`), the worker polled and wrote
+upper-case ones (`PENDING`, `RUNNING`), so a job queued for a live worker
+waited forever and the API's start guard did not see a job the worker ran.
+Both now write the lower-case values (`backend/core/ingestion_jobs.py`:
+`JOB_*`, `status_spellings` for filters that must also match older documents,
+`normalize_status` for comparisons); `INTERRUPTED` keeps its upper-case form.
 
 Measured 2026-11-07 on the Minisforum (Ultra 9 285HX, RTX PRO 2000 16 GB) in a
 side container of the live image with the worktree's code mounted, see

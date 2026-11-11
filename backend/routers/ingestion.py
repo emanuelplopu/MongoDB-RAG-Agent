@@ -20,7 +20,8 @@ from backend.models.schemas import (
 from backend.core.config import settings
 from src.ingestion.progress import progress_percent_label
 from backend.core.ingestion_jobs import (
-    API_OWNED, INTERRUPTED_STATUS, RUNNER_API, RUNNER_WORKER, TENANT_FIELD, reached_files, resume_config
+    ACTIVE_JOB_STATUSES, API_OWNED, INTERRUPTED_STATUS, RUNNER_API, RUNNER_WORKER, TENANT_FIELD, normalize_status,
+    reached_files, resume_config, status_spellings
 )
 from backend.routers.auth import require_admin, UserResponse
 from backend.routers.backup import trigger_post_ingestion_backup
@@ -138,7 +139,7 @@ async def get_latest_job_from_db(db) -> Optional[dict]:
     """
     collection = await get_jobs_collection(db)
     live = await collection.find_one(
-        {"status": {"$in": [IngestionStatus.PENDING, IngestionStatus.RUNNING, IngestionStatus.PAUSED]}},
+        {"status": {"$in": ACTIVE_JOB_STATUSES}},
         sort=[("created_at", -1), ("started_at", -1)],
     )
     if live:
@@ -157,7 +158,7 @@ async def get_worker_job_from_db(db) -> Optional[dict]:
     collection = await get_jobs_collection(db)
     doc = await collection.find_one({
         "runner": RUNNER_WORKER,
-        "status": {"$in": [IngestionStatus.PENDING, IngestionStatus.RUNNING, IngestionStatus.PAUSED]},
+        "status": {"$in": ACTIVE_JOB_STATUSES},
     })
     if doc:
         doc["job_id"] = doc.pop("_id")
@@ -216,7 +217,7 @@ async def get_running_job_from_db(db) -> Optional[dict]:
     collection = await get_jobs_collection(db)
     # Look for RUNNING or INTERRUPTED status
     doc = await collection.find_one({
-        "status": {"$in": [IngestionStatus.RUNNING, INTERRUPTED_STATUS]}
+        "status": {"$in": status_spellings(IngestionStatus.RUNNING) + [INTERRUPTED_STATUS]}
     })
     if doc:
         doc["job_id"] = doc.pop("_id")
@@ -244,7 +245,7 @@ async def mark_job_interrupted(db, job_id: str, paused: bool = False):
     """
     collection = await get_jobs_collection(db)
     await collection.update_one(
-        {"_id": job_id, "status": {"$in": [IngestionStatus.RUNNING, IngestionStatus.PAUSED]}},
+        {"_id": job_id, "status": {"$in": status_spellings(IngestionStatus.RUNNING, IngestionStatus.PAUSED)}},
         {"$set": _interrupted_fields(paused)}
     )
     logger.info(f"Marked job {job_id} as interrupted" + (" (paused)" if paused else ""))
@@ -1541,7 +1542,7 @@ async def start_ingestion(
 
     # Check if another job is running (in DB)
     running_job = await get_running_job_from_db(db)
-    if running_job and running_job.get("status") == IngestionStatus.RUNNING:
+    if running_job and normalize_status(running_job.get("status")) == IngestionStatus.RUNNING.value:
         raise HTTPException(
             status_code=409,
             detail=f"Ingestion job {running_job['job_id']} is already running"
@@ -2206,10 +2207,10 @@ async def pause_ingestion(request: Request):
 
     if not _current_job_id:
         worker_job = await get_worker_job_from_db(request.app.state.db)
-        if worker_job and worker_job.get("status") == IngestionStatus.RUNNING:
+        if worker_job and normalize_status(worker_job.get("status")) == IngestionStatus.RUNNING.value:
             await _send_worker_command(request.app.state.db, worker_job, "PAUSE")
             return SuccessResponse(success=True, message="Pause requested - the ingestion worker pauses after the current document(s)")
-        if worker_job and worker_job.get("status") == IngestionStatus.PAUSED:
+        if worker_job and normalize_status(worker_job.get("status")) == IngestionStatus.PAUSED.value:
             return SuccessResponse(success=True, message="Already paused")
         raise HTTPException(status_code=400, detail="No ingestion job is running")
 
@@ -2237,7 +2238,7 @@ async def resume_ingestion(request: Request):
 
     if not _current_job_id:
         worker_job = await get_worker_job_from_db(request.app.state.db)
-        if worker_job and worker_job.get("status") == IngestionStatus.PAUSED:
+        if worker_job and normalize_status(worker_job.get("status")) == IngestionStatus.PAUSED.value:
             await _send_worker_command(request.app.state.db, worker_job, "RESUME")
             return SuccessResponse(success=True, message="Resume sent to the ingestion worker")
         if worker_job:
@@ -2273,11 +2274,11 @@ async def stop_ingestion(request: Request):
 
     if not _current_job_id:
         worker_job = await get_worker_job_from_db(db)
-        if worker_job and worker_job.get("status") == IngestionStatus.PENDING:
+        if worker_job and normalize_status(worker_job.get("status")) == IngestionStatus.PENDING.value:
             # Not claimed yet: nothing runs, the job simply ends here
             collection = await get_jobs_collection(db)
             await collection.update_one(
-                {"_id": worker_job["job_id"], "status": IngestionStatus.PENDING},
+                {"_id": worker_job["job_id"], "status": {"$in": status_spellings(IngestionStatus.PENDING)}},
                 {"$set": {"status": IngestionStatus.STOPPED, "completed_at": datetime.now().isoformat()}},
             )
             return SuccessResponse(success=True, message="Queued job stopped before the worker claimed it")
@@ -2304,7 +2305,7 @@ async def stop_ingestion(request: Request):
     job_id = _current_job_id
     collection = await get_jobs_collection(db)
     await collection.update_one(
-        {"_id": job_id, "status": {"$in": [IngestionStatus.RUNNING, IngestionStatus.PAUSED]}},
+        {"_id": job_id, "status": {"$in": status_spellings(IngestionStatus.RUNNING, IngestionStatus.PAUSED)}},
         {"$set": {"status": IngestionStatus.STOPPED, "completed_at": datetime.now().isoformat()}}
     )
 

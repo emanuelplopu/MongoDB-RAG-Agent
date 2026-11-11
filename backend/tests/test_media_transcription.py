@@ -22,7 +22,7 @@ ingest = pytest.importorskip("src.ingestion.ingest")
 from backend.models.schemas import FileClassification, IngestionStartRequest  # noqa: E402
 from backend.services.ingestion_counters import JOB_COUNTER_FIELDS, apply_stats_counts  # noqa: E402
 from backend.services.media_config import MediaTranscriptionConfig, media_config_from  # noqa: E402
-from backend.services.media_run import ACTIVE_STATUSES, WORKER_PENDING, media_run_job, queue_media_run  # noqa: E402
+from backend.services.media_run import ACTIVE_STATUSES, media_run_job, queue_media_run  # noqa: E402
 from src.ingestion.conversion_workers import WorkerInit, _apply_init  # noqa: E402
 
 JOB = "job-media-1"
@@ -320,7 +320,7 @@ class _Jobs:
 
 def test_media_run_job_is_what_the_worker_claims() -> None:
     job = media_run_job("diejuristin", tenant="quellex")
-    assert job["status"] == WORKER_PENDING and job["runner"] == "worker" and job["tenant"] == "quellex"
+    assert job["status"] == "pending" and job["runner"] == "worker" and job["tenant"] == "quellex"
     assert job["config"]["retry_media"] is True and job["config"]["incremental"] is True
     assert job["config"]["profile"] == "diejuristin" and job["profile"] == "diejuristin"
     assert "tenant" not in media_run_job("x")
@@ -334,7 +334,123 @@ async def test_queue_media_run_refuses_while_a_job_is_active() -> None:
         await queue_media_run({"ingestion_jobs": jobs}, "p")
     jobs = _Jobs([{"_id": "old", "status": "completed"}])
     job = await queue_media_run({"ingestion_jobs": jobs}, "p", tenant="quellex")
-    assert jobs.docs[-1]["_id"] == job["job_id"] and jobs.docs[-1]["status"] == WORKER_PENDING
+    assert jobs.docs[-1]["_id"] == job["job_id"] and jobs.docs[-1]["status"] == "pending"
+    # A job the worker runs (any spelling) blocks the next one too
+    jobs = _Jobs([{"_id": "w", "status": "RUNNING", "profile": "p", "runner": "worker"}])
+    with pytest.raises(RuntimeError, match="w is RUNNING"):
+        await queue_media_run({"ingestion_jobs": jobs}, "p")
+
+
+def test_docling_device_pin_keeps_the_layout_models_off_a_media_gpu(monkeypatch) -> None:
+    """docker-compose.media-gpu.yml attaches a GPU for Whisper and pins Docling to the CPU."""
+    monkeypatch.setattr(ingest, "detect_available_device", lambda: "cuda")
+    monkeypatch.delenv("INGEST_DOCLING_DEVICE", raising=False)
+    saved = ingest._accelerator_config.device
+    try:
+        ingest._accelerator_config.device = "auto"
+        assert ingest.get_effective_device() == "cuda", "auto follows the hardware"
+        monkeypatch.setenv("INGEST_DOCLING_DEVICE", "cpu")
+        assert ingest.get_effective_device() == "cpu"
+        assert ingest.MediaConfig().resolved_device() == "cuda", "Whisper resolves its own device"
+        monkeypatch.setenv("INGEST_DOCLING_DEVICE", "tpu")
+        assert ingest.get_effective_device() == "cuda", "an unknown value is ignored"
+        ingest._accelerator_config.device = "cuda"
+        monkeypatch.setenv("INGEST_DOCLING_DEVICE", " CPU ")
+        assert ingest.get_effective_device() == "cpu", "the pin wins over the stored accelerator config"
+    finally:
+        ingest._accelerator_config.device = saved
+
+
+def test_media_gpu_layer_reserves_the_gpu_for_the_worker_only() -> None:
+    yaml = pytest.importorskip("yaml")
+    layer = yaml.safe_load((Path(__file__).resolve().parents[2] / "docker-compose.media-gpu.yml").read_text(encoding="utf-8"))
+    assert list(layer["services"]) == ["ingestion-worker"], "an API container with a GPU reservation cannot start without the GPU"
+    worker = layer["services"]["ingestion-worker"]
+    assert "INGEST_DOCLING_DEVICE=cpu" in worker["environment"]
+    device = worker["deploy"]["resources"]["reservations"]["devices"][0]
+    assert device["driver"] == "nvidia" and device["capabilities"] == ["gpu"]
+
+
+# ---------------------------------------------------------------------------
+# Job statuses: the API and the worker speak the same spelling
+# ---------------------------------------------------------------------------
+
+
+def test_status_spellings_and_normalisation() -> None:
+    from backend.core import ingestion_jobs as jobs_core
+    from backend.models.schemas import IngestionStatus
+
+    assert jobs_core.status_spellings("pending") == ["pending", "PENDING"]
+    assert jobs_core.status_spellings(IngestionStatus.RUNNING, "PAUSED") == ["running", "RUNNING", "paused", "PAUSED"]
+    assert jobs_core.ACTIVE_JOB_STATUSES == ["pending", "PENDING", "running", "RUNNING", "paused", "PAUSED"]
+    assert jobs_core.normalize_status("RUNNING") == jobs_core.normalize_status(IngestionStatus.RUNNING) == "running"
+    assert jobs_core.normalize_status(None) == ""
+    # The stored states are the API schema's values
+    for name in ("PENDING", "RUNNING", "PAUSED", "COMPLETED", "FAILED", "STOPPED", "CANCELLED"):
+        assert getattr(jobs_core, f"JOB_{name}") == getattr(IngestionStatus, name).value
+
+
+class _WorkerJobs:
+    """``ingestion_jobs`` as the worker's poll sees it: equality and ``$in`` filters."""
+
+    def __init__(self, docs: List[dict]) -> None:
+        self.docs = docs
+
+    @staticmethod
+    def _matches(doc: dict, query: dict) -> bool:
+        for key, wanted in query.items():
+            value = doc.get(key)
+            if isinstance(wanted, dict) and "$in" in wanted:
+                if value not in wanted["$in"]:
+                    return False
+            elif value != wanted:
+                return False
+        return True
+
+    async def find_one_and_update(self, query: dict, update: dict, sort=None, return_document=None) -> Optional[dict]:
+        for doc in self.docs:
+            if self._matches(doc, query):
+                doc.update(update["$set"])
+                return dict(doc)
+        return None
+
+
+async def test_the_worker_claims_a_job_the_api_queued_for_it() -> None:
+    """Until 2026-11-11 the API stored ``pending`` and the worker polled ``PENDING``: never claimed."""
+    import bson
+
+    worker_module = pytest.importorskip("backend.workers.ingestion_worker")
+    from backend.core.ingestion_jobs import ACTIVE_JOB_STATUSES
+    from backend.models.schemas import IngestionStatus
+
+    assert worker_module.IngestionStatus.PENDING == IngestionStatus.PENDING.value == "pending"
+    assert worker_module.IngestionStatus.RUNNING == "running" and worker_module.IngestionStatus.COMPLETED == "completed"
+    assert worker_module.IngestionStatus.INTERRUPTED == "INTERRUPTED", "kept: both processes resume on exactly this value"
+
+    # What the API's start endpoint writes for the worker, as MongoDB stores it
+    api_job = bson.decode(bson.encode({
+        "_id": "from-api", "status": IngestionStatus.PENDING, "runner": "worker", "created_at": "2026-11-11T10:00:00",
+        "config": IngestionStartRequest(profile="p", retry_media=True).model_dump(),
+    }))
+    assert api_job["status"] == "pending"
+    legacy_job = {"_id": "legacy", "status": "PENDING", "runner": None, "created_at": "2026-11-11T10:01:00"}
+    api_run = {"_id": "api-run", "status": "pending", "runner": "api", "created_at": "2026-11-11T09:00:00"}
+    jobs = _WorkerJobs([api_run, api_job, legacy_job])
+
+    worker = worker_module.IngestionWorker()
+    worker.db = {"ingestion_jobs": jobs}
+    claimed = await worker._poll_next_job()
+    assert claimed["job_id"] == "from-api" and claimed["status"] == "running" and claimed["runner"] == "worker"
+    assert claimed["status"] in ACTIVE_JOB_STATUSES, "the API's start guard sees the job the worker runs"
+    assert (await worker._poll_next_job())["job_id"] == "legacy", "a job queued by an older build is still claimed"
+    assert await worker._poll_next_job() is None, "never a job the API runs"
+    assert api_run["status"] == "pending"
+
+    # The media run the CLI queues is claimed the same way
+    queued = media_run_job("p")
+    jobs = _WorkerJobs([queued])
+    worker.db = {"ingestion_jobs": jobs}
+    assert (await worker._poll_next_job())["config"]["retry_media"] is True
 
 
 # ---------------------------------------------------------------------------

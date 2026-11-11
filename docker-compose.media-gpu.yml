@@ -1,0 +1,36 @@
+# NVIDIA GPU for media transcription (Whisper) in the ingestion worker - the same
+# device reservation the `embedder-gpu` profile uses. Opt-in: layer this file
+# through COMPOSE_FILE in .env (";" on Windows, ":" elsewhere), e.g.
+#   COMPOSE_FILE=docker-compose.yml;docker-compose.override.yml;docker-compose.shares.yml;docker-compose.media-gpu.yml
+# or pass it with -f. Requires the NVIDIA Container Toolkit on the host
+# (`docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi`).
+#
+# What it changes (docs/04-EMBEDDING_AND_QUERY_SYSTEM.md, "Media transcription"):
+# - the worker sees the GPU, so the media config's `device: auto` transcribes on
+#   CUDA (about 15x real time with Whisper turbo on an RTX PRO 2000, against 0.4x
+#   on 10 CPU threads); each media worker holds ~1.6 GB of VRAM;
+# - INGEST_DOCLING_DEVICE=cpu keeps the Docling layout/table models of the
+#   conversion workers on the CPU. Without the pin the accelerator config's
+#   `auto` would load them onto the GPU in every one of the worker processes and
+#   exhaust its memory.
+#
+# The API containers get no GPU on purpose: a container with a device reservation
+# does not start while the GPU passthrough is down (it happens after a WSL fault),
+# and that would take the UI with it. Run media jobs on the worker: `quellexctl
+# ingest queue-media`, or the Ingestion page (jobs go to the worker when one is
+# alive, INGESTION_UI_JOB_RUNNER=auto).
+#
+# Validate with:
+#   docker compose -f docker-compose.yml -f docker-compose.media-gpu.yml config | grep -A6 reservations
+
+services:
+  ingestion-worker:
+    environment:
+      - INGEST_DOCLING_DEVICE=cpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

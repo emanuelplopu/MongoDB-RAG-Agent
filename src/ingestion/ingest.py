@@ -2478,6 +2478,14 @@ def get_effective_device() -> str:
     Returns:
         Device string for torch/docling
     """
+    # INGEST_DOCLING_DEVICE pins the Docling models' device whatever the stored accelerator
+    # config says. docker-compose.media-gpu.yml sets it to cpu: the GPU it attaches is for
+    # Whisper (MediaConfig resolves its own device), and with "auto" every conversion worker
+    # process would load its layout/table models onto that GPU and exhaust the VRAM.
+    pinned = (os.getenv("INGEST_DOCLING_DEVICE") or "").strip().lower()
+    if pinned in ("cpu", "cuda", "mps"):
+        return pinned
+
     cfg = _accelerator_config
     
     if cfg.device == "auto":

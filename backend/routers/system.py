@@ -2045,9 +2045,14 @@ async def get_worker_health(request: Request):
     db = request.app.state.db
     
     try:
-        # Check for any running job with recent heartbeat
+        # Check for a job the worker runs (either status spelling) with a recent heartbeat
+        from backend.core.ingestion_jobs import RUNNER_WORKER, status_spellings
+
+        def _iso(value):
+            return value.isoformat() if hasattr(value, "isoformat") else value
+
         job = await db.db["ingestion_jobs"].find_one(
-            {"status": "RUNNING"},
+            {"status": {"$in": status_spellings("running")}, "runner": RUNNER_WORKER},
             {"worker_heartbeat": 1, "worker_pid": 1, "started_at": 1}
         )
         
@@ -2066,12 +2071,12 @@ async def get_worker_health(request: Request):
                 "worker_healthy": is_healthy,
                 "worker_pid": worker_pid,
                 "last_heartbeat": last_heartbeat.isoformat() if last_heartbeat else None,
-                "job_started_at": job.get("started_at").isoformat() if job.get("started_at") else None
+                "job_started_at": _iso(job.get("started_at")) if job.get("started_at") else None
             }
         
         # No running job - check if worker picked up any job recently
         recent_job = await db.db["ingestion_jobs"].find_one(
-            {"status": {"$in": ["COMPLETED", "FAILED", "STOPPED"]}},
+            {"status": {"$in": status_spellings("completed", "failed", "stopped")}},
             sort=[("completed_at", -1)],
             projection={"completed_at": 1, "worker_pid": 1}
         )
@@ -2081,7 +2086,7 @@ async def get_worker_health(request: Request):
             "worker_healthy": None,
             "worker_pid": recent_job.get("worker_pid") if recent_job else None,
             "last_heartbeat": None,
-            "last_job_completed": recent_job.get("completed_at").isoformat() if recent_job and recent_job.get("completed_at") else None
+            "last_job_completed": _iso(recent_job.get("completed_at")) if recent_job and recent_job.get("completed_at") else None
         }
         
     except Exception as e:

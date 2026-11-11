@@ -146,9 +146,17 @@ docker build -f backend/Dockerfile.base --build-arg WHISPER_MODELS="turbo small"
 
 (`.\build-backend.ps1 -Base` builds with the default, `turbo` only.) Check a
 container with `docker exec rag-ingestion-worker sh -c 'ls -la $DOCLING_ARTIFACTS_PATH/*.pt'`.
-A GPU for the transcription comes from `docker-compose.gpu.yml` (PR #26), the
-same device reservation the `embedder-gpu` profile uses; without it Whisper runs
-on the CPU with the media config's thread count.
+A GPU for the transcription comes from `docker-compose.media-gpu.yml` (the
+device reservation the `embedder-gpu` profile uses, for the ingestion worker,
+with the Docling models pinned to the CPU); without it Whisper runs on the CPU
+with the media config's thread count.
+
+On a box where a full base rebuild is unwanted (it re-resolves every floating
+dependency), the checkpoint can be added as one layer on the existing base:
+download `large-v3-turbo.pt` from the URL in `whisper._MODELS["turbo"]`, check
+its SHA-256 against the hash in that URL, and build
+`FROM recallhub-backend-base:latest` + `COPY large-v3-turbo.pt /opt/docling-models/`
+as the new `recallhub-backend-base:latest` (done on the Quellex box on 2026-11-11).
 
 ### Check Status
 ```powershell

@@ -14,19 +14,12 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from backend.core.ingestion_jobs import RUNNER_WORKER, TENANT_FIELD
-from backend.models.schemas import IngestionStartRequest, IngestionStatus
+from backend.core.ingestion_jobs import ACTIVE_JOB_STATUSES, JOB_PENDING, RUNNER_WORKER, TENANT_FIELD
+from backend.models.schemas import IngestionStartRequest
 
 INGESTION_JOBS_COLLECTION = "ingestion_jobs"
-#: What the worker's ``_poll_next_job`` claims (its own IngestionStatus spells the states in
-#: upper case, the API's schema in lower case; a job for the worker carries the worker's spelling)
-WORKER_PENDING = "PENDING"
-#: A job in one of these states blocks a new one (the API's start guard does the same);
-#: both spellings, since the API and the worker each write their own
-ACTIVE_STATUSES = (
-    IngestionStatus.PENDING.value, IngestionStatus.RUNNING.value, IngestionStatus.PAUSED.value,
-    "PENDING", "RUNNING", "PAUSED",
-)
+#: A job in one of these states blocks a new one (the API's start guard uses the same list)
+ACTIVE_STATUSES = tuple(ACTIVE_JOB_STATUSES)
 
 
 def media_run_job(profile: str, *, tenant: Optional[str] = None, incremental: bool = True) -> Dict[str, Any]:
@@ -41,7 +34,7 @@ def media_run_job(profile: str, *, tenant: Optional[str] = None, incremental: bo
     job_id = str(uuid.uuid4())
     job: Dict[str, Any] = {
         "_id": job_id,
-        "status": WORKER_PENDING,
+        "status": JOB_PENDING,
         "runner": RUNNER_WORKER,
         "created_at": datetime.now().isoformat(),
         "started_at": None,
@@ -76,7 +69,7 @@ async def queue_media_run(
         incremental: Skip media files that are already ingested.
 
     Returns:
-        The inserted job document (``job_id``, ``status`` ...).
+        The inserted job document plus ``job_id``.
 
     Raises:
         RuntimeError: Another job is active in that database.

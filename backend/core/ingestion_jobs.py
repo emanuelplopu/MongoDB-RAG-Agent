@@ -5,7 +5,7 @@ start. Each job records the process that runs it in ``runner``, and each process
 only its own jobs, so a job is never resumed twice.
 """
 
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, List, Mapping
 
 # Persisted status of a run ended by shutdown/restart (the API reports it as "interrupted").
 # Upper case because existing documents and the ingestion worker use exactly this value.
@@ -60,3 +60,45 @@ def resume_config(job: Mapping[str, Any]) -> Dict[str, Any]:
     if not reached_files(job):
         return config
     return {**config, "clean_before_ingest": False, "incremental": True}
+
+
+# Job states as stored in ``ingestion_jobs``: the lower-case values of the API's schema
+# (``backend.models.schemas.IngestionStatus``). The ingestion worker wrote them in upper case
+# until 2026-11-11, so the two processes never understood each other: a job the API queued
+# ``pending`` for the worker was never claimed (the worker polled ``PENDING``), and the API's
+# start guard did not see a worker job that was ``RUNNING``. Both write the lower-case values
+# now and read either spelling (documents of older builds). ``INTERRUPTED_STATUS`` stays as it is.
+JOB_PENDING = "pending"
+JOB_RUNNING = "running"
+JOB_PAUSED = "paused"
+JOB_COMPLETED = "completed"
+JOB_FAILED = "failed"
+JOB_STOPPED = "stopped"
+JOB_CANCELLED = "cancelled"
+
+
+def normalize_status(value: Any) -> str:
+    """A stored or enum status in the canonical lower-case spelling (``""`` for None)."""
+    return str(getattr(value, "value", value) or "").lower()
+
+
+def status_spellings(*statuses: Any) -> List[str]:
+    """``statuses`` in both stored spellings (lower case, and the worker's former upper case).
+
+    For ``{"status": {"$in": ...}}`` filters, so a query also finds the documents an older
+    build wrote.
+
+    Args:
+        *statuses: Status strings or ``IngestionStatus`` members.
+    """
+    spellings: List[str] = []
+    for status in statuses:
+        canonical = normalize_status(status)
+        for spelling in (canonical, canonical.upper()):
+            if spelling and spelling not in spellings:
+                spellings.append(spelling)
+    return spellings
+
+
+#: A job in one of these states is live: it blocks a new start and is what "the current job" means
+ACTIVE_JOB_STATUSES: List[str] = status_spellings(JOB_PENDING, JOB_RUNNING, JOB_PAUSED)

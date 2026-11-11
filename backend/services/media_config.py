@@ -30,7 +30,7 @@ class MediaTranscriptionConfig(BaseModel):
     )
     device: Literal["auto", "cpu", "cuda"] = Field(
         default="auto",
-        description="auto = CUDA when the container sees a GPU (docker-compose.gpu.yml), else the CPU",
+        description="auto = CUDA when the container sees a GPU (docker-compose.media-gpu.yml), else the CPU",
     )
     model: str = Field(
         default="turbo", min_length=1,
