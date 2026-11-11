@@ -65,6 +65,10 @@ class WorkerInit:
             for sharing the CPU threads (``docling_num_threads``, Tesseract's OpenMP limit).
         accelerator: ``dataclasses.asdict`` of the parent's accelerator config (device,
             CUDA device id), stored in the database and not visible through the environment.
+        media: ``dataclasses.asdict`` of the parent's media config (``MediaConfig``: the
+            transcription threads, device, model and language the audio/video readers use).
+        media_worker: This process is one of the run's dedicated media workers: it only
+            transcribes, so it keeps the Whisper model loaded between files.
         apply_pipeline_config: Import ``src.ingestion.ingest`` and apply the above; off for
             test targets that do not convert documents.
         warm_up: Build the PDF converter (loads the layout/table/OCR models) before ``ready``.
@@ -73,6 +77,8 @@ class WorkerInit:
 
     pool_workers: int = 1
     accelerator: Optional[Dict[str, Any]] = None
+    media: Optional[Dict[str, Any]] = None
+    media_worker: bool = False
     apply_pipeline_config: bool = True
     warm_up: bool = True
     log_level: int = logging.INFO
@@ -125,6 +131,12 @@ def _apply_init(init: WorkerInit) -> None:
             ingest.update_accelerator_config(**init.accelerator)
         except TypeError as exc:  # a field this version does not know
             logger.warning("Ignoring accelerator config in conversion worker: %s", exc)
+    if init.media:
+        try:
+            ingest.update_media_config(**init.media)
+        except (TypeError, ValueError) as exc:
+            logger.warning("Ignoring media config in conversion worker: %s", exc)
+    ingest.enable_media_model_cache(bool(init.media_worker))
     try:
         from src.ingestion.ocr_tesseract import configure_tesseract_threads
     except ImportError:  # Docling not installed: no Tesseract either

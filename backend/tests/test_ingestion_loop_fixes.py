@@ -309,7 +309,7 @@ def test_job_counters_follow_the_written_stats() -> None:
     assert job_state == {
         "processed_files": 10, "timeout_files": 3, "no_chunks_files": 3, "error_files": 2,
         "image_only_pdfs": 4, "image_only_pdfs_ocr": 0, "duplicates_skipped": 5, "partial_files": 0,
-        "failed_files": 8,
+        "media_deferred_files": 0, "failed_files": 8,
     }
 
 

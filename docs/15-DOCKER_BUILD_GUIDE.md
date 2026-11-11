@@ -115,8 +115,48 @@ Rules that follow from this:
   same change (`docling-tools models download --help` lists the names).
 - Check a running container with
   `docker exec rag-ingestion-worker sh -c 'ls $DOCLING_ARTIFACTS_PATH'`.
-- Whisper (audio transcription) still downloads its model on first use; it is
-  not covered by this layer.
+
+#### Whisper checkpoint (audio/video transcription)
+
+Audio files and the audio track of videos are transcribed with openai-whisper
+through Docling's ASR pipeline (`src/ingestion/ingest.py`, `MediaConfig`; see
+`docs/04-EMBEDDING_AND_QUERY_SYSTEM.md`, "Media transcription"). Docling hands
+`whisper.load_model(name, download_root=DOCLING_ARTIFACTS_PATH)` the same
+artifacts path, and whisper looks for the checkpoint directly in it under its
+own file name: `turbo` is `large-v3-turbo.pt` (1.6 GB). Until 2026-11-07 that
+file was not part of the image, so every conversion worker process downloaded
+it at its first recording (16 slots stalled for an hour on a throttled uplink
+on 2026-11-06). `backend/Dockerfile.base` now fetches it at build time right
+after the docling models:
+
+```
+ARG WHISPER_MODELS="turbo"
+RUN python -c "import os, whisper; ... whisper._download(whisper._MODELS[name], root, False) ..."
+```
+
+`whisper._download` verifies the SHA-256 that openai-whisper pins for the
+release, so the layer is reproducible. The pipeline records a model that is not
+under the artifacts path as an error (`[Error: Whisper model ... is not
+available under /opt/docling-models ...]`) instead of downloading. If the media
+config selects another size (`media.model`, `INGEST_MEDIA_MODEL`), bake it too:
+
+```powershell
+docker build -f backend/Dockerfile.base --build-arg WHISPER_MODELS="turbo small" -t recallhub-backend-base:latest .
+```
+
+(`.\build-backend.ps1 -Base` builds with the default, `turbo` only.) Check a
+container with `docker exec rag-ingestion-worker sh -c 'ls -la $DOCLING_ARTIFACTS_PATH/*.pt'`.
+A GPU for the transcription comes from `docker-compose.media-gpu.yml` (the
+device reservation the `embedder-gpu` profile uses, for the ingestion worker,
+with the Docling models pinned to the CPU); without it Whisper runs on the CPU
+with the media config's thread count.
+
+On a box where a full base rebuild is unwanted (it re-resolves every floating
+dependency), the checkpoint can be added as one layer on the existing base:
+download `large-v3-turbo.pt` from the URL in `whisper._MODELS["turbo"]`, check
+its SHA-256 against the hash in that URL, and build
+`FROM recallhub-backend-base:latest` + `COPY large-v3-turbo.pt /opt/docling-models/`
+as the new `recallhub-backend-base:latest` (done on the Quellex box on 2026-11-11).
 
 ### Check Status
 ```powershell

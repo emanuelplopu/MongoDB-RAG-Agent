@@ -35,6 +35,7 @@ class FileClassification(str, Enum):
     NO_CHUNKS = "no_chunks"         # Processed but produced 0 chunks
     TIMEOUT = "timeout"             # Processing timed out
     ERROR = "error"                 # Processing error
+    MEDIA_DEFERRED = "media_deferred"  # Audio/video left to a media run (retry_media)
     PENDING = "pending"             # Never processed
 
 
@@ -286,6 +287,13 @@ class IngestionStartRequest(BaseModel):
     retry_timeouts: bool = Field(default=False, description="Only process timed-out files")
     retry_errors: bool = Field(default=False, description="Only process errored files")
     retry_no_chunks: bool = Field(default=False, description="Only process files with 0 chunks")
+    retry_media: bool = Field(
+        default=False,
+        description=(
+            "Media run: transcribe only the audio/video files (the ones a document run deferred as "
+            "media_deferred or never reached); other files are skipped"
+        ),
+    )
     skip_image_only_pdfs: bool = Field(default=False, description="Skip known image-only PDFs")
 
 
@@ -338,6 +346,7 @@ class IngestionStatusResponse(BaseModel):
     no_chunks_files: int = 0
     timeout_files: int = 0
     error_files: int = 0
+    media_deferred_files: int = 0  # audio/video left to a media run (retry_media)
 
 
 class IngestionEtaExtension(BaseModel):
@@ -384,6 +393,7 @@ class IngestionRunSummary(BaseModel):
     no_chunks_files: int = 0  # Files that produced 0 chunks (after processing)
     timeout_files: int = 0  # Files that timed out
     error_files: int = 0  # Files with processing errors
+    media_deferred_files: int = 0  # Audio/video left to a media run (retry_media)
     avg_processing_time_ms: float = 0.0
     total_size_bytes: int = 0
     files_per_hour: float = 0.0

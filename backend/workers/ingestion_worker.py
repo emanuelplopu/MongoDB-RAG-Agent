@@ -24,7 +24,9 @@ from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 from dotenv import load_dotenv
 
 from backend.core.ingestion_jobs import (
-    FILES_STARTED_FIELD, RUNNER_WORKER, TENANT_FIELD, WORKER_OWNED, reached_files, resume_config
+    FILES_STARTED_FIELD, INTERRUPTED_STATUS, JOB_CANCELLED, JOB_COMPLETED, JOB_FAILED, JOB_PAUSED, JOB_PENDING,
+    JOB_RUNNING, JOB_STOPPED, RUNNER_WORKER, TENANT_FIELD, WORKER_OWNED, reached_files, resume_config,
+    status_spellings,
 )
 from backend.services.ingestion_schedule import ConcurrencyController, EffectiveLimits
 from backend.services.activity_events import (
@@ -86,16 +88,18 @@ def job_tenant(job: Dict[str, Any]) -> str:
     return tenant.strip() if isinstance(tenant, str) and tenant.strip() else worker_default_tenant()
 
 
-# Status constants (matching backend schemas)
+# Status constants: the values the API's schema stores (backend/core/ingestion_jobs.py). They
+# were upper case here until 2026-11-11, which is why the worker never claimed a job the API
+# queued for it (``pending`` != ``PENDING``).
 class IngestionStatus:
-    PENDING = "PENDING"
-    RUNNING = "RUNNING"
-    PAUSED = "PAUSED"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
-    STOPPED = "STOPPED"
-    INTERRUPTED = "INTERRUPTED"
-    CANCELLED = "CANCELLED"
+    PENDING = JOB_PENDING
+    RUNNING = JOB_RUNNING
+    PAUSED = JOB_PAUSED
+    COMPLETED = JOB_COMPLETED
+    FAILED = JOB_FAILED
+    STOPPED = JOB_STOPPED
+    INTERRUPTED = INTERRUPTED_STATUS
+    CANCELLED = JOB_CANCELLED
 
 
 class IngestionWorker:
@@ -270,6 +274,8 @@ class IngestionWorker:
                     # Load profile (backend/services/ingestion_schedule.py), resolved per file
                     "load_profile": config_doc.get("load_profile"),
                     "office_hours": config_doc.get("office_hours"),
+                    # Audio/video transcription (src/ingestion/ingest.py, MediaConfig)
+                    "media": config_doc.get("media"),
                 })
                 new_concurrent = self.config.get("max_concurrent_files", 1)
                 if old_concurrent != new_concurrent:
@@ -329,7 +335,8 @@ class IngestionWorker:
         # Find and claim a PENDING job atomically (queued jobs are untagged until claimed;
         # never claim a job the API runs)
         job = await jobs_collection.find_one_and_update(
-            {"status": IngestionStatus.PENDING, "runner": {"$in": [RUNNER_WORKER, None]}},
+            # either spelling: jobs queued by an older build or CLI carry the upper-case one
+            {"status": {"$in": status_spellings(IngestionStatus.PENDING)}, "runner": {"$in": [RUNNER_WORKER, None]}},
             {
                 "$set": {
                     "status": IngestionStatus.RUNNING,
@@ -662,6 +669,8 @@ class IngestionWorker:
                     retry_failed_types=retry_error_types(config),
                     queue_callback=queue_callback,
                     slot_limit=slot_controller.current,
+                    media_config=self.config.get("media"),
+                    media_only=bool(config.get("retry_media")),
                 )
             finally:
                 config_refresh.cancel()

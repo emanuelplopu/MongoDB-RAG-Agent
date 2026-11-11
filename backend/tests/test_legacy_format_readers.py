@@ -69,7 +69,7 @@ def test_every_supported_extension_has_a_processing_priority(pipeline, tmp_path:
     assert len(ordered) == len(ingest.SUPPORTED_INGESTION_EXTENSIONS)
     # text-like formats come first, images and media last
     assert ordered[0].endswith((".txt", ".md", ".markdown", ".as", ".wvb", ".mtt", ".3", ".ds", ".do", ".dos", ".eb", ".ass", ".dss"))
-    assert ordered[-1].endswith((".mp4", ".avi", ".mkv", ".mov", ".webm"))
+    assert ordered[-1].endswith((".mp4", ".avi", ".mkv", ".mov", ".webm", ".wmv"))
 
 
 def test_api_patterns_are_derived_from_the_pipeline_set() -> None:

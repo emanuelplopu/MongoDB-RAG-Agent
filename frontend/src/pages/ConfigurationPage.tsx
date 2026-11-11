@@ -29,7 +29,7 @@ import {
   Profile, SystemStats, CustomEndpoint, NetworkScanResult, ConfigOptions,
   LLMModel, EmbeddingModel, LLMProviderConfigResponse, LLMProviderConfigRequest,
   ProviderModelInfo, FetchModelsResponse, ProviderTestResponse,
-  AgentTool, ToolTestResponse, IngestionPerformanceConfig, IngestionLoadProfile, IngestionOfficeHours, PowerPlanStatus,
+  AgentTool, ToolTestResponse, IngestionPerformanceConfig, IngestionLoadProfile, IngestionOfficeHours, IngestionMediaConfig, PowerPlanStatus,
   EmbedderWatchdogStatus, EmbedderWatchdogTarget, ModelTestResult, ModelCapability
 } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
@@ -228,6 +228,25 @@ export default function ConfigurationPage() {
       const days = ingestionConfig.office_hours.weekdays.filter(d => d !== day)
       updateOfficeHours({ weekdays: (on ? [...days, day] : days).sort((a, b) => a - b) })
     }
+
+    // Media transcription (the performance config's media section; the defaults mirror the backend)
+    const defaultMediaConfig: IngestionMediaConfig = {
+      max_concurrent: 2,
+      threads: 0,
+      device: 'auto',
+      model: 'turbo',
+      language: '',
+      defer: false,
+      video: true,
+      budget_per_media_second: 4,
+      min_budget_seconds: 600,
+      max_budget_seconds: 14400,
+    }
+    const mediaConfig: IngestionMediaConfig = { ...defaultMediaConfig, ...(ingestionConfig.media ?? {}) }
+    const updateMedia = (patch: Partial<IngestionMediaConfig>) =>
+      setIngestionConfig(prev => ({ ...prev, media: { ...defaultMediaConfig, ...(prev.media ?? {}), ...patch } }))
+    const clampInt = (value: number, min: number, max: number): number =>
+      Number.isFinite(value) ? Math.min(max, Math.max(min, Math.round(value))) : min
 
     const validateOfficeHours = (cfg: IngestionPerformanceConfig): string => {
       if (cfg.load_profile !== 'office' && cfg.load_profile !== 'office_lite') return ''
@@ -2994,6 +3013,101 @@ export default function ConfigurationPage() {
                   )}
                 </div>
               )}
+            </div>
+
+            {/* Media transcription: audio files and the audio track of videos (Whisper) */}
+            <div className="mt-6 rounded-xl bg-surface-variant dark:bg-gray-700 p-4" data-testid="ingestion-media">
+              <h4 className="block text-sm font-medium text-primary-900 dark:text-gray-200 mb-2">Media Transcription</h4>
+              <p className="text-xs text-secondary dark:text-gray-500 mb-3">
+                Audio files and the audio track of videos are transcribed with Whisper. A transcription takes a media
+                slot before a file slot, so recordings never occupy every slot of a run. Deferred media are left to a
+                media run: queue the profile on the Ingestion page with &quot;Transcribe Media (audio/video only)&quot;.
+                These settings apply on the next job start.
+              </p>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <label htmlFor="media-max-concurrent" className="block text-xs font-medium text-primary-900 dark:text-gray-200 mb-1">
+                    Transcriptions at once
+                  </label>
+                  <input
+                    id="media-max-concurrent"
+                    type="number"
+                    min={1}
+                    max={8}
+                    value={mediaConfig.max_concurrent}
+                    onChange={(e) => updateMedia({ max_concurrent: clampInt(Number(e.target.value), 1, 8) })}
+                    className={officeInputClass}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="media-threads" className="block text-xs font-medium text-primary-900 dark:text-gray-200 mb-1">
+                    CPU threads per transcription
+                  </label>
+                  <input
+                    id="media-threads"
+                    type="number"
+                    min={0}
+                    max={32}
+                    value={mediaConfig.threads}
+                    onChange={(e) => updateMedia({ threads: clampInt(Number(e.target.value), 0, 32) })}
+                    className={officeInputClass}
+                  />
+                  <p className="mt-1 text-xs text-secondary dark:text-gray-500">0 = the cores shared among the transcriptions</p>
+                </div>
+                <div>
+                  <label htmlFor="media-device" className="block text-xs font-medium text-primary-900 dark:text-gray-200 mb-1">
+                    Transcription device
+                  </label>
+                  <select
+                    id="media-device"
+                    value={mediaConfig.device}
+                    onChange={(e) => updateMedia({ device: e.target.value as IngestionMediaConfig['device'] })}
+                    className={officeInputClass}
+                  >
+                    <option value="auto">Auto (GPU when the container has one)</option>
+                    <option value="cuda">GPU (CUDA)</option>
+                    <option value="cpu">CPU</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="media-language" className="block text-xs font-medium text-primary-900 dark:text-gray-200 mb-1">
+                    Recording language
+                  </label>
+                  <input
+                    id="media-language"
+                    type="text"
+                    maxLength={8}
+                    placeholder="detect"
+                    value={mediaConfig.language}
+                    onChange={(e) => updateMedia({ language: e.target.value.trim().toLowerCase() })}
+                    className={officeInputClass}
+                  />
+                  <p className="mt-1 text-xs text-secondary dark:text-gray-500">ISO code such as de; empty = Whisper detects it</p>
+                </div>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-6">
+                <label className="flex items-center gap-2 text-sm text-primary-900 dark:text-gray-200">
+                  <input
+                    type="checkbox"
+                    checked={mediaConfig.defer}
+                    onChange={(e) => updateMedia({ defer: e.target.checked })}
+                    className="rounded-sm"
+                  />
+                  Defer media to a media run
+                </label>
+                <label className="flex items-center gap-2 text-sm text-primary-900 dark:text-gray-200">
+                  <input
+                    type="checkbox"
+                    checked={mediaConfig.video}
+                    onChange={(e) => updateMedia({ video: e.target.checked })}
+                    className="rounded-sm"
+                  />
+                  Transcribe video audio tracks
+                </label>
+              </div>
+              <p className="mt-3 text-xs text-secondary dark:text-gray-500">
+                Whisper model: {mediaConfig.model} (baked into the image; another size needs an image built with it).
+              </p>
             </div>
           </div>
 

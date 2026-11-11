@@ -61,6 +61,7 @@ class QueuedIngestionJob(BaseModel):
     retry_timeouts: bool = False
     retry_errors: bool = False
     retry_no_chunks: bool = False
+    retry_media: bool = False
     skip_image_only_pdfs: bool = False
 
 
@@ -84,6 +85,7 @@ class ScheduledIngestionJob(BaseModel):
     retry_timeouts: bool = False
     retry_errors: bool = False
     retry_no_chunks: bool = False
+    retry_media: bool = False
     skip_image_only_pdfs: bool = False
 
 
@@ -98,6 +100,7 @@ class QueueRequest(BaseModel):
     retry_timeouts: bool = False
     retry_errors: bool = False
     retry_no_chunks: bool = False
+    retry_media: bool = False
     skip_image_only_pdfs: bool = False
 
 
@@ -115,6 +118,7 @@ class ScheduleRequest(BaseModel):
     retry_timeouts: bool = False
     retry_errors: bool = False
     retry_no_chunks: bool = False
+    retry_media: bool = False
     skip_image_only_pdfs: bool = False
 
 
@@ -242,6 +246,7 @@ async def add_to_queue(
         "retry_timeouts": queue_request.retry_timeouts,
         "retry_errors": queue_request.retry_errors,
         "retry_no_chunks": queue_request.retry_no_chunks,
+        "retry_media": queue_request.retry_media,
         "skip_image_only_pdfs": queue_request.skip_image_only_pdfs
     }
     
@@ -302,6 +307,7 @@ async def add_multiple_to_queue(
                 "retry_timeouts": queue_request.retry_timeouts,
                 "retry_errors": queue_request.retry_errors,
                 "retry_no_chunks": queue_request.retry_no_chunks,
+                "retry_media": queue_request.retry_media,
                 "skip_image_only_pdfs": queue_request.skip_image_only_pdfs
             }
             
@@ -504,6 +510,7 @@ async def _run_ingestion_job(job: Dict[str, Any], db) -> None:
             "retry_timeouts": job.get("retry_timeouts", False),
             "retry_errors": job.get("retry_errors", False),
             "retry_no_chunks": job.get("retry_no_chunks", False),
+            "retry_media": job.get("retry_media", False),
             "skip_image_only_pdfs": job.get("skip_image_only_pdfs", False)
         },
         "profile": job["profile_key"],
@@ -714,6 +721,7 @@ async def create_schedule(
         "retry_timeouts": schedule_request.retry_timeouts,
         "retry_errors": schedule_request.retry_errors,
         "retry_no_chunks": schedule_request.retry_no_chunks,
+        "retry_media": schedule_request.retry_media,
         "skip_image_only_pdfs": schedule_request.skip_image_only_pdfs
     }
     
@@ -762,6 +770,7 @@ async def update_schedule(
         "retry_timeouts": schedule_request.retry_timeouts,
         "retry_errors": schedule_request.retry_errors,
         "retry_no_chunks": schedule_request.retry_no_chunks,
+        "retry_media": schedule_request.retry_media,
         "skip_image_only_pdfs": schedule_request.skip_image_only_pdfs
     }
     

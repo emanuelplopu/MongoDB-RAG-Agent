@@ -651,6 +651,7 @@
       "retryTimeouts": "Retry Timeouts",
       "retryErrors": "Retry Errors",
       "retryNoChunks": "Retry No-Chunks",
+      "retryMedia": "Transcribe Media (audio/video only)",
       "skipImagePdfs": "Skip Image-Only PDFs",
       "retryModeInfo": "Retry mode: Only files matching the selected retry filters will be processed.",
       "activeFilters": "Active Filters"

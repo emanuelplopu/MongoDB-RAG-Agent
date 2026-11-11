@@ -47,7 +47,7 @@ except Exception:  # pragma: no cover - defensive fallback if import path shifts
         ".md", ".markdown", ".txt", ".pdf", ".docx", ".doc", ".wbk",
         ".pptx", ".ppt", ".xlsx", ".xls", ".html", ".htm", ".msg", ".eml",
         ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif",
-        ".mp3", ".wav", ".m4a", ".flac", ".mp4", ".avi", ".mkv", ".mov", ".webm",
+        ".mp3", ".wav", ".m4a", ".flac", ".mp4", ".avi", ".mkv", ".mov", ".webm", ".wmv",
     })
 
 _MB = 1024 * 1024
@@ -65,7 +65,7 @@ EXTENSION_CATEGORY: Dict[str, str] = {
     "png": "image", "jpg": "image", "jpeg": "image", "gif": "image",
     "webp": "image", "bmp": "image", "tiff": "image", "tif": "image",
     "mp3": "audio", "wav": "audio", "m4a": "audio", "flac": "audio",
-    "mp4": "video", "avi": "video", "mkv": "video", "mov": "video", "webm": "video",
+    "mp4": "video", "avi": "video", "mkv": "video", "mov": "video", "webm": "video", "wmv": "video",
 }
 
 #: Rough embedding-tokens produced per *file byte*, by category. Used only when

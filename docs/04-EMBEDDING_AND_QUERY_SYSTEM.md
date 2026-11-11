@@ -484,10 +484,98 @@ GPU was visible. Each pool thread keeps its own converter, so N threads load
 the layout and TableFormer models N times on the GPU; keep that within the
 VRAM left by the embedder and the chat model.
 
-**Audio Processing** uses Whisper:
-- Transcribes audio content to text
-- Preserves speaker identification when available
-- Timestamps important segments
+#### Media transcription (audio and video)
+
+Audio files (`.mp3`, `.wav`, `.m4a`, `.flac`) and the audio track of videos
+(`.mp4`, `.avi`, `.mkv`, `.mov`, `.webm`, `.wmv`; ffmpeg extracts it to a 16 kHz
+mono WAV first) are transcribed with openai-whisper through Docling's ASR
+pipeline (`_transcribe_audio_local` / `_run_whisper` in `src/ingestion/ingest.py`).
+The transcript keeps Docling's timed segments, so the chunker sees a normal
+`DoclingDocument`. The Whisper checkpoint is baked into the base image under
+`DOCLING_ARTIFACTS_PATH` (`docs/15-DOCKER_BUILD_GUIDE.md`, "Whisper checkpoint");
+a model that is not there is recorded as an error, nothing downloads at run
+time.
+
+A transcription is not a document conversion: it runs for minutes to hours,
+scales with its torch thread count and is an order of magnitude faster on a
+GPU. With the Docling thread share of one thread per file slot and the model
+downloaded at runtime, the 16 slots of the 2026-11-06 live run stalled for an
+hour on the first law-lecture recordings (37 mp3 + 23 m4a + 6 wav + 171 videos
+on the shares). Since 2026-11-07 media files are handled by their own config,
+the `media` section of the performance config (`backend/services/media_config.py`,
+`POST /api/v1/system/ingestion-performance`, the "Media Transcription" block of
+the Configuration page's ingestion tab), with `INGEST_MEDIA_*` / the
+`ingest_media_*` settings as the defaults for runs without one:
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `max_concurrent` | 2 | Transcriptions at once. A media file takes one of these *media slots* before a file slot, so transcriptions never occupy every slot of a document run and a waiting transcription holds no file slot. |
+| `threads` | 0 | Torch CPU threads per transcription; 0 = the container's cores shared among `max_concurrent` (20 cores, 2 at once: 10 each). Set around the transcription only (`torch_thread_limit`), so the Docling models keep their share. |
+| `device` | `auto` | `auto` = CUDA when the container sees a GPU (`docker-compose.media-gpu.yml`), else the CPU; `cpu`; `cuda`. A failure on the GPU (out of memory next to the embedders and the chat model) is retried once on the CPU. |
+| `model` | `turbo` | Whisper model; must be baked into the image (`WHISPER_MODELS` build arg). |
+| `language` | (detect) | ISO 639-1 code of the recordings, e.g. `de` for the Austrian lectures; empty lets Whisper detect it from the first 30 seconds (the code hard-coded `en` until 2026-11-07, which mangled German audio). |
+| `defer` | false | Record media files as `media_deferred` (`failed_documents`, job counter `media_deferred_files`) instead of transcribing them; a later media run picks them up. |
+| `video` | true | Transcribe the audio track of videos; off records them as `[Skipped: ...]` (never stored as a stub). |
+| `budget_per_media_second` | 4.0 | Conversion budget per second of media (ffprobe tells the duration; without it ~60 s of audio or ~8 s of video per MB is assumed), clamped to `min_budget_seconds` (600) .. `max_budget_seconds` (14400). The size-based document budget (30 s/MB, 30 min cap) would have killed every lecture. |
+
+With process isolation (the default) a run that has media files starts
+`max_concurrent` **dedicated media worker processes** next to the conversion
+workers (`_start_conversion_pool(size, media_workers=...)`, `WorkerInit.media_worker`):
+audio/video files convert there, each media worker keeps its Whisper converter
+between files (`enable_media_model_cache`), and the document workers never load
+the model. Loading `turbo` costs about 30 s per file (1.6 GB from disk, the
+SHA-256 check whisper's loader does, the transfer to the GPU), which would have
+dominated a media run: a 7-minute lecture decodes in 23 s on the GPU. On the
+thread pool (process isolation off) the model is loaded per file and released
+afterwards (`release_torch_memory`): a cached model in each of 16 worker
+processes (3.2 GB each on the CPU) would not fit the box. A media worker that is
+killed on a timeout loses its model; the next file reloads it. `note_conversion`
+records `media_seconds`, `media_device` and `media_realtime` (seconds of media
+per second of wall clock) with the conversion.
+
+**The media run.** The deliberate way to transcribe a corpus's recordings is a
+run with `retry_media` (`IngestionStartRequest`, queue and schedule requests):
+the pipeline then processes *only* audio/video files (`media_only`), skips the
+ones already ingested (incremental), transcribes them even when `media.defer` is
+on, and `media_deferred` joins the error types the run retries
+(`RETRY_FLAG_ERROR_TYPES`), so a resumed job no longer skips them. Start it once
+the document ingestion is done, either
+
+- on the Ingestion page: add the profile to the queue with the filter
+  "Transcribe Media (audio/video only)" checked (incremental on), or
+- from the CLI, which writes the job the ingestion worker claims
+  (`backend/services/media_run.py`):
+
+```powershell
+uv run python -m backend.cli ingest queue-media --profile diejuristin --tenant quellex -d rag_diejuristin
+```
+
+The command refuses while another job is pending, running or paused. The
+ingestion worker reads the `media` section at job start.
+
+**GPU.** `docker-compose.media-gpu.yml` attaches the NVIDIA GPU to the ingestion
+worker (add it to `COMPOSE_FILE`) and sets `INGEST_DOCLING_DEVICE=cpu` there:
+`get_effective_device()` honours that pin, so the Docling layout/table models
+of the 16 conversion workers stay on the CPU (with the accelerator config's
+`auto` each of them would load onto the GPU and exhaust its memory) and only
+Whisper, whose device the media config resolves on its own, uses the card. The
+API containers get no GPU on purpose: a container with a device reservation
+does not start when the GPU passthrough is down, which would take the UI with
+it. Media runs therefore belong to the worker: `quellexctl ingest queue-media`
+queues them there, and jobs started on the Ingestion page go to the worker
+whenever one is alive (`INGESTION_UI_JOB_RUNNER=auto`).
+
+**Job statuses.** That hand-over never worked before 2026-11-11: the API stores
+the lower-case states of its schema (`pending`), the worker polled and wrote
+upper-case ones (`PENDING`, `RUNNING`), so a job queued for a live worker
+waited forever and the API's start guard did not see a job the worker ran.
+Both now write the lower-case values (`backend/core/ingestion_jobs.py`:
+`JOB_*`, `status_spellings` for filters that must also match older documents,
+`normalize_status` for comparisons); `INTERRUPTED` keeps its upper-case form.
+
+Measured 2026-11-07 on the Minisforum (Ultra 9 285HX, RTX PRO 2000 16 GB) in a
+side container of the live image with the worktree's code mounted, see
+`docs/system-validation/MEDIA_TRANSCRIPTION_BENCH_2026-11-07.md`.
 
 ### Phase 3: Chunking with HybridChunker
 

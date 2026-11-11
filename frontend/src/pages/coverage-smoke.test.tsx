@@ -603,6 +603,7 @@ function resetApiMocks() {
     job_poll_interval_seconds: 1.0,
     load_profile: 'server_room',
     office_hours: { timezone: 'Europe/Vienna', start: '08:00', end: '18:00', weekdays: [0, 1, 2, 3, 4], max_concurrent_files: 8, lite_max_concurrent_files: 4, cap_cpu_boost: false },
+    media: { max_concurrent: 2, threads: 0, device: 'auto', model: 'turbo', language: '', defer: false, video: true, budget_per_media_second: 4, min_budget_seconds: 600, max_budget_seconds: 14400 },
   })
   apiMocks.systemApi.getPowerPlanStatus.mockResolvedValue({
     desired: 'normal',
@@ -1707,6 +1708,14 @@ describe('large workflow page coverage smoke tests', () => {
     expect(watchdog).toHaveTextContent('embedder healthy, 38 ms, 0.12 cores, 1 restart')
     expect(watchdog).toHaveTextContent('embedder-query absent (no container running)')
 
+    // Media transcription: the stored section is shown and edited
+    expect(screen.getByTestId('ingestion-media')).toHaveTextContent('Whisper model: turbo')
+    expect(screen.getByLabelText('Transcriptions at once')).toHaveValue(2)
+    expect(screen.getByLabelText('Transcription device')).toHaveValue('auto')
+    await user.type(screen.getByLabelText('Recording language'), 'DE')
+    await user.click(screen.getByLabelText('Defer media to a media run'))
+    await user.selectOptions(screen.getByLabelText('Transcription device'), 'cuda')
+
     await user.selectOptions(profile, 'office')
     expect(screen.getByTestId('ingestion-office-hours')).toBeInTheDocument()
     expect(screen.getByLabelText('Office hours start')).toHaveValue('08:00')
@@ -1738,6 +1747,7 @@ describe('large workflow page coverage smoke tests', () => {
     )
     const saved = apiMocks.systemApi.saveIngestionPerformanceConfig.mock.calls[saveCallsBefore][0]
     expect(saved.load_profile).toBe('office')
+    expect(saved.media).toMatchObject({ language: 'de', defer: true, device: 'cuda', max_concurrent: 2, model: 'turbo' })
     expect(saved.office_hours).toEqual({
       timezone: 'Europe/Vienna',
       start: '08:00',
