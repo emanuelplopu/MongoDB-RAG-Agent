@@ -258,6 +258,14 @@ class Settings(BaseSettings):
         description="Also write the per-file ingestion stats every this many seconds during a run",
     )
 
+    ingest_chunk_budget_seconds: float = Field(
+        default=600.0,
+        description=(
+            "Time a converted document gets for its OCR repair and chunking, run off the event "
+            "loop (INGEST_CHUNK_BUDGET_SECONDS); a file still chunking after that is recorded as a timeout"
+        ),
+    )
+
     ingest_embed_budget_floor_seconds: float = Field(
         default=600.0,
         description=(
@@ -415,6 +423,7 @@ class Settings(BaseSettings):
             'ingest_process_isolation': self.ingest_process_isolation,
             'ingest_stats_flush_files': self.ingest_stats_flush_files,
             'ingest_stats_flush_seconds': self.ingest_stats_flush_seconds,
+            'ingest_chunk_budget_seconds': self.ingest_chunk_budget_seconds,
             'ingest_embed_budget_floor_seconds': self.ingest_embed_budget_floor_seconds,
             'ingest_embed_budget_margin': self.ingest_embed_budget_margin,
             'ingest_embed_budget_max_seconds': self.ingest_embed_budget_max_seconds,

@@ -44,6 +44,7 @@ except ImportError:
 
 from src.ingestion.chunker import ChunkingConfig, create_chunker, DocumentChunk, chunk_max_tokens_default
 from src.ingestion.embedder import create_embedder
+from src.ingestion.chunker import ChunkingDeadlineExceeded
 from src.ingestion.ocr_repair import repair_docling_document, repair_ocr_text
 from src.ingestion import telemetry_hooks
 from src.ingestion.progress import progress_percent_label
@@ -1455,6 +1456,13 @@ MAX_EMBEDDING_BACKLOG_PASSES = 3
 #: deadline overshoots by at most one batch, which the same throughput measurement predicts).
 INDEXING_HARD_CAP_BUDGETS = 3
 INDEXING_HARD_CAP_GRACE_SECONDS = 300.0
+#: Budget of a file's OCR repair and chunking, counted from the end of its conversion
+#: (``INGEST_CHUNK_BUDGET_SECONDS``); chunking a 2,000-page book takes seconds, so a file
+#: still chunking after this is spinning (a pathological table) and is recorded as a timeout.
+DEFAULT_CHUNK_BUDGET_SECONDS = 600.0
+#: Threads of the pool that runs OCR repair and chunking off the event loop. Chunking is
+#: Python code under the GIL, so more threads would only share the same core.
+POST_CONVERSION_THREADS = 2
 
 
 @dataclass(frozen=True)
@@ -1501,6 +1509,23 @@ def embedding_budget_config() -> EmbeddingBudgetConfig:
         margin=float(margin or DEFAULT_EMBED_BUDGET_MARGIN),
         max_seconds=max(floor, cap),
     )
+
+
+def chunking_budget_seconds() -> float:
+    """Seconds a file's OCR repair and chunking may take after its conversion.
+
+    ``INGEST_CHUNK_BUDGET_SECONDS`` wins, then the settings field of the same name, then
+    :data:`DEFAULT_CHUNK_BUDGET_SECONDS`.
+    """
+    seconds = _positive_float_env("INGEST_CHUNK_BUDGET_SECONDS")
+    if seconds is None:
+        try:
+            configured = load_settings(use_profile=False)
+        except Exception:  # settings need MONGODB_URI etc.; the harness has none
+            configured = None
+        if configured is not None:
+            seconds = getattr(configured, "ingest_chunk_budget_seconds", None)
+    return float(seconds or DEFAULT_CHUNK_BUDGET_SECONDS)
 
 
 @dataclass
@@ -2758,6 +2783,17 @@ class IndexingTimeoutError(RuntimeError):
 
     Not an ``asyncio.TimeoutError``: the conversion succeeded, so re-queueing the file for
     another conversion would only redo that work. The loop records it as an error.
+    """
+
+
+class ChunkingTimeoutError(IndexingTimeoutError):
+    """A file's OCR repair or chunking ran past its budget (:func:`chunking_budget_seconds`).
+
+    Raised by :meth:`DocumentIngestionPipeline._run_post_conversion` on the loop while the
+    thread doing the work stops itself at the same deadline. The loop records it as a
+    ``timeout`` (``failed_documents``, retried on resume with ``retry_timeouts``), not
+    retried within the run: the chunker is deterministic, a bigger budget would only spin
+    longer.
     """
 
 
@@ -5062,9 +5098,15 @@ class DocumentIngestionPipeline:
                 ocr_fallback=ocr_fallback,
             )
 
+        # OCR repair and chunking run on a thread under the post-conversion budget: the
+        # event loop keeps serving /health and the job endpoints, a pathological document
+        # ends as a timeout instead of freezing the process (2026-11-02/03)
+        deadline = self._post_conversion_deadline(handle)
         with telemetry_hooks.step("ocr_repair"):
-            repaired_items = repair_docling_document(docling_doc)
-            repaired_content = repair_ocr_text(document_content)
+            repaired_items, repaired_content = await self._run_post_conversion(
+                lambda: (repair_docling_document(docling_doc), repair_ocr_text(document_content)),
+                deadline, file_path, "OCR repair",
+            )
         if repaired_items or repaired_content != document_content:
             logger.info(
                 f"OCR repair: restored § references in {os.path.basename(file_path)} "
@@ -5094,12 +5136,14 @@ class DocumentIngestionPipeline:
 
         # Chunk the document - pass DoclingDocument for HybridChunker
         with telemetry_hooks.step("chunk"):
-            chunks = await self.chunker.chunk_document(
+            chunks = await self._chunk_within_budget(
+                file_path,
+                deadline,
                 content=document_content,
                 title=document_title,
                 source=document_source,
                 metadata=document_metadata,
-                docling_doc=docling_doc  # Pass DoclingDocument for HybridChunker
+                docling_doc=docling_doc,  # Pass DoclingDocument for HybridChunker
             )
 
         if not chunks:
@@ -5204,6 +5248,80 @@ class DocumentIngestionPipeline:
             config = embedding_budget_config()
             self._embed_budget_config = config
         return config
+
+    # Pool for the steps between a file's conversion and its embedding (OCR repair, chunking):
+    # off the event loop, shared across instances like the conversion pool
+    _post_conversion_executor: Optional[ThreadPoolExecutor] = None
+
+    @classmethod
+    def get_post_conversion_executor(cls) -> ThreadPoolExecutor:
+        """The thread pool that runs OCR repair and chunking (``POST_CONVERSION_THREADS``)."""
+        if cls._post_conversion_executor is None:
+            cls._post_conversion_executor = ThreadPoolExecutor(
+                max_workers=POST_CONVERSION_THREADS, thread_name_prefix="ingest_chunk_"
+            )
+        return cls._post_conversion_executor
+
+    @staticmethod
+    def _post_conversion_deadline(handle: Optional[ConversionHandle]) -> float:
+        """When this file's OCR repair and chunking must be done: the budget from its conversion's end."""
+        base = handle.converted_at if handle is not None and handle.converted_at is not None else None
+        return (base if base is not None else time.monotonic()) + chunking_budget_seconds()
+
+    async def _run_post_conversion(
+        self, work: Callable[[], Any], deadline: float, file_path: str, what: str
+    ) -> Any:
+        """Run ``work`` on the post-conversion pool, giving up at ``deadline``.
+
+        The thread cannot be interrupted, so the loop stops waiting at the deadline (the
+        file's slot moves on) while the work stops itself: the chunker checks the same
+        deadline at every token count (``src.ingestion.chunker.chunking_deadline``), and
+        :class:`ChunkingTimeoutError` is raised here either way.
+
+        Args:
+            work: The synchronous step (OCR repair, chunking).
+            deadline: ``time.monotonic()`` value from :meth:`_post_conversion_deadline`.
+            file_path: The file, for the error message.
+            what: The step's name, for the error message.
+
+        Returns:
+            What ``work`` returned.
+
+        Raises:
+            ChunkingTimeoutError: ``deadline`` passed before ``work`` returned.
+        """
+        loop = asyncio.get_running_loop()
+        context = contextvars.copy_context()  # the chunking deadline travels with the task
+        future = loop.run_in_executor(self.get_post_conversion_executor(), context.run, work)
+        try:
+            return await asyncio.wait_for(future, timeout=max(0.0, deadline - time.monotonic()))
+        except (asyncio.TimeoutError, ChunkingDeadlineExceeded) as exc:
+            raise ChunkingTimeoutError(
+                f"{what} of {os.path.basename(file_path)} ran past the post-conversion budget "
+                f"of {chunking_budget_seconds():.0f}s"
+            ) from exc
+
+    async def _chunk_within_budget(self, file_path: str, deadline: float, **kwargs: Any) -> List[DocumentChunk]:
+        """Chunk a document before ``deadline``: on the post-conversion pool, or awaited for stub chunkers.
+
+        A chunker with ``chunk_document_sync`` (the pipeline's :class:`DoclingHybridChunker`)
+        runs on the pool with the deadline; chunkers without it (older stubs) are awaited
+        on the loop under the same timeout.
+        """
+        sync = getattr(self.chunker, "chunk_document_sync", None)
+        if sync is not None:
+            return await self._run_post_conversion(
+                lambda: sync(deadline=deadline, **kwargs), deadline, file_path, "chunking"
+            )
+        try:
+            return await asyncio.wait_for(
+                self.chunker.chunk_document(**kwargs), timeout=max(0.0, deadline - time.monotonic())
+            )
+        except asyncio.TimeoutError as exc:
+            raise ChunkingTimeoutError(
+                f"chunking of {os.path.basename(file_path)} ran past the post-conversion budget "
+                f"of {chunking_budget_seconds():.0f}s"
+            ) from exc
 
     async def _embed_chunks(
         self, chunks: List[DocumentChunk], deadline: Optional[float]
@@ -6130,6 +6248,27 @@ class DocumentIngestionPipeline:
                             processing_time_ms=processing_time,
                             error_type="timeout",
                             error_message=error_msg,
+                            classification="timeout",
+                        ))
+
+                    if progress_callback:
+                        progress_callback(processed_count, total_files, file_path, 0)
+
+                except ChunkingTimeoutError as e:
+                    # OCR repair or chunking ran past the post-conversion budget: a timeout
+                    # (failed_documents, retried on resume with retry_timeouts), not retried
+                    # here since the conversion succeeded and the chunker is deterministic
+                    processing_time = (datetime.now() - file_start_time).total_seconds() * 1000
+                    error_msg = str(e)
+                    logger.error(f"TIMEOUT after the conversion of {file_path}: {error_msg}")
+
+                    with results_lock:
+                        results.append(failed_result(error_msg, processing_time))
+                        processed_count += 1
+                        recorder.add(stat(
+                            processing_time_ms=processing_time,
+                            error_type="timeout",
+                            error_message=error_msg[:500],
                             classification="timeout",
                         ))
 

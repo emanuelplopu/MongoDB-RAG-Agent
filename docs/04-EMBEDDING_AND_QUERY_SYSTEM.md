@@ -133,6 +133,7 @@ settings surfaces, passed through by `docker-compose.yml`; evidence in
 | `OCR_OMP_THREAD_LIMIT` | derived | OpenMP threads per Tesseract process. Default: the cores shared evenly across the pool, 1-4; `0` leaves OpenMP free. Applied through a generated wrapper command (`tesseract_command()` in `src/ingestion/ocr_tesseract.py`), so it never caps PyTorch in the ingestion process. |
 | `INGEST_PROCESS_ISOLATION` | `true` | Convert in worker processes the concurrent loop kills when a file's budget runs out (`src/ingestion/conversion_workers.py`). Runs started by the API or the ingestion worker take the Configuration page's "Process isolation" (`process_isolation_enabled`) instead; this is the fallback for runs without a stored performance config (CLI). See "Timed-out conversions" below. |
 | `INGEST_STATS_FLUSH_FILES`, `INGEST_STATS_FLUSH_SECONDS` | `25`, `60` | How often the per-file stats of a run are written to `ingestion_stats` / `failed_documents`: every N recorded files or every M seconds, whichever comes first (and once more when the run ends). See "Per-file stats during the run" below. |
+| `INGEST_CHUNK_BUDGET_SECONDS` | `600` | Budget of a converted document's OCR repair and chunking, counted from the end of its conversion. Both run on a small thread pool off the event loop; a file still chunking when the budget ends is recorded as a `timeout` and the loop moves on. See "Chunking off the event loop" below. |
 | `INGEST_EMBED_BUDGET_FLOOR_SECONDS`, `INGEST_EMBED_BUDGET_MARGIN`, `INGEST_EMBED_BUDGET_MAX_SECONDS` | `600`, `3`, `14400` | Budget of a converted document's chunking + embedding + storing (the conversion budget stops when the conversion returns): MARGIN times the time the embedder's recent throughput predicts for the document's tokens, between FLOOR and MAX seconds. When it runs out the document is stored with the chunks embedded so far and the rest is embedded after the round from the run's embedding backlog. See "Budgets after the conversion" below. |
 
 Converters are cached per worker thread and configuration
@@ -289,6 +290,42 @@ read by nothing. Now:
   only a retry lifts it (below). A file whose conversion has not started
   within one budget times out all the same, so nothing stuck before the
   conversion can hold a slot forever.
+
+**Chunking off the event loop and the chunking budget (2026-11-03).** On
+2026-11-02 (21:19 UTC) and again on 2026-11-03 (20:02 UTC) the live Quellex API
+froze with its main thread at exactly one core for 35+ minutes: no log line,
+`/health` timing out, every conversion worker idle. A `py-spy dump` of the live
+process and an offline reproduction on the same file (`SETO.xlsx`, a 2,670-row
+x 32-column sheet, 2.7 MB of Markdown, 1.58 M tokens) showed docling-core's
+`HybridChunker._split_table_by_columns` re-tokenizing the whole table at every
+step of its column search, feeding every column slice to a line chunker, and
+repeating the whole segmentation whenever a piece overflowed: 2 s for a
+100 x 10 table, 51 s for 200 x 20, more than 4 min for 400 x 40, hours for the
+sheet. The chunker ran on the event-loop thread, so the whole API was gone with
+it, and the hard cap of `_run_with_budget` could not fire (a cancel reaches a
+task only at its next `await`). Three layers now guard this:
+
+- Oversized tables are cut into row windows before the HybridChunker sees them
+  (`presplit_large_tables` in `src/ingestion/chunker.py`): a table estimated
+  above `TABLE_PRESPLIT_FACTOR` (2) x `CHUNK_MAX_TOKENS` tokens is replaced, in
+  a copy of the document, by sub-tables of about `CHUNK_MAX_TOKENS` tokens, each
+  carrying the header rows (one token count per row, linear in the table). The
+  chunker then splits each small sub-table cheaply; the stored Markdown
+  (`content`) is unchanged, only the chunks differ (2,670 rows now take
+  seconds and keep their header, which the column split lost).
+- The chunker's tokenizer checks a deadline on every token count
+  (`DeadlineTokenizer`, `chunking_deadline`): whatever docling-core loop a
+  document drives into, it ends with `ChunkingDeadlineExceeded` when the file's
+  budget does.
+- OCR repair and chunking run on a two-thread pool off the event loop
+  (`_run_post_conversion` in `src/ingestion/ingest.py`), under
+  `INGEST_CHUNK_BUDGET_SECONDS` (600) counted from the end of the conversion.
+  When it runs out the loop stops waiting (the slot moves on, `/health` and the
+  job endpoints answered throughout), the thread stops itself at the same
+  deadline, and the file is recorded as `error_type: timeout` with "ran past
+  the post-conversion budget" in `ingestion_stats` / `failed_documents`: not
+  retried within the run (the chunker is deterministic), retried on a resume
+  with `retry_timeouts`. Embedding keeps its own work-derived budget (below).
 
 **Budgets after the conversion (F44) and the retry of a timeout (F43).** Until
 2026-10-28 the per-file budget wrapped the whole file: conversion, chunking,
