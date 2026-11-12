@@ -583,6 +583,8 @@ def build_exact_pipeline(
                 "from": docs_collection,
                 "localField": "document_id",
                 "foreignField": "_id",
+                # title, source and content hash only: a plain $lookup loads the whole document, content included
+                "pipeline": [{"$project": {"title": 1, "source": 1, "content_hash": 1}}],
                 "as": "doc_info",
             }
         },

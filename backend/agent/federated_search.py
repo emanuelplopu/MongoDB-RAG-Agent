@@ -42,6 +42,7 @@ from backend.services.identifier_search import (
 )
 from backend.services.query_embedding import create_embedding_client, embed_query
 from backend.services.text_query import QueryTooLongError, run_text_search, text_search_stage
+from backend.services.search_results import fused_order
 
 if TYPE_CHECKING:
     from backend.agent.strategies.base import BaseStrategy
@@ -308,6 +309,8 @@ class FederatedSearch:
                                 "from": docs_collection,
                                 "localField": "document_id",
                                 "foreignField": "_id",
+                                # title, source and content hash only: a plain $lookup loads the whole document, content included
+                                "pipeline": [{"$project": {"title": 1, "source": 1, "content_hash": 1}}],
                                 "as": "doc_info"
                             }
                         },
@@ -350,6 +353,8 @@ class FederatedSearch:
                                 "from": docs_collection,
                                 "localField": "document_id",
                                 "foreignField": "_id",
+                                # title, source and content hash only: a plain $lookup loads the whole document, content included
+                                "pipeline": [{"$project": {"title": 1, "source": 1, "content_hash": 1}}],
                                 "as": "doc_info"
                             }
                         },
@@ -538,7 +543,7 @@ class FederatedSearch:
                     rrf_scores[chunk_id] = original_similarity.get(chunk_id, 0.75)
         
         # Sort by RRF score
-        sorted_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
+        sorted_ids = fused_order(rrf_scores, text_ids)  # on a tie the text hit precedes a vector-only hit
         
         merged = []
         for chunk_id in sorted_ids[:limit]:

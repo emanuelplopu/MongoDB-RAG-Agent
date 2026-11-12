@@ -431,7 +431,13 @@ class _Collection:
                     existing.pop(key, None)
                 return
         if upsert:
-            self.docs.append({**query, **update.get("$set", {})})
+            self.docs.append({**{k: v for k, v in query.items() if not isinstance(v, dict)}, **update.get("$set", {})})
+
+    async def update_many(self, query: dict, update: dict) -> None:
+        self.ops.append(("update_many", query))
+        for existing in self.docs:
+            if _matches(existing, query):
+                existing.update(update.get("$set", {}))
 
     async def delete_many(self, query: dict) -> None:
         self.ops.append(("delete_many", query))
@@ -750,3 +756,58 @@ async def test_embed_chunks_within_stops_between_batches_and_measures_throughput
     embedded, pending = await generator.embed_chunks_within(pending)  # no deadline: everything
     assert ([c.index for c in embedded], pending) == ([4, 5], [])
     assert len(await generator.embed_chunks(chunks)) == 6  # the old entry point is unchanged
+
+
+# --------------------------------------------------------------------------- failure records across runs
+
+
+def _file_stat(path: str, error_type: Optional[str], job_id: str = "job-2", message: str = "") -> Any:
+    now = datetime.now()
+    return ingest.IngestionFileStats(
+        file_path=path, file_name=Path(path).name, file_size_bytes=10, started_at=now, completed_at=now,
+        processing_time_ms=1.0, chunks_created=0 if error_type and error_type != "duplicate" else 5,
+        success=error_type in (None, "duplicate"), error_type=error_type, error_message=message or str(error_type),
+        timeout_seconds=1800.0, profile_key="p", job_id=job_id, retry_count=0,
+    )
+
+
+async def test_a_later_success_resolves_every_open_failure_of_the_file() -> None:
+    """136 of 155 open timeout rows of one corpus belonged to files a later run had indexed."""
+    stats = _Collection()
+    failed = _Collection([
+        {"file_path": "/docs/Kommentar.pdf", "error_type": "timeout", "resolved": False, "job_id": "job-1", "retry_pending": True},
+        {"file_path": "/docs/Kommentar.pdf", "error_type": "hang_suspect", "resolved": False, "job_id": "job-1"},
+        {"file_path": "/docs/Kopie.pdf", "error_type": "error", "resolved": False, "job_id": "job-1"},
+        {"file_path": "/docs/Anderes.pdf", "error_type": "error", "resolved": False, "job_id": "job-1"},
+        {"file_path": "/docs/Kommentar.pdf", "error_type": "timeout", "resolved": True, "resolution": "retry 1 ended as success"},
+    ])
+    pipe = _BudgetPipeline()
+    pipe.db = {"ingestion_stats": stats, "failed_documents": failed}
+
+    batch = [_file_stat("/docs/Kommentar.pdf", None), _file_stat("/docs/Kopie.pdf", "duplicate")]
+    assert await ingest.DocumentIngestionPipeline._save_ingestion_stats(pipe, batch) is True
+
+    by_file = {(d["file_path"], d["error_type"], d.get("job_id")): d for d in failed.docs}
+    for key in (("/docs/Kommentar.pdf", "timeout", "job-1"), ("/docs/Kommentar.pdf", "hang_suspect", "job-1"), ("/docs/Kopie.pdf", "error", "job-1")):
+        row = by_file[key]
+        assert row["resolved"] is True and row["resolution"] == "a later attempt indexed the file" and row["retry_pending"] is False
+        datetime.fromisoformat(row["resolved_at"])
+    assert by_file[("/docs/Anderes.pdf", "error", "job-1")]["resolved"] is False, "other files are untouched"
+    assert failed.docs[-1]["resolution"] == "retry 1 ended as success", "an already resolved row keeps its history"
+    assert len(failed.docs) == 5
+
+
+async def test_a_repeated_failure_updates_its_row_instead_of_adding_one() -> None:
+    stats, failed = _Collection(), _Collection()
+    pipe = _BudgetPipeline()
+    pipe.db = {"ingestion_stats": stats, "failed_documents": failed}
+    save = ingest.DocumentIngestionPipeline._save_ingestion_stats
+
+    assert await save(pipe, [_file_stat("/docs/Scan.pdf", "no_chunks", job_id="job-1", message="No content extracted")]) is True
+    assert await save(pipe, [_file_stat("/docs/Scan.pdf", "no_chunks", job_id="job-2", message="No content extracted (retry)")]) is True
+    (row,) = failed.docs
+    assert (row["error_type"], row["job_id"], row["error_message"], row["resolved"]) == ("no_chunks", "job-2", "No content extracted (retry)", False)
+
+    # a different error type is a different finding and gets its own row
+    assert await save(pipe, [_file_stat("/docs/Scan.pdf", "error", job_id="job-2")]) is True
+    assert sorted(d["error_type"] for d in failed.docs) == ["error", "no_chunks"]

@@ -518,12 +518,13 @@ class TestHybridEndpoint:
         assert pipelines[1][0]["$search"] == text_search_stage(
             F34_QUERY_WITHOUT_CITATION, index=pipelines[1][0]["$search"]["index"], fuzzy=True
         )["$search"]
-        assert pipelines[0][0]["$vectorSearch"]["limit"] == 20
+        assert pipelines[0][0]["$vectorSearch"]["limit"] == 30  # three times the requested ten, so copies can collapse
         collection.find.assert_not_called()
         results = response.json()["results"]
         assert [r["chunk_id"] for r in results] == [d["chunk_id"] for d in _raw_rrf(stages)[:10]]
         assert "tkg-16" not in {r["chunk_id"] for r in results}
-        assert all("semantic_guarantee" not in r["metadata"] and "locations" not in r["metadata"] for r in results)
+        # no pinning and no guarantee; every result carries the (here empty) list of its copies
+        assert all("semantic_guarantee" not in r["metadata"] and r["metadata"]["locations"] == [] for r in results)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

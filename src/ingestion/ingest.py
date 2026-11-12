@@ -46,6 +46,14 @@ from src.ingestion.chunker import ChunkingConfig, create_chunker, DocumentChunk,
 from src.ingestion.embedder import create_embedder
 from src.ingestion.chunker import ChunkingDeadlineExceeded
 from src.ingestion.ocr_repair import repair_docling_document, repair_ocr_text
+from src.ingestion.indexes import ensure_ingestion_indexes
+from src.ingestion.office_fallbacks import (
+    WordBinaryError,
+    has_backslash_member_names,
+    normalise_ooxml_member_names,
+    ooxml_media_images,
+    word_binary_text,
+)
 from src.ingestion import telemetry_hooks
 from src.ingestion.progress import progress_percent_label
 from src.settings import load_settings
@@ -1317,6 +1325,60 @@ DEFAULT_STATS_FLUSH_FILES = 25
 DEFAULT_STATS_FLUSH_SECONDS = 60.0
 
 
+#: ``documents.content`` is capped at this many UTF-8 bytes. MongoDB rejects a document
+#: over 16 MB (BSON); the chunks carry the whole text, ``content`` only feeds the document
+#: viewer's text fallback and the title/metadata extraction.
+DEFAULT_MAX_DOCUMENT_CONTENT_BYTES = 8 * 1024 * 1024
+
+
+def max_document_content_bytes() -> int:
+    """The cap on ``documents.content`` in bytes (``INGEST_MAX_DOCUMENT_CONTENT_MB``, default 8)."""
+    raw = os.environ.get("INGEST_MAX_DOCUMENT_CONTENT_MB", "").strip()
+    if raw:
+        try:
+            return max(1, min(15, int(float(raw)))) * 1024 * 1024
+        except ValueError:
+            logger.warning(f"Ignoring non-numeric INGEST_MAX_DOCUMENT_CONTENT_MB={raw!r}")
+    return DEFAULT_MAX_DOCUMENT_CONTENT_BYTES
+
+
+def cap_document_content(content: str, limit: int) -> Tuple[str, Optional[int]]:
+    """Cut ``content`` to at most ``limit`` UTF-8 bytes for storage in ``documents.content``.
+
+    Three law commentaries of one corpus (12-30 MB of text) were converted, chunked and
+    embedded for four to five and a half hours each and then failed at the insert with
+    "BSON document too large" (``docs/27-POST_INGESTION_VALIDATION.md``). The cut is made at
+    a line end when one is near; the chunks are not affected.
+
+    Args:
+        content: The document's full text.
+        limit: Maximum size in bytes.
+
+    Returns:
+        ``(stored_content, full_size_in_bytes)``; the size is ``None`` when nothing was cut.
+    """
+    if len(content) * 4 <= limit:  # a character is at most four bytes
+        return content, None
+    encoded = content.encode("utf-8", errors="replace")
+    if len(encoded) <= limit:
+        return content, None
+    cut = encoded[:limit].decode("utf-8", errors="ignore")
+    line_end = cut.rfind(chr(10))
+    if line_end > len(cut) - 4096:
+        cut = cut[:line_end]
+    return cut, len(encoded)
+
+
+class EmbeddingFailedError(Exception):
+    """No chunk of a document could be embedded: nothing is stored, the file is recorded as failed.
+
+    Until 2026-11-11 such a document was stored without chunks and counted as ingested:
+    while the embedder was degraded on 2026-11-01, 50 e-mails and Word files of one corpus
+    ended up in ``documents`` with ``chunks_count`` 0, invisible to search and skipped by
+    every later run (``docs/27-POST_INGESTION_VALIDATION.md``).
+    """
+
+
 class UnreadableFileError(Exception):
     """A reader could not read the file: nothing is stored and the file is recorded as failed.
 
@@ -1326,27 +1388,16 @@ class UnreadableFileError(Exception):
     """
 
 
-#: Reader placeholders that mean "could not read" (an unreadable file, a missing tool)
-ERROR_PLACEHOLDER_PREFIXES: Tuple[str, ...] = ("[Error:", "[Skipped:")
-#: Reader placeholders that mean "read fine, but there is no text in it"
-EMPTY_PLACEHOLDER_PREFIX = "[Document:"
-_PLACEHOLDER_MAX_CHARS = 400
-
-
-def placeholder_kind(content: Optional[str]) -> Optional[str]:
-    """Classify a reader's output: ``"error"`` / ``"empty"`` for a placeholder, else ``None``.
-
-    A placeholder is a single bracketed line such as ``[Error: Could not read file x.pdf]``
-    or ``[Document: x.rtf - no text content]``; real document text never looks like that.
-    """
-    text = (content or "").strip()
-    if not text or len(text) > _PLACEHOLDER_MAX_CHARS or "\n" in text or not text.endswith("]"):
-        return None
-    if text.startswith(ERROR_PLACEHOLDER_PREFIXES):
-        return "error"
-    if text.startswith(EMPTY_PLACEHOLDER_PREFIX):
-        return "empty"
-    return None
+# The placeholder table lives in a module without heavy imports (the purge and the search
+# path use it too); the names stay importable from here.
+from src.ingestion.placeholders import (  # noqa: E402,F401
+    EMPTY_PLACEHOLDER_PREFIX,
+    EMPTY_PLACEHOLDER_PREFIXES,
+    ERROR_PLACEHOLDER_PREFIXES,
+    MEDIA_PLACEHOLDER_PREFIXES,
+    PLACEHOLDER_PREFIXES,
+    placeholder_kind,
+)
 
 
 #: Selective-retry flags of an ingestion request -> the recorded error type they ask to retry
@@ -1994,12 +2045,59 @@ def markdown_table(rows: List[List[Any]]) -> str:
 #: bytes and HP PCL printer escapes. ``.dss`` is also Olympus dictation audio, detected by magic.
 LEGACY_TEXT_EXTENSIONS: frozenset[str] = frozenset({".as", ".ass", ".ds", ".eb", ".do", ".dos", ".3", ".dss"})
 _DSS_AUDIO_MAGIC = b"\x02dss"
+#: OLE2 compound file (Word 97-2003 .doc, Outlook .msg) and zip container (.docx)
+_OLE2_MAGIC = bytes.fromhex("d0cf11e0a1b11ae1")
+_ZIP_MAGIC = bytes.fromhex("504b0304")
+
+
+def markdown_has_text(markdown: Optional[str]) -> bool:
+    """Whether a converted document has text besides picture placeholders (``<!-- image -->``)."""
+    return len((markdown or "").replace("<!-- image -->", "").strip()) > 20
+
+
+def pdf_open_problem(path: str) -> Optional[str]:
+    """Why a PDF cannot be opened at all, when that is known: ``"password-protected PDF"``.
+
+    Docling reports such a file as "could not load document"; pdfium names the reason.
+    22 of 30 unreadable PDFs sampled from one corpus were password-protected
+    (docs/27-POST_INGESTION_VALIDATION.md).
+    """
+    try:
+        import pypdfium2 as pdfium
+
+        pdfium.PdfDocument(path).close()
+    except ImportError:
+        return None
+    except Exception as exc:  # noqa: BLE001 - only the reason matters
+        return "password-protected PDF" if "password" in str(exc).lower() else None
+    return None
+
+
+def read_error_cause(exc: BaseException, limit: int = 240) -> str:
+    """One line naming why a read failed, for the ``[Error: …]`` placeholder and ``failed_documents``.
+
+    Until 2026-11-11 the readers recorded "Could not read file <name>" without the cause:
+    508 Word files of one corpus failed that way and the reason (package members named with
+    backslashes) was only in the conversion worker's log (docs/27-POST_INGESTION_VALIDATION.md).
+    """
+    text = " ".join(str(exc).split())
+    text = text.replace("[", "(").replace("]", ")")  # the placeholder is bracketed
+    return f"{type(exc).__name__}: {text}"[:limit] if text else type(exc).__name__
 _APPLEDOUBLE_PREFIX = "._"  # macOS resource forks copied onto SMB shares; never documents
+_OFFICE_OWNER_PREFIX = "~$"  # Word/Excel/PowerPoint owner (lock) files: 162 bytes naming who has the document open
 
 
 def is_sidecar_file(filename: str) -> bool:
-    """Whether ``filename`` is a macOS AppleDouble resource fork (``._name``), never a document."""
-    return filename.startswith(_APPLEDOUBLE_PREFIX)
+    """Whether ``filename`` is a companion file that is never a document.
+
+    Two kinds exist on office shares: macOS AppleDouble resource forks (``._name``) and
+    Office owner files (``~$name.docx``, written while a document is open and left behind
+    after a crash). One law firm's shares held 2,500 of them; until 2026-11-11 the owner
+    files were read as documents and ended as failed files ("legacy .doc format requires
+    antiword", "Could not read file"): 724 of that corpus's 1,980 read errors
+    (``docs/27-POST_INGESTION_VALIDATION.md``).
+    """
+    return filename.startswith((_APPLEDOUBLE_PREFIX, _OFFICE_OWNER_PREFIX))
 
 
 def walk_document_files(folder: str, extensions: frozenset) -> Iterator[Tuple[str, int]]:
@@ -2009,7 +2107,7 @@ def walk_document_files(folder: str, extensions: frozenset) -> Iterator[Tuple[st
     on CIFS/SMB mounts the kernel fills the attribute cache from the directory query, so
     that ``stat`` is answered locally, while sizing the files after the whole walk (as the
     pipeline did until 2026-10-24) sent one network round trip per file, ~20 min for 400K
-    files on every start and resume. AppleDouble ``._`` forks and symlinks are skipped;
+    files on every start and resume. AppleDouble ``._`` forks, Office ``~$`` owner files and symlinks are skipped;
     unreadable directories are logged and skipped.
 
     Args:
@@ -3229,6 +3327,15 @@ class DocumentIngestionPipeline:
             logger.exception(f"mongodb_connection_failed: {str(e)}")
             raise
 
+        # Ordinary indexes the run and the document endpoints query by: without them every
+        # stored file scans ``documents`` once (src/ingestion/indexes.py). Idempotent; the
+        # first build on a large collection takes a few minutes.
+        started = time.monotonic()
+        ensured = await ensure_ingestion_indexes(
+            self.db, self.settings.mongodb_collection_documents, self.settings.mongodb_collection_chunks
+        )
+        logger.info(f"Ingestion indexes in place: {len(ensured)} ({time.monotonic() - started:.1f}s)")
+
         self._initialized = True
         logger.info("Ingestion pipeline initialized")
 
@@ -3555,7 +3662,22 @@ class DocumentIngestionPipeline:
                 )
 
                 converter = create_document_converter(table_structure=options.table_structure)
-                result = converter.convert(file_path)
+                convert_path = file_path
+                repaired_copy: Optional[str] = None
+                if file_ext in ('.docx', '.xlsx', '.pptx') and has_backslash_member_names(file_path):
+                    # Packages written with backslashes in their member names (a practice-management
+                    # system's letters and fee notes): Word opens them, a zip reader finds no parts
+                    fd, repaired_copy = tempfile.mkstemp(suffix=file_ext, prefix="recallhub-ooxml-")
+                    os.close(fd)
+                    renamed = normalise_ooxml_member_names(file_path, repaired_copy)
+                    logger.info(f"{os.path.basename(file_path)}: {renamed} package members renamed to forward slashes")
+                    note_conversion(ooxml_repair="member_names")
+                    convert_path = repaired_copy
+                try:
+                    result = converter.convert(convert_path)
+                finally:
+                    if repaired_copy and os.path.exists(repaired_copy):
+                        os.remove(repaired_copy)
 
                 # Scanned pages whose OCR text Docling attached to a picture, or returned
                 # empty, get their text back into the document before export/chunking (F35)
@@ -3569,21 +3691,33 @@ class DocumentIngestionPipeline:
                     f"to markdown"
                 )
 
+                # A Word file that holds only pictures (photographed exhibits, tickets,
+                # screenshots): the text is in the pictures
+                if file_ext == '.docx' and not markdown_has_text(markdown_content):
+                    picture_text = self._ocr_office_pictures(file_path)
+                    if picture_text:
+                        return (picture_text, None)
+
                 # Return both markdown and DoclingDocument for HybridChunker
                 return (markdown_content, result.document)
 
             except Exception as e:
                 logger.error(f"Failed to convert {file_path} with Docling: {e}")
                 # Fall back to raw text if Docling fails
-                logger.warning(f"Falling back to raw text extraction for {file_path}")
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        return (f.read(), None)
-                except Exception:
-                    return (
-                        f"[Error: Could not read file {os.path.basename(file_path)}]",
-                        None
-                    )
+                # Raw text is a fallback for the text formats only: an ASCII-only PDF or a
+                # .pptx that Docling rejects must not be stored as its file source
+                if file_ext in ('.md', '.markdown', '.html', '.htm'):
+                    logger.warning(f"Falling back to raw text extraction for {file_path}")
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            return (f.read(), None)
+                    except Exception:  # noqa: BLE001 - reported with the conversion's cause below
+                        pass
+                cause = (pdf_open_problem(file_path) if file_ext == '.pdf' else None) or read_error_cause(e)
+                return (
+                    f"[Error: Could not read file {os.path.basename(file_path)} ({cause})]",
+                    None
+                )
 
         # Text-based formats (read directly)
         else:
@@ -3594,6 +3728,41 @@ class DocumentIngestionPipeline:
                 # Try with different encoding
                 with open(file_path, 'r', encoding='latin-1') as f:
                     return (f.read(), None)
+
+    def _ocr_office_pictures(self, file_path: str) -> str:
+        """OCR text of the pictures embedded in an Office package, in the order of their names.
+
+        Used when the document itself has no text (``docs/27-POST_INGESTION_VALIDATION.md``:
+        229 Word files of one corpus held only pasted scans and photos). Each picture goes
+        through the image reader, so the noise gate and the OCR settings apply.
+
+        Args:
+            file_path: The ``.docx`` file.
+
+        Returns:
+            The pictures' text separated by rules; empty when no picture has text.
+        """
+        parts: List[str] = []
+        for name, data in ooxml_media_images(file_path):
+            fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(name)[1].lower(), prefix="recallhub-picture-")
+            os.close(fd)
+            try:
+                with open(tmp, "wb") as handle:
+                    handle.write(data)
+                text, _ = self._read_document(tmp)
+            except Exception as exc:  # noqa: BLE001 - one unreadable picture must not fail the document
+                logger.warning(f"Could not OCR {name} of {os.path.basename(file_path)}: {exc}")
+                continue
+            finally:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            text = (text or "").replace("<!-- image -->", "").strip()
+            if text and placeholder_kind(text) is None:
+                parts.append(text)
+        if parts:
+            logger.info(f"{os.path.basename(file_path)}: text of {len(parts)} embedded picture(s) read with OCR")
+            note_conversion(ocr_fallback="office_pictures")
+        return "\n\n---\n\n".join(parts)
 
     # -- Legacy and container formats (law-firm corpora, docs/26) ------------------------
 
@@ -3904,62 +4073,87 @@ class DocumentIngestionPipeline:
 
     def _read_doc_file(self, file_path: str) -> tuple[str, Optional[Any]]:
         """
-        Extract text content from legacy .doc files using antiword.
-        
-        Docling does not support the legacy .doc binary format (only .docx).
-        This method uses the antiword command-line tool as a reliable fallback.
-        
+        Extract text from a ``.doc`` / ``.wbk`` / ``.dot`` file, by content rather than by name.
+
+        Docling does not read the Word 97-2003 binary format, so an OLE2 container goes to
+        ``antiword``. Files under these extensions are not always that format: on one law
+        firm's shares they were also ``.docx`` containers, RTF, HTML, plain text and DOS-era
+        text (``docs/27-POST_INGESTION_VALIDATION.md``); each goes to its own reader. When
+        ``antiword`` cannot read the file, its reason is part of the error.
+
         Args:
-            file_path: Path to the .doc file
-            
+            file_path: Path to the file
+
         Returns:
-            Tuple of (text_content, None)
+            Tuple of (text_content, None) or of (markdown, DoclingDocument) for a ``.docx``
+            container; an ``[Error: …]`` placeholder when unreadable.
         """
         import subprocess
         import shutil
-        
+
         basename = os.path.basename(file_path)
-        
-        # Try antiword first (best quality for .doc)
-        if shutil.which('antiword'):
-            try:
-                result = subprocess.run(
-                    ['antiword', '-w', '0', file_path],
-                    capture_output=True, text=True, timeout=60
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    logger.info(f"Successfully extracted .doc with antiword: {basename}")
-                    return (result.stdout.strip(), None)
-                else:
-                    logger.warning(
-                        f"antiword returned empty or failed for {basename}: "
-                        f"{result.stderr.strip()}"
-                    )
-            except subprocess.TimeoutExpired:
-                logger.warning(f"antiword timed out for {basename}")
-            except Exception as e:
-                logger.warning(f"antiword failed for {basename}: {e}")
-        else:
-            logger.warning(
-                "antiword not installed. Legacy .doc extraction will be limited. "
-                "Install with: apt-get install antiword"
-            )
-        
-        # Fallback: try reading as text (works for some .doc files that are actually RTF/text)
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-                # Check if content looks like binary garbage
-                printable_ratio = sum(1 for c in content[:1000] if c.isprintable() or c.isspace()) / max(len(content[:1000]), 1)
-                if printable_ratio > 0.8:
-                    logger.info(f"Extracted .doc as text (text-like content): {basename}")
-                    return (content, None)
-                else:
-                    logger.warning(f"Skipping .doc with binary content (not readable as text): {basename}")
-                    return (f"[Skipped: {basename} - legacy .doc format requires antiword]", None)
-        except UnicodeDecodeError:
-            logger.warning(f"Cannot read .doc as text: {basename}")
-            return (f"[Skipped: {basename} - legacy .doc format requires antiword]", None)
+            with open(file_path, "rb") as handle:
+                magic = handle.read(8)
+        except OSError as exc:
+            logger.error(f"Failed to open {basename}: {exc}")
+            return (f"[Error: Could not read file {basename} ({read_error_cause(exc)})]", None)
+
+        if magic[:4] == _ZIP_MAGIC:
+            logger.info(f"{basename} is a .docx container under a .doc name")
+            return self._read_renamed_office_file(file_path, ".docx")
+        if magic != _OLE2_MAGIC:
+            # RTF, HTML, plain or DOS-era text saved as .doc
+            content, document = self._read_sniffed_text_file(file_path)
+            if document is None and placeholder_kind(content) is None:
+                # A binary format of another word processor decodes to a few stray letters
+                tokens, wordlike = image_text_quality(content)
+                try:
+                    size = os.path.getsize(file_path)
+                except OSError:
+                    size = 0
+                too_little = size > 512 and len(content.strip()) < size * 0.05
+                if too_little or (tokens >= 3 and wordlike < 0.5):
+                    logger.warning(f"{basename} is neither a Word document nor readable text ({tokens} tokens, {wordlike:.2f} word-like)")
+                    return (f"[Error: Could not read file {basename} (not a Word document and not text)]", None)
+            return (content, document)
+
+        if not shutil.which('antiword'):
+            logger.warning("antiword not installed; Word 97-2003 files cannot be read (apt-get install antiword)")
+            return (f"[Error: Could not read file {basename} (antiword is not installed)]", None)
+        try:
+            result = subprocess.run(
+                ['antiword', '-w', '0', file_path],
+                capture_output=True, text=True, timeout=60
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning(f"antiword timed out for {basename}")
+            return (f"[Error: Could not read file {basename} (antiword timed out after 60 s)]", None)
+        except Exception as e:  # noqa: BLE001 - one unreadable file must not stop the run
+            logger.warning(f"antiword failed for {basename}: {e}")
+            return (f"[Error: Could not read file {basename} ({read_error_cause(e)})]", None)
+        if result.returncode == 0 and result.stdout.strip():
+            logger.info(f"Successfully extracted .doc with antiword: {basename}")
+            return (result.stdout.strip(), None)
+        if result.returncode == 0:
+            return (f"[Document: {basename} - no text content]", None)
+        reason = " ".join((result.stderr or "").split())[:200] or f"exit code {result.returncode}"
+        reason = reason.replace("[", "(").replace("]", ")")
+        # antiword rejects small Word 6/95 files ("the text stream of this file is too small
+        # to handle"): read the text from the WordDocument stream instead
+        try:
+            text = word_binary_text(file_path)
+        except WordBinaryError as exc:
+            logger.warning(f"antiword could not read {basename}: {reason}; Word binary reader: {exc}")
+            return (f"[Error: Could not read file {basename} (antiword: {reason}; {exc})]", None)
+        except Exception as exc:  # noqa: BLE001 - a damaged container must not stop the run
+            logger.warning(f"antiword could not read {basename}: {reason}; Word binary reader failed: {exc}")
+            return (f"[Error: Could not read file {basename} (antiword: {reason}; {read_error_cause(exc)})]", None)
+        if not text:
+            return (f"[Document: {basename} - no text content]", None)
+        logger.info(f"Read {basename} with the Word binary reader (antiword: {reason})")
+        note_conversion(doc_reader="word_binary")
+        return (text, None)
 
     def _read_msg_file(self, file_path: str) -> tuple[str, Optional[Any]]:
         """
@@ -4072,7 +4266,16 @@ class DocumentIngestionPipeline:
 
         try:
             with open(file_path, "rb") as fh:
+                magic = fh.read(8)
+            if magic == _OLE2_MAGIC:
+                # An Outlook message saved as .eml: the RFC 5322 parser finds no headers and
+                # takes the binary file for a text body, which was indexed as text
+                logger.info(f"{os.path.basename(file_path)} is an Outlook (OLE2) message; reading it as .msg")
+                return self._read_msg_file(file_path)
+            with open(file_path, "rb") as fh:
                 msg = BytesParser(policy=policy.default).parse(fh)
+            if not msg.keys():
+                return (f"[Error: Could not read email {os.path.basename(file_path)}: no message headers (not an RFC 5322 file)]", None)
 
             parts = []
             if msg["subject"]:
@@ -4621,7 +4824,7 @@ class DocumentIngestionPipeline:
 
         return metadata
 
-    async def _delete_existing_document(self, source: str) -> int:
+    async def _delete_existing_document(self, source: str, keep_id: Any = None) -> int:
         """
         Delete existing document and its chunks by source path.
         
@@ -4630,6 +4833,7 @@ class DocumentIngestionPipeline:
         
         Args:
             source: Document source path to match against
+            keep_id: ``_id`` of the document to keep (the version just stored)
             
         Returns:
             Number of documents deleted (0 or 1)
@@ -4641,7 +4845,10 @@ class DocumentIngestionPipeline:
         
         # Find existing document(s) with this source
         existing_docs = []
-        cursor = documents_collection.find({"source": source}, {"_id": 1})
+        query: Dict[str, Any] = {"source": source}
+        if keep_id is not None:
+            query["_id"] = {"$ne": keep_id}
+        cursor = documents_collection.find(query, {"_id": 1})
         async for doc in cursor:
             existing_docs.append(doc["_id"])
         
@@ -4679,8 +4886,13 @@ class DocumentIngestionPipeline:
         """
         Save document and chunks to MongoDB.
 
-        Always deletes any existing document with the same source path
-        before inserting, preventing duplicates regardless of ingestion mode.
+        The new version is stored first (document, then chunks); only then is an older
+        document with the same source path deleted, so a failed save keeps the version
+        that was there (until 2026-11-11 the old version was deleted before the insert).
+        A save that fails after the document row was written removes that row and its
+        chunks again. ``content`` is capped (:func:`cap_document_content`): the chunks
+        carry the whole text, ``metadata.content_truncated`` / ``content_bytes`` record
+        the cut.
 
         Args:
             title: Document title
@@ -4697,16 +4909,17 @@ class DocumentIngestionPipeline:
             Document ID (ObjectId as string)
 
         Raises:
+            EmbeddingFailedError: There is no chunk to store and none pending
             Exception: If MongoDB operations fail
         """
+        if not chunks and pending_chunks <= 0:
+            raise EmbeddingFailedError(f"no embedded chunk to store for {source}")
+
         # Get collection references
         documents_collection = self.db[
             self.settings.mongodb_collection_documents
         ]
         chunks_collection = self.db[self.settings.mongodb_collection_chunks]
-
-        # Delete any existing document with the same source to prevent duplicates
-        await self._delete_existing_document(source)
 
         # Insert document
         document_metadata = {
@@ -4715,10 +4928,18 @@ class DocumentIngestionPipeline:
         }
         if pending_chunks > 0:
             document_metadata["chunks_pending"] = pending_chunks
+        stored_content, full_bytes = cap_document_content(content, max_document_content_bytes())
+        if full_bytes is not None:
+            document_metadata["content_truncated"] = True
+            document_metadata["content_bytes"] = full_bytes
+            logger.warning(
+                f"Text of '{source}' is {full_bytes / 1e6:.1f} MB: documents.content keeps the first "
+                f"{len(stored_content.encode('utf-8')) / 1e6:.1f} MB, all {len(chunks) + max(0, pending_chunks)} chunks are stored"
+            )
         document_dict = {
             "title": title,
             "source": source,
-            "content": content,
+            "content": stored_content,
             "content_hash": content_hash,  # Store hash for deduplication
             "metadata": document_metadata,
             "created_at": datetime.now()
@@ -4729,15 +4950,34 @@ class DocumentIngestionPipeline:
 
         logger.info(f"Inserted document with ID: {document_id}")
 
-        # Insert chunks with embeddings as Python lists
-        chunk_dicts = self._chunk_documents(document_id, chunks)
+        try:
+            # Insert chunks with embeddings as Python lists
+            chunk_dicts = self._chunk_documents(document_id, chunks)
 
-        # Batch insert with ordered=False for partial success
-        if chunk_dicts:
-            await chunks_collection.insert_many(chunk_dicts, ordered=False)
-            logger.info(f"Inserted {len(chunk_dicts)} chunks")
+            # Batch insert with ordered=False for partial success
+            if chunk_dicts:
+                await chunks_collection.insert_many(chunk_dicts, ordered=False)
+                logger.info(f"Inserted {len(chunk_dicts)} chunks")
+        except BaseException:
+            # A document row without its chunks would count as ingested and never be found
+            await self._discard_torn_document(document_id)
+            raise
+
+        # The new version is complete: replace any older document of the same source
+        await self._delete_existing_document(source, keep_id=document_id)
 
         return str(document_id)
+
+    async def _discard_torn_document(self, document_id: Any) -> None:
+        """Remove a document row (and the chunks stored so far) whose save failed half-way."""
+        try:
+            await asyncio.shield(self._delete_document_rows(document_id))
+        except Exception as exc:  # noqa: BLE001 - the original error is the one to report
+            logger.error(f"Could not remove the half-stored document {document_id}: {exc}")
+
+    async def _delete_document_rows(self, document_id: Any) -> None:
+        await self.db[self.settings.mongodb_collection_chunks].delete_many({"document_id": document_id})
+        await self.db[self.settings.mongodb_collection_documents].delete_one({"_id": document_id})
 
     @staticmethod
     def _chunk_documents(document_id: Any, chunks: List[DocumentChunk]) -> List[Dict[str, Any]]:
@@ -5179,7 +5419,19 @@ class DocumentIngestionPipeline:
             f"{budget.tokens} tokens ({budget.seconds_per_1k_tokens:.2f} s per 1k tokens recently)"
         )
         with telemetry_hooks.step("embed"):
-            embedded_chunks, pending_chunks = await self._embed_chunks(chunks, budget.deadline)
+            embedded_chunks, pending_chunks, rejected_chunks = await self._embed_chunks_detailed(chunks, budget.deadline)
+        if not embedded_chunks and not pending_chunks:
+            raise EmbeddingFailedError(
+                f"none of the {len(chunks)} chunks of {os.path.basename(file_path)} could be embedded "
+                "(is the embedding server healthy?)"
+            )
+        if rejected_chunks:
+            # stored with ``chunks_pending``; the embedding backlog tries them again
+            logger.warning(
+                f"The embedder rejected {len(rejected_chunks)} of {len(chunks)} chunks of "
+                f"{os.path.basename(file_path)}; they go to the embedding backlog"
+            )
+            pending_chunks = pending_chunks + rejected_chunks
         if pending_chunks:
             logger.warning(
                 f"Embedding budget of {budget.seconds:.0f}s ran out for {os.path.basename(file_path)}: "
@@ -5330,11 +5582,32 @@ class DocumentIngestionPipeline:
 
         Embedders without ``embed_chunks_within`` (older stubs) embed everything.
         """
+        embedded, pending, rejected = await self._embed_chunks_detailed(chunks, deadline)
+        return embedded, pending + rejected
+
+    async def _embed_chunks_detailed(
+        self, chunks: List[DocumentChunk], deadline: Optional[float]
+    ) -> Tuple[List[DocumentChunk], List[DocumentChunk], List[DocumentChunk]]:
+        """Embed ``chunks`` until ``deadline``; ``(embedded, not attempted, rejected)``.
+
+        The embedder drops a chunk the server rejects (it retries a failed batch chunk by
+        chunk). Those chunks come back as ``rejected`` so the caller keeps them for the
+        embedding backlog instead of storing a document that silently lacks part of its
+        text - or, when nothing at all was embedded, fails the file.
+        """
         within = getattr(self.embedder, "embed_chunks_within", None)
         if within is None:
-            return list(await self.embedder.embed_chunks(chunks)), []
-        embedded, pending = await within(chunks, deadline=deadline)
-        return list(embedded), list(pending)
+            embedded = list(await self.embedder.embed_chunks(chunks))
+            pending: List[DocumentChunk] = []
+        else:
+            result = await within(chunks, deadline=deadline)
+            embedded, pending = list(result[0]), list(result[1])
+        if len(embedded) + len(pending) >= len(chunks):
+            return embedded, pending, []
+        embedded_indexes = {c.index for c in embedded}
+        pending_ids = {id(c) for c in pending}
+        rejected = [c for c in chunks if c.index not in embedded_indexes and id(c) not in pending_ids]
+        return embedded, pending, rejected
 
     async def _embed_backlog_chunks(
         self, document_id: str, chunks: List[DocumentChunk]
@@ -6550,8 +6823,26 @@ class DocumentIngestionPipeline:
                     # merges into the row its earlier run left pending instead of adding one
                     await failed_collection.update_one(open_timeout, {"$set": doc}, upsert=True)
                 else:
-                    await failed_collection.insert_one(doc)
+                    # One open row per (file, error type): a retry that fails the same way
+                    # updates it (and moves it to the current job) instead of adding a row
+                    await failed_collection.update_one(
+                        {"file_path": stat.file_path, "error_type": stat.error_type, "resolved": {"$ne": True}},
+                        {"$set": doc, "$inc": {"attempts": 1}},
+                        upsert=True,
+                    )
                 recorded += 1
+            # A file that is in the index now (stored, or a copy of a stored file) has no open
+            # failure any more, whichever run or error type recorded it. Until 2026-11-11 only
+            # a retry inside the same run resolved a timeout row: 136 of the 155 open timeout
+            # records of one corpus belonged to files a later run had indexed
+            # (docs/27-POST_INGESTION_VALIDATION.md).
+            succeeded = sorted({stat.file_path for stat in file_stats if stat.success and stat.file_path})
+            if succeeded:
+                await failed_collection.update_many(
+                    {"file_path": {"$in": succeeded}, "resolved": {"$ne": True}},
+                    {"$set": {"resolved": True, "resolved_at": datetime.now().isoformat(),
+                              "resolution": "a later attempt indexed the file", "retry_pending": False}},
+                )
             if recorded:
                 logger.warning(f"Recorded {recorded} failed documents to database")
         except Exception as e:

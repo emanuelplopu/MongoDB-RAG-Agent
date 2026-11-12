@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 from backend.core.ingestion_jobs import (
     FILES_STARTED_FIELD, INTERRUPTED_STATUS, JOB_CANCELLED, JOB_COMPLETED, JOB_FAILED, JOB_PAUSED, JOB_PENDING,
     JOB_RUNNING, JOB_STOPPED, RUNNER_WORKER, TENANT_FIELD, WORKER_OWNED, reached_files, resume_config,
+    trim_job_logs_update,
     status_spellings,
 )
 from backend.services.ingestion_schedule import ConcurrencyController, EffectiveLimits
@@ -344,9 +345,13 @@ class IngestionWorker:
                     "started_at": datetime.now().isoformat(),
                     "worker_pid": self.pid,
                     "worker_heartbeat": datetime.now(),
-                }
+                },
+                # A job document stored by an older build can carry 50,000 log lines (13.5 MB);
+                # every progress update would rewrite all of it (backend/core/ingestion_jobs.py)
+                **trim_job_logs_update(),
             },
             sort=[("created_at", 1)],  # FIFO order
+            projection={"logs": 0},
             return_document=True
         )
         

@@ -192,11 +192,13 @@ if HAS_TYPER:
         apply: bool = typer.Option(False, "--apply", help="Delete (default: dry run, list only)"),
         no_record: bool = typer.Option(False, "--no-record", help="Do not record the purged files in failed_documents"),
     ) -> None:
-        """Delete documents whose content is a reader placeholder ("[Error: Could not read file …]").
+        """Delete documents whose whole content is a reader placeholder.
 
-        Such documents were stored, chunked and embedded until 2026-10-26 (F26). They are
-        deleted with their chunks and recorded as failed files, so the retry-errors option
-        re-queues them. Dry run unless --apply is given.
+        "[Error: Could not read file …]" documents were stored, chunked and embedded until
+        2026-10-26 (F26); "[Image: … - OCR extracted minimal text]", "[Video: …]" and
+        "[Empty email: …]" ones until 2026-11-11. They are deleted with their chunks and
+        recorded as failed files: a failed read as "error" (the retry-errors option
+        re-queues it), a file without text as "no_chunks". Dry run unless --apply is given.
         """
         fmt = OutputFormatter(app.state.get("format", "table") if hasattr(app, "state") else "table")
         if bool(profile) == bool(database):
@@ -253,6 +255,8 @@ if HAS_TYPER:
         mode = "dry run" if result.dry_run else "applied"
         rows = [
             ["Placeholder documents found", _fmt_int(result.documents_found)],
+            ["  of them: failed reads", _fmt_int(result.by_kind.get("error", 0))],
+            ["  of them: files without text", _fmt_int(result.by_kind.get("empty", 0))],
             ["Documents deleted", _fmt_int(result.documents_deleted)],
             ["Chunks deleted", _fmt_int(result.chunks_deleted)],
             ["Failures recorded", _fmt_int(result.failures_recorded)],
@@ -266,6 +270,58 @@ if HAS_TYPER:
             )
         if result.dry_run and result.documents_found:
             console.print("[dim]Dry run: pass --apply to delete them.[/dim]")
+
+
+    @ingest_app.command("tidy-failures")
+    def tidy_failures(
+        database: str = typer.Option(..., "--database", "-d", help="Database holding failed_documents (the profile's database)"),
+        documents_collection: str = typer.Option("documents", "--documents-collection"),
+        mongodb_uri: str = typer.Option(
+            os.environ.get("MONGODB_URI", "mongodb://localhost:11017/?directConnection=true"), "--mongodb-uri"
+        ),
+        apply: bool = typer.Option(False, "--apply", help="Resolve the records (default: dry run, count only)"),
+    ) -> None:
+        """Resolve failure records that no longer describe a failure.
+
+        Records of a file that is in the index (a later attempt stored it), and older
+        records of a file that has a newer record of the same error type (every failed
+        retry added a row until 2026-11-11). Nothing is deleted; the records are marked
+        resolved. Dry run unless --apply is given.
+        """
+        fmt = OutputFormatter(app.state.get("format", "table") if hasattr(app, "state") else "table")
+
+        async def _run():
+            from pymongo import AsyncMongoClient
+
+            from backend.services.failed_documents_tidy import tidy_failed_documents
+
+            client = AsyncMongoClient(mongodb_uri, serverSelectionTimeoutMS=8000)
+            try:
+                return await tidy_failed_documents(client[database], documents_collection=documents_collection, dry_run=not apply)
+            finally:
+                await client.close()
+
+        try:
+            result = run_async(_run())
+        except Exception as exc:  # noqa: BLE001 - CLI boundary
+            fmt.print_error(str(exc))
+            raise typer.Exit(code=1)
+
+        if fmt.format == "json":
+            print(json.dumps(result.__dict__, indent=2, default=str))
+            return
+        mode = "dry run" if result.dry_run else "applied"
+        rows = [
+            ["Open failure records", _fmt_int(result.open_records)],
+            ["  file is in the index", _fmt_int(result.indexed_files)],
+            ["  repeated record of a later attempt", _fmt_int(result.repeated_records)],
+            ["Records resolved", _fmt_int(result.resolved)],
+            ["Open records afterwards", _fmt_int(result.remaining_open)],
+        ]
+        rows += [[f"  {error_type}", _fmt_int(count)] for error_type, count in sorted(result.by_error_type.items())]
+        fmt.print_table(["Metric", "Value"], rows, title=f"Tidy failure records - {database} ({mode})")
+        if result.dry_run and (result.indexed_files or result.repeated_records):
+            console.print("[dim]Dry run: pass --apply to resolve them.[/dim]")
 
 
     @ingest_app.command("queue-media")

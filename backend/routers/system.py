@@ -3218,6 +3218,18 @@ async def create_database(request: Request, create_request: DatabaseCreateReques
                 results["indexes_created"].append(f"{settings.mongodb_collection_chunks}.created_at")
             except Exception as e:
                 results["errors"].append(f"Failed to create chunk indexes: {e}")
+
+            # The full set the ingestion pipeline queries by (duplicate check, failure pages)
+            try:
+                from src.ingestion.indexes import ensure_ingestion_indexes_sync
+
+                for name in ensure_ingestion_indexes_sync(
+                    mongo_db, settings.mongodb_collection_documents, settings.mongodb_collection_chunks
+                ):
+                    if name not in results["indexes_created"]:
+                        results["indexes_created"].append(name)
+            except Exception as e:
+                results["errors"].append(f"Failed to create ingestion indexes: {e}")
             
             return results
         

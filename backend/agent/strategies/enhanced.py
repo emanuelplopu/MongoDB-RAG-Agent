@@ -20,6 +20,7 @@ from backend.agent.strategies.base import (
     StrategyDomain
 )
 from backend.agent.strategies.registry import register_strategy
+from backend.services.search_results import fused_order
 
 
 # Enhanced prompts with all improvements
@@ -544,7 +545,7 @@ class EnhancedStrategy(BaseStrategy):
                     rrf_scores[chunk_id] = original_similarity.get(chunk_id, 0.75)
         
         # Sort and return
-        sorted_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
+        sorted_ids = fused_order(rrf_scores, text_ids)  # on a tie the text hit precedes a vector-only hit
         
         merged = []
         for chunk_id in sorted_ids[:limit]:

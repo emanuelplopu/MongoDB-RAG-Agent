@@ -72,6 +72,8 @@ async def semantic_search(
                     "from": deps.settings.mongodb_collection_documents,
                     "localField": "document_id",
                     "foreignField": "_id",
+                    # title, source and content hash only: a plain $lookup loads the whole document, content included
+                    "pipeline": [{"$project": {"title": 1, "source": 1, "content_hash": 1}}],
                     "as": "document_info"
                 }
             },
@@ -183,6 +185,8 @@ async def text_search(
                     "from": deps.settings.mongodb_collection_documents,
                     "localField": "document_id",
                     "foreignField": "_id",
+                    # title, source and content hash only: a plain $lookup loads the whole document, content included
+                    "pipeline": [{"$project": {"title": 1, "source": 1, "content_hash": 1}}],
                     "as": "document_info"
                 }
             },
