@@ -251,7 +251,10 @@ async def hybrid_search(request: Request, search_request: SearchRequest):
         # maxClauseCount (backend/services/text_query.py, F56)
         def text_pipeline(fuzzy: bool) -> list:
             if text_plan.mode == "statute":
-                text_stage = {"$search": text_plan.operator}
+                plan = text_plan if fuzzy else plan_text_stage(
+                    search_request.query, identifiers, index=settings.mongodb_text_index, fuzzy=False
+                )
+                text_stage = {"$search": plan.operator}
             else:
                 text_stage = text_search_stage(
                     search_request.query, index=settings.mongodb_text_index, fuzzy=fuzzy
