@@ -342,7 +342,10 @@ class FederatedSearch:
                 # maxClauseCount (backend/services/text_query.py, F56)
                 def text_pipeline(fuzzy: bool) -> List[Dict[str, Any]]:
                     if text_plan.mode == "statute":
-                        text_stage: Dict[str, Any] = {"$search": text_plan.operator}
+                        plan = text_plan if fuzzy else plan_text_stage(
+                            query, identifiers, index=settings.mongodb_text_index, fuzzy=False
+                        )
+                        text_stage: Dict[str, Any] = {"$search": plan.operator}
                     else:
                         text_stage = text_search_stage(query, index=settings.mongodb_text_index, fuzzy=fuzzy)
                     return [
