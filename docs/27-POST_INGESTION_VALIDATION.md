@@ -6,6 +6,9 @@ job, validates what was indexed against the files on the shares, reviews the fai
 skips and slow stages, defines a retrieval and chat benchmark built from the live index,
 and records the fixes of the first improvement cycle (PR "post-ingestion cycle 1").
 
+Update 2026-11-12: cycle 1 was merged (main `013dc6b`) and deployed; the benchmark was run
+again on the deployed build, including the chat prompts that had no baseline (section 7.7).
+
 All numbers are measurements taken on 2026-11-11 between 20:05 and 22:30 local time, with
 read-only queries against MongoDB, a file census of the shares, and read-only re-reads of
 sample files inside the worker container. A retry run of failed files was started from the
@@ -453,6 +456,72 @@ uv run python scripts/retrieval-benchmark/fusion_lab.py score --out <dir>
 The same `cases.jsonl` can be run again after a deployment (`--tag`) and compared with
 `baseline-20261111`. The search endpoints allow 30 requests per minute and client; the
 runner paces itself. The cases quote the corpus and must stay outside the repository.
+
+### 7.7 After the deployment (2026-11-12)
+
+The retry run finished on 2026-11-12 at 00:08 (29,865 files looked at, 29,476 already
+indexed, 341 documents added, 332 failed again). Cycle 1 was deployed at 18:04 with no job
+running; the same 678 cases and 45 chat prompts were then run against the live application
+(tags `cycle1-20261112`, `cycle1-20261112-a`, `-b`).
+
+Hybrid search, rank 1 / top 10 / mean reciprocal rank:
+
+| query | before | after |
+|---|---|---|
+| exact sentence (130) | 0.22 / 0.88 / 0.50 | **0.62** / 0.88 / 0.70 |
+| transliterated (88) | 0.23 / 0.85 / 0.48 | **0.58** / 0.85 / 0.67 |
+| keywords (129) | 0.10 / 0.70 / 0.34 | **0.43** / 0.73 / 0.52 |
+| typing errors (130) | 0.15 / 0.88 / 0.46 | **0.64** / 0.90 / 0.71 |
+| written question (106) | 0.33 / 0.78 / 0.50 | **0.54** / 0.79 / 0.62 |
+| matter codes (12) | 0.00 / 0.33 / 0.08 | 0.17 / 0.33 / 0.20 |
+| court file, Firmenbuch, Grundbuch numbers (36) | 0.83 / 1.00 | 0.83 / 1.00 |
+
+- Of the 583 known-item queries 284 rank their document higher than before, 32 lower, 267
+  the same; 10 entered the top ten, 2 left it. The live result confirms the offline
+  what-if of section 7.4.
+- The semantic endpoint finds 47 % of the written questions in its top ten instead of 42 %
+  (`numCandidates` 200 instead of 100); the text endpoint is unchanged, as expected.
+- Server time at the median / 90th percentile: hybrid 337 ms / 770 ms (baseline 1.3 s / 4.6 s,
+  measured while the job document was still being rewritten), semantic 72 / 81 ms, text
+  24 / 49 ms, identifier queries 367 / 484 ms.
+- Result lists with the same text more than once: 374 of 645 instead of 448 of 642, and
+  1.12 repeats per list instead of 1.45. What remains are near-copies with different files
+  (the attachment inside its e-mail, the same clause in two contracts). No list contains a
+  placeholder.
+- **Unchanged, as these were not part of cycle 1**: all 32 negative queries still return ten
+  results, 267 of 645 lists contain a fragment under 60 characters, matter codes are in the
+  top ten for 4 of 12.
+- **One query fails, before and after**: a written question of 26 words around `§ 23 UrhG`
+  gets HTTP 400 "Query too long". The statute text stage sent the rest of the question as
+  one unbounded fuzzy clause (more than Lucene's 1,024 clauses), and the retry without fuzzy
+  matching rebuilt the same stage. Fixed after the deployment (`remainder_clause` in
+  `backend/services/identifier_search.py`); against the live index the bounded stage answers
+  in 125 ms with the expected document first.
+
+Chat, with no ingestion running (gemma4:12b on the GPU, 43-45 s per answer at the median,
+65 s at most, no request near the 300 s limit):
+
+| prompts | result |
+|---|---|
+| single-document questions (14) | 14 answered; the document that holds the answer is among the cited sources for 13 (baseline 12) |
+| identifier questions (5) | all five answers deal with the identifier asked for |
+| two-document questions (10) | 10 answered, the local-model judge accepts 4; one of the two documents is cited for 1, both for none |
+| folder listings (4) | 4 answered, none complete: of the 22 documents to list, 4 are among the sources |
+| must be declined (12) | **9 declined; 3 answered anyway**; all 12 cite sources |
+
+- The three false positives (one invented party, two false premises about a real matter)
+  all state that the documents do not contain the answer and then fill the answer with
+  unrelated material from the retrieved chunks; the invented party's "report" is described
+  as if it existed. A prompt that is declined still lists ten sources.
+- Questions that need two documents and folder listings are the weak classes: the second
+  document is not retrieved, and a listing needs a query by path, not a similarity search.
+- The timeouts of the baseline run were caused by the ingestion running next to the chat.
+
+Failure list after the retry run (dry run of `quellexctl ingest tidy-failures`): 11,489 open
+records, of which 465 belong to files that are in the index now and 4,076 repeat a later
+attempt; 6,948 remain (2,280 no text, 1,968 read errors, 1,742 image-only PDFs, 731 suspected
+hangs, 199 deferred media, 17 timeouts, 11 hangs). The retry ran on the build before cycle 1,
+so the read errors that cycle 1 repairs are still in that list.
 
 ## 8. Backlog for the next cycles
 
