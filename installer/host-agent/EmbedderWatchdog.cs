@@ -33,6 +33,22 @@ namespace RecallHub.HostAgent;
 /// error is "unreachable", not slow (Docker's own restart policy covers crashes), and restarts are
 /// rate-limited per container. Every check is reported to <c>host_control</c>
 /// (<c>_id: "embedder_watchdog"</c>) for <c>GET /api/v1/system/embedder-watchdog</c>.
+///
+/// Agent 1.3.0 adds a second, earlier rule. Under the firm's ingestion load the degradation now
+/// comes every 1-2 hours, and the probe latency lags the CPU signal: single probes slip between
+/// the backend's batches, so a degraded server answers them in 0.8-20 s and only now and then slower
+/// than 5 s, while its CPU has been pinned for 20 minutes and the conversion throughput has already
+/// dropped by a quarter to a half (2026-11-01 23:30: "healthy, 2930 ms, cpu 0.942" with the embedder
+/// at 0.9-1.0 cores for 20 min). Measured signatures: healthy busy 0.34-0.71 cores at 15-30 % GPU,
+/// degraded 0.95-1.05 cores at 6-16 % GPU with probes of 0.8-20 s; memory 5-10 GB in both states.
+/// The sustained rule (<see cref="RuleSustainedCpu"/>) therefore fires when, over the last
+/// <see cref="EmbedderWatchdogOptions.SustainedWindowSeconds"/>, the container's mean CPU reached
+/// <see cref="EmbedderWatchdogOptions.SustainedCpuCores"/>, the mean GPU utilisation stayed below
+/// <see cref="EmbedderWatchdogOptions.SustainedMaxGpuUtilPct"/> (unknown counts as not busy) and the
+/// probes were not all fast (one slower than <see cref="EmbedderWatchdogOptions.SlowMs"/>, or a mean
+/// above <see cref="EmbedderWatchdogOptions.SustainedSlowMs"/>). The probes must cover the window, so
+/// the rule cannot fire right after a warm-up or a restart; the GPU figure is the mean of the sample
+/// collector's nvidia-smi readings between two probes (<see cref="GpuUtilFeed"/>).
 /// </summary>
 public static class EmbedderWatchdogDecision
 {
@@ -46,6 +62,12 @@ public static class EmbedderWatchdogDecision
     public const string Unreachable = "unreachable";
     public const string Absent = "absent";
     public const string Unknown = "unknown";
+
+    /// <summary>Rule name: consecutive slow probes with the CPU up (the original rule).</summary>
+    public const string RuleSlowProbes = "slow_probes";
+
+    /// <summary>Rule name: sustained CPU with an idle GPU and probes that are not all fast.</summary>
+    public const string RuleSustainedCpu = "sustained_cpu";
 
     /// <summary>
     /// Judges one target from its probe history (oldest first).
@@ -78,12 +100,18 @@ public static class EmbedderWatchdogDecision
         if (last.Loading) return new WatchdogVerdict(WarmingUp, false, "server is loading its model", 0);
         if (last.Unreachable) return new WatchdogVerdict(Unreachable, false, last.Error ?? "connection failed", 0);
 
-        // Trailing run of consecutive slow probes.
+        // Rule 1: trailing run of consecutive slow probes.
         var run = new List<ProbeCheck>();
         for (var i = judged.Count - 1; i >= 0 && judged[i].IsSlow(o.SlowMs); i--) run.Insert(0, judged[i]);
+        var sustained = EvaluateSustained(judged, nowUtc, o);
+
         if (run.Count == 0)
         {
-            return new WatchdogVerdict(Healthy, false, Inv($"{last.LatencyMs:F0} ms"), 0);
+            if (sustained is { Fires: true })
+            {
+                return Fire(RuleSustainedCpu, sustained.Summary, 0, sustained.MeanCpuCores, sustained.MeanGpuUtilPct, nowUtc, lastRestartUtc, o);
+            }
+            return new WatchdogVerdict(Healthy, false, Inv($"{last.LatencyMs:F0} ms"), 0, null, null, sustained?.MeanGpuUtilPct);
         }
 
         var span = run[^1].At - run[0].At;
@@ -93,20 +121,67 @@ public static class EmbedderWatchdogDecision
         var cpuOk = o.MinCpuCores <= 0 || (meanCpu is not null && meanCpu.Value >= o.MinCpuCores);
         var summary = Inv($"{run.Count} slow probe(s) over {FormatAge(span)} (last {DescribeLatency(last)}, mean CPU {(meanCpu is null ? "unknown" : meanCpu.Value.ToString("F2", CultureInfo.InvariantCulture))} cores)");
 
+        if (enough && cpuOk)
+        {
+            return Fire(RuleSlowProbes, summary, run.Count, meanCpu, sustained?.MeanGpuUtilPct, nowUtc, lastRestartUtc, o);
+        }
+        // Rule 2: sustained CPU with an idle GPU, judged over the longer window regardless of the run.
+        if (sustained is { Fires: true })
+        {
+            return Fire(RuleSustainedCpu, sustained.Summary, run.Count, sustained.MeanCpuCores, sustained.MeanGpuUtilPct, nowUtc, lastRestartUtc, o);
+        }
         if (!enough)
         {
-            return new WatchdogVerdict(Slow, false, Inv($"{summary}; restart after {o.ConsecutiveChecks} over {o.WindowSeconds} s"), run.Count, meanCpu);
+            return new WatchdogVerdict(Slow, false, Inv($"{summary}; restart after {o.ConsecutiveChecks} over {o.WindowSeconds} s"), run.Count, meanCpu, null, sustained?.MeanGpuUtilPct);
         }
-        if (!cpuOk)
-        {
-            return new WatchdogVerdict(Slow, false, Inv($"{summary}; CPU below {o.MinCpuCores:F2} cores, not the known degradation, no restart"), run.Count, meanCpu);
-        }
+        return new WatchdogVerdict(Slow, false, Inv($"{summary}; CPU below {o.MinCpuCores:F2} cores, not the known degradation, no restart"), run.Count, meanCpu, null, sustained?.MeanGpuUtilPct);
+    }
+
+    /// <summary>A rule has fired: restart now, unless the last restart is too recent (then <see cref="Cooldown"/>).</summary>
+    private static WatchdogVerdict Fire(
+        string rule, string summary, int slowChecks, double? meanCpu, double? meanGpu,
+        DateTime nowUtc, DateTime? lastRestartUtc, EmbedderWatchdogOptions o)
+    {
         if (lastRestartUtc is not null && (nowUtc - lastRestartUtc.Value).TotalSeconds < o.MinRestartIntervalSeconds)
         {
             var wait = o.MinRestartIntervalSeconds - (nowUtc - lastRestartUtc.Value).TotalSeconds;
-            return new WatchdogVerdict(Cooldown, false, Inv($"{summary}; restarted {FormatAge(nowUtc - lastRestartUtc.Value)} ago, next restart allowed in {wait:F0} s"), run.Count, meanCpu);
+            return new WatchdogVerdict(Cooldown, false, Inv($"{summary}; restarted {FormatAge(nowUtc - lastRestartUtc.Value)} ago, next restart allowed in {wait:F0} s"), slowChecks, meanCpu, rule, meanGpu);
         }
-        return new WatchdogVerdict(Degraded, true, summary, run.Count, meanCpu);
+        return new WatchdogVerdict(Degraded, true, summary, slowChecks, meanCpu, rule, meanGpu);
+    }
+
+    /// <summary>What the sustained-CPU rule saw over its window; null when it is off or the window is not covered yet.</summary>
+    public sealed record SustainedObservation(bool Fires, string Summary, double MeanCpuCores, double? MeanGpuUtilPct, double MeanLatencyMs, bool AnySlow);
+
+    /// <summary>
+    /// Evaluates the sustained-CPU rule over the probes of the last <see cref="EmbedderWatchdogOptions.SustainedWindowSeconds"/>.
+    /// Only probes that reached the server count (answered or timed out). The probes must span the
+    /// window less one check interval, so a history that starts after a warm-up or a restart is not
+    /// judged by this rule until the window is full. A window without any CPU figure is not judged.
+    /// </summary>
+    public static SustainedObservation? EvaluateSustained(IReadOnlyList<ProbeCheck> judged, DateTime nowUtc, EmbedderWatchdogOptions o)
+    {
+        if (!o.SustainedEnabled || o.SustainedWindowSeconds <= 0) return null;
+        var from = nowUtc.AddSeconds(-o.SustainedWindowSeconds);
+        var window = judged.Where(c => c.At >= from && (c.Answered || c.TimedOut)).ToList();
+        if (window.Count < 2) return null;
+        var span = window[^1].At - window[0].At;
+        if (span.TotalSeconds < o.SustainedWindowSeconds - o.CheckSeconds) return null;
+        var cpuValues = window.Where(c => c.CpuCores is not null).Select(c => c.CpuCores!.Value).ToList();
+        if (cpuValues.Count == 0) return null;
+        var meanCpu = cpuValues.Average();
+        var gpuValues = window.Where(c => c.GpuUtilPct is not null).Select(c => c.GpuUtilPct!.Value).ToList();
+        double? meanGpu = gpuValues.Count > 0 ? gpuValues.Average() : null;
+        var meanLatency = window.Average(c => c.LatencyMs);
+        var anySlow = window.Any(c => c.IsSlow(o.SlowMs));
+        var fires = meanCpu >= o.SustainedCpuCores
+            && (meanGpu is null || meanGpu.Value < o.SustainedMaxGpuUtilPct)
+            && (anySlow || meanLatency > o.SustainedSlowMs);
+        var gpuText = meanGpu is null ? "unknown" : meanGpu.Value.ToString("F0", CultureInfo.InvariantCulture) + " %";
+        var minS = window.Min(c => c.LatencyMs) / 1000.0;
+        var maxS = window.Max(c => c.LatencyMs) / 1000.0;
+        var summary = Inv($"sustained: {meanCpu:F2} cores over {FormatAge(span)}, GPU {gpuText}, probes {minS:F1}-{maxS:F1} s");
+        return new SustainedObservation(fires, summary, meanCpu, meanGpu, meanLatency, anySlow);
     }
 
     /// <summary>A deterministic probe text of about <paramref name="words"/> words (one sentence repeated).</summary>
@@ -152,7 +227,10 @@ public static class EmbedderWatchdogDecision
     private static string Inv(FormattableString s) => FormattableString.Invariant(s);
 }
 
-/// <summary>One probe of one target, with the container's CPU use since the previous probe.</summary>
+/// <summary>
+/// One probe of one target, with the container's CPU use since the previous probe and the mean GPU
+/// utilisation of the host over the same interval (null when nvidia-smi is not available).
+/// </summary>
 public sealed record ProbeCheck(
     DateTime At,
     bool Answered,
@@ -162,7 +240,8 @@ public sealed record ProbeCheck(
     bool Unreachable,
     int? PromptTokens,
     double? CpuCores,
-    string? Error)
+    string? Error,
+    double? GpuUtilPct = null)
 {
     /// <summary>Slow = answered later than the threshold, or not at all within the probe timeout.</summary>
     public bool IsSlow(int slowMs) => TimedOut || (Answered && LatencyMs >= slowMs);
@@ -170,17 +249,22 @@ public sealed record ProbeCheck(
     /// <summary>Tokens per second of this probe, including any queue wait (null when unknown).</summary>
     public double? TokensPerSecond => Answered && PromptTokens is > 0 && LatencyMs > 0 ? PromptTokens.Value / (LatencyMs / 1000.0) : null;
 
-    public static ProbeCheck Ok(DateTime at, double ms, int? tokens, double? cpu) => new(at, true, ms, false, false, false, tokens, cpu, null);
+    public static ProbeCheck Ok(DateTime at, double ms, int? tokens, double? cpu, double? gpu = null) => new(at, true, ms, false, false, false, tokens, cpu, null, gpu);
 
-    public static ProbeCheck Timeout(DateTime at, double ms, double? cpu) => new(at, false, ms, true, false, false, null, cpu, "timeout");
+    public static ProbeCheck Timeout(DateTime at, double ms, double? cpu, double? gpu = null) => new(at, false, ms, true, false, false, null, cpu, "timeout", gpu);
 
-    public static ProbeCheck LoadingModel(DateTime at, double ms, double? cpu) => new(at, false, ms, false, true, false, null, cpu, "loading model");
+    public static ProbeCheck LoadingModel(DateTime at, double ms, double? cpu, double? gpu = null) => new(at, false, ms, false, true, false, null, cpu, "loading model", gpu);
 
-    public static ProbeCheck Failed(DateTime at, double ms, double? cpu, string error) => new(at, false, ms, false, false, true, null, cpu, error);
+    public static ProbeCheck Failed(DateTime at, double ms, double? cpu, string error, double? gpu = null) => new(at, false, ms, false, false, true, null, cpu, error, gpu);
 }
 
-/// <summary>What the watchdog concluded for one target.</summary>
-public sealed record WatchdogVerdict(string State, bool Restart, string Reason, int SlowChecks, double? MeanCpuCores = null);
+/// <summary>
+/// What the watchdog concluded for one target. <paramref name="Rule"/> names the rule that fired
+/// (<see cref="EmbedderWatchdogDecision.RuleSlowProbes"/> or <see cref="EmbedderWatchdogDecision.RuleSustainedCpu"/>)
+/// for a <c>degraded</c> or <c>cooldown</c> verdict, null otherwise.
+/// </summary>
+public sealed record WatchdogVerdict(
+    string State, bool Restart, string Reason, int SlowChecks, double? MeanCpuCores = null, string? Rule = null, double? MeanGpuUtilPct = null);
 
 /// <summary>What the Docker engine says about the container behind a target.</summary>
 public sealed record ContainerObservation(string Name, string State, DateTime? StartedAt, string? Health, double? CpuCores, long? MemBytes, int? RestartCount);
@@ -197,13 +281,15 @@ public sealed class EmbedderWatchdogWorker : BackgroundService, IDisposable
     private readonly DockerEngine _engine;
     private readonly HttpClient _http;
     private readonly string _probeText;
+    private readonly GpuUtilFeed? _gpuFeed;
     private readonly Dictionary<string, TargetState> _targets = new();
     private DateTime _lastWarning = DateTime.MinValue;
 
-    public EmbedderWatchdogWorker(ILogger<EmbedderWatchdogWorker> logger, EmbedderWatchdogOptions options, DockerOptions docker, MongoContext mongo)
+    public EmbedderWatchdogWorker(ILogger<EmbedderWatchdogWorker> logger, EmbedderWatchdogOptions options, DockerOptions docker, MongoContext mongo, GpuUtilFeed? gpuFeed = null)
     {
         _logger = logger;
         _options = options;
+        _gpuFeed = gpuFeed;
         _control = mongo.Database.GetCollection<BsonDocument>(MongoContext.HostControl);
         // A restart blocks until the container is up again; give the engine calls their own, longer budget.
         _engine = new DockerEngine(logger, docker.Pipes, TimeSpan.FromSeconds(120));
@@ -222,6 +308,13 @@ public sealed class EmbedderWatchdogWorker : BackgroundService, IDisposable
             string.Join(", ", _options.Targets.Select(t => $"{t.Name} ({t.Url} -> {string.Join("|", t.Containers)})")),
             _options.CheckSeconds, _options.ConsecutiveChecks, _options.SlowMs, _options.WindowSeconds, _options.MinCpuCores,
             _options.WarmupSeconds, _options.MinRestartIntervalSeconds);
+        if (_options.SustainedEnabled)
+        {
+            _logger.LogInformation(
+                "Embedder watchdog sustained rule on: restart when CPU >= {Cpu} cores over {Window}s with GPU < {Gpu} % and a probe >= {Slow} ms or a mean probe latency > {Mean} ms (GPU readings {Gpu2})",
+                _options.SustainedCpuCores, _options.SustainedWindowSeconds, _options.SustainedMaxGpuUtilPct, _options.SlowMs, _options.SustainedSlowMs,
+                _gpuFeed is null ? "unavailable, GPU counts as not busy" : "from the sample collector");
+        }
         try
         {
             using var timer = new PeriodicTimer(TimeSpan.FromSeconds(_options.CheckSeconds));
@@ -274,7 +367,10 @@ public sealed class EmbedderWatchdogWorker : BackgroundService, IDisposable
             return;
         }
 
-        var check = await ProbeAsync(state, now, container.CpuCores, ct);
+        // Mean GPU utilisation since the previous probe (the same interval as the container's CPU figure).
+        var previousProbeAt = state.History.Count > 0 ? state.History[^1].At : now.AddSeconds(-_options.CheckSeconds);
+        var gpu = _gpuFeed?.MeanSince(previousProbeAt, now);
+        var check = await ProbeAsync(state, now, container.CpuCores, gpu, ct);
         state.History.Add(check);
         if (state.History.Count > HistoryKeep) state.History.RemoveRange(0, state.History.Count - HistoryKeep);
 
@@ -286,13 +382,14 @@ public sealed class EmbedderWatchdogWorker : BackgroundService, IDisposable
         state.Verdict = verdict;
         if (!verdict.Restart) return;
 
-        _logger.LogWarning("Embedder watchdog: restarting {Container} ({Target}): {Reason}", container.Name, state.Target.Name, verdict.Reason);
+        _logger.LogWarning("Embedder watchdog: restarting {Container} ({Target}) by rule {Rule}: {Reason}", container.Name, state.Target.Name, verdict.Rule, verdict.Reason);
         var restartedAt = DateTime.UtcNow;
         try
         {
             await RestartContainerAsync(container.Name, ct);
             state.LastRestart = restartedAt;
             state.LastRestartReason = verdict.Reason;
+            state.LastRestartRule = verdict.Rule;
             state.RestartCount++;
             state.History.Clear();
             state.PreviousCounters = null;
@@ -306,6 +403,7 @@ public sealed class EmbedderWatchdogWorker : BackgroundService, IDisposable
             // pipe cannot turn into a restart storm once it works again.
             state.LastRestart = restartedAt;
             state.LastRestartReason = $"restart failed: {ex.Message}";
+            state.LastRestartRule = verdict.Rule;
             state.LastError = $"restart failed: {ex.Message}";
             _engine.Reset();
             _logger.LogError("Embedder watchdog: restart of {Container} failed: {Message}", container.Name, ex.Message);
@@ -391,7 +489,7 @@ public sealed class EmbedderWatchdogWorker : BackgroundService, IDisposable
     }
 
     /// <summary>Times one embeddings request to the target's URL.</summary>
-    private async Task<ProbeCheck> ProbeAsync(TargetState state, DateTime at, double? cpu, CancellationToken ct)
+    private async Task<ProbeCheck> ProbeAsync(TargetState state, DateTime at, double? cpu, double? gpu, CancellationToken ct)
     {
         var watch = Stopwatch.StartNew();
         try
@@ -400,27 +498,27 @@ public sealed class EmbedderWatchdogWorker : BackgroundService, IDisposable
             var ms = watch.Elapsed.TotalMilliseconds;
             if (response.StatusCode == HttpStatusCode.ServiceUnavailable)
             {
-                return ProbeCheck.LoadingModel(at, ms, cpu);
+                return ProbeCheck.LoadingModel(at, ms, cpu, gpu);
             }
             if (!response.IsSuccessStatusCode)
             {
                 var body = await response.Content.ReadAsStringAsync(ct);
-                return ProbeCheck.Failed(at, ms, cpu, $"HTTP {(int)response.StatusCode}: {Trim(body)}");
+                return ProbeCheck.Failed(at, ms, cpu, $"HTTP {(int)response.StatusCode}: {Trim(body)}", gpu);
             }
             await using var stream = await response.Content.ReadAsStreamAsync(ct);
             using var json = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
             var (tokens, vectors) = EmbedderWatchdogDecision.ParseEmbeddingsResponse(json.RootElement);
-            if (vectors == 0) return ProbeCheck.Failed(at, ms, cpu, "no embedding in the answer");
-            return ProbeCheck.Ok(at, watch.Elapsed.TotalMilliseconds, tokens, cpu);
+            if (vectors == 0) return ProbeCheck.Failed(at, ms, cpu, "no embedding in the answer", gpu);
+            return ProbeCheck.Ok(at, watch.Elapsed.TotalMilliseconds, tokens, cpu, gpu);
         }
         catch (TaskCanceledException) when (!ct.IsCancellationRequested)
         {
-            return ProbeCheck.Timeout(at, watch.Elapsed.TotalMilliseconds, cpu);
+            return ProbeCheck.Timeout(at, watch.Elapsed.TotalMilliseconds, cpu, gpu);
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException or JsonException)
         {
             if (ct.IsCancellationRequested) throw;
-            return ProbeCheck.Failed(at, watch.Elapsed.TotalMilliseconds, cpu, ex.Message);
+            return ProbeCheck.Failed(at, watch.Elapsed.TotalMilliseconds, cpu, ex.Message, gpu);
         }
     }
 
@@ -455,16 +553,20 @@ public sealed class EmbedderWatchdogWorker : BackgroundService, IDisposable
                 { "started_at", (BsonValue?)s.Container?.StartedAt ?? BsonNull.Value },
                 { "state", s.Verdict?.State ?? EmbedderWatchdogDecision.Unknown },
                 { "reason", s.Verdict?.Reason ?? "" },
+                { "rule", (BsonValue?)s.Verdict?.Rule ?? BsonNull.Value },
                 { "slow_checks", s.Verdict?.SlowChecks ?? 0 },
                 { "latency_ms", last is null ? BsonNull.Value : Math.Round(last.LatencyMs, 1) },
                 { "prompt_tokens", (BsonValue?)last?.PromptTokens ?? BsonNull.Value },
                 { "tokens_per_second", last?.TokensPerSecond is { } tps ? Math.Round(tps, 1) : BsonNull.Value },
                 { "cpu_cores", (BsonValue?)s.Container?.CpuCores ?? BsonNull.Value },
+                { "gpu_util_pct", (BsonValue?)last?.GpuUtilPct ?? BsonNull.Value },
+                { "sustained_gpu_util_pct", (BsonValue?)s.Verdict?.MeanGpuUtilPct ?? BsonNull.Value },
                 { "mem_bytes", (BsonValue?)s.Container?.MemBytes ?? BsonNull.Value },
                 { "last_check", (BsonValue?)s.LastCheck ?? BsonNull.Value },
                 { "last_error", (BsonValue?)(s.LastError ?? last?.Error) ?? BsonNull.Value },
                 { "last_restart", (BsonValue?)s.LastRestart ?? BsonNull.Value },
                 { "last_restart_reason", (BsonValue?)s.LastRestartReason ?? BsonNull.Value },
+                { "last_restart_rule", (BsonValue?)s.LastRestartRule ?? BsonNull.Value },
                 { "restart_count", s.RestartCount },
                 { "next_restart_allowed_at", (BsonValue?)allowedAt ?? BsonNull.Value },
             });
@@ -483,6 +585,11 @@ public sealed class EmbedderWatchdogWorker : BackgroundService, IDisposable
                     { "warmup_seconds", _options.WarmupSeconds },
                     { "min_restart_interval_seconds", _options.MinRestartIntervalSeconds },
                     { "probe_words", _options.ProbeWords },
+                    { "sustained_enabled", _options.SustainedEnabled },
+                    { "sustained_window_seconds", _options.SustainedWindowSeconds },
+                    { "sustained_cpu_cores", _options.SustainedCpuCores },
+                    { "sustained_max_gpu_util_pct", _options.SustainedMaxGpuUtilPct },
+                    { "sustained_slow_ms", _options.SustainedSlowMs },
                 } },
             { "targets", targets },
             { "agent_version", SampleCollector.AgentVersion },
@@ -534,6 +641,7 @@ public sealed class EmbedderWatchdogWorker : BackgroundService, IDisposable
         public string? LastError { get; set; }
         public DateTime? LastRestart { get; set; }
         public string? LastRestartReason { get; set; }
+        public string? LastRestartRule { get; set; }
         public int RestartCount { get; set; }
     }
 }

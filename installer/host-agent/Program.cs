@@ -57,8 +57,10 @@ var mongo = new MongoContext(options);
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton(mongo);
 builder.Services.AddSingleton<IHardwareSensorProbe>(sp => HardwareSensorFactory.Create(options, sp.GetRequiredService<ILoggerFactory>()));
+// GPU utilisation readings shared between the sample collector and the embedder watchdog (GpuUtilFeed.cs)
+var gpuFeed = new GpuUtilFeed();
 builder.Services.AddSingleton(sp => new SampleCollector(
-    sp.GetRequiredService<ILoggerFactory>(), options, mongo, sp.GetRequiredService<IHardwareSensorProbe>()));
+    sp.GetRequiredService<ILoggerFactory>(), options, mongo, sp.GetRequiredService<IHardwareSensorProbe>(), gpuFeed));
 builder.Services.AddHostedService(sp => new AgentWorker(
     sp.GetRequiredService<ILogger<AgentWorker>>(),
     options,
@@ -82,7 +84,8 @@ if (mode == OutputMode.Mongo && options.EmbedderWatchdog.Enabled)
         sp.GetRequiredService<ILogger<EmbedderWatchdogWorker>>(),
         options.EmbedderWatchdog,
         options.Docker,
-        mongo));
+        mongo,
+        gpuFeed));
 }
 
 using var host = builder.Build();

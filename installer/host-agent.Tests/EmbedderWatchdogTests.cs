@@ -204,6 +204,239 @@ public class EmbedderWatchdogDecisionTests
     }
 }
 
+/// <summary>
+/// The sustained-CPU rule of agent 1.3.0: CPU >= 0.85 cores over 10 min with the GPU below 40 % and
+/// probes that are not all fast. Signatures measured on the client's machine 2026-11-01: healthy busy
+/// 0.34-0.71 cores at 15-30 % GPU with probes of 0.2-6 s; degraded 0.95-1.05 cores at 6-16 % GPU with
+/// probes of 0.8-20 s, only now and then above the 5 s threshold.
+/// </summary>
+public class EmbedderWatchdogSustainedRuleTests
+{
+    private static readonly DateTime Now = new(2026, 11, 1, 23, 30, 0, DateTimeKind.Utc);
+    private static readonly DateTime StartedLongAgo = Now.AddHours(-3);
+
+    private static EmbedderWatchdogOptions Options() => new EmbedderWatchdogOptions().Normalize();
+
+    /// <summary>Eleven probes a minute apart ending now (the 10 min window covered), latencies cycled over the list.</summary>
+    private static List<ProbeCheck> Window(double? cpu, double? gpu, params double[] latencies) => WindowOf(11, cpu, gpu, latencies);
+
+    private static List<ProbeCheck> WindowOf(int count, double? cpu, double? gpu, params double[] latencies)
+    {
+        var checks = new List<ProbeCheck>();
+        for (var i = 0; i < count; i++)
+        {
+            checks.Add(ProbeCheck.Ok(Now.AddMinutes(-(count - 1 - i)), latencies[i % latencies.Length], 150, cpu, gpu));
+        }
+        return checks;
+    }
+
+    /// <summary>The degraded signature: a core pinned, GPU 13 %, probes 0.8-8.9 s, slow only now and then.</summary>
+    private static readonly double[] DegradedProbes = { 800, 2930, 1500, 8900, 1200, 900, 3400, 1100, 6200, 2100, 1800 };
+
+    [Fact]
+    public void DegradedSignature_RestartsWithoutFiveSlowProbesInARow()
+    {
+        var v = EmbedderWatchdogDecision.Decide(Window(0.96, 13, DegradedProbes), Now, StartedLongAgo, null, Options());
+        Assert.Equal("degraded", v.State);
+        Assert.True(v.Restart);
+        Assert.Equal(EmbedderWatchdogDecision.RuleSustainedCpu, v.Rule);
+        Assert.Equal(0.96, v.MeanCpuCores!.Value, 3);
+        Assert.Equal(13, v.MeanGpuUtilPct!.Value, 3);
+        Assert.Equal("sustained: 0.96 cores over 10 min, GPU 13 %, probes 0.8-8.9 s", v.Reason);
+        Assert.Equal(0, v.SlowChecks); // the last probe was fast; the consecutive rule saw nothing
+    }
+
+    [Fact]
+    public void WhatTheAgentReportedAsHealthy_IsNowDegraded()
+    {
+        // 2026-11-01 23:30: "healthy, 2930 ms, cpu 0.942" after 20 min at 0.9-1.0 cores; no probe over 5 s, mean 2.9 s.
+        var v = EmbedderWatchdogDecision.Decide(Window(0.942, 12, 2930, 3100, 2700, 2850), Now, StartedLongAgo, null, Options());
+        Assert.True(v.Restart);
+        Assert.Equal(EmbedderWatchdogDecision.RuleSustainedCpu, v.Rule);
+    }
+
+    [Fact]
+    public void HealthyBusy_DoesNotFire()
+    {
+        // 0.6 cores at 25 % GPU with one 6 s probe: ingestion batches ahead of the probe, not the degradation.
+        var v = EmbedderWatchdogDecision.Decide(Window(0.6, 25, 200, 6000, 400, 1500, 300), Now, StartedLongAgo, null, Options());
+        Assert.False(v.Restart);
+        Assert.Null(v.Rule);
+        Assert.Equal("healthy", v.State);
+    }
+
+    [Fact]
+    public void ABusyGpu_MeansRealWork_NoRestart()
+    {
+        // The core is up but so is the GPU: the server is embedding, not spinning.
+        var v = EmbedderWatchdogDecision.Decide(Window(0.96, 55, DegradedProbes), Now, StartedLongAgo, null, Options());
+        Assert.False(v.Restart);
+        Assert.Null(v.Rule);
+    }
+
+    [Fact]
+    public void GpuUnknown_CountsAsNotBusy()
+    {
+        var v = EmbedderWatchdogDecision.Decide(Window(0.96, null, DegradedProbes), Now, StartedLongAgo, null, Options());
+        Assert.True(v.Restart);
+        Assert.Equal(EmbedderWatchdogDecision.RuleSustainedCpu, v.Rule);
+        Assert.Null(v.MeanGpuUtilPct);
+        Assert.Contains("GPU unknown", v.Reason);
+    }
+
+    [Fact]
+    public void FastProbesThroughout_DoNotFire_EvenWithTheCpuUp()
+    {
+        // A core pinned at an idle GPU but every probe answered in under a second: not the known failure.
+        var v = EmbedderWatchdogDecision.Decide(Window(0.98, 10, 120, 300, 800, 450), Now, StartedLongAgo, null, Options());
+        Assert.False(v.Restart);
+        Assert.Equal("healthy", v.State);
+    }
+
+    [Fact]
+    public void CpuBelowTheThreshold_DoesNotFire()
+    {
+        var v = EmbedderWatchdogDecision.Decide(Window(0.8, 10, DegradedProbes), Now, StartedLongAgo, null, Options());
+        Assert.False(v.Restart);
+        Assert.Null(v.Rule);
+    }
+
+    [Fact]
+    public void CpuUnknownThroughout_IsNotJudged()
+    {
+        var v = EmbedderWatchdogDecision.Decide(Window(null, 10, DegradedProbes), Now, StartedLongAgo, null, Options());
+        Assert.False(v.Restart);
+        Assert.Null(EmbedderWatchdogDecision.EvaluateSustained(Window(null, 10, DegradedProbes), Now, Options()));
+    }
+
+    [Fact]
+    public void DuringWarmup_NothingIsJudged()
+    {
+        var v = EmbedderWatchdogDecision.Decide(Window(0.96, 13, DegradedProbes), Now, Now.AddSeconds(-120), null, Options());
+        Assert.Equal("warming_up", v.State);
+        Assert.False(v.Restart);
+    }
+
+    [Fact]
+    public void RightAfterTheWarmup_TheWindowIsNotCoveredYet()
+    {
+        // Started 8 min ago, warm-up 5 min: only three probes count, the 10 min window is not covered.
+        var v = EmbedderWatchdogDecision.Decide(Window(0.96, 13, DegradedProbes), Now, Now.AddMinutes(-8), null, Options());
+        Assert.False(v.Restart);
+        Assert.Null(v.Rule);
+    }
+
+    [Fact]
+    public void DuringCooldown_TheRuleReportsButDoesNotRestart()
+    {
+        var v = EmbedderWatchdogDecision.Decide(Window(0.96, 13, DegradedProbes), Now, StartedLongAgo, Now.AddMinutes(-20), Options());
+        Assert.Equal("cooldown", v.State);
+        Assert.False(v.Restart);
+        Assert.Equal(EmbedderWatchdogDecision.RuleSustainedCpu, v.Rule);
+        Assert.Contains("next restart allowed in 600 s", v.Reason);
+    }
+
+    [Fact]
+    public void ProbesBeforeTheLastRestart_AreIgnored()
+    {
+        // Restarted 4 min ago (container start unknown): four probes since, the window is not covered.
+        var v = EmbedderWatchdogDecision.Decide(Window(0.96, 13, DegradedProbes), Now, null, Now.AddMinutes(-4), Options());
+        Assert.False(v.Restart);
+    }
+
+    [Fact]
+    public void TheConsecutiveRule_StillFires_AndTakesPrecedence()
+    {
+        // Six fast minutes, then five slow ones in a row: both rules hold, the original one is named.
+        var checks = Window(0.98, 13, 20, 30, 25, 40, 22, 35, 8000, 12000, 9000, 15000, 25000);
+        var v = EmbedderWatchdogDecision.Decide(checks, Now, StartedLongAgo, null, Options());
+        Assert.True(v.Restart);
+        Assert.Equal(EmbedderWatchdogDecision.RuleSlowProbes, v.Rule);
+        Assert.Equal(5, v.SlowChecks);
+        Assert.Contains("5 slow probe(s) over 4 min", v.Reason);
+        Assert.Equal(13, v.MeanGpuUtilPct!.Value, 3);
+    }
+
+    [Fact]
+    public void FourSlowProbes_WithTheSustainedSignature_FireTheSustainedRule()
+    {
+        var checks = Window(0.98, 13, 20, 30, 25, 40, 22, 35, 800, 8000, 12000, 9000, 15000);
+        var v = EmbedderWatchdogDecision.Decide(checks, Now, StartedLongAgo, null, Options());
+        Assert.True(v.Restart);
+        Assert.Equal(EmbedderWatchdogDecision.RuleSustainedCpu, v.Rule);
+        Assert.Equal(4, v.SlowChecks);
+    }
+
+    [Fact]
+    public void SwitchedOff_OnlyTheConsecutiveRuleRemains()
+    {
+        var o = Options();
+        o.SustainedEnabled = false;
+        var v = EmbedderWatchdogDecision.Decide(Window(0.96, 13, DegradedProbes), Now, StartedLongAgo, null, o);
+        Assert.False(v.Restart);
+        Assert.Equal("healthy", v.State);
+        Assert.Null(v.MeanGpuUtilPct);
+    }
+
+    [Fact]
+    public void TimeoutsCountAsSlow_UnreachableProbesDoNotCount()
+    {
+        var checks = Window(0.96, 13, 1500, 2000);
+        checks[3] = ProbeCheck.Timeout(checks[3].At, 30000, 0.96, 13);
+        checks[5] = ProbeCheck.Failed(checks[5].At, 5, 0.96, "connection reset", 13);
+        var s = EmbedderWatchdogDecision.EvaluateSustained(checks, Now, Options());
+        Assert.NotNull(s);
+        Assert.True(s!.Fires);
+        Assert.True(s.AnySlow);
+        Assert.Equal(0.96, s.MeanCpuCores, 3);
+    }
+
+    [Fact]
+    public void TheWindowIsTheConfiguredLength()
+    {
+        // 5 min window at the defaults otherwise: probes must span the window less one check (240 s),
+        // so six or five one-minute probes cover it and four do not.
+        var o = Options();
+        o.SustainedWindowSeconds = 300;
+        Assert.True(EmbedderWatchdogDecision.Decide(WindowOf(6, 0.96, 13, DegradedProbes), Now, StartedLongAgo, null, o).Restart);
+        Assert.True(EmbedderWatchdogDecision.Decide(WindowOf(5, 0.96, 13, DegradedProbes), Now, StartedLongAgo, null, o).Restart);
+        Assert.False(EmbedderWatchdogDecision.Decide(WindowOf(4, 0.96, 13, DegradedProbes), Now, StartedLongAgo, null, o).Restart);
+    }
+}
+
+public class GpuUtilFeedTests
+{
+    private static readonly DateTime T0 = new(2026, 11, 1, 23, 0, 0, DateTimeKind.Utc);
+
+    [Fact]
+    public void MeanSince_AveragesTheReadingsInTheInterval()
+    {
+        var feed = new GpuUtilFeed();
+        for (var i = 0; i < 24; i++) feed.Record(T0.AddSeconds(5 * i), i < 12 ? 30 : 10);
+        Assert.Equal(10, feed.MeanSince(T0.AddSeconds(55), T0.AddSeconds(115)));
+        Assert.Equal(30, feed.MeanSince(T0.AddSeconds(-5), T0.AddSeconds(55)));
+        Assert.Null(feed.MeanSince(T0.AddMinutes(10), T0.AddMinutes(11)));
+        Assert.Equal(10, feed.Latest);
+    }
+
+    [Fact]
+    public void OldReadings_AreDropped()
+    {
+        var feed = new GpuUtilFeed(TimeSpan.FromMinutes(1));
+        feed.Record(T0, 90);
+        feed.Record(T0.AddMinutes(2), 10);
+        Assert.Null(feed.MeanSince(T0.AddSeconds(-1), T0.AddSeconds(1)));
+        Assert.Equal(10, feed.MeanSince(T0, T0.AddMinutes(3)));
+    }
+
+    [Fact]
+    public void EmptyFeed_HasNoMean()
+    {
+        Assert.Null(new GpuUtilFeed().MeanSince(T0, T0.AddMinutes(1)));
+        Assert.Null(new GpuUtilFeed().Latest);
+    }
+}
+
 public class ProbeCheckTests
 {
     [Fact]
@@ -273,5 +506,24 @@ public class EmbedderWatchdogOptionsTests
         Assert.Equal(10, o.CheckSeconds);
         Assert.Equal(1, o.ConsecutiveChecks);
         Assert.Equal(100, o.SlowMs);
+    }
+
+    [Fact]
+    public void SustainedRule_IsOnByDefault_WithTheMeasuredThresholds()
+    {
+        var o = new EmbedderWatchdogOptions().Normalize();
+        Assert.True(o.SustainedEnabled);
+        Assert.Equal(600, o.SustainedWindowSeconds);
+        Assert.Equal(0.85, o.SustainedCpuCores);
+        Assert.Equal(40, o.SustainedMaxGpuUtilPct);
+        Assert.Equal(2500, o.SustainedSlowMs);
+    }
+
+    [Fact]
+    public void SustainedWindow_IsAtLeastTwoChecks()
+    {
+        var o = new EmbedderWatchdogOptions { CheckSeconds = 60, SustainedWindowSeconds = 30, SustainedMaxGpuUtilPct = 150 }.Normalize();
+        Assert.Equal(120, o.SustainedWindowSeconds);
+        Assert.Equal(100, o.SustainedMaxGpuUtilPct);
     }
 }

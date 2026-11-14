@@ -35,6 +35,8 @@ def agent_report(updated_at: datetime = NOW) -> Dict[str, Any]:
         "thresholds": {
             "slow_ms": 5000, "probe_timeout_seconds": 30, "consecutive_checks": 5, "window_seconds": 240,
             "min_cpu_cores": 0.5, "warmup_seconds": 300, "min_restart_interval_seconds": 1800, "probe_words": 120,
+            "sustained_enabled": True, "sustained_window_seconds": 600, "sustained_cpu_cores": 0.85,
+            "sustained_max_gpu_util_pct": 40, "sustained_slow_ms": 2500,
         },
         "targets": [
             {
@@ -45,7 +47,8 @@ def agent_report(updated_at: datetime = NOW) -> Dict[str, Any]:
                 "latency_ms": 38.2, "prompt_tokens": 153, "tokens_per_second": 4005.2, "cpu_cores": 0.12,
                 "mem_bytes": 4_900_000_000, "last_check": naive, "last_error": None,
                 "last_restart": naive - timedelta(hours=3, seconds=20),
-                "last_restart_reason": "5 slow probe(s) over 4 min (last timeout after 30000 ms, mean CPU 0.98 cores)",
+                "last_restart_reason": "sustained: 0.96 cores over 10 min, GPU 13 %, probes 0.8-8.9 s",
+                "last_restart_rule": "sustained_cpu", "rule": None, "gpu_util_pct": 22.5,
                 "restart_count": 1, "next_restart_allowed_at": naive - timedelta(hours=2, minutes=30, seconds=20),
             },
             {
@@ -58,7 +61,7 @@ def agent_report(updated_at: datetime = NOW) -> Dict[str, Any]:
                 "restart_count": 0, "next_restart_allowed_at": None,
             },
         ],
-        "agent_version": "1.2.0",
+        "agent_version": "1.3.0",
         "host": "MINISFORUM",
         "updated_at": naive,
     }
@@ -88,12 +91,15 @@ class TestStatusFromDoc:
         assert status.agent_seen is True
         assert status.enabled is True
         assert status.check_seconds == 60
-        assert status.agent_version == "1.2.0"
+        assert status.agent_version == "1.3.0"
         assert status.updated_at == NOW
         assert status.thresholds is not None
         assert status.thresholds.slow_ms == 5000
         assert status.thresholds.consecutive_checks == 5
         assert status.thresholds.min_cpu_cores == 0.5
+        assert status.thresholds.sustained_enabled is True
+        assert status.thresholds.sustained_cpu_cores == 0.85
+        assert status.thresholds.sustained_max_gpu_util_pct == 40
         embedder, query = status.targets
         assert embedder.name == "embedder"
         assert embedder.state == "healthy"
@@ -103,7 +109,10 @@ class TestStatusFromDoc:
         assert embedder.restart_count == 1
         assert embedder.last_restart == NOW - timedelta(hours=3, seconds=20)
         assert embedder.last_restart.tzinfo is not None
-        assert "mean CPU 0.98 cores" in (embedder.last_restart_reason or "")
+        assert "sustained: 0.96 cores over 10 min" in (embedder.last_restart_reason or "")
+        assert embedder.last_restart_rule == "sustained_cpu"
+        assert embedder.rule is None
+        assert embedder.gpu_util_pct == 22.5
         assert query.state == "absent"
         assert query.container is None
         assert query.latency_ms is None
