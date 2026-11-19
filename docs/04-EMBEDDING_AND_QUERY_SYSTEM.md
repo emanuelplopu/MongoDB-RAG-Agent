@@ -578,6 +578,48 @@ Measured 2026-11-07 on the Minisforum (Ultra 9 285HX, RTX PRO 2000 16 GB) in a
 side container of the live image with the worktree's code mounted, see
 `docs/system-validation/MEDIA_TRANSCRIPTION_BENCH_2026-11-07.md`.
 
+#### Tiny raster images (the `images` section)
+
+Saved web pages (`…-Dateien` folders), e-mail attachments and practice-management
+exports leave thousands of spacer, icon, button, rule and signature-logo images
+on a corpus's shares: 78 % of the 778 GIFs of the diejuristin corpus still
+unindexed on 2026-11-19 were under 100 x 100 px or 1 KiB (`docs/26-FORMAT_EDGE_AUDIT.md`,
+"Tiny raster images"). Each used to cost a Docling conversion with Tesseract
+(1-5 s) and end as a `no_chunks` failure that every retry run picked up again.
+Since 2026-11-19 the pipeline applies a **tiny-image policy** before hashing a
+raster image (`.gif`, `.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tif`,
+`.tiff`): the `images` section of the performance config
+(`backend/services/image_policy.py`, `POST /api/v1/system/ingestion-performance`,
+`ImagePolicy` / `resolve_image_policy` in `src/ingestion/ingest.py`), with
+`INGEST_IMAGE_MIN_PIXELS` / `INGEST_IMAGE_MIN_BYTES` and the `ingest_image_*`
+settings as the defaults for runs without one:
+
+| key | default | meaning |
+|---|---|---|
+| `min_pixels` | 10000 | Least `width x height` of an image worth OCR, read from the file header (PIL opens lazily, one small read on the share). A file PIL cannot identify is not judged by pixels. `0` = no minimum. |
+| `min_bytes` | 1024 | Least file size. `0` = no minimum. |
+
+A file below either minimum is recorded as **`tiny_image`**: its own
+`error_type` in `ingestion_stats` and `failed_documents` (message with the
+reason, e.g. `30x30 px, below 10000`), the classification
+`FileClassification.TINY_IMAGE`, the job counter `tiny_images`
+(`backend/services/ingestion_counters.py`; not part of `failed_files`, like
+`media_deferred`), and the file's `IngestionResult` error starts with
+`Tiny image skipped` (`counts_as_failure` leaves it out of the job's final
+failure count). A resumed job skips its `tiny_image` records like any other
+failure of its own; a run with **`retry_tiny_images`** (`IngestionStartRequest`,
+queue and schedule requests) converts them, which is the way to re-check them
+after lowering the minimums. The Configuration page does not edit the section
+yet; it is set through the API and kept when the page saves without it.
+
+Two related reader fixes from the same audit: an **animated GIF** is re-saved as
+its first frame before Docling sees it (`prepare_image_for_docling`; Docling's
+image backend turned every frame into a page, 78 s and 75 "pages" for a web
+clock icon, a banner's text stored 27 times), and a file under an image
+extension that **PIL cannot identify** (a web page's CSS saved as `site.gif`) is
+an unreadable file (`NotARasterImageError`, `[Error: … is not a raster image …]`)
+instead of being sniffed by Docling as a CSV table.
+
 ### Phase 3: Chunking with HybridChunker
 
 The Docling HybridChunker provides intelligent document splitting:

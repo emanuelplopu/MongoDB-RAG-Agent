@@ -344,6 +344,23 @@ class Settings(BaseSettings):
         description="Transcribe the audio track of video files (INGEST_MEDIA_VIDEO); off records them as skipped",
     )
 
+    ingest_image_min_pixels: int = Field(
+        default=10000,
+        description=(
+            "Least width x height in pixels of a raster image worth OCR (INGEST_IMAGE_MIN_PIXELS); "
+            "smaller ones are recorded as tiny_image unconverted, 0 = no minimum. The performance "
+            "config's images.min_pixels wins. See docs/26, Tiny raster images"
+        ),
+    )
+
+    ingest_image_min_bytes: int = Field(
+        default=1024,
+        description=(
+            "Least file size in bytes of a raster image worth OCR (INGEST_IMAGE_MIN_BYTES); "
+            "smaller ones are recorded as tiny_image unconverted, 0 = no minimum"
+        ),
+    )
+
     msg_extract_attachments: bool = Field(
         default=False,
         description=(
@@ -434,6 +451,8 @@ class Settings(BaseSettings):
             'ingest_media_language': self.ingest_media_language,
             'ingest_media_defer': self.ingest_media_defer,
             'ingest_media_video': self.ingest_media_video,
+            'ingest_image_min_pixels': self.ingest_image_min_pixels,
+            'ingest_image_min_bytes': self.ingest_image_min_bytes,
             'ocr_rect_dilation': self.ocr_rect_dilation,
             'ocr_image_noise_gate': self.ocr_image_noise_gate,
             'msg_extract_attachments': self.msg_extract_attachments,
