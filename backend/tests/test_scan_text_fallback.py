@@ -264,7 +264,11 @@ def test_captions_do_not_count_as_hidden_text() -> None:
 
 def test_pages_with_body_text_are_untouched(tmp_path: Path) -> None:
     doc = _picture_only_document()
-    doc.add_text(label=DocItemLabel.TEXT, text="Native text layer of the same page", prov=_prov(1))
+    doc.add_text(
+        label=DocItemLabel.TEXT,
+        text="Native text layer of the same page: more than fifty characters of ordinary body text",
+        prov=_prov(1),
+    )
     before_markdown = doc.export_to_markdown()
     before_texts = len(doc.texts)
     ocr_calls: List[Any] = []
@@ -282,9 +286,28 @@ def test_a_table_is_body_text_too() -> None:
     from docling_core.types.doc import TableCell, TableData
 
     doc = _picture_only_document()
-    cell = TableCell(text="Betrag", start_row_offset_idx=0, end_row_offset_idx=1, start_col_offset_idx=0, end_col_offset_idx=1)
+    cell = TableCell(
+        text="Betrag in EUR inklusive Umsatzsteuer, faellig binnen 14 Tagen ab Rechnungsdatum",
+        start_row_offset_idx=0, end_row_offset_idx=1, start_col_offset_idx=0, end_col_offset_idx=1,
+    )
     doc.add_table(data=TableData(num_rows=1, num_cols=1, table_cells=[cell]), prov=_prov(1))
     assert fallback.recover_scan_text(doc) is None
+
+
+def test_a_heading_alone_is_not_body_text() -> None:
+    """A section header made of the first OCR line must not hide the rest of the page (2026-11-19)."""
+    doc = _picture_only_document()
+    doc.add_text(label=DocItemLabel.SECTION_HEADER, text="Handlerquelle und Neurissquelle", prov=_prov(1))
+    recovery = fallback.recover_scan_text(doc)
+    assert recovery is not None and recovery.fallback == "picture_children"
+    assert all(line in doc.export_to_markdown() for line in HIDDEN_LINES)
+
+
+def test_a_short_body_line_still_gets_the_picture_children() -> None:
+    """Fewer than MIN_BODY_TEXT_CHARS of body text (a timestamp next to a screenshot) count as none."""
+    doc = _picture_only_document()
+    doc.add_text(label=DocItemLabel.TEXT, text="07:29", prov=_prov(1))
+    assert fallback.recover_scan_text(doc) is not None
 
 
 def test_blank_page_without_an_image_is_not_ocred(tmp_path: Path) -> None:
@@ -407,8 +430,8 @@ def test_mixed_document_keeps_page_order(tmp_path: Path) -> None:
     doc = DoclingDocument(name="mixed")
     for page_no in (1, 2, 3):
         doc.add_page(page_no=page_no, size=Size(width=200, height=280))
-    doc.add_text(label=DocItemLabel.TEXT, text="Seite eins mit Text", prov=_prov(1))  # page 1: normal
-    _add_hidden_picture(doc, 2, ["Seite zwei im Bild"])  # page 2: variant A
+    doc.add_text(label=DocItemLabel.TEXT, text="Seite eins mit Text: mehr als fuenfzig Zeichen gewoehnlicher Fliesstext", prov=_prov(1))  # page 1: normal
+    _add_hidden_picture(doc, 2, ["Seite zwei im Bild: die OCR-Zeile unter dem Bild, mehr als fuenfzig Zeichen"])  # page 2: variant A
     # page 3: nothing at all -> variant B
 
     recovery = fallback.recover_scan_text(doc, str(pdf), ocr_page=lambda image: "Seite drei\nper Tesseract")
@@ -417,9 +440,9 @@ def test_mixed_document_keeps_page_order(tmp_path: Path) -> None:
     assert recovery.pages == {2: "picture_children", 3: "full_page"}
     assert recovery.fallback == "picture_children+full_page"
     assert _body(doc) == [
-        ("TextItem", "Seite eins mit Text"),
+        ("TextItem", "Seite eins mit Text: mehr als fuenfzig Zeichen gewoehnlicher Fliesstext"),
         ("PictureItem", ""),
-        ("TextItem", "Seite zwei im Bild"),
+        ("TextItem", "Seite zwei im Bild: die OCR-Zeile unter dem Bild, mehr als fuenfzig Zeichen"),
         ("TextItem", "Seite drei per Tesseract"),
     ]
 
@@ -431,12 +454,13 @@ def test_full_page_text_of_an_early_page_is_inserted_before_later_pages(tmp_path
     doc = DoclingDocument(name="early")
     for page_no in (1, 2):
         doc.add_page(page_no=page_no, size=Size(width=200, height=280))
-    doc.add_text(label=DocItemLabel.TEXT, text="Seite zwei", prov=_prov(2))  # only page 2 has text
+    page_two = "Seite zwei: mehr als fuenfzig Zeichen gewoehnlicher Fliesstext auf der Seite"
+    doc.add_text(label=DocItemLabel.TEXT, text=page_two, prov=_prov(2))  # only page 2 has text
 
     recovery = fallback.recover_scan_text(doc, str(pdf), ocr_page=lambda image: "Seite eins")
 
     assert recovery is not None and recovery.pages == {1: "full_page"}
-    assert [text for _, text in _body(doc)] == ["Seite eins", "Seite zwei"]
+    assert [text for _, text in _body(doc)] == ["Seite eins", page_two]
 
 
 # --------------------------------------------------------------------------- the conversion path
@@ -476,7 +500,11 @@ def test_read_document_leaves_a_pdf_with_text_alone(tmp_path: Path, fake_convert
     pdf = tmp_path / "text.pdf"
     _image_only_pdf(pdf)
     doc = _picture_only_document()
-    doc.add_text(label=DocItemLabel.TEXT, text="Native text of the page", prov=_prov(1))
+    doc.add_text(
+        label=DocItemLabel.TEXT,
+        text="Native text of the page: more than fifty characters of ordinary body text",
+        prov=_prov(1),
+    )
     expected = ingest.export_document_markdown(doc)
     texts_before = len(doc.texts)
     fake_converter(doc, page_ocr=lambda image: pytest.fail("Tesseract must not run on a page with text"))

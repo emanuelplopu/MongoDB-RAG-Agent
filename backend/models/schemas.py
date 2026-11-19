@@ -33,6 +33,8 @@ class FileClassification(str, Enum):
     NORMAL = "normal"               # Successfully processed with chunks
     IMAGE_ONLY_PDF = "image_only_pdf"  # PDF with no extractable text
     NO_CHUNKS = "no_chunks"         # Processed but produced 0 chunks
+    IMAGE_NO_TEXT = "image_no_text"  # Image whose OCR found no text (a photo, a logo); not a failure
+    EMPTY_FILE = "empty_file"       # File without any text (an empty attachment stub); not a failure
     TIMEOUT = "timeout"             # Processing timed out
     ERROR = "error"                 # Processing error
     MEDIA_DEFERRED = "media_deferred"  # Audio/video left to a media run (retry_media)
@@ -347,6 +349,8 @@ class IngestionStatusResponse(BaseModel):
     timeout_files: int = 0
     error_files: int = 0
     media_deferred_files: int = 0  # audio/video left to a media run (retry_media)
+    images_without_text: int = 0  # images whose OCR found no text (photos, logos); not failures
+    empty_files: int = 0  # files without any text (attachment stubs, templates); not failures
 
 
 class IngestionEtaExtension(BaseModel):
@@ -394,6 +398,8 @@ class IngestionRunSummary(BaseModel):
     timeout_files: int = 0  # Files that timed out
     error_files: int = 0  # Files with processing errors
     media_deferred_files: int = 0  # Audio/video left to a media run (retry_media)
+    images_without_text: int = 0  # Images whose OCR found no text (photos, logos); not failures
+    empty_files: int = 0  # Files without any text (attachment stubs, templates); not failures
     avg_processing_time_ms: float = 0.0
     total_size_bytes: int = 0
     files_per_hour: float = 0.0

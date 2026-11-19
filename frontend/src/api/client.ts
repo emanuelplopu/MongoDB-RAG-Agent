@@ -884,6 +884,10 @@ export interface IngestionStatus {
   error_files?: number
   /** Audio/video files left to a media run (retry_media). */
   media_deferred_files?: number
+  /** Images whose OCR found no text (photos, logos, drawings); read fine, not failures. */
+  images_without_text?: number
+  /** Files without any text (empty attachment stubs, templates); read fine, not failures. */
+  empty_files?: number
   /** Documents stored with part of their chunks while the rest waits in the run's embedding backlog. */
   partial_files?: number
 }

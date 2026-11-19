@@ -440,7 +440,7 @@ pure scan whose OCR produced text carries `image_only_pdf: true` on its
 `ingestion_stats` record and is counted in the job's `image_only_pdfs_ocr`
 (`/failed-documents/summary` reports the total as `image_only_pdfs_ocr_ok`).
 Files whose content is empty (Outlook `ATT0000x.txt` placeholders, frameset
-pages) log "No chunks created" at INFO instead of WARNING.
+pages) log "No chunks created" at INFO instead of WARNING. Since the `no_chunks` audit of 2026-11-19 (`docs/26-FORMAT_EDGE_AUDIT.md`) such files are not failures: an image whose OCR found no text is recorded as `image_no_text` (job counter `images_without_text`), a file without any text (an empty attachment stub, a template, a Word file of pictures without text, an empty e-mail) as `empty_file` (`empty_files`); both are `success` stats without a `failed_documents` row, and a later run that reads the file the same way resolves its open rows ("a later attempt found no text in the file"). `no_chunks` is left for a file whose extracted text produced no chunk.
 
 **UI-started jobs run in the worker (F7).** `POST /api/v1/ingestion/start`
 used to run every job inside the API process (1,400 % CPU, 45 GB RSS, `/health`
