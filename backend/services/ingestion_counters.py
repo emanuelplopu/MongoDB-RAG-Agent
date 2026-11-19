@@ -25,7 +25,27 @@ JOB_COUNTER_FIELDS: Dict[str, str] = {
     "partial": "partial_files",
     # audio/video left to a media run (retry_media); not a failure
     "media_deferred": "media_deferred_files",
+    # raster images below the performance config's images.min_pixels / min_bytes, skipped
+    # unconverted (retry_tiny_images converts them); not a failure
+    "tiny_image": "tiny_images",
 }
+
+#: First words of the ``IngestionResult`` errors of files a run skipped on purpose: duplicates,
+#: audio/video deferred to a media run, raster images below the tiny-image minimum. The job's
+#: final ``failed_files`` leaves them out, as the running counters do.
+SKIPPED_RESULT_PREFIXES: tuple = ("Duplicate of:", "Deferred to a media run", "Tiny image skipped")
+
+
+def counts_as_failure(errors: Optional[list]) -> bool:
+    """Whether a result's errors make it a failed file (not a deliberate skip).
+
+    Args:
+        errors: ``IngestionResult.errors`` of one file.
+    """
+    if not errors:
+        return False
+    first = str(errors[0])
+    return not any(first.startswith(prefix) for prefix in SKIPPED_RESULT_PREFIXES)
 
 
 def apply_stats_counts(

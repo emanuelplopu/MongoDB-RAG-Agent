@@ -68,7 +68,7 @@ Supported-extension files: **390,192**; unsupported: **26,171** (mostly noise �
 | **.dot** | 2,504 | **NOT INGESTED** | Word templates; OLE2 like `.doc`, so antiword could read them, but `.dot` is not a supported extension. |
 | **images (.jpg/.png/.bmp)** | ~21k | **works for document photos; noisy for real photos** | Docling OCR; MPO and 0-dpi files are re-saved correctly (`prepare_image_for_docling`). Live runs with `OCR_IMAGE_NOISE_GATE=false`, so photos that OCR to letter-soup are indexed as noise (the scale-test noise gate exists but is off in the live `.env`). |
 | **.tif / .tiff** | 242 | **lossy** | **Multi-page TIFFs are flattened to page 1** (3/10 sampled had 3–8 frames). Separately, **every** TIFF is unnecessarily re-saved because its DPI tag is a PIL `IFDRational`, which fails the `isinstance(v,(int,float))` check in `prepare_image_for_docling` → `bad_dpi=True`. |
-| **.gif** | 852 | **works (static)** | Animated GIFs would use frame 0 only (none animated in sample; rare). |
+| **.gif** | 852 | **works (static)** | Animated GIFs would use frame 0 only (none animated in sample; rare). *2026-11-19: wrong on both counts, see "Tiny raster images" below: Docling OCRed every frame of an animated GIF as a page (52 of the 778 unindexed GIFs were animated), and 78 % of the GIFs are web-page furniture below 100 x 100 px or 1 KiB, now skipped as `tiny_image`.* |
 | **video (.mp4/.mov/.avi)** | ~340 / ~30 GB | **not ingested (by design)** | Returns `"[Video: … not yet supported]"`. No transcription pipeline. `.wmv` is additionally absent from `SUPPORTED_INGESTION_EXTENSIONS`, so `.wmv` is not even walked. *2026-11-07: the audio track is transcribed (ffmpeg extraction, `media.video`), `.wmv` is walked; see docs/04, "Media transcription".* |
 | **audio (.mp3/.m4a/.wav)** | ~66 / ~5 GB | **broken offline** | With no OpenAI key (the live config) the path uses local Whisper via Docling, whose **`turbo` model is not baked into the image** — first use downloads **1.51 GB** (fails in an offline/air-gapped install). Language is **hard-coded `"en"`**, so German audio is mis-transcribed. `faster_whisper` is not importable, but the code uses openai-whisper, so that is moot. *2026-11-07: the checkpoint is baked into the base image (`WHISPER_MODELS`), the language is configurable (`media.language`, default detect), transcriptions have their own threads/device/slots and budget, and a media run (`retry_media`) transcribes the deferred files; see docs/04, "Media transcription".* |
 
@@ -247,3 +247,99 @@ OCR already ran on that bitmap and found nothing; a second pass with the same en
 cost time), the CCITT fax scans of F30, and files whose Docling conversion fails outright.
 Tests: `backend/tests/test_scan_text_fallback.py` (synthetic equivalents of the sample files;
 Tesseract mocked, rendering and chunking real).
+
+## Follow-up 2026-11-19: tiny raster images (the 778 GIFs)
+
+**State before.** Of the 852 `.gif` files on the four shares, 60 had been indexed by the full
+run and 74 had failed; the other 778 were recorded on 2026-11-03 as `error_type: hang_suspect`
+(job `b98d150e`) because the API had frozen several times right after GIFs. The freeze was
+docling-core's table column split of a 2,670 x 32 sheet on the event loop (PR #37, `docs/04`,
+"Chunking off the event loop"), not the GIFs. All 778 were probed with the deployed worker image
+(`docker run --rm --volumes-from rag-ingestion-worker … python`; 5 s for the header pass):
+
+| | files |
+|---|---|
+| GIF / PNG / BMP content under the `.gif` name | 759 / 10 / 2 |
+| not an image at all (a web page's `site.gif` = CSS, `script.gif`, `effects.gif` = JavaScript) | 7 |
+| animated (2-75 frames) | 52 |
+| below 1 KiB | 417 (54 %) |
+| below 100 x 100 px | 583 (76 %) |
+| below either | 600 (78 %) |
+| at or above both (worth OCR) | 171 |
+
+The furniture is what one expects next to saved web pages and e-mails: `leer1.gif` / `leer.gif`
+(36 copies of a 1 x 1 spacer), `image001.gif` … `image006.gif` (e-mail signature logos and
+30 x 30 social icons), `back_hell.gif`, `graycol.gif`, `linie.gif` (1200 x 25 px, 296 bytes),
+`zurueck.gif`, `blocked.gif`, `ajax-loader.gif`, RIS and university web-page buttons. The 171
+that pass include real documents: `Kaufvertrag Pumper-Adami Seite 1.gif` (2550 x 3510 px, a
+scanned contract page), `Zeichenerkl f Flächenwidmgsplan.gif` (817 x 1166 px, a zoning-plan
+legend), `wgkk_anm.gif` (568 x 813 px, a social-insurance registration form).
+
+**Sample conversion** (17 files, the deployed image, the exact image branch of `_read_document`,
+4 CPUs; the first file includes the model load):
+
+| file | content | px | bytes | frames | seconds | OCR result |
+|---|---|---|---|---|---|---|
+| `blocked.gif` | GIF | 100 x 50 | 118 | 1 | 5.1 | nothing |
+| `ATT00001.gif` | GIF | 113 x 113 | 4,843 | 1 | 1.1 | `<!-- image -->` only |
+| `linie.gif` | GIF | 1200 x 25 | 296 | 1 | 1.2 | nothing |
+| `waiting.gif` | GIF | 100 x 100 | 162 | 1 | 1.0 | nothing |
+| `10580977.gif` | PNG | 72 x 65 | 14,094 | 1 | 1.1 | `JUSTIZ` (a logo) |
+| `image004_1.gif` | GIF | 30 x 30 | 2,500 | 1 | 1.2 | nothing |
+| `18038847.gif` | PNG | 212 x 41 | 4,943 | 1 | 1.2 | `<!-- image -->` only |
+| `logo_bmwa.gif` | GIF | 104 x 66 | 3,003 | 1 | 1.4 | `BUNDESMINISTERIUM für WIBTSCHAET und ARREIT` |
+| `grundbuch.gif` | GIF | 235 x 35 | 1,960 | 1 | 1.2 | `<!-- image -->` only |
+| `wgkk_anm.gif` | GIF | 568 x 813 | 549,152 | 1 | 15.8 | 1,254 chars, a form (`freie Dienstverträge …`) |
+| `Zeichenerkl f Flächenwidmgsplan.gif` | GIF | 817 x 1166 | 292,305 | 1 | 32.7 | 29,740 chars, clean (`ZEICHENERKLÄRUNG FÜR DEN FLÄCHENWIDMUNGS- UND BEBAUUNGSPLAN …`) |
+| `Kaufvertrag Pumper-Adami Seite 1.gif` | GIF | 2550 x 3510 | 110,929 | 1 | 7.3 | 1,743 chars, clean (`Frau Mag. Elisabeth Krenn … Immobilienmaklerin …`) |
+| `image006.gif` (REZA-BUWOG) | GIF | 480 x 240 | 73,251 | 3 | 5.8 | 137 chars, an advertising banner, 3 pages |
+| `RIDA-Banner_01.gif` | GIF | 468 x 60 | 127,127 | 27 | 38.0 | 1,975 chars: `rida Rechts-Index & Datenbank` **27 times**, one page per frame |
+| `Uhr2.gif` (Czinglar homepage clock) | GIF | 100 x 72 | 33,528 | 75 | **78.1** | 673 chars of `<!-- image -->`, 75 pages |
+| `fz_a2_gb_telefon.gif` | GIF | 468 x 60 | 12,526 | 2 | 2.4 | `Jusline.` |
+| `site.gif` | **CSS text** | - | 1,804 | - | 0.01 | Docling sniffed it as **CSV**: 6,313 chars of stylesheet "table" |
+
+Nothing hung; the longest conversion was the 75-frame icon. Three findings:
+
+1. **Furniture costs a conversion each and ends as `no_chunks`.** 1-5 s per file (Tesseract on a
+   30 x 30 icon), then a `no_chunks` failure that every retry run picks up again; the 15 GIFs the
+   2026-11-11 retry did index are buttons whose content is `|\n\nHoldem\n\n|` or `<!-- image -->`.
+2. **Animated GIFs are OCRed frame by frame.** Docling's image backend turns every frame into a
+   page: 75 frames = 78 s, and the text of a 27-frame banner is stored 27 times. The audit's
+   "frame 0 only" was an assumption, not a measurement.
+3. **A non-image under an image name is sniffed as CSV.** `site.gif` (CSS) and `script.gif`
+   (JavaScript) were saved by a browser next to a Lotus Domino page; Docling's format detection
+   found commas and indexed the stylesheet as a table.
+
+**Fix (this change).**
+
+- **Tiny-image policy** (`ImagePolicy` / `resolve_image_policy` / `tiny_image_reason` in
+  `src/ingestion/ingest.py`; the performance config's `images` section,
+  `backend/services/image_policy.py`, `POST /api/v1/system/ingestion-performance`; the
+  `INGEST_IMAGE_MIN_PIXELS` / `INGEST_IMAGE_MIN_BYTES` environment and the `ingest_image_*`
+  settings as the defaults): a raster image (`.gif`, `.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`,
+  `.tif`, `.tiff`) whose file is below `min_bytes` (**default 1,024**) or whose header gives
+  fewer than `min_pixels` (**default 10,000**, i.e. 100 x 100) is recorded as `tiny_image`
+  without a Docling conversion: its own `error_type` in `ingestion_stats` and
+  `failed_documents`, the `FileClassification.TINY_IMAGE`, the job counter `tiny_images`
+  (`JOB_COUNTER_FIELDS`), not part of `failed_files`, and a resumed job skips the records
+  unless the run sets `retry_tiny_images` (after lowering the minimums). `0` disables a
+  minimum. The dimensions come from the file header (PIL opens lazily, one small read on the
+  share); a file PIL cannot identify is only judged by its size. Both loops apply it before
+  hashing. The defaults were chosen on the GIF census above: a readable OCR line needs ~10 px
+  of height and a few hundred bytes of GIF payload, so everything a 100 x 100 / 1 KiB gate
+  drops is an icon, a spacer, a rule or a logo; the smallest real document in the corpus's
+  images is many times larger. On the full image population of the shares (~21,000 .jpg/.png
+  photos and scans) the gate touches only the e-mail signature logos and web icons among them.
+- **Animated GIFs** are re-saved as their first frame (`prepare_image_for_docling`, like the
+  0-dpi JPEG and MPO cases) before Docling sees them, so the banner is one page and the icon
+  one OCR pass.
+- **A file under an image extension that PIL cannot identify** (`NotARasterImageError` from
+  `prepare_image_for_docling`) is returned as an `[Error: … is not a raster image …]`
+  placeholder: a failed read (`UnreadableFileError`, `error_type: error`), nothing stored, and
+  Docling never sniffs it.
+
+Tests: `backend/tests/test_tiny_images.py` (policy precedence, the probe on generated images,
+both loops, the resume filter, the retry flag and counters, the API section, the animated-GIF
+re-save, the CSS-under-.gif placeholder). The run of the 778 records on the live stack happens on
+the deployed build, so they are retried without the gate and the furniture becomes
+`no_chunks` records once more; the next deployment turns such files into `tiny_image` skips.

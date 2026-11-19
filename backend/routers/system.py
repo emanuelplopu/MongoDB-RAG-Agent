@@ -14,6 +14,7 @@ from backend.models.schemas import (
 from backend.core.config import settings
 from backend.routers.auth import require_admin, UserResponse
 from backend.services import host_stats
+from backend.services.image_policy import ImagePolicyConfig, image_policy_from
 from backend.services.media_config import MediaTranscriptionConfig, media_config_from
 from backend.services.ingestion_schedule import (
     DEFAULT_LOAD_PROFILE,
@@ -1678,6 +1679,13 @@ class IngestionPerformanceConfig(BaseModel):
             "threads, device, model, language, defer; the stored section is kept when omitted"
         ),
     )
+    images: Optional[ImagePolicyConfig] = Field(
+        default=None,
+        description=(
+            "Tiny-image policy (backend/services/image_policy.py): raster images below min_pixels or "
+            "min_bytes are recorded as tiny_image without a conversion; the stored section is kept when omitted"
+        ),
+    )
 
 
 @router.get("/ingestion-performance")
@@ -1706,6 +1714,7 @@ async def get_ingestion_performance_config(request: Request):
                 "load_profile": load_profile_from(doc),
                 "office_hours": office_hours_from(doc).model_dump(),
                 "media": media_config_from(doc).model_dump(),
+                "images": image_policy_from(doc).model_dump(),
             }
     except Exception as e:
         logger.warning(f"Failed to load ingestion config from database: {e}")
@@ -1722,6 +1731,7 @@ async def get_ingestion_performance_config(request: Request):
         "load_profile": DEFAULT_LOAD_PROFILE,
         "office_hours": OfficeHoursConfig().model_dump(),
         "media": MediaTranscriptionConfig().model_dump(),
+        "images": ImagePolicyConfig().model_dump(),
     }
 
 
@@ -1754,6 +1764,8 @@ async def save_ingestion_performance_config(request: Request, config: IngestionP
         if config.media is not None:
             # Omitted by a client that does not know the section (the Configuration page): kept as stored
             update_doc["media"] = config.media.model_dump()
+        if config.images is not None:
+            update_doc["images"] = config.images.model_dump()
         
         # $set, not replace: the same document carries the timeout_config the
         # /ingestion-timeout-config endpoint saves (a replace dropped it on every save)
