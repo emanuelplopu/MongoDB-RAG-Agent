@@ -56,6 +56,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from backend.services.text_query import FUZZY_TERM_LIMIT, build_text_operator, query_terms
+
 logger = logging.getLogger(__name__)
 
 # How many exact hits the phrase query returns at most.
@@ -869,8 +871,23 @@ class TextStagePlan:
         return f"statute phrase stage {list(self.phrases)}, fuzzy remainder {self.remainder!r}"
 
 
+def remainder_clause(remainder: str, path: str = "content", fuzzy: bool = True) -> Dict[str, Any]:
+    """The ``should`` clause for the rest of a statute question, within Lucene's clause limit.
+
+    A remainder of at most :data:`FUZZY_TERM_LIMIT` distinct terms is the single fuzzy
+    ``text`` clause the statute path has always sent. A longer one, or any remainder when
+    ``fuzzy`` is false, goes through :func:`build_text_operator`: the first terms fuzzy with
+    a capped expansion, the following ones plain. Unbounded, a written question of 26 words
+    around ``§ 23 UrhG`` expanded to more than Lucene's 1,024 clauses and the hybrid search
+    answered 400 "Query too long" (``docs/27-POST_INGESTION_VALIDATION.md``, section 7.7).
+    """
+    if fuzzy and len(query_terms(remainder)) <= FUZZY_TERM_LIMIT:
+        return {"text": {"query": remainder, "path": path, "fuzzy": dict(TEXT_FUZZY)}}
+    return build_text_operator(remainder, path=path, fuzzy=fuzzy)
+
+
 def plan_text_stage(
-    query: str, identifiers: Sequence[LegalIdentifier], *, index: str, path: str = "content"
+    query: str, identifiers: Sequence[LegalIdentifier], *, index: str, path: str = "content", fuzzy: bool = True
 ) -> TextStagePlan:
     """Build the text stage of the hybrid search for a query.
 
@@ -879,9 +896,10 @@ def plan_text_stage(
     included). With one, the stage is a ``compound.should`` of exact ``phrase``
     clauses on the citation spellings (``§ 1 TKG 2021``, ``§ 1 TKG``) and on the
     statute name (``TKG 2021``, ``TKG``), the same citation spellings once more
-    with :data:`STATUTE_PHRASE_SLOP`, plus one fuzzy ``text`` clause on
+    with :data:`STATUTE_PHRASE_SLOP`, plus :func:`remainder_clause` on
     :func:`fuzzy_remainder` when anything is left of the question. No clause
-    carries a bare number.
+    carries a bare number. ``fuzzy=False`` builds the same stage without fuzzy
+    matching, for the retry after a ``maxClauseCount`` rejection.
     """
     if not has_statute_citation(identifiers):
         return TextStagePlan(
@@ -896,7 +914,7 @@ def plan_text_stage(
     should: List[Dict[str, Any]] = _phrase_clauses(phrases, path) + _loose_phrase_clauses(loose, path)
     remainder = fuzzy_remainder(query, identifiers)
     if remainder:
-        should.append({"text": {"query": remainder, "path": path, "fuzzy": dict(TEXT_FUZZY)}})
+        should.append(remainder_clause(remainder, path, fuzzy))
     return TextStagePlan(
         operator={"index": index, "compound": {"should": should, "minimumShouldMatch": 1}},
         mode="statute",

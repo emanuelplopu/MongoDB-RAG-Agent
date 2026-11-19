@@ -32,12 +32,33 @@ from backend.services.identifier_search import (
     has_statute_citation,
     merge_identifier_results,
     plan_text_stage,
+    remainder_clause,
     semantic_guarantee,
 )
+from backend.services.text_query import FUZZY_OPTIONS, FUZZY_TERM_LIMIT, query_terms
 from backend.tests.test_identifier_search import _AsyncCursor, _doc
 
 F34_QUERY = "Was regelt § 1 TKG 2021 (Zweck und Ziele) laut dem Gesetzestext in der Fassung vom 18.08.2022?"
 F34_QUERY_WITHOUT_CITATION = "Was regelt Zweck und Ziele laut dem Gesetzestext in der Fassung vom 18.08.2022?"
+LONG_STATUTE_QUESTION = (
+    "Welche Arten von Änderungen an einem digitalen Lichtbild gelten nach § 23 UrhG als Bearbeitung und dürfen "
+    "deshalb ohne Zustimmung des Urhebers nicht auf einer öffentlich zugänglichen Website verwendet werden?"
+)
+#: Atlas Search default of ``fuzzy.maxExpansions`` when the option is absent
+DEFAULT_MAX_EXPANSIONS = 50
+
+
+def _lucene_clauses(operator: Dict[str, Any]) -> int:
+    """Upper bound of the Lucene clauses a ``$search`` operator expands to."""
+    if "compound" in operator:
+        return sum(_lucene_clauses(clause) for clause in operator["compound"]["should"])
+    if "phrase" in operator:
+        return 1
+    if "text" in operator:
+        terms = len(operator["text"]["query"].split())
+        fuzzy = operator["text"].get("fuzzy")
+        return terms * (fuzzy.get("maxExpansions", DEFAULT_MAX_EXPANSIONS) if fuzzy else 1)
+    return 0
 STATUTE_SOURCE = "FP-DIETR-MAGENTA/Recherche/TKG\xa02021, Fassung vom 18.08.2022.pdf"
 STATUTE_TITLE = "TKG\xa02021, Fassung vom 18.08.2022"
 SECTION_TEXT = (
@@ -234,6 +255,32 @@ class TestTextStage:
         plan = plan_text_stage("§ 365 ZPO", detect_identifiers("§ 365 ZPO"), index="text_index")
         assert all("phrase" in c for c in plan.operator["compound"]["should"])
         assert plan.remainder == ""
+
+    def test_a_long_question_around_a_citation_stays_within_the_clause_limit(self) -> None:
+        """A written question of 26 words around a citation got HTTP 400 "Query too long" from the hybrid search."""
+        plan = plan_text_stage(LONG_STATUTE_QUESTION, detect_identifiers(LONG_STATUTE_QUESTION), index="text_index")
+        assert plan.mode == "statute" and len(query_terms(plan.remainder)) > FUZZY_TERM_LIMIT
+        should = plan.operator["compound"]["should"]
+        assert [c["phrase"]["query"] for c in should if "phrase" in c and "slop" not in c["phrase"]] == ["§ 23 UrhG", "UrhG"]
+        (rest,) = [c for c in should if "phrase" not in c]
+        fuzzy_part, plain_part = rest["compound"]["should"]
+        assert fuzzy_part["text"]["fuzzy"] == FUZZY_OPTIONS and len(fuzzy_part["text"]["query"].split()) == FUZZY_TERM_LIMIT
+        assert "fuzzy" not in plain_part["text"]
+        assert _lucene_clauses(plan.operator) < 512, "Lucene rejects a query above 1,024 clauses"
+        # every word of the question is still searched
+        searched = set((fuzzy_part["text"]["query"] + " " + plain_part["text"]["query"]).split())
+        assert searched == set(query_terms(plan.remainder))
+
+    def test_the_retry_plan_has_no_fuzzy_clause_at_all(self) -> None:
+        for query in (LONG_STATUTE_QUESTION, F34_QUERY):
+            plan = plan_text_stage(query, detect_identifiers(query), index="text_index", fuzzy=False)
+            assert plan.mode == "statute" and "fuzzy" not in str(plan.operator)
+            assert _lucene_clauses(plan.operator) < 100
+
+    def test_a_short_remainder_keeps_the_single_fuzzy_clause(self) -> None:
+        remainder = "Was regelt (Zweck und Ziele) laut dem Gesetzestext in der Fassung vom"
+        assert remainder_clause(remainder) == {"text": {"query": remainder, "path": "content", "fuzzy": TEXT_FUZZY}}
+        assert remainder_clause(remainder, fuzzy=False) == {"text": {"query": remainder, "path": "content"}}
 
     def test_exact_operator_has_exact_clauses_first_then_the_sloppy_ones(self) -> None:
         """Review of PR #32: `§ 1 TKG` must also reach `§ 1 Abs 1 TKG 2021` / `§ 1 (1) TKG` (ERV, commentary)."""
