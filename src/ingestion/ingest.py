@@ -48,10 +48,17 @@ from src.ingestion.chunker import ChunkingDeadlineExceeded
 from src.ingestion.ocr_repair import repair_docling_document, repair_ocr_text
 from src.ingestion.indexes import ensure_ingestion_indexes
 from src.ingestion.office_fallbacks import (
+    WORD2_MAGIC,
     WordBinaryError,
+    docx_plain_text,
     has_backslash_member_names,
+    is_office_owner_content,
     normalise_ooxml_member_names,
+    ole_container_kind,
+    ole_embedded_images,
+    ooxml_main_part_kind,
     ooxml_media_images,
+    word2_binary_text,
     word_binary_text,
 )
 from src.ingestion import telemetry_hooks
@@ -222,7 +229,7 @@ class IngestionFileStats:
     processing_time_ms: float
     chunks_created: int
     success: bool
-    error_type: Optional[str]  # timeout, error, none, no_chunks, image_only_pdf, partial
+    error_type: Optional[str]  # timeout, error, encrypted, none, no_chunks, image_only_pdf, partial
     error_message: Optional[str]
     timeout_seconds: float
     profile_key: str
@@ -1385,7 +1392,15 @@ class UnreadableFileError(Exception):
     Until 2026-10-26 the readers' ``[Error: Could not read file …]`` placeholder was stored,
     chunked and embedded as the document's content (F26 of the prompt-test log), so the file
     counted as ingested and a question naming it got the error string as its source.
+
+    ``error_type`` is what ``failed_documents`` records: ``"error"`` (retried with
+    ``retry_errors``) or ``"encrypted"`` for a password-protected file, which no retry can
+    read (:func:`placeholder_error_type`).
     """
+
+    def __init__(self, message: str, error_type: str = "error") -> None:
+        super().__init__(message)
+        self.error_type = error_type
 
 
 # The placeholder table lives in a module without heavy imports (the purge and the search
@@ -1393,9 +1408,12 @@ class UnreadableFileError(Exception):
 from src.ingestion.placeholders import (  # noqa: E402,F401
     EMPTY_PLACEHOLDER_PREFIX,
     EMPTY_PLACEHOLDER_PREFIXES,
+    ENCRYPTED_ERROR_TYPE,
+    ENCRYPTED_MARKER,
     ERROR_PLACEHOLDER_PREFIXES,
     MEDIA_PLACEHOLDER_PREFIXES,
     PLACEHOLDER_PREFIXES,
+    placeholder_error_type,
     placeholder_kind,
 )
 
@@ -2048,6 +2066,46 @@ _DSS_AUDIO_MAGIC = b"\x02dss"
 #: OLE2 compound file (Word 97-2003 .doc, Outlook .msg) and zip container (.docx)
 _OLE2_MAGIC = bytes.fromhex("d0cf11e0a1b11ae1")
 _ZIP_MAGIC = bytes.fromhex("504b0304")
+#: The Word family: the content decides the reader (docs/26, follow-up 2026-11-19)
+WORD_EXTENSIONS: frozenset = frozenset({".doc", ".docx", ".dot", ".dotx", ".wbk"})
+#: Image signatures and the extension the image reader expects for them
+_IMAGE_SIGNATURES: Tuple[Tuple[bytes, str], ...] = (
+    (b"\xff\xd8\xff", ".jpg"),
+    (b"\x89PNG\r\n\x1a\n", ".png"),
+    (b"GIF87a", ".gif"),
+    (b"GIF89a", ".gif"),
+    (b"II*\x00", ".tif"),
+    (b"MM\x00*", ".tif"),
+    (b"BM", ".bmp"),
+)
+
+
+def sniff_container(head: bytes, size: int) -> Optional[str]:
+    """What a file's first bytes say it is, for the readers that go by content.
+
+    Returns ``"ole2"``, ``"zip"``, ``"pdf"``, ``"word2"`` (Word 1.x/2.x for Windows),
+    ``"owner"`` (an Office owner file under another name, by size and layout), an image
+    extension (``".jpg"``, ``".png"``, ``".gif"``, ``".tif"``, ``".bmp"``) or ``None`` for
+    anything else (RTF, HTML and text are told apart by :func:`sniff_text_bytes`).
+
+    Args:
+        head: The first bytes of the file (at least 8; 162 to recognise an owner file).
+        size: The file's size.
+    """
+    if head[:8] == _OLE2_MAGIC:
+        return "ole2"
+    if head[:4] == _ZIP_MAGIC:
+        return "zip"
+    if head[:4] == b"%PDF":
+        return "pdf"
+    if head[:2] == WORD2_MAGIC:
+        return "word2"
+    if size == 162 and is_office_owner_content(head[:162]):
+        return "owner"
+    for signature, suffix in _IMAGE_SIGNATURES:
+        if head.startswith(signature):
+            return suffix
+    return None
 
 
 def markdown_has_text(markdown: Optional[str]) -> bool:
@@ -2071,6 +2129,13 @@ def pdf_open_problem(path: str) -> Optional[str]:
     except Exception as exc:  # noqa: BLE001 - only the reason matters
         return "password-protected PDF" if "password" in str(exc).lower() else None
     return None
+
+
+def _antiword_output(data: Any) -> str:
+    """antiword's stdout/stderr as text (bytes from ``subprocess``, str from tests' stubs)."""
+    if isinstance(data, bytes):
+        return data.decode("utf-8", errors="replace")
+    return data or ""
 
 
 def read_error_cause(exc: BaseException, limit: int = 240) -> str:
@@ -2230,7 +2295,7 @@ _OOXML_TEMPLATE_TYPES: Dict[str, Tuple[str, str]] = {
 }
 
 
-def ooxml_template_as_document(src: str, dst: str) -> None:
+def ooxml_template_as_document(src: str, dst: str, template_ext: Optional[str] = None) -> None:
     """Write the Office template ``src`` (.dotx/.xltx/.potx) to ``dst`` as the matching document.
 
     A template is the same zip as the document except for the main part's content type in
@@ -2240,10 +2305,13 @@ def ooxml_template_as_document(src: str, dst: str) -> None:
     Args:
         src: The template file.
         dst: Destination path (``.docx``/``.xlsx``/``.pptx``).
+        template_ext: The template kind (``.dotx``, ``.xltx``, ``.potx``) when the file's
+            own extension does not say it (a template saved as ``Brief.doc``,
+            :func:`ooxml_main_part_kind`); the extension of ``src`` by default.
     """
     import zipfile
 
-    template_type, document_type = _OOXML_TEMPLATE_TYPES[os.path.splitext(src)[1].lower()]
+    template_type, document_type = _OOXML_TEMPLATE_TYPES[template_ext or os.path.splitext(src)[1].lower()]
     with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
         for item in zin.infolist():
             data = zin.read(item.filename)
@@ -2860,7 +2928,7 @@ def map_error_type_to_classification(error_type: Optional[str], chunks_created: 
     """
     if error_type == "timeout":
         return "timeout"
-    elif error_type == "error":
+    elif error_type in ("error", ENCRYPTED_ERROR_TYPE):
         return "error"
     elif error_type == "image_only_pdf":
         return "image_only_pdf"
@@ -3527,6 +3595,22 @@ class DocumentIngestionPipeline:
         """
         file_ext = os.path.splitext(file_path)[1].lower()
         options = options or ConversionOptions()
+        basename = os.path.basename(file_path)
+
+        # A zero-byte file has nothing to read: an empty document, not a failed one
+        try:
+            if os.path.getsize(file_path) == 0:
+                logger.info(f"{basename} is empty (0 bytes)")
+                return (f"[Document: {basename} - empty file (0 bytes)]", None)
+        except OSError:
+            pass  # the reader below reports why the file cannot be opened
+
+        # Word names hide PDFs, pictures, owner files and Word binaries named .docx: the
+        # content picks the reader (docs/26, follow-up 2026-11-19)
+        if file_ext in WORD_EXTENSIONS:
+            routed = self._read_word_file_by_content(file_path, file_ext)
+            if routed is not None:
+                return routed
 
         # Word backups (.wbk) and Word 97 templates (.dot) are the same OLE2 format as .doc
         if file_ext in ('.wbk', '.dot'):
@@ -3664,6 +3748,10 @@ class DocumentIngestionPipeline:
                 converter = create_document_converter(table_structure=options.table_structure)
                 convert_path = file_path
                 repaired_copy: Optional[str] = None
+                if file_ext == '.docx' and ooxml_main_part_kind(file_path) == '.dotx':
+                    # A template package saved as .docx: python-docx refuses the content type
+                    logger.info(f"{basename} is a Word template package under a .docx name")
+                    return self._read_renamed_office_file(file_path, '.docx')
                 if file_ext in ('.docx', '.xlsx', '.pptx') and has_backslash_member_names(file_path):
                     # Packages written with backslashes in their member names (a practice-management
                     # system's letters and fee notes): Word opens them, a zip reader finds no parts
@@ -3703,6 +3791,12 @@ class DocumentIngestionPipeline:
 
             except Exception as e:
                 logger.error(f"Failed to convert {file_path} with Docling: {e}")
+                # A Word package Docling rejects for a reason of its own (a list definition
+                # with an empty start value) still has its paragraphs in document.xml
+                if file_ext == '.docx':
+                    fallback = self._docx_text_fallback(file_path, basename, e)
+                    if fallback is not None:
+                        return fallback
                 # Fall back to raw text if Docling fails
                 # Raw text is a fallback for the text formats only: an ASCII-only PDF or a
                 # .pptx that Docling rejects must not be stored as its file source
@@ -3729,6 +3823,75 @@ class DocumentIngestionPipeline:
                 with open(file_path, 'r', encoding='latin-1') as f:
                     return (f.read(), None)
 
+    def _read_word_file_by_content(self, file_path: str, file_ext: str) -> Optional[tuple[str, Optional[Any]]]:
+        """Route a Word-named file by its first bytes; ``None`` when the extension's reader applies.
+
+        On one law firm's shares (docs/26, follow-up 2026-11-19) ``.doc`` names covered PDFs,
+        JPEG scans and Outlook messages, ``.docx`` names Word 97 binaries and encrypted
+        packages, and two owner files had lost their ``~$`` prefix. A PDF or a picture goes
+        to its own reader through a temporary copy with the right suffix; an OLE2 or Word 2
+        file named ``.docx``/``.dotx`` goes to the ``.doc`` reader, which tells the container
+        kinds apart; a zip named ``.doc`` is handled by that reader already.
+
+        Args:
+            file_path: The file.
+            file_ext: Its lower-case extension (one of :data:`WORD_EXTENSIONS`).
+        """
+        basename = os.path.basename(file_path)
+        try:
+            size = os.path.getsize(file_path)
+            with open(file_path, "rb") as handle:
+                head = handle.read(162)
+        except OSError:
+            return None  # the extension's reader reports why the file cannot be opened
+        kind = sniff_container(head, size)
+        if kind == "owner":
+            logger.info(f"{basename} is an Office owner file without its ~$ prefix")
+            return (f"[Document: {basename} - Office owner file, no document]", None)
+        if kind == "pdf":
+            logger.info(f"{basename} is a PDF under a Word name")
+            return self._read_as_renamed(file_path, ".pdf")
+        if kind in {suffix for _, suffix in _IMAGE_SIGNATURES}:
+            logger.info(f"{basename} is a {kind[1:].upper()} picture under a Word name")
+            return self._read_as_renamed(file_path, kind)
+        if file_ext in (".docx", ".dotx") and kind != "zip":
+            logger.info(f"{basename} is not an Office package ({kind or 'unknown content'}); reading it like a .doc")
+            return self._read_doc_file(file_path)
+        return None
+
+    def _read_as_renamed(self, file_path: str, suffix: str) -> tuple[str, Optional[Any]]:
+        """Read a file through a temporary copy named with ``suffix`` (the readers go by extension).
+
+        The placeholder of a failed read names the original file, not the copy.
+        """
+        basename = os.path.basename(file_path)
+        fd, tmp = tempfile.mkstemp(suffix=suffix, prefix="recallhub-renamed-")
+        os.close(fd)
+        try:
+            shutil.copyfile(file_path, tmp)
+            content, document = self._read_document(tmp)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        if placeholder_kind(content) is not None:
+            content = content.replace(os.path.basename(tmp), basename)
+        return (content, document)
+
+    def _docx_text_fallback(self, package_path: str, basename: str, error: BaseException) -> Optional[tuple[str, Optional[Any]]]:
+        """The paragraphs of a Word package Docling failed on (:func:`docx_plain_text`), or ``None``."""
+        try:
+            text = docx_plain_text(package_path)
+        except Exception as exc:  # noqa: BLE001 - the conversion error is reported instead
+            logger.warning(f"document.xml of {basename} could not be read either: {exc}")
+            return None
+        if not text:
+            return None
+        logger.warning(
+            f"{basename}: Docling failed ({read_error_cause(error)}); {len(text)} characters read from document.xml instead"
+        )
+        note_conversion(doc_reader="docx_xml")
+        return (text, None)
+
     def _ocr_office_pictures(self, file_path: str) -> str:
         """OCR text of the pictures embedded in an Office package, in the order of their names.
 
@@ -3742,8 +3905,12 @@ class DocumentIngestionPipeline:
         Returns:
             The pictures' text separated by rules; empty when no picture has text.
         """
+        return self._ocr_pictures(ooxml_media_images(file_path), os.path.basename(file_path), "office_pictures")
+
+    def _ocr_pictures(self, images: List[Tuple[str, bytes]], basename: str, fallback: str) -> str:
+        """OCR text of ``images`` (``(name, bytes)`` pairs); ``fallback`` is recorded as ``ocr_fallback``."""
         parts: List[str] = []
-        for name, data in ooxml_media_images(file_path):
+        for name, data in images:
             fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(name)[1].lower(), prefix="recallhub-picture-")
             os.close(fd)
             try:
@@ -3751,7 +3918,7 @@ class DocumentIngestionPipeline:
                     handle.write(data)
                 text, _ = self._read_document(tmp)
             except Exception as exc:  # noqa: BLE001 - one unreadable picture must not fail the document
-                logger.warning(f"Could not OCR {name} of {os.path.basename(file_path)}: {exc}")
+                logger.warning(f"Could not OCR {name} of {basename}: {exc}")
                 continue
             finally:
                 if os.path.exists(tmp):
@@ -3760,8 +3927,8 @@ class DocumentIngestionPipeline:
             if text and placeholder_kind(text) is None:
                 parts.append(text)
         if parts:
-            logger.info(f"{os.path.basename(file_path)}: text of {len(parts)} embedded picture(s) read with OCR")
-            note_conversion(ocr_fallback="office_pictures")
+            logger.info(f"{basename}: text of {len(parts)} embedded picture(s) read with OCR")
+            note_conversion(ocr_fallback=fallback)
         return "\n\n---\n\n".join(parts)
 
     # -- Legacy and container formats (law-firm corpora, docs/26) ------------------------
@@ -3999,21 +4166,42 @@ class DocumentIngestionPipeline:
         basename = os.path.basename(file_path)
         fd, tmp = tempfile.mkstemp(suffix=suffix, prefix="recallhub-renamed-")
         os.close(fd)
+        normalised: Optional[str] = None
+        source = file_path
         try:
-            if os.path.splitext(file_path)[1].lower() in _OOXML_TEMPLATE_TYPES:
-                ooxml_template_as_document(file_path, tmp)
+            if suffix in ('.docx', '.xlsx', '.pptx') and has_backslash_member_names(file_path):
+                # The practice software's packages under a .doc name have the same backslash
+                # member names as its .docx files
+                fd, normalised = tempfile.mkstemp(suffix=suffix, prefix="recallhub-ooxml-")
+                os.close(fd)
+                renamed = normalise_ooxml_member_names(file_path, normalised)
+                logger.info(f"{basename}: {renamed} package members renamed to forward slashes")
+                note_conversion(ooxml_repair="member_names")
+                source = normalised
+            # A template is told by its content type, not by its name (Brief.doc may be a .dotx)
+            template_ext = os.path.splitext(file_path)[1].lower()
+            if template_ext not in _OOXML_TEMPLATE_TYPES:
+                package_kind = ooxml_main_part_kind(source) if suffix in ('.docx', '.xlsx', '.pptx') else None
+                template_ext = package_kind if package_kind in _OOXML_TEMPLATE_TYPES else ""
+            if template_ext:
+                ooxml_template_as_document(source, tmp, template_ext)
             else:
-                shutil.copyfile(file_path, tmp)
+                shutil.copyfile(source, tmp)
             converter = create_document_converter()
             result = converter.convert(tmp)
             logger.info(f"Converted {basename} as {suffix}")
             return (export_document_markdown(result.document), result.document)
         except Exception as exc:  # noqa: BLE001 - one unreadable file must not stop the run
             logger.error(f"Failed to convert {basename} as {suffix}: {exc}")
-            return (f"[Error: Could not read file {basename}]", None)
+            if suffix == '.docx':
+                fallback = self._docx_text_fallback(tmp if os.path.exists(tmp) else source, basename, exc)
+                if fallback is not None:
+                    return fallback
+            return (f"[Error: Could not read file {basename} ({read_error_cause(exc)})]", None)
         finally:
-            if os.path.exists(tmp):
-                os.remove(tmp)
+            for path in (tmp, normalised):
+                if path and os.path.exists(path):
+                    os.remove(path)
 
     def _read_multipage_tiff(self, file_path: str, frames: int) -> tuple[str, Optional[Any]]:
         """OCR every page of a multi-page TIFF scan; pages are separated by a rule.
@@ -4102,6 +4290,18 @@ class DocumentIngestionPipeline:
         if magic[:4] == _ZIP_MAGIC:
             logger.info(f"{basename} is a .docx container under a .doc name")
             return self._read_renamed_office_file(file_path, ".docx")
+        if magic[:2] == WORD2_MAGIC:
+            # Word 1.x/2.x for Windows: no OLE container; antiword returns nothing for them
+            try:
+                text = word2_binary_text(file_path)
+            except WordBinaryError as exc:
+                logger.warning(f"{basename} looks like a Word 2 file but cannot be read: {exc}")
+                return (f"[Error: Could not read file {basename} (Word 2 file: {exc})]", None)
+            if not text:
+                return (f"[Document: {basename} - no text content]", None)
+            logger.info(f"Read {basename} as a Word 2 for Windows file ({len(text)} characters)")
+            note_conversion(doc_reader="word2_binary")
+            return (text, None)
         if magic != _OLE2_MAGIC:
             # RTF, HTML, plain or DOS-era text saved as .doc
             content, document = self._read_sniffed_text_file(file_path)
@@ -4118,13 +4318,34 @@ class DocumentIngestionPipeline:
                     return (f"[Error: Could not read file {basename} (not a Word document and not text)]", None)
             return (content, document)
 
+        # The OLE2 container may hold something other than a Word document (docs/26)
+        container_kind, detail = ole_container_kind(file_path)
+        if container_kind == "encrypted_package":
+            logger.warning(f"{basename} is a password-protected Office package")
+            return (f"[Error: Could not read file {basename} ({ENCRYPTED_MARKER} Office package)]", None)
+        if container_kind == "word_encrypted":
+            logger.warning(f"{basename} is a password-protected Word document")
+            return (f"[Error: Could not read file {basename} ({ENCRYPTED_MARKER} Word document)]", None)
+        if container_kind == "msg":
+            logger.info(f"{basename} is an Outlook message under a Word name")
+            return self._read_msg_file(file_path)
+        if container_kind == "excel":
+            logger.info(f"{basename} is an Excel workbook under a Word name")
+            return self._read_xls_file(file_path)
+        if container_kind == "damaged":
+            logger.warning(f"{basename} is a damaged or truncated OLE2 file: {detail}")
+            return (f"[Error: Could not read file {basename} (damaged or truncated OLE2 file: {detail})]", None)
+        if container_kind != "word":
+            logger.warning(f"{basename} is an OLE2 file of another application ({container_kind}: {detail})")
+            return (f"[Error: Could not read file {basename} (OLE2 file of another application, streams: {detail or container_kind})]", None)
+
         if not shutil.which('antiword'):
             logger.warning("antiword not installed; Word 97-2003 files cannot be read (apt-get install antiword)")
             return (f"[Error: Could not read file {basename} (antiword is not installed)]", None)
         try:
             result = subprocess.run(
                 ['antiword', '-w', '0', file_path],
-                capture_output=True, text=True, timeout=60
+                capture_output=True, timeout=60
             )
         except subprocess.TimeoutExpired:
             logger.warning(f"antiword timed out for {basename}")
@@ -4132,12 +4353,18 @@ class DocumentIngestionPipeline:
         except Exception as e:  # noqa: BLE001 - one unreadable file must not stop the run
             logger.warning(f"antiword failed for {basename}: {e}")
             return (f"[Error: Could not read file {basename} ({read_error_cause(e)})]", None)
-        if result.returncode == 0 and result.stdout.strip():
+        # antiword writes UTF-8 but lets an unmapped character through as a raw byte (11 of
+        # 391 files of one corpus): decode with replacement instead of failing the file
+        stdout = _antiword_output(result.stdout)
+        stderr = _antiword_output(result.stderr)
+        if result.returncode == 0 and stdout.strip():
             logger.info(f"Successfully extracted .doc with antiword: {basename}")
-            return (result.stdout.strip(), None)
+            return (stdout.strip(), None)
         if result.returncode == 0:
-            return (f"[Document: {basename} - no text content]", None)
-        reason = " ".join((result.stderr or "").split())[:200] or f"exit code {result.returncode}"
+            # No body text: a form or letterhead whose words sit in text boxes or headers,
+            # or pasted scans and photos (docs/26, follow-up 2026-11-19)
+            return self._read_doc_without_body_text(file_path, basename)
+        reason = " ".join(stderr.split())[:200] or f"exit code {result.returncode}"
         reason = reason.replace("[", "(").replace("]", ")")
         # antiword rejects small Word 6/95 files ("the text stream of this file is too small
         # to handle"): read the text from the WordDocument stream instead
@@ -4154,6 +4381,28 @@ class DocumentIngestionPipeline:
         logger.info(f"Read {basename} with the Word binary reader (antiword: {reason})")
         note_conversion(doc_reader="word_binary")
         return (text, None)
+
+    def _read_doc_without_body_text(self, file_path: str, basename: str) -> tuple[str, Optional[Any]]:
+        """Text of a Word binary whose main story is empty: its text boxes and its pictures.
+
+        Of the 66 such files of one corpus (antiword exit 0, no output) 15 held JPEG or PNG
+        scans and photos, others were forms laid out in text boxes (docs/26, follow-up
+        2026-11-19); the rest are empty templates and letterheads. Both sources are read
+        and joined; the headers (page numbers, letterheads) are not.
+        """
+        try:
+            text = word_binary_text(file_path)
+        except Exception as exc:  # noqa: BLE001 - the pictures may still carry the text
+            logger.debug(f"Word binary reader found no text in {basename}: {exc}")
+            text = ""
+        if text:
+            logger.info(f"Read {basename} from its text boxes ({len(text)} characters)")
+            note_conversion(doc_reader="word_binary_stories")
+        picture_text = self._ocr_pictures(ole_embedded_images(file_path), basename, "word_binary_pictures")
+        parts = [part for part in (text, picture_text) if part]
+        if parts:
+            return ("\n\n---\n\n".join(parts), None)
+        return (f"[Document: {basename} - no text content]", None)
 
     def _read_msg_file(self, file_path: str) -> tuple[str, Optional[Any]]:
         """
@@ -5326,7 +5575,9 @@ class DocumentIngestionPipeline:
         # (F26), "[Document: … - no text content]" an empty file (no chunks, no warning)
         kind = placeholder_kind(document_content)
         if kind == "error":
-            raise UnreadableFileError(document_content.strip().strip("[]"))
+            raise UnreadableFileError(
+                document_content.strip().strip("[]"), error_type=placeholder_error_type(document_content)
+            )
         if kind == "empty":
             logger.info(f"No text in {os.path.basename(file_path)}: {document_content.strip()}")
             return IngestionResult(
@@ -6557,10 +6808,11 @@ class DocumentIngestionPipeline:
                     with results_lock:
                         results.append(failed_result(error_msg, processing_time))
                         processed_count += 1
-                        # Track error stats
+                        # Track error stats; a password-protected file is "encrypted", which
+                        # no retry flag redoes (UnreadableFileError.error_type)
                         recorder.add(stat(
                             processing_time_ms=processing_time,
-                            error_type="error",
+                            error_type=getattr(e, "error_type", None) or "error",
                             error_message=error_msg[:500],  # Truncate long error messages
                             classification="error",
                         ))

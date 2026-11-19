@@ -67,10 +67,14 @@ async def test_failed_paths_skip_unresolved_failures_unless_retried() -> None:
         {"job_id": "other", "file_path": "/a/other.pdf", "error_type": "timeout"},
         # A timeout whose retry was still queued when the run ended is attempted again (F43)
         {"job_id": JOB, "file_path": "/a/retrying.pdf", "error_type": "timeout", "resolved": False, "retry_pending": True},
+        # A password-protected file is skipped by every retry flag (no flag maps to "encrypted")
+        {"job_id": JOB, "file_path": "/a/geheim.doc", "error_type": "encrypted", "resolved": False},
     ])
-    assert await ingest.failed_paths_of_job(db, JOB) == {"/a/slow.pdf": "timeout", "/a/blank.pdf": "no_chunks"}
+    assert await ingest.failed_paths_of_job(db, JOB) == {"/a/slow.pdf": "timeout", "/a/blank.pdf": "no_chunks", "/a/geheim.doc": "encrypted"}
     assert db["failed_documents"].queries[-1]["retry_pending"] == {"$ne": True}
-    assert await ingest.failed_paths_of_job(db, JOB, frozenset({"timeout"})) == {"/a/blank.pdf": "no_chunks"}
+    assert await ingest.failed_paths_of_job(db, JOB, frozenset({"timeout"})) == {"/a/blank.pdf": "no_chunks", "/a/geheim.doc": "encrypted"}
+    assert await ingest.failed_paths_of_job(db, JOB, ingest.retry_error_types({"retry_errors": True})) == {
+        "/a/slow.pdf": "timeout", "/a/blank.pdf": "no_chunks", "/a/geheim.doc": "encrypted"}
     assert await ingest.failed_paths_of_job(None, JOB) == {}
     assert await ingest.failed_paths_of_job(db, None) == {}
 

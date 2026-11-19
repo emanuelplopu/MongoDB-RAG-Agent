@@ -22,16 +22,24 @@ from typing import Optional, Tuple
 __all__ = [
     "EMPTY_PLACEHOLDER_PREFIX",
     "EMPTY_PLACEHOLDER_PREFIXES",
+    "ENCRYPTED_ERROR_TYPE",
+    "ENCRYPTED_MARKER",
     "ERROR_PLACEHOLDER_PREFIXES",
     "MEDIA_PLACEHOLDER_ERROR_MARKERS",
     "MEDIA_PLACEHOLDER_PREFIXES",
     "PLACEHOLDER_CONTENT_REGEX",
     "PLACEHOLDER_PREFIXES",
+    "placeholder_error_type",
     "placeholder_kind",
 ]
 
 #: Reader placeholders that mean "could not read" (an unreadable file, a missing tool)
 ERROR_PLACEHOLDER_PREFIXES: Tuple[str, ...] = ("[Error:", "[Skipped:")
+#: The cause a reader writes for a file that needs a password (Word, Office packages, PDFs);
+#: the file is recorded with :data:`ENCRYPTED_ERROR_TYPE` instead of ``error`` and no
+#: ``retry_*`` flag redoes it: without the password a retry can only fail the same way
+ENCRYPTED_MARKER = "password-protected"
+ENCRYPTED_ERROR_TYPE = "encrypted"
 #: Reader placeholders that mean "read fine, but there is no text in it"
 EMPTY_PLACEHOLDER_PREFIX = "[Document:"
 #: The same, including e-mails without a body
@@ -80,3 +88,15 @@ def placeholder_kind(content: Optional[str]) -> Optional[str]:
     if is_media or text.startswith(EMPTY_PLACEHOLDER_PREFIXES):
         return "empty"
     return None
+
+
+def placeholder_error_type(content: Optional[str]) -> str:
+    """The ``error_type`` to record for an error placeholder: ``"encrypted"`` or ``"error"``.
+
+    ``[Error: Could not read file x.doc (password-protected Word document)]`` is a final
+    outcome, not a failed attempt: the 10 such Word files and the password-protected PDFs
+    of one corpus were retried with every ``retry_errors`` run and failed every time
+    (``docs/26-FORMAT_EDGE_AUDIT.md``). They are counted on their own and left alone.
+    """
+    text = (content or "").strip()
+    return ENCRYPTED_ERROR_TYPE if ENCRYPTED_MARKER in text[:_ERROR_PLACEHOLDER_MAX_CHARS] else "error"
