@@ -26,6 +26,7 @@ import {
   WrenchScrewdriverIcon,
 } from '@heroicons/react/24/outline'
 import { documentsApi, ingestionApi, Document, DocumentListResponse, FolderInfo, FoldersResponse, SortField, SortOrder, MetadataRebuildStatus } from '../api/client'
+import { useAuth } from '../contexts/AuthContext'
 
 // Types for folder tree
 interface TreeNode {
@@ -158,6 +159,9 @@ function FolderNode({ node, style, dragHandle }: NodeRendererProps<TreeNode>) {
 
 export default function DocumentsPage() {
   const { t } = useTranslation()
+  const { user } = useAuth()
+  // Deleting documents and repairing metadata are admin-only on the API (403 otherwise).
+  const canManageDocuments = user?.is_admin === true
   const [allDocuments, setAllDocuments] = useState<Document[]>([])
   const [folderData, setFolderData] = useState<FoldersResponse | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -588,7 +592,7 @@ export default function DocumentsPage() {
             </div>
 
             {/* Rebuild Metadata Button */}
-            {(docsWithZeroChunks > 0 || isRebuilding) && (
+            {canManageDocuments && (docsWithZeroChunks > 0 || isRebuilding) && (
               <button
                 onClick={handleStartRebuild}
                 disabled={isRebuilding}
@@ -729,14 +733,16 @@ export default function DocumentsPage() {
                     >
                       <div className="relative">
                         {getFileIcon(doc.source || doc.title)}
-                        <div className="absolute -top-1 -right-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            onClick={(e) => handleDelete(doc.id, e)}
-                            className="p-1 bg-red-100 dark:bg-red-900/50 rounded-full hover:bg-red-200 dark:hover:bg-red-900"
-                          >
-                            <TrashIcon className="h-3 w-3 text-red-600" />
-                          </button>
-                        </div>
+                        {canManageDocuments && (
+                          <div className="absolute -top-1 -right-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              onClick={(e) => handleDelete(doc.id, e)}
+                              className="p-1 bg-red-100 dark:bg-red-900/50 rounded-full hover:bg-red-200 dark:hover:bg-red-900"
+                            >
+                              <TrashIcon className="h-3 w-3 text-red-600" />
+                            </button>
+                          </div>
+                        )}
                       </div>
                       <span className="mt-2 text-xs text-center text-primary-900 dark:text-gray-200 line-clamp-2 w-full">
                         {doc.title}
@@ -856,13 +862,15 @@ export default function DocumentsPage() {
                       {formatDate(doc.created_at)}
                     </td>
                     <td className="px-3 py-2 text-right">
-                      <button
-                        onClick={(e) => handleDelete(doc.id, e)}
-                        className="p-1.5 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors opacity-0 group-hover:opacity-100"
-                        title="Delete"
-                      >
-                        <TrashIcon className="h-4 w-4" />
-                      </button>
+                      {canManageDocuments && (
+                        <button
+                          onClick={(e) => handleDelete(doc.id, e)}
+                          className="p-1.5 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors opacity-0 group-hover:opacity-100"
+                          title="Delete"
+                        >
+                          <TrashIcon className="h-4 w-4" />
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

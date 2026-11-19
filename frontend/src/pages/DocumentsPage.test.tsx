@@ -105,6 +105,12 @@ vi.mock('react-arborist', () => ({
   NodeRendererProps: {},
 }))
 
+const authState: { user: { is_admin: boolean } | null } = { user: { is_admin: true } }
+
+vi.mock('../contexts/AuthContext', () => ({
+  useAuth: () => authState,
+}))
+
 vi.mock('../api/client', () => ({
   documentsApi: {
     list: (...args: unknown[]) => listMock(...args),
@@ -266,6 +272,7 @@ describe('DocumentsPage', () => {
     deleteMock.mockReset()
     getMetadataRebuildStatusMock.mockReset()
     startMetadataRebuildMock.mockReset()
+    authState.user = { is_admin: true }
 
     getFoldersMock.mockResolvedValue(foldersFixture)
     listMock.mockResolvedValue(listResponse(rootDocuments))
@@ -290,6 +297,17 @@ describe('DocumentsPage', () => {
   afterEach(() => {
     vi.useRealTimers()
     vi.unstubAllGlobals()
+  })
+
+  it('hides the delete and repair controls from users who are not admins', async () => {
+    authState.user = { is_admin: false }
+    getMetadataRebuildStatusMock.mockResolvedValue({ status: null, running: false })
+
+    renderPage()
+
+    expect(await screen.findByText('Quarterly Report')).toBeInTheDocument()
+    expect(screen.queryByTitle('Delete')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Fix 1 docs/i })).not.toBeInTheDocument()
   })
 
   it('renders folders, documents, and completed rebuild status on initial load', async () => {
