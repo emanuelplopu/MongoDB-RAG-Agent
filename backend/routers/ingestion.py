@@ -1520,7 +1520,8 @@ async def run_ingestion(
 async def start_ingestion(
     request_obj: Request,
     request: IngestionStartRequest,
-    background_tasks: BackgroundTasks
+    background_tasks: BackgroundTasks,
+    _admin: UserResponse = Depends(require_admin),
 ):
     """
     Start document ingestion.
@@ -1729,7 +1730,7 @@ async def get_job_status(request: Request, job_id: str):
 
 
 @router.post("/cancel/{job_id}", response_model=SuccessResponse)
-async def cancel_ingestion(request: Request, job_id: str):
+async def cancel_ingestion(request: Request, job_id: str, _admin: UserResponse = Depends(require_admin)):
     """
     Cancel a running ingestion job.
     
@@ -2112,7 +2113,7 @@ async def _run_metadata_rebuild(db):
 
 
 @router.post("/rebuild-metadata")
-async def start_metadata_rebuild(request: Request):
+async def start_metadata_rebuild(request: Request, _admin: UserResponse = Depends(require_admin)):
     """
     Start async metadata rebuild to fix chunks_count for all documents.
     
@@ -2180,7 +2181,7 @@ async def get_metadata_rebuild_status():
 
 
 @router.delete("/rebuild-metadata")
-async def cancel_metadata_rebuild():
+async def cancel_metadata_rebuild(_admin: UserResponse = Depends(require_admin)):
     """
     Cancel the running metadata rebuild process.
     """
@@ -2197,7 +2198,7 @@ async def cancel_metadata_rebuild():
 
 
 @router.post("/pause", response_model=SuccessResponse)
-async def pause_ingestion(request: Request):
+async def pause_ingestion(request: Request, _admin: UserResponse = Depends(require_admin)):
     """
     Pause the current ingestion job.
     
@@ -2231,7 +2232,7 @@ async def pause_ingestion(request: Request):
 
 
 @router.post("/resume", response_model=SuccessResponse)
-async def resume_ingestion(request: Request):
+async def resume_ingestion(request: Request, _admin: UserResponse = Depends(require_admin)):
     """
     Resume a paused ingestion job.
     """
@@ -2264,7 +2265,7 @@ async def resume_ingestion(request: Request):
 
 
 @router.post("/stop", response_model=SuccessResponse)
-async def stop_ingestion(request: Request):
+async def stop_ingestion(request: Request, _admin: UserResponse = Depends(require_admin)):
     """
     Stop the current ingestion job immediately.
     
@@ -2480,7 +2481,7 @@ async def get_ingestion_logs(since: int = 0, limit: int = 1000):
 
 
 @router.delete("/logs")
-async def clear_logs():
+async def clear_logs(_admin: UserResponse = Depends(require_admin)):
     """Clear all ingestion logs."""
     _ingestion_logs.clear()
     return SuccessResponse(success=True, message="Logs cleared")
@@ -2761,7 +2762,7 @@ async def get_document(request: Request, document_id: str):
 
 
 @router.delete("/documents/{document_id}", response_model=SuccessResponse)
-async def delete_document(request: Request, document_id: str):
+async def delete_document(request: Request, document_id: str, _admin: UserResponse = Depends(require_admin)):
     """Delete a document and its chunks."""
     db = request.app.state.db
     
@@ -3063,7 +3064,7 @@ async def get_document_full_info(request: Request, document_id: str):
 
 
 @router.post("/setup-indexes", response_model=SuccessResponse)
-async def setup_indexes(request: Request):
+async def setup_indexes(request: Request, _admin: UserResponse = Depends(require_admin)):
     """
     Setup MongoDB search indexes.
     
@@ -3165,7 +3166,7 @@ async def get_failed_documents_summary(request: Request):
 
 
 @router.post("/failed-documents/{doc_id}/resolve")
-async def resolve_failed_document(request: Request, doc_id: str):
+async def resolve_failed_document(request: Request, doc_id: str, _admin: UserResponse = Depends(require_admin)):
     """Mark a failed document as resolved (manually handled)."""
     db = request.app.state.db.db
     
@@ -3181,7 +3182,7 @@ async def resolve_failed_document(request: Request, doc_id: str):
 
 
 @router.delete("/failed-documents/{doc_id}")
-async def delete_failed_document(request: Request, doc_id: str):
+async def delete_failed_document(request: Request, doc_id: str, _admin: UserResponse = Depends(require_admin)):
     """Delete a failed document record."""
     db = request.app.state.db.db
     
@@ -3196,7 +3197,8 @@ async def delete_failed_document(request: Request, doc_id: str):
 @router.delete("/failed-documents")
 async def clear_failed_documents(
     request: Request,
-    resolved_only: bool = True
+    resolved_only: bool = True,
+    _admin: UserResponse = Depends(require_admin),
 ):
     """Clear failed document records."""
     db = request.app.state.db.db
@@ -3523,7 +3525,7 @@ async def get_analytics_timeline(
 
 
 @router.delete("/analytics/clear")
-async def clear_analytics_data(request: Request, older_than_days: int = 30):
+async def clear_analytics_data(request: Request, older_than_days: int = 30, _admin: UserResponse = Depends(require_admin)):
     """Clear old analytics data."""
     db = request.app.state.db.db
     
@@ -3782,7 +3784,7 @@ async def get_job_failed_documents(
 
 
 @router.delete("/jobs/{job_id}")
-async def delete_job(request: Request, job_id: str):
+async def delete_job(request: Request, job_id: str, _admin: UserResponse = Depends(require_admin)):
     """
     Delete a job and all its related data (stats, failed documents, logs).
     """
