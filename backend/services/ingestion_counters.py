@@ -48,6 +48,9 @@ def apply_stats_counts(
     baseline = baseline or {}
     for error_type, field in JOB_COUNTER_FIELDS.items():
         job_state[field] = int(baseline.get(error_type, 0) or 0) + int(counts.get(error_type, 0) or 0)
+    # Password-protected files (``encrypted``, never retried) are failed files like any
+    # other read error for the job's counters; ``failed_documents.error_type`` tells them apart
+    job_state["error_files"] = int(job_state["error_files"]) + int(baseline.get("encrypted", 0) or 0) + int(counts.get("encrypted", 0) or 0)
     job_state["failed_files"] = (
         int(job_state["timeout_files"]) + int(job_state["error_files"]) + int(job_state["no_chunks_files"])
     )
