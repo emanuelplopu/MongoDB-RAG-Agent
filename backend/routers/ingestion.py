@@ -1056,6 +1056,8 @@ async def run_ingestion(
         "timeout_files": 0,  # Files that timed out
         "error_files": 0,  # Files with processing errors
         "media_deferred_files": 0,  # Audio/video left to a media run (retry_media)
+        "images_without_text": 0,  # Images whose OCR found no text (not failures)
+        "empty_files": 0,  # Files without any text (not failures)
         "avg_processing_time_ms": 0.0,
         "total_size_bytes": 0,
         "files_per_hour": 0.0,
@@ -1367,9 +1369,11 @@ async def run_ingestion(
             1 for r in results 
             if r.errors and len(r.errors) > 0 and "Duplicate of:" in r.errors[0]
         )
+        # A file read fine but without text (a photo, an empty attachment stub) is not a failure
         actual_failures = sum(
-            1 for r in results 
+            1 for r in results
             if r.errors and len(r.errors) > 0 and "Duplicate of:" not in r.errors[0]
+            and not getattr(r, "no_text", None)
         )
         
         # Calculate extended metrics from ingestion_stats
@@ -1401,6 +1405,8 @@ async def run_ingestion(
             timeout_files=extended_metrics.get("timeout", 0),
             error_files=extended_metrics.get("error", 0),
             media_deferred_files=extended_metrics.get("media_deferred", 0),
+            images_without_text=extended_metrics.get("image_no_text", 0),
+            empty_files=extended_metrics.get("empty_file", 0),
             avg_processing_time_ms=extended_metrics.get("avg_processing_time_ms", 0),
             total_size_bytes=extended_metrics.get("total_size_bytes", 0),
             files_per_hour=files_per_hour,
@@ -1848,6 +1854,8 @@ async def list_ingestion_runs(
             timeout_files=doc.get("timeout_files", 0),
             error_files=doc.get("error_files", 0),
             media_deferred_files=doc.get("media_deferred_files", 0),
+            images_without_text=doc.get("images_without_text", 0),
+            empty_files=doc.get("empty_files", 0),
             avg_processing_time_ms=doc.get("avg_processing_time_ms", 0.0),
             total_size_bytes=doc.get("total_size_bytes", 0),
             files_per_hour=doc.get("files_per_hour", 0.0),
