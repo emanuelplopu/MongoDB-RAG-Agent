@@ -355,3 +355,82 @@ latter as each file is indexed (`docs/27`, "an indexed file resolves its open fa
 rows"); the owner files are no longer discovered, so `quellexctl ingest tidy-failures` now
 resolves their records too (`sidecar_files` in `backend/services/failed_documents_tidy.py`:
 `~$` owner files and `._` forks, "never a document").
+
+## Follow-up 2026-11-19: PowerPoint decks (`.pptx`, legacy `.ppt`, cut-off packages)
+
+**State before.** The four shares hold 17 `.pptx` and 10 `.ppt` files. After the full ingest
+and the 2026-11-11 retry run one `.pptx` was indexed; 2 `.pptx` and all 10 `.ppt` were
+`error: Could not read file`; 2 `.pptx` were recorded as `hang` and 13 as `hang_suspect` by
+the ingestion watch of 2026-11-02/03, when the API main thread froze after a conversion. The
+freeze was later traced to docling-core's table column split on the event loop (`SETO.xlsx`,
+PR #37, live since 2026-11-11), so the PowerPoint records were over-cautious; whether Docling's
+`.pptx` backend and the HybridChunker handle these decks had never been checked.
+
+**Measured 2026-11-19** with the deployed worker image (`recallhub-ingestion-worker:latest`,
+Docling 2.142, `create_document_converter()` + `export_document_markdown` + the pipeline's
+`DoclingHybridChunker`, run with `docker run --volumes-from rag-ingestion-worker` against the
+live shares, read-only):
+
+| deck (17 `.pptx`) | size | convert | chunk | chunks | finding |
+|---|--:|--:|--:|--:|---|
+| `StepDa_Obsorge/Unterlagen/Besuchszeitenaufstellung.pptx` (`hang`) | 0.7 MB | 0.3 s | 0.04 s | 2 | text + 5 pictures; the "hang" was the SETO.xlsx chunking, not this deck |
+| `StepDa_Obsorge/Unterlagen/Brainstorming.pptx` | 53 KB | 0.1 s | 0.1 s | 6 | indexed already |
+| `SMK-CA/Attachements/Lending StructureDFHAT - Kopie*.pptx` (3 copies) | 44 KB | 0.04 s | 0.01 s | 1 | one text slide |
+| `literatur/.../Legal Tech Präsentation*.pptx` (2), `Studying in the US.pptx` | 2-5 MB | 1.3-2.0 s | 0.04 s | 6-10 | clean titles, lists |
+| `literatur/.../Wien_Blockchain_nov_2017.pptx` (2 copies) | 40 MB | 19 s | 0.04 s | 4 | 28 pictures; the time is Docling loading them |
+| `P-4-12/Fotos/2012-11-02 Fotos Gericht.pptx` | 3 MB | 4.5 s | 0.02 s | 2 | captions + 22 photos |
+| `GraWe_AvirSt/GraWe - Bilder.pptx` | 0.8 MB | 1.3 s | - | **0** | 14 photos, no text item: `<!-- image -->` only |
+| `P-102-10/06-03-2012.pptx`, `P-102-10/Fotos/06-03-2012.pptx` (`hang`) | 0.7 MB | 1.0 s | - | **0** | one photo each |
+| `BRUNNER-NÖBAU/Attachements/Besichtigung_UNIQUE_DOCNUMBER%….pptx` | **52 MB** | 11.9 s | - | **0** | 10 photographed letters of the building authority, no text item |
+| `Opening Statements/5.5millionopening.pptx`, `…/Safety Rule for Doctors.pptx` (`error`) | 224 KiB each | 0.02 s | - | - | **not a zip**: both are the same package cut off at 229,376 bytes (56 x 4 KiB, an interrupted copy) inside `ppt/media/image2.jpeg`; all 18 slide parts before the cut are complete |
+
+All 15 intact decks convert in 0.04-19 s and chunk in under 0.2 s: nothing in this set hangs
+the chunker. Four decks are picture-only (zero chunks: Docling's `.pptx` backend does not OCR
+pictures, so they would end as `no_chunks`).
+
+The 10 `.ppt` files (`Präsentation High End Poker.ppt`, `PräsentationÄnderungen.ppt`,
+`Sponsoring - Rechtsfragen.ppt`, `Präsentation Jahresabschluß 2002.ppt`, the two IIR
+`Praesentation_06102016*.ppt`, four `P-28-16/Fotos/vorlagefotos*.ppt`) all fail in Docling
+with `MsPowerpointDocumentBackend could not load document` in 0.02-0.13 s: `.ppt` was in the
+pipeline's Docling format list, but Docling reads `.pptx` only and the image has no LibreOffice.
+Their OLE2 `PowerPoint Document` streams hold 3-692 text atoms (0-78 K characters) and the
+`Pictures` streams 0-24 JPEG/PNG pictures; `Sponsoring - Rechtsfragen.ppt` was saved
+incrementally (5 `UserEditAtom`s, i.e. several copies of edited slides in the stream).
+
+**Fix** (`src/ingestion/office_fallbacks.py`, wired in `src/ingestion/ingest.py`; tests
+`backend/tests/test_powerpoint_readers.py`, OLE container faked, Docling stubbed):
+
+| case | reader | what it does | recorded as |
+|---|---|---|---|
+| legacy `.ppt` (OLE2) | `ppt_binary_text` via `_read_ppt_file` | walks the `PowerPoint Document` record stream for `TextCharsAtom` (UTF-16) / `TextBytesAtom` (cp1252) below the document's slide lists and the slide and notes containers; follows `Current User` → `UserEditAtom` chain → persist directories, so only the current copy of each object and only the slides the document's slide lists reference are read (title masters are slide containers too: without this, "Hier klicken, um Master-Titelformat zu bearbeiten" and the `*` slide-number placeholders leaked into 3 of the 10 decks); `\r`/`\v` become line breaks, Wingdings bullets (private-use code points) are dropped; encrypted decks (`Current User` token or `CryptSession10Container`) are an error naming the reason; a `.pptx` package under a `.ppt` name goes to Docling through a renamed copy | `doc_reader: ppt_binary` (conversion note) |
+| `.ppt` without any text (photo decks) | `ppt_binary_pictures` + `_ocr_picture_blobs` | the JPEG/PNG/TIFF blips of the `Pictures` stream (OfficeArt record header, 16- or 32-byte UID, tag byte) go through the image reader, like the pictures of a picture-only `.docx` | `ocr_fallback: office_pictures` |
+| picture-only `.pptx` | `_ocr_office_pictures` (the `.docx` path, now also for `.pptx`) | the pictures under `ppt/media/` are OCRed when the Markdown has no text | `ocr_fallback: office_pictures` |
+| `.pptx` / `.docx` cut off by an interrupted copy | `truncated_ooxml_text` via `_salvage_truncated_package` | when Docling rejects the file and `zipfile.is_zipfile` is false, the local file headers are walked, every member before the cut is inflated on its own, and the paragraphs of the surviving `ppt/slides/slideN.xml` (in slide order, `## Slide N` headings) or `word/document.xml` are returned; a complete package Docling rejects keeps its own cause | `ooxml_repair: truncated` |
+
+**Measured after the fix** (same image, the worktree's `src/` mounted over the image's;
+`_read_document` + chunker): every `.ppt` reads in 0.02-0.2 s; `Praesentation_06102016_.ppt`
+77,944 characters / 105 chunks, `Praesentation_06102016.ppt` 67,916 / 93,
+`Sponsoring - Rechtsfragen.ppt` 20,365 / 29 (§ 153 ff. StGB, no duplicate slides),
+`Präsentation High End Poker.ppt` 4,163 / 6, `Jahresabschluß 2002.ppt` 1,951 / 3,
+`PräsentationÄnderungen.ppt` 513 / 1 (a table, cell per line), the three captioned
+`vorlagefotos*.ppt` 26-78 characters / 1 chunk each (the photos of models carry no text);
+`VorlagePortraits Anfang_42178.ppt` has no text at all and one 2 MB PNG that OCR reads as
+nothing: `[Document: … - no text content]`, i.e. empty, not an error. The two cut-off decks
+yield 2,389 characters / 4 chunks (18 slides of an American opening statement). Of the four
+picture-only `.pptx`, the 52 MB `Besichtigung` deck gives 19,191 characters / 26 chunks of
+OCR text from the photographed letters in 93 s; `GraWe - Bilder.pptx` (14 photos, 33 s) and
+the two `06-03-2012.pptx` (one photo, 5 s) have no text in their pictures and keep their
+`<!-- image -->` Markdown, so they still end as `no_chunks`, which is correct for a photo album.
+
+Not covered on purpose: speaker notes of `.pptx` (Docling leaves them out; the `.ppt` reader
+includes notes containers), embedded OLE objects and charts in either format, `.pps`/`.pot`
+(none on the shares), and a `.ppt` whose `Current User` stream is missing or damaged (every
+slide and notes container is read then, so an incrementally saved deck may repeat a slide and
+a title master's placeholder text may appear).
+
+**Live retry.** The 13 `hang_suspect` and 2 `hang` `.pptx` records of job
+`b98d150e-8516-4ad0-bd72-bd298d14d92d` are to be marked `resolved: true` and the job re-queued
+as a resume without retry flags (the worker then re-reads those 15 files with the deployed
+image: the 11 text decks index, the 4 picture-only ones end as `no_chunks` until this change is
+deployed); the `.ppt` and cut-off `.pptx` `error` records need the new build and a retry run
+with `retry_errors`.

@@ -48,6 +48,8 @@ from src.ingestion.chunker import ChunkingDeadlineExceeded
 from src.ingestion.ocr_repair import repair_docling_document, repair_ocr_text
 from src.ingestion.indexes import ensure_ingestion_indexes
 from src.ingestion.office_fallbacks import (
+    PptBinaryError,
+    TruncatedPackageError,
     WORD2_MAGIC,
     WordBinaryError,
     docx_plain_text,
@@ -58,6 +60,9 @@ from src.ingestion.office_fallbacks import (
     ole_embedded_images,
     ooxml_main_part_kind,
     ooxml_media_images,
+    ppt_binary_pictures,
+    ppt_binary_text,
+    truncated_ooxml_text,
     word2_binary_text,
     word_binary_text,
 )
@@ -3654,6 +3659,10 @@ class DocumentIngestionPipeline:
         if file_ext == '.doc':
             return self._read_doc_file(file_path)
 
+        # PowerPoint 97-2003: Docling reads .pptx only (docs/26, PowerPoint follow-up)
+        if file_ext == '.ppt':
+            return self._read_ppt_file(file_path)
+
         # Audio formats - transcribe with Whisper ASR (docs/04, "Media transcription")
         if file_ext in AUDIO_EXTENSIONS:
             # Returns tuple: (markdown_content, docling_document)
@@ -3731,7 +3740,7 @@ class DocumentIngestionPipeline:
 
         # Docling-supported formats (convert to markdown); legacy .xls is read above
         docling_formats = [
-            '.pdf', '.docx', '.pptx', '.ppt',
+            '.pdf', '.docx', '.pptx',
             '.xlsx', '.html', '.htm',
             '.md', '.markdown'  # Markdown files for HybridChunker
         ]
@@ -3779,9 +3788,9 @@ class DocumentIngestionPipeline:
                     f"to markdown"
                 )
 
-                # A Word file that holds only pictures (photographed exhibits, tickets,
-                # screenshots): the text is in the pictures
-                if file_ext == '.docx' and not markdown_has_text(markdown_content):
+                # A Word file or a slide deck that holds only pictures (photographed
+                # exhibits, tickets, screenshots, photo decks): the text is in the pictures
+                if file_ext in ('.docx', '.pptx') and not markdown_has_text(markdown_content):
                     picture_text = self._ocr_office_pictures(file_path)
                     if picture_text:
                         return (picture_text, None)
@@ -3807,6 +3816,11 @@ class DocumentIngestionPipeline:
                             return (f.read(), None)
                     except Exception:  # noqa: BLE001 - reported with the conversion's cause below
                         pass
+                # A package cut off by an interrupted copy: the parts before the cut still read
+                if file_ext in ('.pptx', '.docx'):
+                    salvaged = self._salvage_truncated_package(file_path, e)
+                    if salvaged is not None:
+                        return (salvaged, None)
                 cause = (pdf_open_problem(file_path) if file_ext == '.pdf' else None) or read_error_cause(e)
                 return (
                     f"[Error: Could not read file {os.path.basename(file_path)} ({cause})]",
@@ -3900,12 +3914,27 @@ class DocumentIngestionPipeline:
         through the image reader, so the noise gate and the OCR settings apply.
 
         Args:
-            file_path: The ``.docx`` file.
+            file_path: The ``.docx`` / ``.pptx`` file.
 
         Returns:
             The pictures' text separated by rules; empty when no picture has text.
         """
         return self._ocr_pictures(ooxml_media_images(file_path), os.path.basename(file_path), "office_pictures")
+
+    def _ocr_picture_blobs(self, basename: str, pictures: List[tuple[str, bytes]]) -> str:
+        """OCR text of ``pictures`` (``(name, bytes)``) of the document ``basename``, in that order.
+
+        Each picture goes through the image reader, so the noise gate and the OCR settings
+        apply. Pictures without text (photos, logos) add nothing.
+
+        Args:
+            basename: The document's file name, for the log.
+            pictures: The pictures' names (their suffix picks the image reader) and bytes.
+
+        Returns:
+            The pictures' text separated by rules; empty when no picture has text.
+        """
+        return self._ocr_pictures(pictures, basename, "office_pictures")
 
     def _ocr_pictures(self, images: List[Tuple[str, bytes]], basename: str, fallback: str) -> str:
         """OCR text of ``images`` (``(name, bytes)`` pairs); ``fallback`` is recorded as ``ocr_fallback``."""
@@ -3930,6 +3959,36 @@ class DocumentIngestionPipeline:
             logger.info(f"{basename}: text of {len(parts)} embedded picture(s) read with OCR")
             note_conversion(ocr_fallback=fallback)
         return "\n\n---\n\n".join(parts)
+
+    def _salvage_truncated_package(self, file_path: str, error: BaseException) -> Optional[str]:
+        """Text of the parts that survive in a cut-off Office package; ``None`` when it is not one.
+
+        Called when Docling rejects a ``.pptx`` / ``.docx``. A package with a central
+        directory is not truncated, so its rejection keeps its own cause.
+
+        Args:
+            file_path: The rejected file.
+            error: Docling's exception, for the log.
+
+        Returns:
+            The salvaged text, or ``None`` when the file is a complete zip or nothing survived.
+        """
+        import zipfile
+
+        if zipfile.is_zipfile(file_path):
+            return None
+        basename = os.path.basename(file_path)
+        try:
+            text, note = truncated_ooxml_text(file_path)
+        except TruncatedPackageError as exc:
+            logger.warning(f"{basename} is a cut-off package and nothing could be salvaged: {exc}")
+            return None
+        except Exception as exc:  # noqa: BLE001 - the salvage must not hide the conversion's cause
+            logger.warning(f"{basename}: salvage of the cut-off package failed: {exc}")
+            return None
+        logger.warning(f"{basename} is a cut-off package (Docling: {read_error_cause(error)}); salvaged {note}")
+        note_conversion(ooxml_repair="truncated")
+        return text
 
     # -- Legacy and container formats (law-firm corpora, docs/26) ------------------------
 
@@ -4402,6 +4461,52 @@ class DocumentIngestionPipeline:
         parts = [part for part in (text, picture_text) if part]
         if parts:
             return ("\n\n---\n\n".join(parts), None)
+        return (f"[Document: {basename} - no text content]", None)
+
+    def _read_ppt_file(self, file_path: str) -> tuple[str, Optional[Any]]:
+        """Text of a PowerPoint 97-2003 ``.ppt`` file, by content rather than by name.
+
+        Docling reads ``.pptx`` only, so an OLE2 deck goes to the record-stream reader
+        (``ppt_binary_text``); a ``.pptx`` package under a ``.ppt`` name goes to Docling
+        through a renamed copy. A deck without any text (photo decks of a client's
+        ``Fotos`` folder) has its pictures read with OCR, like a picture-only ``.docx``.
+
+        Args:
+            file_path: Path to the file.
+
+        Returns:
+            Tuple of (text, None), or of (markdown, DoclingDocument) for a ``.pptx``
+            package; an ``[Error: …]`` placeholder when unreadable.
+        """
+        basename = os.path.basename(file_path)
+        try:
+            with open(file_path, "rb") as handle:
+                magic = handle.read(8)
+        except OSError as exc:
+            logger.error(f"Failed to open {basename}: {exc}")
+            return (f"[Error: Could not read file {basename} ({read_error_cause(exc)})]", None)
+        if magic[:4] == _ZIP_MAGIC:
+            logger.info(f"{basename} is a .pptx package under a .ppt name")
+            return self._read_renamed_office_file(file_path, ".pptx")
+        if magic != _OLE2_MAGIC:
+            logger.warning(f"{basename} is neither a PowerPoint 97-2003 file nor a .pptx package")
+            return (f"[Error: Could not read file {basename} (not a PowerPoint file)]", None)
+        try:
+            text = ppt_binary_text(file_path)
+        except PptBinaryError as exc:
+            logger.warning(f"PowerPoint binary reader could not read {basename}: {exc}")
+            return (f"[Error: Could not read file {basename} ({exc})]", None)
+        except Exception as exc:  # noqa: BLE001 - a damaged container must not stop the run
+            logger.warning(f"PowerPoint binary reader failed for {basename}: {exc}")
+            return (f"[Error: Could not read file {basename} ({read_error_cause(exc)})]", None)
+        note_conversion(doc_reader="ppt_binary")
+        if text:
+            logger.info(f"Read {basename} with the PowerPoint binary reader ({len(text)} characters)")
+            return (text, None)
+        picture_text = self._ocr_picture_blobs(basename, ppt_binary_pictures(file_path))
+        if picture_text:
+            return (picture_text, None)
+        logger.warning(f"PowerPoint file has no text content: {basename}")
         return (f"[Document: {basename} - no text content]", None)
 
     def _read_msg_file(self, file_path: str) -> tuple[str, Optional[Any]]:
