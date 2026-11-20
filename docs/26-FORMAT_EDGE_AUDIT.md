@@ -247,3 +247,111 @@ OCR already ran on that bitmap and found nothing; a second pass with the same en
 cost time), the CCITT fax scans of F30, and files whose Docling conversion fails outright.
 Tests: `backend/tests/test_scan_text_fallback.py` (synthetic equivalents of the sample files;
 Tesseract mocked, rendering and chunking real).
+
+## Follow-up 2026-11-19: the Word files that stayed unreadable, by content
+
+**Finding.** After the full ingest and the retry run of 2026-11-11, `failed_documents` of the
+diejuristin index held 1,805 distinct unresolved `error` records with a Word extension
+(`.doc` 1,050, `.docx` 718, `.dot` 24, `.wbk` 8, `.dotx` 5; 1,778 written by the retry run,
+27 in October). The messages were "legacy .doc format requires antiword" (1,067: the pre-check
+of the build that ran the retry, removed since) and "Could not read file <name>" (723) and said
+nothing about the files. The retry run used the build of 2026-11-11 08:54, so the readers of
+cycle 1 (`docs/27`, PR #39, deployed 2026-11-12) never saw these files.
+
+**Method.** All 1,805 paths were classified by their first bytes and container structure inside
+the worker image (`docker run --volumes-from rag-ingestion-worker`, read-only), then every file
+that is not an owner file (1,078) was read with the deployed build's `_read_document`, and the
+ones that still failed or returned nothing (144) again with this branch's `src/` mounted into
+the same image. One pass each, no client file copied.
+
+| content (sniffed) | files | under | deployed build (PR #39) | this branch |
+|---|---|---|---|---|
+| `~$` Office owner files, 162 bytes (719 present, 8 deleted since) | 727 | `.doc` 500, `.docx` 204, `.dot` 10, `.dotx` 5 | skipped at discovery (`is_sidecar_file`); the records stay | same |
+| `.docx` packages whose member names use backslashes | 482 | `.docx` | read, 482 of 482 | same |
+| OLE2 Word binaries (398 Word 6/95, 70 Word 97, 1 Word 2003) | 469 | `.doc` 452, `.dot` 14, `.wbk` 3 | 392 read; 66 "no text" (antiword exit 0, empty); 11 `UnicodeDecodeError` (a stray byte in antiword's UTF-8) | 11 decode errors read; 6 of the 66 read from their pictures (three faxes, a Vereinsregisterauszug, a form, a letter); the other 60 are empty (see below) |
+| OLE2 Word 97 binaries named `.docx` (Rangordnungserklärungen of the practice software) | 17 | `.docx` | Docling: "could not load document" | `antiword`, 17 of 17 |
+| plain text (e-mail notes, "An: … Betreff: …") | 58 | `.doc` 53, `.wbk` 5 | read | same |
+| `.docx` packages named `.doc` | 14 | `.doc` | 11 read; 3 are template packages (`wordprocessingml.template`, python-docx: "is not a Word file") | 14 of 14 |
+| `.docx` packages Docling rejects: a list definition with an empty `w:start` value, `int('')` in `msword_backend._get_start_value` ("Pipeline SimplePipeline failed"; WEKA and Forum Media templates) | 4 | `.docx` | error | paragraphs from `document.xml`, 4 of 4 |
+| RTF | 5 | `.doc` | read | same |
+| HTML | 2 | `.doc` | read | same |
+| password-protected Word binaries (FIB flag `fEncrypted`) | 7 | `.doc` | error ("Encrypted documents are not supported"), retried by every `retry_errors` run | `encrypted`, never retried |
+| password-protected packages (`EncryptedPackage` stream: DRM and strong encryption) | 3 | `.docx` | error (a generic `ConversionError`) | `encrypted`, never retried |
+| PDFs (two Grundbuchsauszüge, a scanned letter) | 3 | `.doc` | error ("not a Word document and not text") | PDF reader, 3 of 3 (one is a 59 s OCR) |
+| JPEG scans (LEAD Technologies; UVS letters, a payment slip) | 3 | `.doc` | error | image OCR, 3 of 3 |
+| Word 2.x for Windows (bare FIB `\xdb\xa5`, Pittner Archiv 1995/96) | 3 | `.doc` | read as text with a prefix of formatting bytes | `word2_binary_text`, clean text |
+| Outlook messages (OLE2 `__substg1.0_*` streams) | 2 | `.doc`, `.docx` | error | `.msg` reader, 2 of 2 |
+| owner-file content that lost its `~$` prefix | 2 | `.doc`, `.docx` | one stored as the text "eggereggerMingLiUSimSun…", one error | empty document |
+| Excel 97 workbook (`Workbook` stream, 2.1 MB) | 1 | `.doc` | error | `.xls` reader |
+| truncated OLE2 file (32,768 bytes, "incomplete OLE sector"; two copies of one file) | 2 | `.doc` | error | error naming the truncation |
+| Microsoft Works-style container (streams `CONTENTS`, `SPELLING`) | 1 | `.doc` | error | error naming the streams |
+
+Of the 1,078 real files the deployed build therefore already reads 954; what it does not read is
+the 17 Word binaries named `.docx`, the 11 antiword outputs with a stray byte, the 3 template
+packages, the 4 WEKA packages, the 3 PDFs, the 3 scans, the 2 messages, the workbook, the 10
+password-protected files, the 2 truncated copies, the Works file and the 2 owner contents, and it
+returns no text for 66 Word binaries and junk for the 3 Word 2 files.
+
+**Fix** (`src/ingestion/ingest.py`, `src/ingestion/office_fallbacks.py`,
+`src/ingestion/placeholders.py`, `backend/services/ingestion_counters.py`; tests in
+`backend/tests/test_word_content_dispatch.py`, synthetic fixtures only):
+
+- *Content before extension.* `_read_document` sniffs every Word-named file
+  (`sniff_container`, `_read_word_file_by_content`): a PDF or a picture goes to its reader
+  through a temporary copy with the right suffix (`_read_as_renamed`; the placeholder of a
+  failed read names the original); an OLE2, Word 2 or text file named `.docx`/`.dotx` goes
+  to the `.doc` reader; a zip named `.doc` went there already. A zero-byte file of any type
+  and an owner-file content (`is_office_owner_content`: length byte, ANSI name padded to 54
+  bytes, UTF-16 copy) are empty documents, not errors.
+- *What the OLE2 container holds* (`ole_container_kind`, before antiword runs): `WordDocument`
+  with the encryption flag → password-protected; `EncryptedPackage` → password-protected
+  package; `__substg1.0_*` → the `.msg` reader; `Workbook`/`Book` → the `.xls` reader;
+  `PowerPoint Document`, anything else → an error naming the streams; a container olefile
+  cannot open → an error naming the damage.
+- *antiword's output* is captured as bytes and decoded as UTF-8 with replacement: it lets an
+  unmapped character through as one raw byte (0xED in the 11 court filings), and `text=True`
+  turned that into a failed file.
+- *Word binaries without body text* (`_read_doc_without_body_text`): the text-box story of the
+  piece table (`word_binary_text`, `_main_or_other_stories`: forms and letters laid out in
+  text boxes; the header story is left out, it held "Seite 1 von 1" and letterheads) and the
+  OCR of the JPEG/PNG pictures found in the `WordDocument`, `Data` and `ObjectPool` streams
+  (`ole_embedded_images`, cut at the signatures and end markers, pictures under 2 kB skipped;
+  OCRed like the pictures of a `.docx`, `ocr_fallback: word_binary_pictures`). Both are joined.
+- *Word 2.x* (`word2_binary_text`): the text between `fcMin` and `fcMac` of the bare FIB,
+  cleaned like Word 6 text (`doc_reader: word2_binary`).
+- *Template packages by content type* (`ooxml_main_part_kind`): `_read_renamed_office_file`
+  rewrites the main part's content type whenever the package is a template, whatever the file
+  is called, and normalises backslash member names first; a `.docx` whose package is a
+  template takes the same path.
+- *Docling failure on a Word package* (`_docx_text_fallback`, `docx_plain_text`): the
+  paragraphs, tabs, breaks and table rows of `word/document.xml` are read directly
+  (`doc_reader: docx_xml`, no `DoclingDocument`, so the fallback chunker is used); only when
+  that yields nothing does the conversion error stand, with its cause.
+- *`encrypted` as a countable outcome*: a placeholder whose cause says `password-protected`
+  (Word, Office package, and the PDFs `pdf_open_problem` already named) raises
+  `UnreadableFileError(error_type="encrypted")`; the loop records that type in
+  `ingestion_stats` and `failed_documents`, the job counts it under `error_files`
+  (`apply_stats_counts`), the classification stays `error`, and `failed_paths_of_job` skips
+  it under every `retry_*` flag (`RETRY_FLAG_ERROR_TYPES` has no entry for it). Count them with
+  `db.failed_documents.countDocuments({error_type: "encrypted", resolved: {$ne: true}})`.
+
+**Verified on the real files** (this branch's `src/` mounted into the worker image, the 144
+files the deployed build failed on or returned nothing for): every class above reads as the
+table says; the remaining errors are exactly the 10 password-protected files (now `encrypted`),
+the 2 truncated copies and the Works file. Of the 66 Word binaries without body text, 15 hold
+JPEG/PNG pictures and 6 of them yield OCR text (the other 9 are photos and logos: `fotos
+admond.doc`, `ramhofer.doc`, the `Normal.dot` logos); none has a text-box story (`ccpTxbx` is 0
+throughout, the text-box reader is kept for forms that have one); the 19-24 kB
+`Grundbuchsauszug.doc` / `Firmenbuchauszug.doc` / `Nur Barauslagen.doc` files are empty
+documents (one or two characters in the main story), and the rest are `Normal.dot` templates
+with their backups and letterheads whose only text is the header.
+
+**Not recovered, by design:** the 10 password-protected files (no password), the truncated
+file (its second half is missing), the Works document (no reader), the 8 owner files deleted
+since, and the 60 Word binaries that are empty documents, templates or letterheads (they stay
+`no_chunks`). The 727 owner-file records and the records of the files that
+read fine now are not resolved by this change: a `retry_errors` run on this build resolves the
+latter as each file is indexed (`docs/27`, "an indexed file resolves its open failed_documents
+rows"); the owner files are no longer discovered, so `quellexctl ingest tidy-failures` now
+resolves their records too (`sidecar_files` in `backend/services/failed_documents_tidy.py`:
+`~$` owner files and `._` forks, "never a document").
