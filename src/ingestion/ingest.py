@@ -1439,6 +1439,12 @@ async def failed_paths_of_job(db: Any, job_id: Optional[str], retry_types: froze
     that error type or the record was resolved. A timeout whose retry was still queued when
     the run ended (``retry_pending``) is not a final failure and is attempted again.
 
+    A file with several open records (an October ``no_chunks`` row and the
+    ``image_only_pdf`` row its retry wrote) is judged by its newest record (``failed_at``):
+    that is the outcome of the last attempt, the one a ``retry_*`` flag names. Until
+    2026-11-19 any open record of a non-retried type kept the file out of the queue, and
+    the image-only retry of one corpus skipped 55 of its targets that way.
+
     Args:
         db: The profile's database (``failed_documents`` collection), or ``None``.
         job_id: The job being resumed.
@@ -1446,17 +1452,19 @@ async def failed_paths_of_job(db: Any, job_id: Optional[str], retry_types: froze
     """
     if db is None or not job_id:
         return {}
-    skip: Dict[str, str] = {}
+    newest: Dict[str, Tuple[str, str]] = {}  # file_path -> (failed_at, error_type) of the latest record
     cursor = db["failed_documents"].find(
         {"job_id": job_id, "resolved": {"$ne": True}, "retry_pending": {"$ne": True}},
-        {"file_path": 1, "error_type": 1},
+        {"file_path": 1, "error_type": 1, "failed_at": 1},
     )
     async for doc in cursor:
-        error_type = doc.get("error_type") or "error"
         path = doc.get("file_path")
-        if path and error_type not in retry_types:
-            skip[path] = error_type
-    return skip
+        if not path:
+            continue
+        stamp = str(doc.get("failed_at") or "")
+        if path not in newest or stamp >= newest[path][0]:
+            newest[path] = (stamp, doc.get("error_type") or "error")
+    return {path: error_type for path, (_, error_type) in newest.items() if error_type not in retry_types}
 
 
 def stats_flush_config() -> Tuple[int, float]:
@@ -6830,6 +6838,15 @@ class DocumentIngestionPipeline:
                         {"$set": doc, "$inc": {"attempts": 1}},
                         upsert=True,
                     )
+                # The file's open rows of other types describe earlier attempts: a no_chunks
+                # row left open next to the image_only_pdf row its retry wrote kept the file
+                # out of the next retry run (2026-11-19, 55 files). The newest record is the
+                # outcome of the last attempt; the older ones are closed with that outcome.
+                await failed_collection.update_many(
+                    {"file_path": stat.file_path, "error_type": {"$ne": stat.error_type}, "resolved": {"$ne": True}},
+                    {"$set": {"resolved": True, "resolved_at": failed_at,
+                              "resolution": f"a later attempt ended as {stat.error_type}", "retry_pending": False}},
+                )
                 recorded += 1
             # A file that is in the index now (stored, or a copy of a stored file) has no open
             # failure any more, whichever run or error type recorded it. Until 2026-11-11 only

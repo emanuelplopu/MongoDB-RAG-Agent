@@ -8,6 +8,11 @@ The pipeline now resolves and updates records as it goes
 (``DocumentIngestionPipeline._save_ingestion_stats``); this module cleans up what exists
 (``quellexctl ingest tidy-failures``).
 
+Since 2026-11-19 a file's open records are merged across error types as well: the newest
+record is the outcome of the last attempt, and an older open row of another type (the
+``no_chunks`` row next to the ``image_only_pdf`` row its retry wrote) kept 55 files out
+of a retry run, because the resume's skip list saw the type the run did not retry.
+
 Nothing is deleted: superseded records are marked resolved with a ``resolution`` text, so
 the history of a file stays readable.
 """
@@ -46,7 +51,7 @@ async def tidy_failed_documents(db: Any, *, documents_collection: str = "documen
     """Resolve the open failure records that no longer describe a failure.
 
     Two kinds: records of a file that is in the index (stored by a later attempt), and
-    older records of a file that has a newer record of the same error type.
+    older records of a file that has a newer record, of the same or of another error type.
 
     Args:
         db: The profile's database (PyMongo Async or Motor).
@@ -73,14 +78,19 @@ async def tidy_failed_documents(db: Any, *, documents_collection: str = "documen
     in_index = [row for row in rows if row.get("file_path") in indexed]
     result.indexed_files = len(in_index)
 
-    newest: Dict[Tuple[Any, Any], Dict[str, Any]] = {}
-    repeated: List[Dict[str, Any]] = []
+    newest: Dict[Any, Dict[str, Any]] = {}  # file_path -> its latest open record
+    repeated: List[Dict[str, Any]] = []  # older records of the same file, any error type
+    superseded: List[Dict[str, Any]] = []  # older records of another error type than the newest
     for row in sorted((r for r in rows if r.get("file_path") not in indexed), key=lambda r: str(r.get("failed_at") or "")):
-        key = (row.get("file_path"), row.get("error_type"))
+        key = row.get("file_path")
         if key in newest:
             repeated.append(newest[key])
         newest[key] = row
-    result.repeated_records = len(repeated)
+    for row in repeated:
+        if row.get("error_type") != newest[row.get("file_path")].get("error_type"):
+            superseded.append(row)
+    repeated = [row for row in repeated if row.get("error_type") == newest[row.get("file_path")].get("error_type")]
+    result.repeated_records = len(repeated) + len(superseded)
 
     for row in newest.values():
         error_type = str(row.get("error_type"))
@@ -90,7 +100,16 @@ async def tidy_failed_documents(db: Any, *, documents_collection: str = "documen
         return result
 
     now = datetime.now().isoformat()
-    for group, resolution in ((in_index, "the file is in the index"), (repeated, "repeated record of a later attempt")):
+    groups: List[Tuple[List[Dict[str, Any]], str]] = [
+        (in_index, "the file is in the index"),
+        (repeated, "repeated record of a later attempt"),
+    ]
+    by_outcome: Dict[str, List[Dict[str, Any]]] = {}
+    for row in superseded:
+        by_outcome.setdefault(str(newest[row.get("file_path")].get("error_type")), []).append(row)
+    for outcome, group in sorted(by_outcome.items()):
+        groups.append((group, f"a later attempt ended as {outcome}"))
+    for group, resolution in groups:
         ids = [row["_id"] for row in group]
         for start in range(0, len(ids), _BATCH):
             done = await failed.update_many(
