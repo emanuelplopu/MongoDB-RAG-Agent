@@ -417,7 +417,14 @@ in `src/ingestion/ingest.py`, applied by the pipeline's queue build and by the
 API's `_build_pending_files_queue`), unless the request's `retry_timeouts` /
 `retry_errors` / `retry_no_chunks` / `retry_image_only_pdfs` flag asks for that
 error type or the record was marked resolved. The discovery log line counts them
-as "failed earlier in this job".
+as "failed earlier in this job". A file with open records of several types (an
+October `no_chunks` row and the `image_only_pdf` row the retry of the no-chunks
+class wrote) is judged by its newest record, the outcome of the last attempt:
+until 2026-11-19 any open record of a non-retried type kept the file out of the
+queue, and the image-only retry of one corpus skipped 55 of its 1,742 targets
+that way. The failure writer now closes a file's open rows of other types when
+it records a new outcome ("a later attempt ended as image_only_pdf"), and
+`quellexctl ingest tidy-failures` does the same for the rows that exist.
 
 **Reader placeholders are never stored (F26).** A file neither Docling nor the
 raw-text fallback could read used to be stored as a document whose whole content

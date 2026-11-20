@@ -57,20 +57,23 @@ def _db() -> dict:
 async def test_dry_run_counts_without_changing() -> None:
     db = _db()
     result = await tidy_failed_documents(db)
-    assert (result.open_records, result.indexed_files, result.repeated_records, result.resolved) == (5, 1, 1, 0)
-    assert result.remaining_open == 3 and result.by_error_type == {"error": 1, "no_chunks": 2}
+    assert (result.open_records, result.indexed_files, result.repeated_records, result.resolved) == (5, 1, 2, 0)
+    assert result.remaining_open == 2 and result.by_error_type == {"error": 1, "no_chunks": 1}
     assert [r.get("resolved") for r in db["failed_documents"].rows] == [False, False, False, False, False, True]
 
 
 async def test_apply_resolves_indexed_and_repeated_records_and_keeps_the_newest() -> None:
     db = _db()
     result = await tidy_failed_documents(db, dry_run=False)
-    assert result.resolved == 2 and result.remaining_open == 3
+    assert result.resolved == 3 and result.remaining_open == 2
     rows = {r["_id"]: r for r in db["failed_documents"].rows}
     assert rows[1]["resolved"] is True and rows[1]["resolution"] == "the file is in the index"
     assert rows[2]["resolved"] is True and rows[2]["resolution"] == "repeated record of a later attempt"
-    assert rows[3]["resolved"] is False, "the newest record of the read error stays open"
-    assert rows[4]["resolved"] is False and rows[5]["resolved"] is False, "other error types and files are untouched"
+    assert rows[3]["resolved"] is False, "the newest record of the file stays open"
+    # The older no_chunks row of the same file is closed with the outcome of the later attempt:
+    # left open, it kept the file out of a retry_errors run (the skip list judges by the newest row)
+    assert rows[4]["resolved"] is True and rows[4]["resolution"] == "a later attempt ended as error"
+    assert rows[5]["resolved"] is False, "other files are untouched"
     assert rows[6]["resolution"] == "retry 1 ended as success", "resolved records keep their history"
     again = await tidy_failed_documents(db, dry_run=False)
-    assert (again.open_records, again.resolved) == (3, 0), "idempotent"
+    assert (again.open_records, again.resolved) == (2, 0), "idempotent"

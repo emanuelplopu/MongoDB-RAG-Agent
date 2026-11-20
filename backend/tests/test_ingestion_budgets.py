@@ -488,6 +488,32 @@ async def test_save_ingestion_stats_replaces_the_record_of_a_retried_file() -> N
     assert [(d["error_type"], d["resolved"]) for d in failed.docs] == [("timeout", True), ("error", False)]
 
 
+async def test_save_ingestion_stats_closes_the_older_rows_of_other_types() -> None:
+    """A new failure is the file's current outcome; its open rows of other types are closed.
+
+    Left open, an October ``no_chunks`` row next to the ``image_only_pdf`` row the retry
+    wrote kept 55 files out of the 2026-11-19 image-only retry.
+    """
+    stats, failed = _Collection(), _Collection()
+    pipe = _BudgetPipeline()
+    pipe.db = {"ingestion_stats": stats, "failed_documents": failed}
+    save = ingest.DocumentIngestionPipeline._save_ingestion_stats
+
+    assert await save(pipe, [_attempt_stat("no_chunks", 0)]) is True
+    assert await save(pipe, [_attempt_stat("image_only_pdf", 0)]) is True
+    assert [(d["error_type"], d["resolved"]) for d in failed.docs] == [("no_chunks", True), ("image_only_pdf", False)]
+    assert failed.docs[0]["resolution"] == "a later attempt ended as image_only_pdf"
+    assert failed.docs[0]["retry_pending"] is False
+
+    # The same outcome again updates the open row and closes nothing else
+    assert await save(pipe, [_attempt_stat("image_only_pdf", 0)]) is True
+    assert [(d["error_type"], d["resolved"]) for d in failed.docs] == [("no_chunks", True), ("image_only_pdf", False)]
+
+    # A success closes every open row of the file, whichever type
+    assert await save(pipe, [_attempt_stat(None, 0)]) is True
+    assert [d["resolved"] for d in failed.docs] == [True, True]
+
+
 async def test_save_ingestion_stats_handles_an_attempt_and_its_retry_in_one_batch() -> None:
     """Review B: the first attempt's row must exist before the retry's update looks for it."""
     stats, failed = _Collection(), _Collection()

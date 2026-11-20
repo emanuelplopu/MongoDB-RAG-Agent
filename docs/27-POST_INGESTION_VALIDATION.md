@@ -271,7 +271,9 @@ Ingestion:
 5. **Indexes** for the queries of the pipeline and the document pages are created when a run
    starts and when a database is created (`src/ingestion/indexes.py`).
 6. **Failure records**: a file that is indexed resolves its open records of every type and
-   run; a repeated failure updates its row.
+   run; a repeated failure updates its row; a failure of another type closes the file's older
+   open rows, and the resume's skip list judges a file by its newest record (2026-11-19: 55
+   targets of the image-only retry were skipped by an older `no_chunks` row).
 7. **Job document**: at most 2,000 log lines; a claimed job is trimmed first.
 
 Search:
@@ -286,7 +288,9 @@ Search:
     sentences and 51 % instead of 28 % of written questions on the benchmark (section 7.4).
 
 Maintenance: `quellexctl ingest tidy-failures` resolves failure records of files that are
-indexed and merges repeated records (3,041 of 10,003 open records on this database).
+indexed and merges repeated records (3,041 of 10,003 open records on this database), since
+2026-11-19 across error types: an older row of another type is closed with the newest
+record's outcome.
 
 Benchmark harness: `scripts/retrieval-benchmark/retrieval_benchmark.py` and
 `chat_benchmark.py` (section 7).

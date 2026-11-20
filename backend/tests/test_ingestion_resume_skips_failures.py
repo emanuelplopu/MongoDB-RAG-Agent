@@ -75,6 +75,34 @@ async def test_failed_paths_skip_unresolved_failures_unless_retried() -> None:
     assert await ingest.failed_paths_of_job(db, None) == {}
 
 
+async def test_the_newest_record_of_a_file_decides_the_skip() -> None:
+    """A file with records of two types is judged by its last attempt.
+
+    The image-only retry of 2026-11-19 skipped 55 of its targets: each had an October
+    ``no_chunks`` row and the ``image_only_pdf`` row the 11-11 retry wrote, and any open
+    record of a non-retried type kept the file out of the queue.
+    """
+    db = _db([
+        # October: no chunks; 11-11 retry of the no_chunks class: reclassified as image-only
+        {"job_id": JOB, "file_path": "/a/scan.pdf", "error_type": "no_chunks", "failed_at": "2026-10-27T11:04:43"},
+        {"job_id": JOB, "file_path": "/a/scan.pdf", "error_type": "image_only_pdf", "failed_at": "2026-11-11T21:04:34"},
+        # The reverse order: the last attempt produced no chunks
+        {"job_id": JOB, "file_path": "/a/photo.pdf", "error_type": "image_only_pdf", "failed_at": "2026-10-27T11:04:43"},
+        {"job_id": JOB, "file_path": "/a/photo.pdf", "error_type": "no_chunks", "failed_at": "2026-11-11T21:04:34"},
+        # A record without a timestamp counts as the oldest
+        {"job_id": JOB, "file_path": "/a/old.pdf", "error_type": "error"},
+        {"job_id": JOB, "file_path": "/a/old.pdf", "error_type": "image_only_pdf", "failed_at": "2026-11-11T21:04:34"},
+    ])
+    image_only = ingest.retry_error_types({"retry_image_only_pdfs": True})
+    assert await ingest.failed_paths_of_job(db, JOB, image_only) == {"/a/photo.pdf": "no_chunks"}
+    assert await ingest.failed_paths_of_job(db, JOB, frozenset({"no_chunks"})) == {
+        "/a/scan.pdf": "image_only_pdf", "/a/old.pdf": "image_only_pdf",
+    }
+    assert await ingest.failed_paths_of_job(db, JOB) == {
+        "/a/scan.pdf": "image_only_pdf", "/a/photo.pdf": "no_chunks", "/a/old.pdf": "image_only_pdf",
+    }
+
+
 class _Pipeline(ingest.DocumentIngestionPipeline):
     """Real ``ingest_documents`` over stubbed discovery, DB lookups and per-file processing."""
 
