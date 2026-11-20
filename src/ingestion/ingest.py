@@ -176,6 +176,10 @@ SUPPORTED_INGESTION_EXTENSIONS: frozenset[str] = frozenset({
     ".mp4", ".avi", ".mkv", ".mov", ".webm", ".wmv",  # Video formats (audio track transcribed; VIDEO_EXTENSIONS)
 })
 
+#: Raster image files, converted through Docling's image pipeline with OCR; the ones below the
+#: run's :class:`ImagePolicy` minimum (web-page furniture, icons, spacers) are skipped
+RASTER_IMAGE_EXTENSIONS: frozenset = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"})
+
 #: Audio files, transcribed with Whisper (docs/04, "Media transcription")
 AUDIO_EXTENSIONS: frozenset = frozenset({".mp3", ".wav", ".m4a", ".flac", ".ogg"})
 #: Video files whose audio track is transcribed (ffmpeg extracts it first)
@@ -196,6 +200,11 @@ def media_kind(file_path: str) -> Optional[str]:
 def is_media_file(file_path: str) -> bool:
     """Whether ``file_path`` is an audio or video file (transcribed, not converted)."""
     return media_kind(file_path) is not None
+
+
+def is_raster_image_file(file_path: str) -> bool:
+    """Whether ``file_path`` is a raster image file (OCRed through Docling's image pipeline)."""
+    return os.path.splitext(file_path)[1].lower() in RASTER_IMAGE_EXTENSIONS
 
 
 @dataclass
@@ -239,7 +248,9 @@ class IngestionFileStats:
     processing_time_ms: float
     chunks_created: int
     success: bool
-    error_type: Optional[str]  # timeout, error, encrypted, none, no_chunks, image_only_pdf, partial
+    # timeout, error, encrypted, none, no_chunks, image_only_pdf, partial, media_deferred,
+    # tiny_image, image_no_text, empty_file
+    error_type: Optional[str]
     error_message: Optional[str]
     timeout_seconds: float
     profile_key: str
@@ -797,6 +808,150 @@ MEDIA_MAX_CONCURRENT_CAP = 8
 MEDIA_MAX_THREADS = 32
 MEDIA_DEVICES: Tuple[str, ...] = ("auto", "cpu", "cuda")
 MEDIA_ENV_PREFIX = "INGEST_MEDIA_"
+
+#: Outcome of a raster image below the run's :class:`ImagePolicy` minimum (``error_type``,
+#: classification and ``failed_documents`` record); counted apart, not a failure
+TINY_IMAGE = "tiny_image"
+#: First words of the :class:`IngestionResult` error of such a file (the job's final failure
+#: count leaves these out, like duplicates; ``backend/services/ingestion_counters.py``)
+TINY_IMAGE_RESULT_PREFIX = "Tiny image skipped"
+IMAGE_ENV_PREFIX = "INGEST_IMAGE_"
+#: Defaults of the policy: 100 x 100 px and 1 KiB. Of the 778 GIFs of one law-firm corpus
+#: still unindexed on 2026-11-19, 78 % were below one of the two (spacers, icons, buttons,
+#: rules, e-mail signature logos; docs/26-FORMAT_EDGE_AUDIT.md, "Tiny raster images").
+IMAGE_MIN_PIXELS_DEFAULT = 10_000
+IMAGE_MIN_BYTES_DEFAULT = 1_024
+
+
+@dataclass
+class ImagePolicy:
+    """Which raster images a run skips as worthless before converting them.
+
+    Web pages saved next to their ``…-Dateien`` folders, e-mail attachments and
+    practice-management exports leave thousands of spacer, icon, button, rule and logo images
+    on a corpus's shares. OCR finds nothing in them, but each one costs a Docling conversion
+    (model load in a fresh worker, Tesseract, ~3 s) and ends as a ``no_chunks`` failure that
+    retry runs pick up again. A file below either minimum is recorded as ``tiny_image``
+    instead, without a conversion; ``0`` disables that minimum.
+
+    Attributes:
+        min_pixels: Least ``width x height`` of an image worth OCR; the dimensions come from
+            the file header (PIL opens it lazily). A file PIL cannot identify is converted.
+        min_bytes: Least file size in bytes; applies whether or not the header can be read.
+    """
+
+    min_pixels: int = IMAGE_MIN_PIXELS_DEFAULT
+    min_bytes: int = IMAGE_MIN_BYTES_DEFAULT
+
+    @property
+    def active(self) -> bool:
+        """Whether any minimum is in force."""
+        return self.min_pixels > 0 or self.min_bytes > 0
+
+    def describe(self) -> str:
+        """One log line: ``min 10000 px, min 1024 bytes`` (or ``off``)."""
+        if not self.active:
+            return "off"
+        parts = []
+        if self.min_pixels > 0:
+            parts.append(f"min {self.min_pixels} px")
+        if self.min_bytes > 0:
+            parts.append(f"min {self.min_bytes} bytes")
+        return ", ".join(parts)
+
+
+def coerce_image_policy_value(key: str, value: Any) -> Optional[int]:
+    """``value`` for the :class:`ImagePolicy` field ``key`` as a non-negative int, else ``None``."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    if number < 0:
+        return None
+    return number
+
+
+def resolve_image_policy(raw: Optional[Dict[str, Any]] = None) -> ImagePolicy:
+    """The tiny-image policy of a run.
+
+    ``raw`` (the performance config's ``images`` section) wins over the ``INGEST_IMAGE_*``
+    environment, which wins over the ``ingest_image_*`` settings and the defaults. Unknown
+    keys and unusable values are ignored with a warning.
+
+    Args:
+        raw: The stored ``images`` mapping, or ``None``.
+    """
+    fields = {f.name for f in ImagePolicy.__dataclass_fields__.values()}
+    values: Dict[str, int] = {}
+    try:
+        configured = load_settings(use_profile=False)
+    except Exception:  # settings need MONGODB_URI etc.; the harness has none
+        configured = None
+    if configured is not None:
+        for key in fields:
+            coerced = coerce_image_policy_value(key, getattr(configured, f"ingest_image_{key}", None))
+            if coerced is not None:
+                values[key] = coerced
+    for key in fields:
+        env_value = os.getenv(IMAGE_ENV_PREFIX + key.upper())
+        if env_value is None or env_value.strip() == "":
+            continue
+        coerced = coerce_image_policy_value(key, env_value)
+        if coerced is None:
+            logger.warning(f"Ignoring {IMAGE_ENV_PREFIX + key.upper()}={env_value!r}")
+            continue
+        values[key] = coerced
+    for key, value in (raw or {}).items():
+        if key not in fields:
+            logger.warning(f"Ignoring unknown image policy setting {key!r}")
+            continue
+        coerced = coerce_image_policy_value(key, value)
+        if coerced is None:
+            if value not in (None, ""):
+                logger.warning(f"Ignoring unusable image policy setting {key}={value!r}")
+            continue
+        values[key] = coerced
+    return ImagePolicy(**values)
+
+
+def image_dimensions(file_path: str) -> Optional[Tuple[int, int]]:
+    """``(width, height)`` from the image header, or ``None`` when PIL cannot identify the file.
+
+    PIL reads only the header here (no frame is decoded), so this costs one small read even
+    on a network share; for a multi-frame file (animated GIF, multi-page TIFF) it is the
+    size of the first frame.
+    """
+    try:
+        from PIL import Image
+
+        with Image.open(file_path) as img:
+            width, height = img.size
+            return int(width), int(height)
+    except Exception as exc:  # noqa: BLE001 - the converter will report the real error
+        logger.debug(f"Could not read the image header of {file_path}: {exc}")
+        return None
+
+
+def tiny_image_reason(file_path: str, size_bytes: int, policy: ImagePolicy) -> Optional[str]:
+    """Why ``file_path`` is skipped under ``policy``, or ``None`` when it is worth converting.
+
+    Args:
+        file_path: The file; anything but a raster image (:data:`RASTER_IMAGE_EXTENSIONS`)
+            is never skipped.
+        size_bytes: Its size on disk.
+        policy: The run's minimums (``0`` disables one).
+    """
+    if not policy.active or not is_raster_image_file(file_path):
+        return None
+    if policy.min_bytes > 0 and size_bytes < policy.min_bytes:
+        return f"{size_bytes} bytes, below {policy.min_bytes}"
+    if policy.min_pixels > 0:
+        dims = image_dimensions(file_path)
+        if dims is not None and dims[0] * dims[1] < policy.min_pixels:
+            return f"{dims[0]}x{dims[1]} px, below {policy.min_pixels}"
+    return None
 #: Seconds of media per MB when ffprobe cannot tell the duration (~128 kbit/s audio, ~1 Mbit/s video)
 _MEDIA_SECONDS_PER_MB = {"audio": 60.0, "video": 8.0}
 
@@ -1444,6 +1599,7 @@ RETRY_FLAG_ERROR_TYPES: Dict[str, str] = {
     "retry_no_chunks": "no_chunks",
     "retry_image_only_pdfs": "image_only_pdf",
     "retry_media": "media_deferred",  # audio/video deferred to a media run (MEDIA_DEFERRED)
+    "retry_tiny_images": "tiny_image",  # raster images skipped under the ImagePolicy (TINY_IMAGE)
 }
 
 
@@ -2000,7 +2156,10 @@ def prepare_image_for_docling(image_path: str) -> Tuple[str, Optional[str]]:
     Docling rejects two kinds of files that phones and cameras produce routinely: JPEGs
     whose DPI tag is ``(0, 0)`` (screenshots, some Apple exports; ``_validate_dpi`` raises)
     and MPO multi-picture containers (Canon). Both are re-saved as a plain PNG without a DPI
-    tag in a temporary file; everything else is passed through untouched.
+    tag in a temporary file. An animated GIF is re-saved the same way, as its first frame:
+    Docling's image backend turns every frame into a page, so a 75-frame web icon cost 78 s
+    of OCR and a 27-frame banner repeated its text 27 times (docs/26, "Tiny raster images").
+    Everything else is passed through untouched; multi-page TIFFs have their own reader.
 
     Args:
         image_path: The image file about to be converted.
@@ -2008,32 +2167,53 @@ def prepare_image_for_docling(image_path: str) -> Tuple[str, Optional[str]]:
     Returns:
         ``(path_to_convert, temp_path)``; ``temp_path`` is ``None`` when the original is used
         and must otherwise be removed by the caller after the conversion.
+
+    Raises:
+        NotARasterImageError: PIL opened the file but found no image format in it (a CSS or
+            JavaScript file under a ``.gif`` name): Docling would sniff it as a CSV table.
     """
     try:
-        from PIL import Image
-
+        from PIL import Image, UnidentifiedImageError
+    except ImportError:
+        return image_path, None
+    try:
         with Image.open(image_path) as img:
             dpi = img.info.get("dpi")
             # TIFF DPI tags are PIL IFDRational values: coerce instead of rejecting the type
             # (every TIFF used to be re-saved needlessly, docs/26)
             values = [_dpi_number(v) for v in dpi] if isinstance(dpi, tuple) and len(dpi) == 2 else None
             bad_dpi = dpi is not None and (values is None or any(v is None or v <= 0 or v != v for v in values))
-            if img.format != "MPO" and not bad_dpi:
+            animated = img.format == "GIF" and int(getattr(img, "n_frames", 1)) > 1
+            if img.format != "MPO" and not bad_dpi and not animated:
                 return image_path, None
             import tempfile
 
             fd, tmp = tempfile.mkstemp(suffix=".png", prefix="recallhub-img-")
             os.close(fd)
+            if animated:
+                img.seek(0)
             frame = img.convert("RGB") if img.mode not in ("L", "RGB") else img.copy()
             frame.save(tmp, "PNG")
-            logger.info(
-                f"Re-saved {os.path.basename(image_path)} for OCR ({img.format}, dpi tag {dpi}): "
-                "Docling cannot load it as is"
-            )
+            if animated:
+                logger.info(
+                    f"Re-saved the first of {img.n_frames} frames of {os.path.basename(image_path)} for OCR: "
+                    "Docling would OCR every frame of an animated GIF as a page"
+                )
+            else:
+                logger.info(
+                    f"Re-saved {os.path.basename(image_path)} for OCR ({img.format}, dpi tag {dpi}): "
+                    "Docling cannot load it as is"
+                )
             return tmp, tmp
+    except UnidentifiedImageError as exc:
+        raise NotARasterImageError(f"PIL cannot identify the file under its image name: {exc}") from exc
     except Exception as exc:  # noqa: BLE001 - let Docling report the real problem
         logger.debug(f"Image pre-check failed for {image_path}: {exc}")
         return image_path, None
+
+
+class NotARasterImageError(ValueError):
+    """A file under an image extension that no image format matches (CSS saved as ``site.gif``)."""
 
 
 def _dpi_number(value: Any) -> Optional[float]:
@@ -3008,6 +3188,8 @@ def map_error_type_to_classification(error_type: Optional[str], chunks_created: 
         return "normal"  # Duplicates are considered normal (already processed)
     elif error_type == MEDIA_DEFERRED:
         return MEDIA_DEFERRED
+    elif error_type == TINY_IMAGE:
+        return TINY_IMAGE
     elif chunks_created > 0:
         return "normal"
     else:
@@ -3172,7 +3354,7 @@ class IngestionStatsRecorder:
 
     COUNTED: Tuple[str, ...] = (
         "timeout", "no_chunks", "error", "image_only_pdf", "duplicate", "partial", "success",
-        IMAGE_NO_TEXT, EMPTY_FILE,
+        IMAGE_NO_TEXT, EMPTY_FILE, TINY_IMAGE,
     )
     #: Stats kept in memory while the database refuses writes; the oldest are dropped beyond it.
     MAX_PENDING = 10_000
@@ -3310,6 +3492,8 @@ class DocumentIngestionPipeline:
     _conversion_pool: Optional[Any] = None
     # How this run transcribes audio/video (resolved by ingest_documents; see MediaConfig)
     media_config: MediaConfig = MediaConfig()
+    # Which raster images this run skips unconverted (resolved by ingest_documents; see ImagePolicy)
+    image_policy: ImagePolicy = ImagePolicy()
     # Dedicated media worker processes of the run (process isolation, media files present);
     # None = media files convert in the conversion pool or on the thread pool
     _media_pool: Optional[Any] = None
@@ -3783,8 +3967,7 @@ class DocumentIngestionPipeline:
             return self._transcribe_video(file_path)
 
         # Image formats - convert via Docling with OCR
-        image_formats = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.tif']
-        if file_ext in image_formats:
+        if file_ext in RASTER_IMAGE_EXTENSIONS:
             # Multi-page TIFF scans: OCR every page, not only the first (docs/26)
             if file_ext in ('.tif', '.tiff'):
                 frames = image_frame_count(file_path)
@@ -3840,6 +4023,14 @@ class DocumentIngestionPipeline:
                         f"[Image: {os.path.basename(file_path)} - OCR extracted minimal text]",
                         None
                     )
+            except NotARasterImageError as e:
+                # A web page's CSS or JavaScript saved as site.gif / script.gif: Docling's
+                # format sniffing would read it as a CSV table and index the stylesheet
+                logger.warning(f"Not a raster image: {file_path} ({e})")
+                return (
+                    f"[Error: {os.path.basename(file_path)} is not a raster image ({e})]",
+                    None
+                )
             except ImportError as e:
                 logger.warning(f"Docling image support not available: {e}")
                 return (
@@ -6201,6 +6392,7 @@ class DocumentIngestionPipeline:
         slot_limit: Optional[Callable[[], int]] = None,
         media_config: Optional[Dict[str, Any]] = None,
         media_only: bool = False,
+        image_policy: Optional[Dict[str, Any]] = None,
     ) -> List[IngestionResult]:
         """Ingest all documents; see :meth:`_ingest_documents_impl` for the arguments.
 
@@ -6223,6 +6415,7 @@ class DocumentIngestionPipeline:
                 slot_limit=slot_limit,
                 media_config=media_config,
                 media_only=media_only,
+                image_policy=image_policy,
             )
         finally:
             if token is not None:
@@ -6243,6 +6436,7 @@ class DocumentIngestionPipeline:
         slot_limit: Optional[Callable[[], int]] = None,
         media_config: Optional[Dict[str, Any]] = None,
         media_only: bool = False,
+        image_policy: Optional[Dict[str, Any]] = None,
     ) -> List[IngestionResult]:
         """
         Ingest all documents from the documents folder.
@@ -6254,6 +6448,10 @@ class DocumentIngestionPipeline:
                 and the settings.
             media_only: A media run (``retry_media``): only audio/video files are
                 processed, and they are transcribed even when the media config defers them.
+            image_policy: The performance config's ``images`` section (``min_pixels``,
+                ``min_bytes``: raster images below either are recorded as ``tiny_image``
+                without a conversion); :func:`resolve_image_policy` fills the rest from
+                INGEST_IMAGE_* and the settings.
             retry_failed_types: Error types the job asks to retry (:func:`retry_error_types`).
                 In incremental mode with a ``job_id``, files the same job already recorded in
                 ``failed_documents`` are skipped unless their error type is listed here (F23).
@@ -6295,6 +6493,10 @@ class DocumentIngestionPipeline:
         # read the module-level config, the loop reads the attribute
         self.media_config = resolve_media_config(media_config)
         update_media_config(**asdict(self.media_config))
+        # Which raster images are skipped unconverted (both loops read the attribute)
+        self.image_policy = resolve_image_policy(image_policy)
+        if self.image_policy.active:
+            logger.info(f"Tiny-image policy: {self.image_policy.describe()} (recorded as {TINY_IMAGE})")
         # Media files are deferred to a media run unless this is one or the job retries them
         defer_media = (
             self.media_config.defer and not media_only
@@ -6488,10 +6690,26 @@ class DocumentIngestionPipeline:
                 if progress_callback:
                     progress_callback(i + 1, len(document_files), file_path, 0)
                 continue
-            
+
+            loop = asyncio.get_running_loop()
+            # Raster images below the run's ImagePolicy minimum: skipped unconverted (no stats
+            # recorder on this path, so the file is attempted again by the next run)
+            if self.image_policy.active and is_raster_image_file(file_path):
+                tiny_reason = await loop.run_in_executor(
+                    self.get_executor(), tiny_image_reason, file_path, get_file_size_safe(file_path), self.image_policy
+                )
+                if tiny_reason:
+                    logger.info(f"Skipping tiny image ({tiny_reason}): {file_path}")
+                    results.append(IngestionResult(
+                        document_id="", title=os.path.basename(file_path), chunks_created=0,
+                        processing_time_ms=0, errors=[f"{TINY_IMAGE_RESULT_PREFIX} ({tiny_reason})"],
+                    ))
+                    if progress_callback:
+                        progress_callback(i + 1, len(document_files), file_path, 0)
+                    continue
+
             try:
                 # Compute file hash for content-based deduplication
-                loop = asyncio.get_running_loop()
                 content_hash = await loop.run_in_executor(
                     self.get_executor(),
                     compute_file_hash,
@@ -6634,6 +6852,8 @@ class DocumentIngestionPipeline:
         skip_image_only_pdfs = skip_image_only_pdf_enabled()
         # Media slots: transcriptions at once (each also takes a file slot below)
         media_cfg = self.media_config
+        # Raster images below these minimums are recorded as tiny_image, not converted
+        image_policy = self.image_policy
         media_slots = asyncio.Semaphore(max(1, int(media_cfg.max_concurrent)))
         media_files = sum(1 for f in document_files if is_media_file(f))
         if media_files:
@@ -6799,6 +7019,32 @@ class DocumentIngestionPipeline:
                     if progress_callback:
                         progress_callback(processed_count, total_files, file_path, 0)
                     return
+
+                if image_policy.active and is_raster_image_file(file_path):
+                    # A raster image below the policy's minimum (web-page furniture, icons,
+                    # e-mail signature logos): recorded as tiny_image without a conversion,
+                    # so the resumed job skips it and only retry_tiny_images picks it up
+                    tiny_reason = await loop.run_in_executor(
+                        self.get_executor(), tiny_image_reason, file_path, file_size, image_policy
+                    )
+                    if tiny_reason:
+                        logger.info(f"Skipping tiny image ({tiny_reason}): {file_path}")
+                        with results_lock:
+                            processed_count += 1
+                            results.append(failed_result(f"{TINY_IMAGE_RESULT_PREFIX} ({tiny_reason})", 0))
+                            recorder.add(stat(
+                                success=False,
+                                error_type=TINY_IMAGE,
+                                error_message=(
+                                    f"Tiny image skipped unconverted: {tiny_reason} (performance config "
+                                    f"images.min_pixels / images.min_bytes); a run with retry_tiny_images "
+                                    f"converts it"
+                                ),
+                                classification=TINY_IMAGE,
+                            ))
+                        if progress_callback:
+                            progress_callback(processed_count, total_files, file_path, 0)
+                        return
 
                 try:
                     # Compute file hash with timeout (reuse from previous attempt if retrying)

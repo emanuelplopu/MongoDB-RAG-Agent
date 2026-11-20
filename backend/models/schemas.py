@@ -38,6 +38,7 @@ class FileClassification(str, Enum):
     TIMEOUT = "timeout"             # Processing timed out
     ERROR = "error"                 # Processing error
     MEDIA_DEFERRED = "media_deferred"  # Audio/video left to a media run (retry_media)
+    TINY_IMAGE = "tiny_image"       # Raster image below images.min_pixels / min_bytes, skipped unconverted
     PENDING = "pending"             # Never processed
 
 
@@ -296,6 +297,13 @@ class IngestionStartRequest(BaseModel):
             "media_deferred or never reached); other files are skipped"
         ),
     )
+    retry_tiny_images: bool = Field(
+        default=False,
+        description=(
+            "Convert the raster images a run skipped as tiny_image (below the performance config's "
+            "images.min_pixels / images.min_bytes), e.g. after lowering the minimums"
+        ),
+    )
     skip_image_only_pdfs: bool = Field(default=False, description="Skip known image-only PDFs")
 
 
@@ -351,6 +359,7 @@ class IngestionStatusResponse(BaseModel):
     media_deferred_files: int = 0  # audio/video left to a media run (retry_media)
     images_without_text: int = 0  # images whose OCR found no text (photos, logos); not failures
     empty_files: int = 0  # files without any text (attachment stubs, templates); not failures
+    tiny_images: int = 0  # raster images below images.min_pixels / min_bytes, skipped unconverted
 
 
 class IngestionEtaExtension(BaseModel):
@@ -400,6 +409,7 @@ class IngestionRunSummary(BaseModel):
     media_deferred_files: int = 0  # Audio/video left to a media run (retry_media)
     images_without_text: int = 0  # Images whose OCR found no text (photos, logos); not failures
     empty_files: int = 0  # Files without any text (attachment stubs, templates); not failures
+    tiny_images: int = 0  # Raster images below images.min_pixels / min_bytes, skipped unconverted
     avg_processing_time_ms: float = 0.0
     total_size_bytes: int = 0
     files_per_hour: float = 0.0

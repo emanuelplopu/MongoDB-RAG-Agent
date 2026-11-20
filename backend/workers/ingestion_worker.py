@@ -33,7 +33,7 @@ from backend.services.ingestion_schedule import ConcurrencyController, Effective
 from backend.services.activity_events import (
     ActivityEventRecorder, get_activity_recorder, set_activity_recorder
 )
-from backend.services.ingestion_counters import apply_stats_counts
+from backend.services.ingestion_counters import apply_stats_counts, counts_as_failure
 from backend.services.telemetry_store import SHARED_TENANT
 from src.ingestion import telemetry_hooks
 from src.ingestion.progress import progress_percent_label
@@ -678,6 +678,7 @@ class IngestionWorker:
                     slot_limit=slot_controller.current,
                     media_config=self.config.get("media"),
                     media_only=bool(config.get("retry_media")),
+                    image_policy=self.config.get("images"),
                 )
             finally:
                 config_refresh.cancel()
@@ -693,11 +694,11 @@ class IngestionWorker:
                 1 for r in results
                 if r.errors and len(r.errors) > 0 and "Duplicate of:" in r.errors[0]
             )
-            # A file read fine but without text (a photo, an empty attachment stub) is not a failure
+            # Deliberate skips (duplicates, deferred media, tiny images) are not failures, and
+            # neither is a file read fine but without text (a photo, an empty attachment stub)
             actual_failures = sum(
                 1 for r in results
-                if r.errors and len(r.errors) > 0 and "Duplicate of:" not in r.errors[0]
-                and not getattr(r, "no_text", None)
+                if counts_as_failure(r.errors) and not getattr(r, "no_text", None)
             )
             
             # Update final status

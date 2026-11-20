@@ -786,6 +786,14 @@ export interface IngestionPerformanceConfig {
   office_hours: IngestionOfficeHours
   /** Audio/video transcription; omitted on save keeps the stored section (set through the API or quellexctl). */
   media?: IngestionMediaConfig
+  /** Tiny-image policy; omitted on save keeps the stored section (set through the API or quellexctl). */
+  images?: IngestionImagePolicy
+}
+
+/** The performance config's images section (backend/services/image_policy.py): raster images below either minimum are recorded as tiny_image unconverted; 0 disables one. */
+export interface IngestionImagePolicy {
+  min_pixels: number
+  min_bytes: number
 }
 
 /** The performance config's media section (backend/services/media_config.py). */
@@ -888,6 +896,8 @@ export interface IngestionStatus {
   images_without_text?: number
   /** Files without any text (empty attachment stubs, templates); read fine, not failures. */
   empty_files?: number
+  /** Raster images below the images section's min_pixels / min_bytes, skipped unconverted. */
+  tiny_images?: number
   /** Documents stored with part of their chunks while the rest waits in the run's embedding backlog. */
   partial_files?: number
 }
@@ -2410,6 +2420,8 @@ export interface QueuedIngestionJob {
   retry_no_chunks?: boolean
   /** Media run: transcribe only the audio/video files (deferred or never reached). */
   retry_media?: boolean
+  /** Convert the raster images a run skipped as tiny_image (after lowering images.min_pixels / min_bytes). */
+  retry_tiny_images?: boolean
   skip_image_only_pdfs?: boolean
 }
 
@@ -2434,6 +2446,8 @@ export interface ScheduledIngestionJob {
   retry_no_chunks?: boolean
   /** Media run: transcribe only the audio/video files (deferred or never reached). */
   retry_media?: boolean
+  /** Convert the raster images a run skipped as tiny_image (after lowering images.min_pixels / min_bytes). */
+  retry_tiny_images?: boolean
   skip_image_only_pdfs?: boolean
 }
 
@@ -2456,6 +2470,8 @@ export interface QueueRequest {
   retry_no_chunks?: boolean
   /** Media run: transcribe only the audio/video files (deferred or never reached). */
   retry_media?: boolean
+  /** Convert the raster images a run skipped as tiny_image (after lowering images.min_pixels / min_bytes). */
+  retry_tiny_images?: boolean
   skip_image_only_pdfs?: boolean
 }
 
@@ -2474,6 +2490,8 @@ export interface ScheduleRequest {
   retry_no_chunks?: boolean
   /** Media run: transcribe only the audio/video files (deferred or never reached). */
   retry_media?: boolean
+  /** Convert the raster images a run skipped as tiny_image (after lowering images.min_pixels / min_bytes). */
+  retry_tiny_images?: boolean
   skip_image_only_pdfs?: boolean
 }
 

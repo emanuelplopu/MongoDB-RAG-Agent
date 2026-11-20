@@ -248,7 +248,7 @@ async def test_recorder_keeps_a_batch_the_database_refused() -> None:
     assert [s.file_name for s in written] == ["a.pdf", "b.pdf"]
     assert snapshots == [
         {"timeout": 1, "no_chunks": 0, "error": 0, "image_only_pdf": 0, "duplicate": 0, "partial": 0, "success": 1,
-         "image_no_text": 0, "empty_file": 0, "written": 2}
+         "image_no_text": 0, "empty_file": 0, "tiny_image": 0, "written": 2}
     ]
 
 
@@ -316,7 +316,8 @@ def test_job_counters_follow_the_written_stats() -> None:
     assert job_state == {
         "processed_files": 10, "timeout_files": 3, "no_chunks_files": 3, "error_files": 2,
         "image_only_pdfs": 4, "image_only_pdfs_ocr": 0, "duplicates_skipped": 5, "partial_files": 0,
-        "media_deferred_files": 0, "images_without_text": 0, "empty_files": 0, "failed_files": 8,
+        "media_deferred_files": 0, "images_without_text": 0, "empty_files": 0, "tiny_images": 0,
+        "failed_files": 8,
     }
 
 
