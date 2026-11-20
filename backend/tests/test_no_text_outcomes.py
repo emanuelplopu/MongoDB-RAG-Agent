@@ -196,7 +196,9 @@ def test_concurrent_loop_records_a_file_without_text_as_an_outcome_not_a_failure
     tmp_path: Path, name: str, content: str, outcome: str, counter: str
 ) -> None:
     path = tmp_path / name
-    path.write_bytes(b"GIF89a" if name.endswith(".jpg") else b"")
+    # The picture is padded past the tiny-image minimum (images.min_bytes): a smaller file is
+    # skipped unconverted as tiny_image before the reader ever sees it
+    path.write_bytes(b"GIF89a" + b"\0" * 4096 if name.endswith(".jpg") else b"")
     pipe = _Loop(content)
 
     results, _ = asyncio.run(pipe._ingest_documents_concurrent(
