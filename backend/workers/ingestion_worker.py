@@ -455,6 +455,8 @@ class IngestionWorker:
             "no_chunks_files": 0,
             "timeout_files": 0,
             "error_files": 0,
+            "images_without_text": 0,
+            "empty_files": 0,
             # Phase tracking
             "phase": "initializing",
             "phase_message": "Starting ingestion...",
@@ -691,9 +693,11 @@ class IngestionWorker:
                 1 for r in results
                 if r.errors and len(r.errors) > 0 and "Duplicate of:" in r.errors[0]
             )
+            # A file read fine but without text (a photo, an empty attachment stub) is not a failure
             actual_failures = sum(
                 1 for r in results
                 if r.errors and len(r.errors) > 0 and "Duplicate of:" not in r.errors[0]
+                and not getattr(r, "no_text", None)
             )
             
             # Update final status
@@ -892,6 +896,8 @@ class IngestionWorker:
                     "concurrency_slots": state.get("concurrency_slots"),
                     "timeout_files": state.get("timeout_files", 0),
                     "error_files": state.get("error_files", 0),
+                    "images_without_text": state.get("images_without_text", 0),
+                    "empty_files": state.get("empty_files", 0),
                     # Per-extension queue and progress (the shared ETA estimator reads them)
                     "queue_by_extension": state.get("queue_by_extension"),
                     "processed_by_extension": state.get("processed_by_extension"),

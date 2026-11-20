@@ -29,6 +29,7 @@ __all__ = [
     "MEDIA_PLACEHOLDER_PREFIXES",
     "PLACEHOLDER_CONTENT_REGEX",
     "PLACEHOLDER_PREFIXES",
+    "no_text_kind",
     "placeholder_error_type",
     "placeholder_kind",
 ]
@@ -100,3 +101,25 @@ def placeholder_error_type(content: Optional[str]) -> str:
     """
     text = (content or "").strip()
     return ENCRYPTED_ERROR_TYPE if ENCRYPTED_MARKER in text[:_ERROR_PLACEHOLDER_MAX_CHARS] else "error"
+
+
+def no_text_kind(content: Optional[str]) -> Optional[str]:
+    """Which "nothing to index" outcome an ``"empty"`` placeholder stands for.
+
+    Args:
+        content: The text a reader returned.
+
+    Returns:
+        ``"image"`` for an image whose OCR found no text (``[Image: …]``), ``"empty"`` for a
+        file without text (``[Document: …]``, ``[Empty email: …]``), ``None`` for anything
+        else, including the audio/video placeholders (an untranscribed dictation is not an
+        empty file; it stays a ``no_chunks`` record the media run can pick up).
+    """
+    if placeholder_kind(content) != "empty":
+        return None
+    text = (content or "").strip()
+    if text.startswith("[Image:"):
+        return "image"
+    if text.startswith(EMPTY_PLACEHOLDER_PREFIXES):
+        return "empty"
+    return None

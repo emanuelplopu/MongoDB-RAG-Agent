@@ -7,6 +7,7 @@ changing only the database layer while preserving all document processing logic.
 
 import os
 import re
+import html
 import asyncio
 import logging
 import glob
@@ -221,6 +222,10 @@ class IngestionResult:
     # PDFs only: which scan-text fallback put OCR text back into the document after the
     # conversion (F35): "picture_children", "full_page" or both joined with "+"; None = none
     ocr_fallback: Optional[str] = None
+    # Why a file produced no chunk although it was read: "image" (an image whose OCR found
+    # no text), "empty" (a file without any text); None when text was extracted and the
+    # chunker still produced nothing (the no_chunks failure), or when chunks were created
+    no_text: Optional[str] = None
 
 
 @dataclass
@@ -780,6 +785,14 @@ def docling_accelerator_options(device: Optional[str] = None, num_threads: Optio
 
 #: Error type of a media file recorded for a later media run (``retry_media``)
 MEDIA_DEFERRED = "media_deferred"
+#: Outcome of an image whose OCR found no text (a photo, a logo, a drawing): read fine,
+#: nothing to index, counted on its own (``images_without_text``), never retried
+IMAGE_NO_TEXT = "image_no_text"
+#: Outcome of a file without any text (an empty Outlook attachment stub, a template, a Word
+#: file of pictures without text): the same, counted as ``empty_files``
+EMPTY_FILE = "empty_file"
+#: The two "nothing to index" outcomes: ``success`` stats, no ``failed_documents`` row
+NO_TEXT_OUTCOMES: Tuple[str, ...] = (IMAGE_NO_TEXT, EMPTY_FILE)
 MEDIA_MAX_CONCURRENT_CAP = 8
 MEDIA_MAX_THREADS = 32
 MEDIA_DEVICES: Tuple[str, ...] = ("auto", "cpu", "cuda")
@@ -1418,6 +1431,7 @@ from src.ingestion.placeholders import (  # noqa: E402,F401
     ERROR_PLACEHOLDER_PREFIXES,
     MEDIA_PLACEHOLDER_PREFIXES,
     PLACEHOLDER_PREFIXES,
+    no_text_kind,
     placeholder_error_type,
     placeholder_kind,
 )
@@ -1730,16 +1744,22 @@ def document_content_layers():
     return {ContentLayer.BODY, ContentLayer.FURNITURE}
 
 
-def export_document_markdown(document: Any) -> str:
+def export_document_markdown(document: Any, with_furniture: bool = False) -> str:
     """Export a DoclingDocument to Markdown the way the ingestion pipeline stores it.
 
     Args:
         document: Converted ``DoclingDocument``.
+        with_furniture: Include page headers/footers whatever ``INGEST_PAGE_FURNITURE`` says
+            (the reader's last resort for a page whose only text is its header).
 
     Returns:
         Markdown including page headers/footers when ``INGEST_PAGE_FURNITURE`` is on.
     """
     layers = document_content_layers()
+    if with_furniture and layers is None:
+        from docling_core.types.doc import ContentLayer
+
+        layers = {ContentLayer.BODY, ContentLayer.FURNITURE}
     if layers is None:
         return document.export_to_markdown()
     return document.export_to_markdown(included_content_layers=layers)
@@ -2113,9 +2133,52 @@ def sniff_container(head: bytes, size: int) -> Optional[str]:
     return None
 
 
+def strip_markdown_images(markdown: Optional[str]) -> str:
+    """The Markdown without Docling's picture placeholders (``<!-- image -->``)."""
+    return (markdown or "").replace("<!-- image -->", "")
+
+
 def markdown_has_text(markdown: Optional[str]) -> bool:
     """Whether a converted document has text besides picture placeholders (``<!-- image -->``)."""
-    return len((markdown or "").replace("<!-- image -->", "").strip()) > 20
+    return len(strip_markdown_images(markdown).strip()) > 20
+
+
+_MARKDOWN_HEADING_LINE = re.compile(r"^\s{0,3}#{1,6}\s.*$", re.MULTILINE)
+_HTML_DROP_BLOCKS = re.compile(r"<(script|style|noscript|template)\b.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
+_HTML_TAG = re.compile(r"<[^>]+>")
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def html_visible_text(file_path: str) -> str:
+    """The visible text of an HTML file (scripts, styles and comments dropped), whitespace folded.
+
+    The reader's fallback for a page Docling exports as nothing; the title counts as text.
+    """
+    try:
+        with open(file_path, "rb") as handle:
+            raw = handle.read()
+    except OSError:
+        return ""
+    for encoding in ("utf-8", "cp1252"):
+        try:
+            markup = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        markup = raw.decode("latin-1", "replace")
+    markup = _HTML_COMMENT.sub(" ", _HTML_DROP_BLOCKS.sub(" ", markup))
+    text = html.unescape(_HTML_TAG.sub(" ", markup))
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def markdown_has_prose(markdown: Optional[str]) -> bool:
+    """Whether a converted document has text besides picture placeholders *and* headings.
+
+    A Word file of photographed exhibits often carries one heading (``Lichtbildkonvolut``, a
+    date) above its pictures: the heading alone is no content, the text is in the pictures.
+    """
+    return len(_MARKDOWN_HEADING_LINE.sub("", strip_markdown_images(markdown)).strip()) > 20
 
 
 def pdf_open_problem(path: str) -> Optional[str]:
@@ -2939,6 +3002,8 @@ def map_error_type_to_classification(error_type: Optional[str], chunks_created: 
         return "image_only_pdf"
     elif error_type == "no_chunks":
         return "no_chunks"
+    elif error_type in NO_TEXT_OUTCOMES:
+        return error_type  # image_no_text / empty_file: read fine, nothing to index
     elif error_type == "duplicate":
         return "normal"  # Duplicates are considered normal (already processed)
     elif error_type == MEDIA_DEFERRED:
@@ -3105,7 +3170,10 @@ class IngestionStatsRecorder:
             counts of the stats written so far), e.g. to update job status counters.
     """
 
-    COUNTED: Tuple[str, ...] = ("timeout", "no_chunks", "error", "image_only_pdf", "duplicate", "partial", "success")
+    COUNTED: Tuple[str, ...] = (
+        "timeout", "no_chunks", "error", "image_only_pdf", "duplicate", "partial", "success",
+        IMAGE_NO_TEXT, EMPTY_FILE,
+    )
     #: Stats kept in memory while the database refuses writes; the oldest are dropped beyond it.
     MAX_PENDING = 10_000
 
@@ -3583,6 +3651,48 @@ class DocumentIngestionPipeline:
         note_conversion(ocr_fallback=recovery.fallback)
         return recovery
 
+    def _recover_image_text(self, document: Any, image_path: str) -> Optional[Any]:
+        """The scan-text fallback for an image conversion (docs/26, the no_chunks audit).
+
+        Runs :func:`src.ingestion.scan_text_fallback.recover_image_text`: OCR lines below the
+        picture that covers the image are copied into the body (``picture_children``); when
+        the document still has no body text, the image is read with a plain Tesseract pass at
+        its own size (capped at ``OCR_IMAGE_MAX_MPX``) and at lower scales (``full_page``).
+        A failure inside the fallback never fails the file.
+
+        Args:
+            document: The converted ``DoclingDocument`` (modified in place).
+            image_path: The image file the converter read (a format PIL opens).
+
+        Returns:
+            The ``ScanTextRecovery``, or ``None`` when nothing was recovered.
+        """
+        if document is None:
+            return None
+        try:
+            from src.ingestion.scan_text_fallback import recover_image_text
+
+            ocr_config = resolve_ocr_config()
+            recovery = recover_image_text(
+                document,
+                image_path,
+                ocr_page=full_page_ocr_reader(ocr_config),
+                max_pixels=max(0, int(ocr_config.image_max_mpx)) * 1_000_000,
+            )
+        except Exception as exc:  # noqa: BLE001 - the conversion result stands as Docling returned it
+            logger.warning(f"Image text fallback failed for {os.path.basename(image_path)}: {exc}")
+            return None
+        if recovery is None:
+            return None
+        logger.info(f"OCR fallback for {os.path.basename(image_path)} ({recovery.describe()})")
+        if recovery.error:
+            logger.warning(
+                f"Image text fallback: Tesseract pass failed for {os.path.basename(image_path)} "
+                f"after {recovery.characters:,} characters were recovered: {recovery.error}"
+            )
+        note_conversion(ocr_fallback=recovery.fallback)
+        return recovery
+
     def _read_document(
         self, file_path: str, options: Optional[ConversionOptions] = None
     ) -> tuple[str, Optional[Any]]:
@@ -3690,6 +3800,10 @@ class DocumentIngestionPipeline:
                 try:
                     converter = create_image_converter(image_path=convert_path)
                     result = converter.convert(convert_path)
+                    # OCR lines hanging below the picture that covers the image, or text
+                    # Docling's layout pass dropped, go back into the body before the
+                    # export (docs/26, the no_chunks audit of 2026-11-19)
+                    self._recover_image_text(result.document, convert_path)
                 finally:
                     if temp_copy and os.path.exists(temp_copy):
                         os.remove(temp_copy)
@@ -3710,17 +3824,18 @@ class DocumentIngestionPipeline:
                             None
                         )
 
-                if markdown_content and len(markdown_content.strip()) > 10:
+                # Text besides the picture placeholder: "<!-- image -->" alone (14 characters)
+                # passed the former "> 10 characters" check and was stored as content that
+                # then produced no chunk (3,145 no_chunks images of one corpus)
+                if markdown_has_text(markdown_content):
                     logger.info(
                         f"Successfully extracted {len(markdown_content)} chars from image "
                         f"via OCR: {os.path.basename(file_path)}"
                     )
                     return (markdown_content, result.document)
                 else:
-                    logger.warning(
-                        f"OCR produced minimal content for image: "
-                        f"{os.path.basename(file_path)}"
-                    )
+                    # A photo, logo or drawing: expected, recorded as image_no_text (not a failure)
+                    logger.info(f"No text in image {os.path.basename(file_path)}: OCR found nothing")
                     return (
                         f"[Image: {os.path.basename(file_path)} - OCR extracted minimal text]",
                         None
@@ -3788,12 +3903,46 @@ class DocumentIngestionPipeline:
                     f"to markdown"
                 )
 
-                # A Word file or a slide deck that holds only pictures (photographed
-                # exhibits, tickets, screenshots, photo decks): the text is in the pictures
-                if file_ext in ('.docx', '.pptx') and not markdown_has_text(markdown_content):
+                # A photo exhibit whose only text is its page header (the court's filing
+                # stamp and the exhibit number "./41"): keep that text rather than nothing.
+                # The chunker ignores the furniture layer, so the Markdown fallback of the
+                # chunker makes the chunk (docs/26, 2026-11-19)
+                if file_ext == '.pdf' and not markdown_has_text(markdown_content):
+                    with_furniture = export_document_markdown(result.document, with_furniture=True)
+                    if markdown_has_text(with_furniture):
+                        logger.info(
+                            f"{os.path.basename(file_path)}: only page headers/footers carry text; keeping them"
+                        )
+                        note_conversion(furniture_text=True)
+                        markdown_content = with_furniture
+
+                # A web page Docling exports as nothing: its visible text (a saved ad frame
+                # with a title, a page of links) is taken from the markup directly; one
+                # without visible text (Outlook's ATT0000x.htm stubs, frameset pages) is an
+                # empty file, not a failure
+                if file_ext in ('.html', '.htm') and not markdown_has_text(markdown_content):
+                    visible = html_visible_text(file_path)
+                    if len(visible) > 20:
+                        logger.info(f"{os.path.basename(file_path)}: Docling exported no text; using the page's visible text")
+                        note_conversion(html_fallback="visible_text")
+                        return (visible, None)
+                    logger.info(f"No text in {os.path.basename(file_path)}: no visible text in the markup")
+                    return (f"[Document: {os.path.basename(file_path)} - no text content]", None)
+
+                # A Word file or a slide deck that holds only pictures (photographed exhibits,
+                # tickets, screenshots, photo decks), with at most a heading above them: the
+                # text is in the pictures
+                if file_ext in ('.docx', '.pptx') and not markdown_has_prose(markdown_content):
                     picture_text = self._ocr_office_pictures(file_path)
+                    headings = strip_markdown_images(markdown_content).strip()
                     if picture_text:
-                        return (picture_text, None)
+                        return ((f"{headings}\n\n{picture_text}" if headings else picture_text), None)
+                    if not headings:
+                        # Nothing at all, or pictures without any text: not a failure (empty_file)
+                        pictures = ooxml_media_images(file_path, max_images=1)
+                        reason = "only pictures without text" if pictures else "no text content"
+                        logger.info(f"No text in {os.path.basename(file_path)}: {reason}")
+                        return (f"[Document: {os.path.basename(file_path)} - {reason}]", None)
 
                 # Return both markdown and DoclingDocument for HybridChunker
                 return (markdown_content, result.document)
@@ -4296,7 +4445,9 @@ class DocumentIngestionPipeline:
                         page.save(tmp, "PNG", dpi=save_dpi) if save_dpi else page.save(tmp, "PNG")
                         converter = create_image_converter(image_path=tmp)
                         result = converter.convert(tmp)
-                        text = export_document_markdown(result.document).strip()
+                        self._recover_image_text(result.document, tmp)
+                        # "<!-- image -->" alone is no page text
+                        text = strip_markdown_images(export_document_markdown(result.document)).strip()
                     except Exception as exc:  # noqa: BLE001 - keep the other pages
                         failed += 1
                         logger.warning(f"OCR failed for page {index} of {basename}: {exc}")
@@ -5692,6 +5843,7 @@ class DocumentIngestionPipeline:
                 processing_time_ms=(datetime.now() - start_time).total_seconds() * 1000,
                 errors=["No chunks created"],
                 ocr_fallback=ocr_fallback,
+                no_text=no_text_kind(document_content),
             )
 
         # OCR repair and chunking run on a thread under the post-conversion budget: the
@@ -5743,9 +5895,11 @@ class DocumentIngestionPipeline:
             )
 
         if not chunks:
-            # An empty file is expected (Outlook ATT0000x.txt placeholders, frameset pages):
-            # no warning for those, one for a file whose text produced no chunk (F9)
-            log = logger.info if not (document_content or "").strip() else logger.warning
+            # An empty file is expected (Outlook ATT0000x.txt placeholders, frameset pages,
+            # pictures without text): recorded as empty_file, no warning. A file whose text
+            # produced no chunk is the no_chunks failure (F9), with a warning
+            no_text = "empty" if not strip_markdown_images(document_content).strip() else None
+            log = logger.info if no_text else logger.warning
             log(f"No chunks created for {document_title}")
             return IngestionResult(
                 document_id="",
@@ -5756,6 +5910,7 @@ class DocumentIngestionPipeline:
                 ).total_seconds() * 1000,
                 errors=["No chunks created"],
                 ocr_fallback=ocr_fallback,
+                no_text=no_text,
             )
 
         logger.info(f"Created {len(chunks)} chunks")
@@ -6749,10 +6904,19 @@ class DocumentIngestionPipeline:
                             existing_hashes[content_hash] = os.path.basename(file_path)
                         processed_count += 1
 
-                        # Track stats - mark as failure if no chunks created
+                        # Track stats - mark as failure if no chunks created. A file the
+                        # reader found no text in (a photo, an empty attachment) is an
+                        # expected outcome, counted on its own and never retried
+                        no_text = getattr(result, "no_text", None) if result else None
                         if is_no_chunks and image_only:
                             error_type = "image_only_pdf"
                             error_message = f"Image-only PDF: OCR found no text ({image_only_reason})"
+                        elif is_no_chunks and no_text == "image":
+                            error_type = IMAGE_NO_TEXT
+                            error_message = "Image without text: OCR found nothing (a photo, logo or drawing)"
+                        elif is_no_chunks and no_text == "empty":
+                            error_type = EMPTY_FILE
+                            error_message = "File without text: nothing to index"
                         elif is_no_chunks:
                             error_type = "no_chunks"
                             error_message = "No content extracted from document"
@@ -6769,7 +6933,7 @@ class DocumentIngestionPipeline:
                             error_message = None
                         file_stat = stat(
                             chunks_created=chunks_created,
-                            success=not is_no_chunks,
+                            success=not is_no_chunks or error_type in NO_TEXT_OUTCOMES,
                             error_type=error_type,
                             error_message=error_message,
                             classification=map_error_type_to_classification(error_type, chunks_created),
@@ -7193,12 +7357,28 @@ class DocumentIngestionPipeline:
             # a retry inside the same run resolved a timeout row: 136 of the 155 open timeout
             # records of one corpus belonged to files a later run had indexed
             # (docs/27-POST_INGESTION_VALIDATION.md).
-            succeeded = sorted({stat.file_path for stat in file_stats if stat.success and stat.file_path})
+            succeeded = sorted({
+                stat.file_path for stat in file_stats
+                if stat.success and stat.file_path and stat.error_type not in NO_TEXT_OUTCOMES
+            })
             if succeeded:
                 await failed_collection.update_many(
                     {"file_path": {"$in": succeeded}, "resolved": {"$ne": True}},
                     {"$set": {"resolved": True, "resolved_at": datetime.now().isoformat(),
                               "resolution": "a later attempt indexed the file", "retry_pending": False}},
+                )
+            # A file read again and found to hold no text (a photo, an empty attachment) is
+            # not a failure either: its open no_chunks rows (a retry_no_chunks run, or the
+            # rows the placeholder purge wrote) are closed the same way
+            without_text = sorted({
+                stat.file_path for stat in file_stats
+                if stat.success and stat.file_path and stat.error_type in NO_TEXT_OUTCOMES
+            })
+            if without_text:
+                await failed_collection.update_many(
+                    {"file_path": {"$in": without_text}, "resolved": {"$ne": True}},
+                    {"$set": {"resolved": True, "resolved_at": datetime.now().isoformat(),
+                              "resolution": "a later attempt found no text in the file", "retry_pending": False}},
                 )
             if recorded:
                 logger.warning(f"Recorded {recorded} failed documents to database")

@@ -25,6 +25,9 @@ JOB_COUNTER_FIELDS: Dict[str, str] = {
     "partial": "partial_files",
     # audio/video left to a media run (retry_media); not a failure
     "media_deferred": "media_deferred_files",
+    # read fine, nothing to index (docs/26, the no_chunks audit of 2026-11-19); not failures
+    "image_no_text": "images_without_text",  # photos, logos, drawings: OCR found no text
+    "empty_file": "empty_files",  # empty attachment stubs, templates, pictures without text
 }
 
 
