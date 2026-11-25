@@ -7,6 +7,7 @@ changing only the database layer while preserving all document processing logic.
 
 import os
 import re
+import html
 import asyncio
 import logging
 import glob
@@ -48,10 +49,22 @@ from src.ingestion.chunker import ChunkingDeadlineExceeded
 from src.ingestion.ocr_repair import repair_docling_document, repair_ocr_text
 from src.ingestion.indexes import ensure_ingestion_indexes
 from src.ingestion.office_fallbacks import (
+    PptBinaryError,
+    TruncatedPackageError,
+    WORD2_MAGIC,
     WordBinaryError,
+    docx_plain_text,
     has_backslash_member_names,
+    is_office_owner_content,
     normalise_ooxml_member_names,
+    ole_container_kind,
+    ole_embedded_images,
+    ooxml_main_part_kind,
     ooxml_media_images,
+    ppt_binary_pictures,
+    ppt_binary_text,
+    truncated_ooxml_text,
+    word2_binary_text,
     word_binary_text,
 )
 from src.ingestion import telemetry_hooks
@@ -163,6 +176,10 @@ SUPPORTED_INGESTION_EXTENSIONS: frozenset[str] = frozenset({
     ".mp4", ".avi", ".mkv", ".mov", ".webm", ".wmv",  # Video formats (audio track transcribed; VIDEO_EXTENSIONS)
 })
 
+#: Raster image files, converted through Docling's image pipeline with OCR; the ones below the
+#: run's :class:`ImagePolicy` minimum (web-page furniture, icons, spacers) are skipped
+RASTER_IMAGE_EXTENSIONS: frozenset = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"})
+
 #: Audio files, transcribed with Whisper (docs/04, "Media transcription")
 AUDIO_EXTENSIONS: frozenset = frozenset({".mp3", ".wav", ".m4a", ".flac", ".ogg"})
 #: Video files whose audio track is transcribed (ffmpeg extracts it first)
@@ -183,6 +200,11 @@ def media_kind(file_path: str) -> Optional[str]:
 def is_media_file(file_path: str) -> bool:
     """Whether ``file_path`` is an audio or video file (transcribed, not converted)."""
     return media_kind(file_path) is not None
+
+
+def is_raster_image_file(file_path: str) -> bool:
+    """Whether ``file_path`` is a raster image file (OCRed through Docling's image pipeline)."""
+    return os.path.splitext(file_path)[1].lower() in RASTER_IMAGE_EXTENSIONS
 
 
 @dataclass
@@ -209,6 +231,10 @@ class IngestionResult:
     # PDFs only: which scan-text fallback put OCR text back into the document after the
     # conversion (F35): "picture_children", "full_page" or both joined with "+"; None = none
     ocr_fallback: Optional[str] = None
+    # Why a file produced no chunk although it was read: "image" (an image whose OCR found
+    # no text), "empty" (a file without any text); None when text was extracted and the
+    # chunker still produced nothing (the no_chunks failure), or when chunks were created
+    no_text: Optional[str] = None
 
 
 @dataclass
@@ -222,7 +248,9 @@ class IngestionFileStats:
     processing_time_ms: float
     chunks_created: int
     success: bool
-    error_type: Optional[str]  # timeout, error, none, no_chunks, image_only_pdf, partial
+    # timeout, error, encrypted, none, no_chunks, image_only_pdf, partial, media_deferred,
+    # tiny_image, image_no_text, empty_file
+    error_type: Optional[str]
     error_message: Optional[str]
     timeout_seconds: float
     profile_key: str
@@ -768,10 +796,162 @@ def docling_accelerator_options(device: Optional[str] = None, num_threads: Optio
 
 #: Error type of a media file recorded for a later media run (``retry_media``)
 MEDIA_DEFERRED = "media_deferred"
+#: Outcome of an image whose OCR found no text (a photo, a logo, a drawing): read fine,
+#: nothing to index, counted on its own (``images_without_text``), never retried
+IMAGE_NO_TEXT = "image_no_text"
+#: Outcome of a file without any text (an empty Outlook attachment stub, a template, a Word
+#: file of pictures without text): the same, counted as ``empty_files``
+EMPTY_FILE = "empty_file"
+#: The two "nothing to index" outcomes: ``success`` stats, no ``failed_documents`` row
+NO_TEXT_OUTCOMES: Tuple[str, ...] = (IMAGE_NO_TEXT, EMPTY_FILE)
 MEDIA_MAX_CONCURRENT_CAP = 8
 MEDIA_MAX_THREADS = 32
 MEDIA_DEVICES: Tuple[str, ...] = ("auto", "cpu", "cuda")
 MEDIA_ENV_PREFIX = "INGEST_MEDIA_"
+
+#: Outcome of a raster image below the run's :class:`ImagePolicy` minimum (``error_type``,
+#: classification and ``failed_documents`` record); counted apart, not a failure
+TINY_IMAGE = "tiny_image"
+#: First words of the :class:`IngestionResult` error of such a file (the job's final failure
+#: count leaves these out, like duplicates; ``backend/services/ingestion_counters.py``)
+TINY_IMAGE_RESULT_PREFIX = "Tiny image skipped"
+IMAGE_ENV_PREFIX = "INGEST_IMAGE_"
+#: Defaults of the policy: 100 x 100 px and 1 KiB. Of the 778 GIFs of one law-firm corpus
+#: still unindexed on 2026-11-19, 78 % were below one of the two (spacers, icons, buttons,
+#: rules, e-mail signature logos; docs/26-FORMAT_EDGE_AUDIT.md, "Tiny raster images").
+IMAGE_MIN_PIXELS_DEFAULT = 10_000
+IMAGE_MIN_BYTES_DEFAULT = 1_024
+
+
+@dataclass
+class ImagePolicy:
+    """Which raster images a run skips as worthless before converting them.
+
+    Web pages saved next to their ``…-Dateien`` folders, e-mail attachments and
+    practice-management exports leave thousands of spacer, icon, button, rule and logo images
+    on a corpus's shares. OCR finds nothing in them, but each one costs a Docling conversion
+    (model load in a fresh worker, Tesseract, ~3 s) and ends as a ``no_chunks`` failure that
+    retry runs pick up again. A file below either minimum is recorded as ``tiny_image``
+    instead, without a conversion; ``0`` disables that minimum.
+
+    Attributes:
+        min_pixels: Least ``width x height`` of an image worth OCR; the dimensions come from
+            the file header (PIL opens it lazily). A file PIL cannot identify is converted.
+        min_bytes: Least file size in bytes; applies whether or not the header can be read.
+    """
+
+    min_pixels: int = IMAGE_MIN_PIXELS_DEFAULT
+    min_bytes: int = IMAGE_MIN_BYTES_DEFAULT
+
+    @property
+    def active(self) -> bool:
+        """Whether any minimum is in force."""
+        return self.min_pixels > 0 or self.min_bytes > 0
+
+    def describe(self) -> str:
+        """One log line: ``min 10000 px, min 1024 bytes`` (or ``off``)."""
+        if not self.active:
+            return "off"
+        parts = []
+        if self.min_pixels > 0:
+            parts.append(f"min {self.min_pixels} px")
+        if self.min_bytes > 0:
+            parts.append(f"min {self.min_bytes} bytes")
+        return ", ".join(parts)
+
+
+def coerce_image_policy_value(key: str, value: Any) -> Optional[int]:
+    """``value`` for the :class:`ImagePolicy` field ``key`` as a non-negative int, else ``None``."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    if number < 0:
+        return None
+    return number
+
+
+def resolve_image_policy(raw: Optional[Dict[str, Any]] = None) -> ImagePolicy:
+    """The tiny-image policy of a run.
+
+    ``raw`` (the performance config's ``images`` section) wins over the ``INGEST_IMAGE_*``
+    environment, which wins over the ``ingest_image_*`` settings and the defaults. Unknown
+    keys and unusable values are ignored with a warning.
+
+    Args:
+        raw: The stored ``images`` mapping, or ``None``.
+    """
+    fields = {f.name for f in ImagePolicy.__dataclass_fields__.values()}
+    values: Dict[str, int] = {}
+    try:
+        configured = load_settings(use_profile=False)
+    except Exception:  # settings need MONGODB_URI etc.; the harness has none
+        configured = None
+    if configured is not None:
+        for key in fields:
+            coerced = coerce_image_policy_value(key, getattr(configured, f"ingest_image_{key}", None))
+            if coerced is not None:
+                values[key] = coerced
+    for key in fields:
+        env_value = os.getenv(IMAGE_ENV_PREFIX + key.upper())
+        if env_value is None or env_value.strip() == "":
+            continue
+        coerced = coerce_image_policy_value(key, env_value)
+        if coerced is None:
+            logger.warning(f"Ignoring {IMAGE_ENV_PREFIX + key.upper()}={env_value!r}")
+            continue
+        values[key] = coerced
+    for key, value in (raw or {}).items():
+        if key not in fields:
+            logger.warning(f"Ignoring unknown image policy setting {key!r}")
+            continue
+        coerced = coerce_image_policy_value(key, value)
+        if coerced is None:
+            if value not in (None, ""):
+                logger.warning(f"Ignoring unusable image policy setting {key}={value!r}")
+            continue
+        values[key] = coerced
+    return ImagePolicy(**values)
+
+
+def image_dimensions(file_path: str) -> Optional[Tuple[int, int]]:
+    """``(width, height)`` from the image header, or ``None`` when PIL cannot identify the file.
+
+    PIL reads only the header here (no frame is decoded), so this costs one small read even
+    on a network share; for a multi-frame file (animated GIF, multi-page TIFF) it is the
+    size of the first frame.
+    """
+    try:
+        from PIL import Image
+
+        with Image.open(file_path) as img:
+            width, height = img.size
+            return int(width), int(height)
+    except Exception as exc:  # noqa: BLE001 - the converter will report the real error
+        logger.debug(f"Could not read the image header of {file_path}: {exc}")
+        return None
+
+
+def tiny_image_reason(file_path: str, size_bytes: int, policy: ImagePolicy) -> Optional[str]:
+    """Why ``file_path`` is skipped under ``policy``, or ``None`` when it is worth converting.
+
+    Args:
+        file_path: The file; anything but a raster image (:data:`RASTER_IMAGE_EXTENSIONS`)
+            is never skipped.
+        size_bytes: Its size on disk.
+        policy: The run's minimums (``0`` disables one).
+    """
+    if not policy.active or not is_raster_image_file(file_path):
+        return None
+    if policy.min_bytes > 0 and size_bytes < policy.min_bytes:
+        return f"{size_bytes} bytes, below {policy.min_bytes}"
+    if policy.min_pixels > 0:
+        dims = image_dimensions(file_path)
+        if dims is not None and dims[0] * dims[1] < policy.min_pixels:
+            return f"{dims[0]}x{dims[1]} px, below {policy.min_pixels}"
+    return None
 #: Seconds of media per MB when ffprobe cannot tell the duration (~128 kbit/s audio, ~1 Mbit/s video)
 _MEDIA_SECONDS_PER_MB = {"audio": 60.0, "video": 8.0}
 
@@ -1385,7 +1565,15 @@ class UnreadableFileError(Exception):
     Until 2026-10-26 the readers' ``[Error: Could not read file …]`` placeholder was stored,
     chunked and embedded as the document's content (F26 of the prompt-test log), so the file
     counted as ingested and a question naming it got the error string as its source.
+
+    ``error_type`` is what ``failed_documents`` records: ``"error"`` (retried with
+    ``retry_errors``) or ``"encrypted"`` for a password-protected file, which no retry can
+    read (:func:`placeholder_error_type`).
     """
+
+    def __init__(self, message: str, error_type: str = "error") -> None:
+        super().__init__(message)
+        self.error_type = error_type
 
 
 # The placeholder table lives in a module without heavy imports (the purge and the search
@@ -1393,9 +1581,13 @@ class UnreadableFileError(Exception):
 from src.ingestion.placeholders import (  # noqa: E402,F401
     EMPTY_PLACEHOLDER_PREFIX,
     EMPTY_PLACEHOLDER_PREFIXES,
+    ENCRYPTED_ERROR_TYPE,
+    ENCRYPTED_MARKER,
     ERROR_PLACEHOLDER_PREFIXES,
     MEDIA_PLACEHOLDER_PREFIXES,
     PLACEHOLDER_PREFIXES,
+    no_text_kind,
+    placeholder_error_type,
     placeholder_kind,
 )
 
@@ -1407,6 +1599,7 @@ RETRY_FLAG_ERROR_TYPES: Dict[str, str] = {
     "retry_no_chunks": "no_chunks",
     "retry_image_only_pdfs": "image_only_pdf",
     "retry_media": "media_deferred",  # audio/video deferred to a media run (MEDIA_DEFERRED)
+    "retry_tiny_images": "tiny_image",  # raster images skipped under the ImagePolicy (TINY_IMAGE)
 }
 
 
@@ -1707,16 +1900,22 @@ def document_content_layers():
     return {ContentLayer.BODY, ContentLayer.FURNITURE}
 
 
-def export_document_markdown(document: Any) -> str:
+def export_document_markdown(document: Any, with_furniture: bool = False) -> str:
     """Export a DoclingDocument to Markdown the way the ingestion pipeline stores it.
 
     Args:
         document: Converted ``DoclingDocument``.
+        with_furniture: Include page headers/footers whatever ``INGEST_PAGE_FURNITURE`` says
+            (the reader's last resort for a page whose only text is its header).
 
     Returns:
         Markdown including page headers/footers when ``INGEST_PAGE_FURNITURE`` is on.
     """
     layers = document_content_layers()
+    if with_furniture and layers is None:
+        from docling_core.types.doc import ContentLayer
+
+        layers = {ContentLayer.BODY, ContentLayer.FURNITURE}
     if layers is None:
         return document.export_to_markdown()
     return document.export_to_markdown(included_content_layers=layers)
@@ -1957,7 +2156,10 @@ def prepare_image_for_docling(image_path: str) -> Tuple[str, Optional[str]]:
     Docling rejects two kinds of files that phones and cameras produce routinely: JPEGs
     whose DPI tag is ``(0, 0)`` (screenshots, some Apple exports; ``_validate_dpi`` raises)
     and MPO multi-picture containers (Canon). Both are re-saved as a plain PNG without a DPI
-    tag in a temporary file; everything else is passed through untouched.
+    tag in a temporary file. An animated GIF is re-saved the same way, as its first frame:
+    Docling's image backend turns every frame into a page, so a 75-frame web icon cost 78 s
+    of OCR and a 27-frame banner repeated its text 27 times (docs/26, "Tiny raster images").
+    Everything else is passed through untouched; multi-page TIFFs have their own reader.
 
     Args:
         image_path: The image file about to be converted.
@@ -1965,32 +2167,53 @@ def prepare_image_for_docling(image_path: str) -> Tuple[str, Optional[str]]:
     Returns:
         ``(path_to_convert, temp_path)``; ``temp_path`` is ``None`` when the original is used
         and must otherwise be removed by the caller after the conversion.
+
+    Raises:
+        NotARasterImageError: PIL opened the file but found no image format in it (a CSS or
+            JavaScript file under a ``.gif`` name): Docling would sniff it as a CSV table.
     """
     try:
-        from PIL import Image
-
+        from PIL import Image, UnidentifiedImageError
+    except ImportError:
+        return image_path, None
+    try:
         with Image.open(image_path) as img:
             dpi = img.info.get("dpi")
             # TIFF DPI tags are PIL IFDRational values: coerce instead of rejecting the type
             # (every TIFF used to be re-saved needlessly, docs/26)
             values = [_dpi_number(v) for v in dpi] if isinstance(dpi, tuple) and len(dpi) == 2 else None
             bad_dpi = dpi is not None and (values is None or any(v is None or v <= 0 or v != v for v in values))
-            if img.format != "MPO" and not bad_dpi:
+            animated = img.format == "GIF" and int(getattr(img, "n_frames", 1)) > 1
+            if img.format != "MPO" and not bad_dpi and not animated:
                 return image_path, None
             import tempfile
 
             fd, tmp = tempfile.mkstemp(suffix=".png", prefix="recallhub-img-")
             os.close(fd)
+            if animated:
+                img.seek(0)
             frame = img.convert("RGB") if img.mode not in ("L", "RGB") else img.copy()
             frame.save(tmp, "PNG")
-            logger.info(
-                f"Re-saved {os.path.basename(image_path)} for OCR ({img.format}, dpi tag {dpi}): "
-                "Docling cannot load it as is"
-            )
+            if animated:
+                logger.info(
+                    f"Re-saved the first of {img.n_frames} frames of {os.path.basename(image_path)} for OCR: "
+                    "Docling would OCR every frame of an animated GIF as a page"
+                )
+            else:
+                logger.info(
+                    f"Re-saved {os.path.basename(image_path)} for OCR ({img.format}, dpi tag {dpi}): "
+                    "Docling cannot load it as is"
+                )
             return tmp, tmp
+    except UnidentifiedImageError as exc:
+        raise NotARasterImageError(f"PIL cannot identify the file under its image name: {exc}") from exc
     except Exception as exc:  # noqa: BLE001 - let Docling report the real problem
         logger.debug(f"Image pre-check failed for {image_path}: {exc}")
         return image_path, None
+
+
+class NotARasterImageError(ValueError):
+    """A file under an image extension that no image format matches (CSS saved as ``site.gif``)."""
 
 
 def _dpi_number(value: Any) -> Optional[float]:
@@ -2048,11 +2271,94 @@ _DSS_AUDIO_MAGIC = b"\x02dss"
 #: OLE2 compound file (Word 97-2003 .doc, Outlook .msg) and zip container (.docx)
 _OLE2_MAGIC = bytes.fromhex("d0cf11e0a1b11ae1")
 _ZIP_MAGIC = bytes.fromhex("504b0304")
+#: The Word family: the content decides the reader (docs/26, follow-up 2026-11-19)
+WORD_EXTENSIONS: frozenset = frozenset({".doc", ".docx", ".dot", ".dotx", ".wbk"})
+#: Image signatures and the extension the image reader expects for them
+_IMAGE_SIGNATURES: Tuple[Tuple[bytes, str], ...] = (
+    (b"\xff\xd8\xff", ".jpg"),
+    (b"\x89PNG\r\n\x1a\n", ".png"),
+    (b"GIF87a", ".gif"),
+    (b"GIF89a", ".gif"),
+    (b"II*\x00", ".tif"),
+    (b"MM\x00*", ".tif"),
+    (b"BM", ".bmp"),
+)
+
+
+def sniff_container(head: bytes, size: int) -> Optional[str]:
+    """What a file's first bytes say it is, for the readers that go by content.
+
+    Returns ``"ole2"``, ``"zip"``, ``"pdf"``, ``"word2"`` (Word 1.x/2.x for Windows),
+    ``"owner"`` (an Office owner file under another name, by size and layout), an image
+    extension (``".jpg"``, ``".png"``, ``".gif"``, ``".tif"``, ``".bmp"``) or ``None`` for
+    anything else (RTF, HTML and text are told apart by :func:`sniff_text_bytes`).
+
+    Args:
+        head: The first bytes of the file (at least 8; 162 to recognise an owner file).
+        size: The file's size.
+    """
+    if head[:8] == _OLE2_MAGIC:
+        return "ole2"
+    if head[:4] == _ZIP_MAGIC:
+        return "zip"
+    if head[:4] == b"%PDF":
+        return "pdf"
+    if head[:2] == WORD2_MAGIC:
+        return "word2"
+    if size == 162 and is_office_owner_content(head[:162]):
+        return "owner"
+    for signature, suffix in _IMAGE_SIGNATURES:
+        if head.startswith(signature):
+            return suffix
+    return None
+
+
+def strip_markdown_images(markdown: Optional[str]) -> str:
+    """The Markdown without Docling's picture placeholders (``<!-- image -->``)."""
+    return (markdown or "").replace("<!-- image -->", "")
 
 
 def markdown_has_text(markdown: Optional[str]) -> bool:
     """Whether a converted document has text besides picture placeholders (``<!-- image -->``)."""
-    return len((markdown or "").replace("<!-- image -->", "").strip()) > 20
+    return len(strip_markdown_images(markdown).strip()) > 20
+
+
+_MARKDOWN_HEADING_LINE = re.compile(r"^\s{0,3}#{1,6}\s.*$", re.MULTILINE)
+_HTML_DROP_BLOCKS = re.compile(r"<(script|style|noscript|template)\b.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
+_HTML_TAG = re.compile(r"<[^>]+>")
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def html_visible_text(file_path: str) -> str:
+    """The visible text of an HTML file (scripts, styles and comments dropped), whitespace folded.
+
+    The reader's fallback for a page Docling exports as nothing; the title counts as text.
+    """
+    try:
+        with open(file_path, "rb") as handle:
+            raw = handle.read()
+    except OSError:
+        return ""
+    for encoding in ("utf-8", "cp1252"):
+        try:
+            markup = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        markup = raw.decode("latin-1", "replace")
+    markup = _HTML_COMMENT.sub(" ", _HTML_DROP_BLOCKS.sub(" ", markup))
+    text = html.unescape(_HTML_TAG.sub(" ", markup))
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def markdown_has_prose(markdown: Optional[str]) -> bool:
+    """Whether a converted document has text besides picture placeholders *and* headings.
+
+    A Word file of photographed exhibits often carries one heading (``Lichtbildkonvolut``, a
+    date) above its pictures: the heading alone is no content, the text is in the pictures.
+    """
+    return len(_MARKDOWN_HEADING_LINE.sub("", strip_markdown_images(markdown)).strip()) > 20
 
 
 def pdf_open_problem(path: str) -> Optional[str]:
@@ -2071,6 +2377,13 @@ def pdf_open_problem(path: str) -> Optional[str]:
     except Exception as exc:  # noqa: BLE001 - only the reason matters
         return "password-protected PDF" if "password" in str(exc).lower() else None
     return None
+
+
+def _antiword_output(data: Any) -> str:
+    """antiword's stdout/stderr as text (bytes from ``subprocess``, str from tests' stubs)."""
+    if isinstance(data, bytes):
+        return data.decode("utf-8", errors="replace")
+    return data or ""
 
 
 def read_error_cause(exc: BaseException, limit: int = 240) -> str:
@@ -2230,7 +2543,7 @@ _OOXML_TEMPLATE_TYPES: Dict[str, Tuple[str, str]] = {
 }
 
 
-def ooxml_template_as_document(src: str, dst: str) -> None:
+def ooxml_template_as_document(src: str, dst: str, template_ext: Optional[str] = None) -> None:
     """Write the Office template ``src`` (.dotx/.xltx/.potx) to ``dst`` as the matching document.
 
     A template is the same zip as the document except for the main part's content type in
@@ -2240,10 +2553,13 @@ def ooxml_template_as_document(src: str, dst: str) -> None:
     Args:
         src: The template file.
         dst: Destination path (``.docx``/``.xlsx``/``.pptx``).
+        template_ext: The template kind (``.dotx``, ``.xltx``, ``.potx``) when the file's
+            own extension does not say it (a template saved as ``Brief.doc``,
+            :func:`ooxml_main_part_kind`); the extension of ``src`` by default.
     """
     import zipfile
 
-    template_type, document_type = _OOXML_TEMPLATE_TYPES[os.path.splitext(src)[1].lower()]
+    template_type, document_type = _OOXML_TEMPLATE_TYPES[template_ext or os.path.splitext(src)[1].lower()]
     with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
         for item in zin.infolist():
             data = zin.read(item.filename)
@@ -2860,16 +3176,20 @@ def map_error_type_to_classification(error_type: Optional[str], chunks_created: 
     """
     if error_type == "timeout":
         return "timeout"
-    elif error_type == "error":
+    elif error_type in ("error", ENCRYPTED_ERROR_TYPE):
         return "error"
     elif error_type == "image_only_pdf":
         return "image_only_pdf"
     elif error_type == "no_chunks":
         return "no_chunks"
+    elif error_type in NO_TEXT_OUTCOMES:
+        return error_type  # image_no_text / empty_file: read fine, nothing to index
     elif error_type == "duplicate":
         return "normal"  # Duplicates are considered normal (already processed)
     elif error_type == MEDIA_DEFERRED:
         return MEDIA_DEFERRED
+    elif error_type == TINY_IMAGE:
+        return TINY_IMAGE
     elif chunks_created > 0:
         return "normal"
     else:
@@ -3032,7 +3352,10 @@ class IngestionStatsRecorder:
             counts of the stats written so far), e.g. to update job status counters.
     """
 
-    COUNTED: Tuple[str, ...] = ("timeout", "no_chunks", "error", "image_only_pdf", "duplicate", "partial", "success")
+    COUNTED: Tuple[str, ...] = (
+        "timeout", "no_chunks", "error", "image_only_pdf", "duplicate", "partial", "success",
+        IMAGE_NO_TEXT, EMPTY_FILE, TINY_IMAGE,
+    )
     #: Stats kept in memory while the database refuses writes; the oldest are dropped beyond it.
     MAX_PENDING = 10_000
 
@@ -3169,6 +3492,8 @@ class DocumentIngestionPipeline:
     _conversion_pool: Optional[Any] = None
     # How this run transcribes audio/video (resolved by ingest_documents; see MediaConfig)
     media_config: MediaConfig = MediaConfig()
+    # Which raster images this run skips unconverted (resolved by ingest_documents; see ImagePolicy)
+    image_policy: ImagePolicy = ImagePolicy()
     # Dedicated media worker processes of the run (process isolation, media files present);
     # None = media files convert in the conversion pool or on the thread pool
     _media_pool: Optional[Any] = None
@@ -3510,6 +3835,48 @@ class DocumentIngestionPipeline:
         note_conversion(ocr_fallback=recovery.fallback)
         return recovery
 
+    def _recover_image_text(self, document: Any, image_path: str) -> Optional[Any]:
+        """The scan-text fallback for an image conversion (docs/26, the no_chunks audit).
+
+        Runs :func:`src.ingestion.scan_text_fallback.recover_image_text`: OCR lines below the
+        picture that covers the image are copied into the body (``picture_children``); when
+        the document still has no body text, the image is read with a plain Tesseract pass at
+        its own size (capped at ``OCR_IMAGE_MAX_MPX``) and at lower scales (``full_page``).
+        A failure inside the fallback never fails the file.
+
+        Args:
+            document: The converted ``DoclingDocument`` (modified in place).
+            image_path: The image file the converter read (a format PIL opens).
+
+        Returns:
+            The ``ScanTextRecovery``, or ``None`` when nothing was recovered.
+        """
+        if document is None:
+            return None
+        try:
+            from src.ingestion.scan_text_fallback import recover_image_text
+
+            ocr_config = resolve_ocr_config()
+            recovery = recover_image_text(
+                document,
+                image_path,
+                ocr_page=full_page_ocr_reader(ocr_config),
+                max_pixels=max(0, int(ocr_config.image_max_mpx)) * 1_000_000,
+            )
+        except Exception as exc:  # noqa: BLE001 - the conversion result stands as Docling returned it
+            logger.warning(f"Image text fallback failed for {os.path.basename(image_path)}: {exc}")
+            return None
+        if recovery is None:
+            return None
+        logger.info(f"OCR fallback for {os.path.basename(image_path)} ({recovery.describe()})")
+        if recovery.error:
+            logger.warning(
+                f"Image text fallback: Tesseract pass failed for {os.path.basename(image_path)} "
+                f"after {recovery.characters:,} characters were recovered: {recovery.error}"
+            )
+        note_conversion(ocr_fallback=recovery.fallback)
+        return recovery
+
     def _read_document(
         self, file_path: str, options: Optional[ConversionOptions] = None
     ) -> tuple[str, Optional[Any]]:
@@ -3527,6 +3894,22 @@ class DocumentIngestionPipeline:
         """
         file_ext = os.path.splitext(file_path)[1].lower()
         options = options or ConversionOptions()
+        basename = os.path.basename(file_path)
+
+        # A zero-byte file has nothing to read: an empty document, not a failed one
+        try:
+            if os.path.getsize(file_path) == 0:
+                logger.info(f"{basename} is empty (0 bytes)")
+                return (f"[Document: {basename} - empty file (0 bytes)]", None)
+        except OSError:
+            pass  # the reader below reports why the file cannot be opened
+
+        # Word names hide PDFs, pictures, owner files and Word binaries named .docx: the
+        # content picks the reader (docs/26, follow-up 2026-11-19)
+        if file_ext in WORD_EXTENSIONS:
+            routed = self._read_word_file_by_content(file_path, file_ext)
+            if routed is not None:
+                return routed
 
         # Word backups (.wbk) and Word 97 templates (.dot) are the same OLE2 format as .doc
         if file_ext in ('.wbk', '.dot'):
@@ -3570,6 +3953,10 @@ class DocumentIngestionPipeline:
         if file_ext == '.doc':
             return self._read_doc_file(file_path)
 
+        # PowerPoint 97-2003: Docling reads .pptx only (docs/26, PowerPoint follow-up)
+        if file_ext == '.ppt':
+            return self._read_ppt_file(file_path)
+
         # Audio formats - transcribe with Whisper ASR (docs/04, "Media transcription")
         if file_ext in AUDIO_EXTENSIONS:
             # Returns tuple: (markdown_content, docling_document)
@@ -3580,8 +3967,7 @@ class DocumentIngestionPipeline:
             return self._transcribe_video(file_path)
 
         # Image formats - convert via Docling with OCR
-        image_formats = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.tif']
-        if file_ext in image_formats:
+        if file_ext in RASTER_IMAGE_EXTENSIONS:
             # Multi-page TIFF scans: OCR every page, not only the first (docs/26)
             if file_ext in ('.tif', '.tiff'):
                 frames = image_frame_count(file_path)
@@ -3597,6 +3983,10 @@ class DocumentIngestionPipeline:
                 try:
                     converter = create_image_converter(image_path=convert_path)
                     result = converter.convert(convert_path)
+                    # OCR lines hanging below the picture that covers the image, or text
+                    # Docling's layout pass dropped, go back into the body before the
+                    # export (docs/26, the no_chunks audit of 2026-11-19)
+                    self._recover_image_text(result.document, convert_path)
                 finally:
                     if temp_copy and os.path.exists(temp_copy):
                         os.remove(temp_copy)
@@ -3617,21 +4007,30 @@ class DocumentIngestionPipeline:
                             None
                         )
 
-                if markdown_content and len(markdown_content.strip()) > 10:
+                # Text besides the picture placeholder: "<!-- image -->" alone (14 characters)
+                # passed the former "> 10 characters" check and was stored as content that
+                # then produced no chunk (3,145 no_chunks images of one corpus)
+                if markdown_has_text(markdown_content):
                     logger.info(
                         f"Successfully extracted {len(markdown_content)} chars from image "
                         f"via OCR: {os.path.basename(file_path)}"
                     )
                     return (markdown_content, result.document)
                 else:
-                    logger.warning(
-                        f"OCR produced minimal content for image: "
-                        f"{os.path.basename(file_path)}"
-                    )
+                    # A photo, logo or drawing: expected, recorded as image_no_text (not a failure)
+                    logger.info(f"No text in image {os.path.basename(file_path)}: OCR found nothing")
                     return (
                         f"[Image: {os.path.basename(file_path)} - OCR extracted minimal text]",
                         None
                     )
+            except NotARasterImageError as e:
+                # A web page's CSS or JavaScript saved as site.gif / script.gif: Docling's
+                # format sniffing would read it as a CSV table and index the stylesheet
+                logger.warning(f"Not a raster image: {file_path} ({e})")
+                return (
+                    f"[Error: {os.path.basename(file_path)} is not a raster image ({e})]",
+                    None
+                )
             except ImportError as e:
                 logger.warning(f"Docling image support not available: {e}")
                 return (
@@ -3647,7 +4046,7 @@ class DocumentIngestionPipeline:
 
         # Docling-supported formats (convert to markdown); legacy .xls is read above
         docling_formats = [
-            '.pdf', '.docx', '.pptx', '.ppt',
+            '.pdf', '.docx', '.pptx',
             '.xlsx', '.html', '.htm',
             '.md', '.markdown'  # Markdown files for HybridChunker
         ]
@@ -3664,6 +4063,10 @@ class DocumentIngestionPipeline:
                 converter = create_document_converter(table_structure=options.table_structure)
                 convert_path = file_path
                 repaired_copy: Optional[str] = None
+                if file_ext == '.docx' and ooxml_main_part_kind(file_path) == '.dotx':
+                    # A template package saved as .docx: python-docx refuses the content type
+                    logger.info(f"{basename} is a Word template package under a .docx name")
+                    return self._read_renamed_office_file(file_path, '.docx')
                 if file_ext in ('.docx', '.xlsx', '.pptx') and has_backslash_member_names(file_path):
                     # Packages written with backslashes in their member names (a practice-management
                     # system's letters and fee notes): Word opens them, a zip reader finds no parts
@@ -3691,18 +4094,58 @@ class DocumentIngestionPipeline:
                     f"to markdown"
                 )
 
-                # A Word file that holds only pictures (photographed exhibits, tickets,
-                # screenshots): the text is in the pictures
-                if file_ext == '.docx' and not markdown_has_text(markdown_content):
+                # A photo exhibit whose only text is its page header (the court's filing
+                # stamp and the exhibit number "./41"): keep that text rather than nothing.
+                # The chunker ignores the furniture layer, so the Markdown fallback of the
+                # chunker makes the chunk (docs/26, 2026-11-19)
+                if file_ext == '.pdf' and not markdown_has_text(markdown_content):
+                    with_furniture = export_document_markdown(result.document, with_furniture=True)
+                    if markdown_has_text(with_furniture):
+                        logger.info(
+                            f"{os.path.basename(file_path)}: only page headers/footers carry text; keeping them"
+                        )
+                        note_conversion(furniture_text=True)
+                        markdown_content = with_furniture
+
+                # A web page Docling exports as nothing: its visible text (a saved ad frame
+                # with a title, a page of links) is taken from the markup directly; one
+                # without visible text (Outlook's ATT0000x.htm stubs, frameset pages) is an
+                # empty file, not a failure
+                if file_ext in ('.html', '.htm') and not markdown_has_text(markdown_content):
+                    visible = html_visible_text(file_path)
+                    if len(visible) > 20:
+                        logger.info(f"{os.path.basename(file_path)}: Docling exported no text; using the page's visible text")
+                        note_conversion(html_fallback="visible_text")
+                        return (visible, None)
+                    logger.info(f"No text in {os.path.basename(file_path)}: no visible text in the markup")
+                    return (f"[Document: {os.path.basename(file_path)} - no text content]", None)
+
+                # A Word file or a slide deck that holds only pictures (photographed exhibits,
+                # tickets, screenshots, photo decks), with at most a heading above them: the
+                # text is in the pictures
+                if file_ext in ('.docx', '.pptx') and not markdown_has_prose(markdown_content):
                     picture_text = self._ocr_office_pictures(file_path)
+                    headings = strip_markdown_images(markdown_content).strip()
                     if picture_text:
-                        return (picture_text, None)
+                        return ((f"{headings}\n\n{picture_text}" if headings else picture_text), None)
+                    if not headings:
+                        # Nothing at all, or pictures without any text: not a failure (empty_file)
+                        pictures = ooxml_media_images(file_path, max_images=1)
+                        reason = "only pictures without text" if pictures else "no text content"
+                        logger.info(f"No text in {os.path.basename(file_path)}: {reason}")
+                        return (f"[Document: {os.path.basename(file_path)} - {reason}]", None)
 
                 # Return both markdown and DoclingDocument for HybridChunker
                 return (markdown_content, result.document)
 
             except Exception as e:
                 logger.error(f"Failed to convert {file_path} with Docling: {e}")
+                # A Word package Docling rejects for a reason of its own (a list definition
+                # with an empty start value) still has its paragraphs in document.xml
+                if file_ext == '.docx':
+                    fallback = self._docx_text_fallback(file_path, basename, e)
+                    if fallback is not None:
+                        return fallback
                 # Fall back to raw text if Docling fails
                 # Raw text is a fallback for the text formats only: an ASCII-only PDF or a
                 # .pptx that Docling rejects must not be stored as its file source
@@ -3713,6 +4156,11 @@ class DocumentIngestionPipeline:
                             return (f.read(), None)
                     except Exception:  # noqa: BLE001 - reported with the conversion's cause below
                         pass
+                # A package cut off by an interrupted copy: the parts before the cut still read
+                if file_ext in ('.pptx', '.docx'):
+                    salvaged = self._salvage_truncated_package(file_path, e)
+                    if salvaged is not None:
+                        return (salvaged, None)
                 cause = (pdf_open_problem(file_path) if file_ext == '.pdf' else None) or read_error_cause(e)
                 return (
                     f"[Error: Could not read file {os.path.basename(file_path)} ({cause})]",
@@ -3729,6 +4177,75 @@ class DocumentIngestionPipeline:
                 with open(file_path, 'r', encoding='latin-1') as f:
                     return (f.read(), None)
 
+    def _read_word_file_by_content(self, file_path: str, file_ext: str) -> Optional[tuple[str, Optional[Any]]]:
+        """Route a Word-named file by its first bytes; ``None`` when the extension's reader applies.
+
+        On one law firm's shares (docs/26, follow-up 2026-11-19) ``.doc`` names covered PDFs,
+        JPEG scans and Outlook messages, ``.docx`` names Word 97 binaries and encrypted
+        packages, and two owner files had lost their ``~$`` prefix. A PDF or a picture goes
+        to its own reader through a temporary copy with the right suffix; an OLE2 or Word 2
+        file named ``.docx``/``.dotx`` goes to the ``.doc`` reader, which tells the container
+        kinds apart; a zip named ``.doc`` is handled by that reader already.
+
+        Args:
+            file_path: The file.
+            file_ext: Its lower-case extension (one of :data:`WORD_EXTENSIONS`).
+        """
+        basename = os.path.basename(file_path)
+        try:
+            size = os.path.getsize(file_path)
+            with open(file_path, "rb") as handle:
+                head = handle.read(162)
+        except OSError:
+            return None  # the extension's reader reports why the file cannot be opened
+        kind = sniff_container(head, size)
+        if kind == "owner":
+            logger.info(f"{basename} is an Office owner file without its ~$ prefix")
+            return (f"[Document: {basename} - Office owner file, no document]", None)
+        if kind == "pdf":
+            logger.info(f"{basename} is a PDF under a Word name")
+            return self._read_as_renamed(file_path, ".pdf")
+        if kind in {suffix for _, suffix in _IMAGE_SIGNATURES}:
+            logger.info(f"{basename} is a {kind[1:].upper()} picture under a Word name")
+            return self._read_as_renamed(file_path, kind)
+        if file_ext in (".docx", ".dotx") and kind != "zip":
+            logger.info(f"{basename} is not an Office package ({kind or 'unknown content'}); reading it like a .doc")
+            return self._read_doc_file(file_path)
+        return None
+
+    def _read_as_renamed(self, file_path: str, suffix: str) -> tuple[str, Optional[Any]]:
+        """Read a file through a temporary copy named with ``suffix`` (the readers go by extension).
+
+        The placeholder of a failed read names the original file, not the copy.
+        """
+        basename = os.path.basename(file_path)
+        fd, tmp = tempfile.mkstemp(suffix=suffix, prefix="recallhub-renamed-")
+        os.close(fd)
+        try:
+            shutil.copyfile(file_path, tmp)
+            content, document = self._read_document(tmp)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        if placeholder_kind(content) is not None:
+            content = content.replace(os.path.basename(tmp), basename)
+        return (content, document)
+
+    def _docx_text_fallback(self, package_path: str, basename: str, error: BaseException) -> Optional[tuple[str, Optional[Any]]]:
+        """The paragraphs of a Word package Docling failed on (:func:`docx_plain_text`), or ``None``."""
+        try:
+            text = docx_plain_text(package_path)
+        except Exception as exc:  # noqa: BLE001 - the conversion error is reported instead
+            logger.warning(f"document.xml of {basename} could not be read either: {exc}")
+            return None
+        if not text:
+            return None
+        logger.warning(
+            f"{basename}: Docling failed ({read_error_cause(error)}); {len(text)} characters read from document.xml instead"
+        )
+        note_conversion(doc_reader="docx_xml")
+        return (text, None)
+
     def _ocr_office_pictures(self, file_path: str) -> str:
         """OCR text of the pictures embedded in an Office package, in the order of their names.
 
@@ -3737,13 +4254,32 @@ class DocumentIngestionPipeline:
         through the image reader, so the noise gate and the OCR settings apply.
 
         Args:
-            file_path: The ``.docx`` file.
+            file_path: The ``.docx`` / ``.pptx`` file.
 
         Returns:
             The pictures' text separated by rules; empty when no picture has text.
         """
+        return self._ocr_pictures(ooxml_media_images(file_path), os.path.basename(file_path), "office_pictures")
+
+    def _ocr_picture_blobs(self, basename: str, pictures: List[tuple[str, bytes]]) -> str:
+        """OCR text of ``pictures`` (``(name, bytes)``) of the document ``basename``, in that order.
+
+        Each picture goes through the image reader, so the noise gate and the OCR settings
+        apply. Pictures without text (photos, logos) add nothing.
+
+        Args:
+            basename: The document's file name, for the log.
+            pictures: The pictures' names (their suffix picks the image reader) and bytes.
+
+        Returns:
+            The pictures' text separated by rules; empty when no picture has text.
+        """
+        return self._ocr_pictures(pictures, basename, "office_pictures")
+
+    def _ocr_pictures(self, images: List[Tuple[str, bytes]], basename: str, fallback: str) -> str:
+        """OCR text of ``images`` (``(name, bytes)`` pairs); ``fallback`` is recorded as ``ocr_fallback``."""
         parts: List[str] = []
-        for name, data in ooxml_media_images(file_path):
+        for name, data in images:
             fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(name)[1].lower(), prefix="recallhub-picture-")
             os.close(fd)
             try:
@@ -3751,7 +4287,7 @@ class DocumentIngestionPipeline:
                     handle.write(data)
                 text, _ = self._read_document(tmp)
             except Exception as exc:  # noqa: BLE001 - one unreadable picture must not fail the document
-                logger.warning(f"Could not OCR {name} of {os.path.basename(file_path)}: {exc}")
+                logger.warning(f"Could not OCR {name} of {basename}: {exc}")
                 continue
             finally:
                 if os.path.exists(tmp):
@@ -3760,9 +4296,39 @@ class DocumentIngestionPipeline:
             if text and placeholder_kind(text) is None:
                 parts.append(text)
         if parts:
-            logger.info(f"{os.path.basename(file_path)}: text of {len(parts)} embedded picture(s) read with OCR")
-            note_conversion(ocr_fallback="office_pictures")
+            logger.info(f"{basename}: text of {len(parts)} embedded picture(s) read with OCR")
+            note_conversion(ocr_fallback=fallback)
         return "\n\n---\n\n".join(parts)
+
+    def _salvage_truncated_package(self, file_path: str, error: BaseException) -> Optional[str]:
+        """Text of the parts that survive in a cut-off Office package; ``None`` when it is not one.
+
+        Called when Docling rejects a ``.pptx`` / ``.docx``. A package with a central
+        directory is not truncated, so its rejection keeps its own cause.
+
+        Args:
+            file_path: The rejected file.
+            error: Docling's exception, for the log.
+
+        Returns:
+            The salvaged text, or ``None`` when the file is a complete zip or nothing survived.
+        """
+        import zipfile
+
+        if zipfile.is_zipfile(file_path):
+            return None
+        basename = os.path.basename(file_path)
+        try:
+            text, note = truncated_ooxml_text(file_path)
+        except TruncatedPackageError as exc:
+            logger.warning(f"{basename} is a cut-off package and nothing could be salvaged: {exc}")
+            return None
+        except Exception as exc:  # noqa: BLE001 - the salvage must not hide the conversion's cause
+            logger.warning(f"{basename}: salvage of the cut-off package failed: {exc}")
+            return None
+        logger.warning(f"{basename} is a cut-off package (Docling: {read_error_cause(error)}); salvaged {note}")
+        note_conversion(ooxml_repair="truncated")
+        return text
 
     # -- Legacy and container formats (law-firm corpora, docs/26) ------------------------
 
@@ -3999,21 +4565,42 @@ class DocumentIngestionPipeline:
         basename = os.path.basename(file_path)
         fd, tmp = tempfile.mkstemp(suffix=suffix, prefix="recallhub-renamed-")
         os.close(fd)
+        normalised: Optional[str] = None
+        source = file_path
         try:
-            if os.path.splitext(file_path)[1].lower() in _OOXML_TEMPLATE_TYPES:
-                ooxml_template_as_document(file_path, tmp)
+            if suffix in ('.docx', '.xlsx', '.pptx') and has_backslash_member_names(file_path):
+                # The practice software's packages under a .doc name have the same backslash
+                # member names as its .docx files
+                fd, normalised = tempfile.mkstemp(suffix=suffix, prefix="recallhub-ooxml-")
+                os.close(fd)
+                renamed = normalise_ooxml_member_names(file_path, normalised)
+                logger.info(f"{basename}: {renamed} package members renamed to forward slashes")
+                note_conversion(ooxml_repair="member_names")
+                source = normalised
+            # A template is told by its content type, not by its name (Brief.doc may be a .dotx)
+            template_ext = os.path.splitext(file_path)[1].lower()
+            if template_ext not in _OOXML_TEMPLATE_TYPES:
+                package_kind = ooxml_main_part_kind(source) if suffix in ('.docx', '.xlsx', '.pptx') else None
+                template_ext = package_kind if package_kind in _OOXML_TEMPLATE_TYPES else ""
+            if template_ext:
+                ooxml_template_as_document(source, tmp, template_ext)
             else:
-                shutil.copyfile(file_path, tmp)
+                shutil.copyfile(source, tmp)
             converter = create_document_converter()
             result = converter.convert(tmp)
             logger.info(f"Converted {basename} as {suffix}")
             return (export_document_markdown(result.document), result.document)
         except Exception as exc:  # noqa: BLE001 - one unreadable file must not stop the run
             logger.error(f"Failed to convert {basename} as {suffix}: {exc}")
-            return (f"[Error: Could not read file {basename}]", None)
+            if suffix == '.docx':
+                fallback = self._docx_text_fallback(tmp if os.path.exists(tmp) else source, basename, exc)
+                if fallback is not None:
+                    return fallback
+            return (f"[Error: Could not read file {basename} ({read_error_cause(exc)})]", None)
         finally:
-            if os.path.exists(tmp):
-                os.remove(tmp)
+            for path in (tmp, normalised):
+                if path and os.path.exists(path):
+                    os.remove(path)
 
     def _read_multipage_tiff(self, file_path: str, frames: int) -> tuple[str, Optional[Any]]:
         """OCR every page of a multi-page TIFF scan; pages are separated by a rule.
@@ -4049,7 +4636,9 @@ class DocumentIngestionPipeline:
                         page.save(tmp, "PNG", dpi=save_dpi) if save_dpi else page.save(tmp, "PNG")
                         converter = create_image_converter(image_path=tmp)
                         result = converter.convert(tmp)
-                        text = export_document_markdown(result.document).strip()
+                        self._recover_image_text(result.document, tmp)
+                        # "<!-- image -->" alone is no page text
+                        text = strip_markdown_images(export_document_markdown(result.document)).strip()
                     except Exception as exc:  # noqa: BLE001 - keep the other pages
                         failed += 1
                         logger.warning(f"OCR failed for page {index} of {basename}: {exc}")
@@ -4102,6 +4691,18 @@ class DocumentIngestionPipeline:
         if magic[:4] == _ZIP_MAGIC:
             logger.info(f"{basename} is a .docx container under a .doc name")
             return self._read_renamed_office_file(file_path, ".docx")
+        if magic[:2] == WORD2_MAGIC:
+            # Word 1.x/2.x for Windows: no OLE container; antiword returns nothing for them
+            try:
+                text = word2_binary_text(file_path)
+            except WordBinaryError as exc:
+                logger.warning(f"{basename} looks like a Word 2 file but cannot be read: {exc}")
+                return (f"[Error: Could not read file {basename} (Word 2 file: {exc})]", None)
+            if not text:
+                return (f"[Document: {basename} - no text content]", None)
+            logger.info(f"Read {basename} as a Word 2 for Windows file ({len(text)} characters)")
+            note_conversion(doc_reader="word2_binary")
+            return (text, None)
         if magic != _OLE2_MAGIC:
             # RTF, HTML, plain or DOS-era text saved as .doc
             content, document = self._read_sniffed_text_file(file_path)
@@ -4118,13 +4719,34 @@ class DocumentIngestionPipeline:
                     return (f"[Error: Could not read file {basename} (not a Word document and not text)]", None)
             return (content, document)
 
+        # The OLE2 container may hold something other than a Word document (docs/26)
+        container_kind, detail = ole_container_kind(file_path)
+        if container_kind == "encrypted_package":
+            logger.warning(f"{basename} is a password-protected Office package")
+            return (f"[Error: Could not read file {basename} ({ENCRYPTED_MARKER} Office package)]", None)
+        if container_kind == "word_encrypted":
+            logger.warning(f"{basename} is a password-protected Word document")
+            return (f"[Error: Could not read file {basename} ({ENCRYPTED_MARKER} Word document)]", None)
+        if container_kind == "msg":
+            logger.info(f"{basename} is an Outlook message under a Word name")
+            return self._read_msg_file(file_path)
+        if container_kind == "excel":
+            logger.info(f"{basename} is an Excel workbook under a Word name")
+            return self._read_xls_file(file_path)
+        if container_kind == "damaged":
+            logger.warning(f"{basename} is a damaged or truncated OLE2 file: {detail}")
+            return (f"[Error: Could not read file {basename} (damaged or truncated OLE2 file: {detail})]", None)
+        if container_kind != "word":
+            logger.warning(f"{basename} is an OLE2 file of another application ({container_kind}: {detail})")
+            return (f"[Error: Could not read file {basename} (OLE2 file of another application, streams: {detail or container_kind})]", None)
+
         if not shutil.which('antiword'):
             logger.warning("antiword not installed; Word 97-2003 files cannot be read (apt-get install antiword)")
             return (f"[Error: Could not read file {basename} (antiword is not installed)]", None)
         try:
             result = subprocess.run(
                 ['antiword', '-w', '0', file_path],
-                capture_output=True, text=True, timeout=60
+                capture_output=True, timeout=60
             )
         except subprocess.TimeoutExpired:
             logger.warning(f"antiword timed out for {basename}")
@@ -4132,12 +4754,18 @@ class DocumentIngestionPipeline:
         except Exception as e:  # noqa: BLE001 - one unreadable file must not stop the run
             logger.warning(f"antiword failed for {basename}: {e}")
             return (f"[Error: Could not read file {basename} ({read_error_cause(e)})]", None)
-        if result.returncode == 0 and result.stdout.strip():
+        # antiword writes UTF-8 but lets an unmapped character through as a raw byte (11 of
+        # 391 files of one corpus): decode with replacement instead of failing the file
+        stdout = _antiword_output(result.stdout)
+        stderr = _antiword_output(result.stderr)
+        if result.returncode == 0 and stdout.strip():
             logger.info(f"Successfully extracted .doc with antiword: {basename}")
-            return (result.stdout.strip(), None)
+            return (stdout.strip(), None)
         if result.returncode == 0:
-            return (f"[Document: {basename} - no text content]", None)
-        reason = " ".join((result.stderr or "").split())[:200] or f"exit code {result.returncode}"
+            # No body text: a form or letterhead whose words sit in text boxes or headers,
+            # or pasted scans and photos (docs/26, follow-up 2026-11-19)
+            return self._read_doc_without_body_text(file_path, basename)
+        reason = " ".join(stderr.split())[:200] or f"exit code {result.returncode}"
         reason = reason.replace("[", "(").replace("]", ")")
         # antiword rejects small Word 6/95 files ("the text stream of this file is too small
         # to handle"): read the text from the WordDocument stream instead
@@ -4154,6 +4782,74 @@ class DocumentIngestionPipeline:
         logger.info(f"Read {basename} with the Word binary reader (antiword: {reason})")
         note_conversion(doc_reader="word_binary")
         return (text, None)
+
+    def _read_doc_without_body_text(self, file_path: str, basename: str) -> tuple[str, Optional[Any]]:
+        """Text of a Word binary whose main story is empty: its text boxes and its pictures.
+
+        Of the 66 such files of one corpus (antiword exit 0, no output) 15 held JPEG or PNG
+        scans and photos, others were forms laid out in text boxes (docs/26, follow-up
+        2026-11-19); the rest are empty templates and letterheads. Both sources are read
+        and joined; the headers (page numbers, letterheads) are not.
+        """
+        try:
+            text = word_binary_text(file_path)
+        except Exception as exc:  # noqa: BLE001 - the pictures may still carry the text
+            logger.debug(f"Word binary reader found no text in {basename}: {exc}")
+            text = ""
+        if text:
+            logger.info(f"Read {basename} from its text boxes ({len(text)} characters)")
+            note_conversion(doc_reader="word_binary_stories")
+        picture_text = self._ocr_pictures(ole_embedded_images(file_path), basename, "word_binary_pictures")
+        parts = [part for part in (text, picture_text) if part]
+        if parts:
+            return ("\n\n---\n\n".join(parts), None)
+        return (f"[Document: {basename} - no text content]", None)
+
+    def _read_ppt_file(self, file_path: str) -> tuple[str, Optional[Any]]:
+        """Text of a PowerPoint 97-2003 ``.ppt`` file, by content rather than by name.
+
+        Docling reads ``.pptx`` only, so an OLE2 deck goes to the record-stream reader
+        (``ppt_binary_text``); a ``.pptx`` package under a ``.ppt`` name goes to Docling
+        through a renamed copy. A deck without any text (photo decks of a client's
+        ``Fotos`` folder) has its pictures read with OCR, like a picture-only ``.docx``.
+
+        Args:
+            file_path: Path to the file.
+
+        Returns:
+            Tuple of (text, None), or of (markdown, DoclingDocument) for a ``.pptx``
+            package; an ``[Error: …]`` placeholder when unreadable.
+        """
+        basename = os.path.basename(file_path)
+        try:
+            with open(file_path, "rb") as handle:
+                magic = handle.read(8)
+        except OSError as exc:
+            logger.error(f"Failed to open {basename}: {exc}")
+            return (f"[Error: Could not read file {basename} ({read_error_cause(exc)})]", None)
+        if magic[:4] == _ZIP_MAGIC:
+            logger.info(f"{basename} is a .pptx package under a .ppt name")
+            return self._read_renamed_office_file(file_path, ".pptx")
+        if magic != _OLE2_MAGIC:
+            logger.warning(f"{basename} is neither a PowerPoint 97-2003 file nor a .pptx package")
+            return (f"[Error: Could not read file {basename} (not a PowerPoint file)]", None)
+        try:
+            text = ppt_binary_text(file_path)
+        except PptBinaryError as exc:
+            logger.warning(f"PowerPoint binary reader could not read {basename}: {exc}")
+            return (f"[Error: Could not read file {basename} ({exc})]", None)
+        except Exception as exc:  # noqa: BLE001 - a damaged container must not stop the run
+            logger.warning(f"PowerPoint binary reader failed for {basename}: {exc}")
+            return (f"[Error: Could not read file {basename} ({read_error_cause(exc)})]", None)
+        note_conversion(doc_reader="ppt_binary")
+        if text:
+            logger.info(f"Read {basename} with the PowerPoint binary reader ({len(text)} characters)")
+            return (text, None)
+        picture_text = self._ocr_picture_blobs(basename, ppt_binary_pictures(file_path))
+        if picture_text:
+            return (picture_text, None)
+        logger.warning(f"PowerPoint file has no text content: {basename}")
+        return (f"[Document: {basename} - no text content]", None)
 
     def _read_msg_file(self, file_path: str) -> tuple[str, Optional[Any]]:
         """
@@ -5326,7 +6022,9 @@ class DocumentIngestionPipeline:
         # (F26), "[Document: … - no text content]" an empty file (no chunks, no warning)
         kind = placeholder_kind(document_content)
         if kind == "error":
-            raise UnreadableFileError(document_content.strip().strip("[]"))
+            raise UnreadableFileError(
+                document_content.strip().strip("[]"), error_type=placeholder_error_type(document_content)
+            )
         if kind == "empty":
             logger.info(f"No text in {os.path.basename(file_path)}: {document_content.strip()}")
             return IngestionResult(
@@ -5336,6 +6034,7 @@ class DocumentIngestionPipeline:
                 processing_time_ms=(datetime.now() - start_time).total_seconds() * 1000,
                 errors=["No chunks created"],
                 ocr_fallback=ocr_fallback,
+                no_text=no_text_kind(document_content),
             )
 
         # OCR repair and chunking run on a thread under the post-conversion budget: the
@@ -5387,9 +6086,11 @@ class DocumentIngestionPipeline:
             )
 
         if not chunks:
-            # An empty file is expected (Outlook ATT0000x.txt placeholders, frameset pages):
-            # no warning for those, one for a file whose text produced no chunk (F9)
-            log = logger.info if not (document_content or "").strip() else logger.warning
+            # An empty file is expected (Outlook ATT0000x.txt placeholders, frameset pages,
+            # pictures without text): recorded as empty_file, no warning. A file whose text
+            # produced no chunk is the no_chunks failure (F9), with a warning
+            no_text = "empty" if not strip_markdown_images(document_content).strip() else None
+            log = logger.info if no_text else logger.warning
             log(f"No chunks created for {document_title}")
             return IngestionResult(
                 document_id="",
@@ -5400,6 +6101,7 @@ class DocumentIngestionPipeline:
                 ).total_seconds() * 1000,
                 errors=["No chunks created"],
                 ocr_fallback=ocr_fallback,
+                no_text=no_text,
             )
 
         logger.info(f"Created {len(chunks)} chunks")
@@ -5690,6 +6392,7 @@ class DocumentIngestionPipeline:
         slot_limit: Optional[Callable[[], int]] = None,
         media_config: Optional[Dict[str, Any]] = None,
         media_only: bool = False,
+        image_policy: Optional[Dict[str, Any]] = None,
     ) -> List[IngestionResult]:
         """Ingest all documents; see :meth:`_ingest_documents_impl` for the arguments.
 
@@ -5712,6 +6415,7 @@ class DocumentIngestionPipeline:
                 slot_limit=slot_limit,
                 media_config=media_config,
                 media_only=media_only,
+                image_policy=image_policy,
             )
         finally:
             if token is not None:
@@ -5732,6 +6436,7 @@ class DocumentIngestionPipeline:
         slot_limit: Optional[Callable[[], int]] = None,
         media_config: Optional[Dict[str, Any]] = None,
         media_only: bool = False,
+        image_policy: Optional[Dict[str, Any]] = None,
     ) -> List[IngestionResult]:
         """
         Ingest all documents from the documents folder.
@@ -5743,6 +6448,10 @@ class DocumentIngestionPipeline:
                 and the settings.
             media_only: A media run (``retry_media``): only audio/video files are
                 processed, and they are transcribed even when the media config defers them.
+            image_policy: The performance config's ``images`` section (``min_pixels``,
+                ``min_bytes``: raster images below either are recorded as ``tiny_image``
+                without a conversion); :func:`resolve_image_policy` fills the rest from
+                INGEST_IMAGE_* and the settings.
             retry_failed_types: Error types the job asks to retry (:func:`retry_error_types`).
                 In incremental mode with a ``job_id``, files the same job already recorded in
                 ``failed_documents`` are skipped unless their error type is listed here (F23).
@@ -5784,6 +6493,10 @@ class DocumentIngestionPipeline:
         # read the module-level config, the loop reads the attribute
         self.media_config = resolve_media_config(media_config)
         update_media_config(**asdict(self.media_config))
+        # Which raster images are skipped unconverted (both loops read the attribute)
+        self.image_policy = resolve_image_policy(image_policy)
+        if self.image_policy.active:
+            logger.info(f"Tiny-image policy: {self.image_policy.describe()} (recorded as {TINY_IMAGE})")
         # Media files are deferred to a media run unless this is one or the job retries them
         defer_media = (
             self.media_config.defer and not media_only
@@ -5977,10 +6690,26 @@ class DocumentIngestionPipeline:
                 if progress_callback:
                     progress_callback(i + 1, len(document_files), file_path, 0)
                 continue
-            
+
+            loop = asyncio.get_running_loop()
+            # Raster images below the run's ImagePolicy minimum: skipped unconverted (no stats
+            # recorder on this path, so the file is attempted again by the next run)
+            if self.image_policy.active and is_raster_image_file(file_path):
+                tiny_reason = await loop.run_in_executor(
+                    self.get_executor(), tiny_image_reason, file_path, get_file_size_safe(file_path), self.image_policy
+                )
+                if tiny_reason:
+                    logger.info(f"Skipping tiny image ({tiny_reason}): {file_path}")
+                    results.append(IngestionResult(
+                        document_id="", title=os.path.basename(file_path), chunks_created=0,
+                        processing_time_ms=0, errors=[f"{TINY_IMAGE_RESULT_PREFIX} ({tiny_reason})"],
+                    ))
+                    if progress_callback:
+                        progress_callback(i + 1, len(document_files), file_path, 0)
+                    continue
+
             try:
                 # Compute file hash for content-based deduplication
-                loop = asyncio.get_running_loop()
                 content_hash = await loop.run_in_executor(
                     self.get_executor(),
                     compute_file_hash,
@@ -6123,6 +6852,8 @@ class DocumentIngestionPipeline:
         skip_image_only_pdfs = skip_image_only_pdf_enabled()
         # Media slots: transcriptions at once (each also takes a file slot below)
         media_cfg = self.media_config
+        # Raster images below these minimums are recorded as tiny_image, not converted
+        image_policy = self.image_policy
         media_slots = asyncio.Semaphore(max(1, int(media_cfg.max_concurrent)))
         media_files = sum(1 for f in document_files if is_media_file(f))
         if media_files:
@@ -6289,6 +7020,32 @@ class DocumentIngestionPipeline:
                         progress_callback(processed_count, total_files, file_path, 0)
                     return
 
+                if image_policy.active and is_raster_image_file(file_path):
+                    # A raster image below the policy's minimum (web-page furniture, icons,
+                    # e-mail signature logos): recorded as tiny_image without a conversion,
+                    # so the resumed job skips it and only retry_tiny_images picks it up
+                    tiny_reason = await loop.run_in_executor(
+                        self.get_executor(), tiny_image_reason, file_path, file_size, image_policy
+                    )
+                    if tiny_reason:
+                        logger.info(f"Skipping tiny image ({tiny_reason}): {file_path}")
+                        with results_lock:
+                            processed_count += 1
+                            results.append(failed_result(f"{TINY_IMAGE_RESULT_PREFIX} ({tiny_reason})", 0))
+                            recorder.add(stat(
+                                success=False,
+                                error_type=TINY_IMAGE,
+                                error_message=(
+                                    f"Tiny image skipped unconverted: {tiny_reason} (performance config "
+                                    f"images.min_pixels / images.min_bytes); a run with retry_tiny_images "
+                                    f"converts it"
+                                ),
+                                classification=TINY_IMAGE,
+                            ))
+                        if progress_callback:
+                            progress_callback(processed_count, total_files, file_path, 0)
+                        return
+
                 try:
                     # Compute file hash with timeout (reuse from previous attempt if retrying)
                     if not content_hash:
@@ -6393,10 +7150,19 @@ class DocumentIngestionPipeline:
                             existing_hashes[content_hash] = os.path.basename(file_path)
                         processed_count += 1
 
-                        # Track stats - mark as failure if no chunks created
+                        # Track stats - mark as failure if no chunks created. A file the
+                        # reader found no text in (a photo, an empty attachment) is an
+                        # expected outcome, counted on its own and never retried
+                        no_text = getattr(result, "no_text", None) if result else None
                         if is_no_chunks and image_only:
                             error_type = "image_only_pdf"
                             error_message = f"Image-only PDF: OCR found no text ({image_only_reason})"
+                        elif is_no_chunks and no_text == "image":
+                            error_type = IMAGE_NO_TEXT
+                            error_message = "Image without text: OCR found nothing (a photo, logo or drawing)"
+                        elif is_no_chunks and no_text == "empty":
+                            error_type = EMPTY_FILE
+                            error_message = "File without text: nothing to index"
                         elif is_no_chunks:
                             error_type = "no_chunks"
                             error_message = "No content extracted from document"
@@ -6413,7 +7179,7 @@ class DocumentIngestionPipeline:
                             error_message = None
                         file_stat = stat(
                             chunks_created=chunks_created,
-                            success=not is_no_chunks,
+                            success=not is_no_chunks or error_type in NO_TEXT_OUTCOMES,
                             error_type=error_type,
                             error_message=error_message,
                             classification=map_error_type_to_classification(error_type, chunks_created),
@@ -6557,10 +7323,11 @@ class DocumentIngestionPipeline:
                     with results_lock:
                         results.append(failed_result(error_msg, processing_time))
                         processed_count += 1
-                        # Track error stats
+                        # Track error stats; a password-protected file is "encrypted", which
+                        # no retry flag redoes (UnreadableFileError.error_type)
                         recorder.add(stat(
                             processing_time_ms=processing_time,
-                            error_type="error",
+                            error_type=getattr(e, "error_type", None) or "error",
                             error_message=error_msg[:500],  # Truncate long error messages
                             classification="error",
                         ))
@@ -6836,12 +7603,28 @@ class DocumentIngestionPipeline:
             # a retry inside the same run resolved a timeout row: 136 of the 155 open timeout
             # records of one corpus belonged to files a later run had indexed
             # (docs/27-POST_INGESTION_VALIDATION.md).
-            succeeded = sorted({stat.file_path for stat in file_stats if stat.success and stat.file_path})
+            succeeded = sorted({
+                stat.file_path for stat in file_stats
+                if stat.success and stat.file_path and stat.error_type not in NO_TEXT_OUTCOMES
+            })
             if succeeded:
                 await failed_collection.update_many(
                     {"file_path": {"$in": succeeded}, "resolved": {"$ne": True}},
                     {"$set": {"resolved": True, "resolved_at": datetime.now().isoformat(),
                               "resolution": "a later attempt indexed the file", "retry_pending": False}},
+                )
+            # A file read again and found to hold no text (a photo, an empty attachment) is
+            # not a failure either: its open no_chunks rows (a retry_no_chunks run, or the
+            # rows the placeholder purge wrote) are closed the same way
+            without_text = sorted({
+                stat.file_path for stat in file_stats
+                if stat.success and stat.file_path and stat.error_type in NO_TEXT_OUTCOMES
+            })
+            if without_text:
+                await failed_collection.update_many(
+                    {"file_path": {"$in": without_text}, "resolved": {"$ne": True}},
+                    {"$set": {"resolved": True, "resolved_at": datetime.now().isoformat(),
+                              "resolution": "a later attempt found no text in the file", "retry_pending": False}},
                 )
             if recorded:
                 logger.warning(f"Recorded {recorded} failed documents to database")

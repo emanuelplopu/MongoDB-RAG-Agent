@@ -33,7 +33,7 @@ from backend.services.ingestion_schedule import ConcurrencyController, Effective
 from backend.services.activity_events import (
     ActivityEventRecorder, get_activity_recorder, set_activity_recorder
 )
-from backend.services.ingestion_counters import apply_stats_counts
+from backend.services.ingestion_counters import apply_stats_counts, counts_as_failure
 from backend.services.telemetry_store import SHARED_TENANT
 from src.ingestion import telemetry_hooks
 from src.ingestion.progress import progress_percent_label
@@ -455,6 +455,8 @@ class IngestionWorker:
             "no_chunks_files": 0,
             "timeout_files": 0,
             "error_files": 0,
+            "images_without_text": 0,
+            "empty_files": 0,
             # Phase tracking
             "phase": "initializing",
             "phase_message": "Starting ingestion...",
@@ -676,6 +678,7 @@ class IngestionWorker:
                     slot_limit=slot_controller.current,
                     media_config=self.config.get("media"),
                     media_only=bool(config.get("retry_media")),
+                    image_policy=self.config.get("images"),
                 )
             finally:
                 config_refresh.cancel()
@@ -691,9 +694,11 @@ class IngestionWorker:
                 1 for r in results
                 if r.errors and len(r.errors) > 0 and "Duplicate of:" in r.errors[0]
             )
+            # Deliberate skips (duplicates, deferred media, tiny images) are not failures, and
+            # neither is a file read fine but without text (a photo, an empty attachment stub)
             actual_failures = sum(
                 1 for r in results
-                if r.errors and len(r.errors) > 0 and "Duplicate of:" not in r.errors[0]
+                if counts_as_failure(r.errors) and not getattr(r, "no_text", None)
             )
             
             # Update final status
@@ -892,6 +897,8 @@ class IngestionWorker:
                     "concurrency_slots": state.get("concurrency_slots"),
                     "timeout_files": state.get("timeout_files", 0),
                     "error_files": state.get("error_files", 0),
+                    "images_without_text": state.get("images_without_text", 0),
+                    "empty_files": state.get("empty_files", 0),
                     # Per-extension queue and progress (the shared ETA estimator reads them)
                     "queue_by_extension": state.get("queue_by_extension"),
                     "processed_by_extension": state.get("processed_by_extension"),

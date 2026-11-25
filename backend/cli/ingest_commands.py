@@ -314,13 +314,14 @@ if HAS_TYPER:
         rows = [
             ["Open failure records", _fmt_int(result.open_records)],
             ["  file is in the index", _fmt_int(result.indexed_files)],
+            ["  owner or sidecar file (~$, ._)", _fmt_int(result.sidecar_files)],
             ["  repeated record of a later attempt", _fmt_int(result.repeated_records)],
             ["Records resolved", _fmt_int(result.resolved)],
             ["Open records afterwards", _fmt_int(result.remaining_open)],
         ]
         rows += [[f"  {error_type}", _fmt_int(count)] for error_type, count in sorted(result.by_error_type.items())]
         fmt.print_table(["Metric", "Value"], rows, title=f"Tidy failure records - {database} ({mode})")
-        if result.dry_run and (result.indexed_files or result.repeated_records):
+        if result.dry_run and (result.indexed_files or result.sidecar_files or result.repeated_records):
             console.print("[dim]Dry run: pass --apply to resolve them.[/dim]")
 
 

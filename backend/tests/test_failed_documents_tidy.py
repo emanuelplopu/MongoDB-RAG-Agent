@@ -50,6 +50,9 @@ def _db() -> dict:
         {"_id": 4, "file_path": "/m/Honorarnote.docx", "error_type": "no_chunks", "failed_at": "2026-10-28T10:00:00", "resolved": False},
         {"_id": 5, "file_path": "/m/Foto.jpg", "error_type": "no_chunks", "failed_at": "2026-10-28T10:00:00", "resolved": False},
         {"_id": 6, "file_path": "/m/Alt.pdf", "error_type": "error", "failed_at": "2026-10-25T10:00:00", "resolved": True, "resolution": "retry 1 ended as success"},
+        # Owner files and AppleDouble forks: skipped at discovery since 2026-11-11, so no run resolves them
+        {"_id": 7, "file_path": "/m/P-42-14/~$norarnote.doc", "error_type": "error", "failed_at": "2026-11-11T23:00:01", "resolved": False},
+        {"_id": 8, "file_path": "/m/._Vertrag.rtf", "error_type": "error", "failed_at": "2026-10-27T10:00:00", "resolved": False},
     ])
     return {"failed_documents": failed, "documents": _Documents(["/m/Kommentar.pdf", "/m/Anderes.pdf"])}
 
@@ -57,20 +60,22 @@ def _db() -> dict:
 async def test_dry_run_counts_without_changing() -> None:
     db = _db()
     result = await tidy_failed_documents(db)
-    assert (result.open_records, result.indexed_files, result.repeated_records, result.resolved) == (5, 1, 1, 0)
+    assert (result.open_records, result.indexed_files, result.sidecar_files, result.repeated_records, result.resolved) == (7, 1, 2, 1, 0)
     assert result.remaining_open == 3 and result.by_error_type == {"error": 1, "no_chunks": 2}
-    assert [r.get("resolved") for r in db["failed_documents"].rows] == [False, False, False, False, False, True]
+    assert [r.get("resolved") for r in db["failed_documents"].rows] == [False, False, False, False, False, True, False, False]
 
 
 async def test_apply_resolves_indexed_and_repeated_records_and_keeps_the_newest() -> None:
     db = _db()
     result = await tidy_failed_documents(db, dry_run=False)
-    assert result.resolved == 2 and result.remaining_open == 3
+    assert result.resolved == 4 and result.remaining_open == 3
     rows = {r["_id"]: r for r in db["failed_documents"].rows}
     assert rows[1]["resolved"] is True and rows[1]["resolution"] == "the file is in the index"
     assert rows[2]["resolved"] is True and rows[2]["resolution"] == "repeated record of a later attempt"
     assert rows[3]["resolved"] is False, "the newest record of the read error stays open"
     assert rows[4]["resolved"] is False and rows[5]["resolved"] is False, "other error types and files are untouched"
     assert rows[6]["resolution"] == "retry 1 ended as success", "resolved records keep their history"
+    assert rows[7]["resolved"] is True and rows[8]["resolved"] is True
+    assert rows[7]["resolution"] == "owner or sidecar file, never a document (skipped at discovery)"
     again = await tidy_failed_documents(db, dry_run=False)
     assert (again.open_records, again.resolved) == (3, 0), "idempotent"

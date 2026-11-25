@@ -181,6 +181,9 @@ def fake_ole(monkeypatch):
         def exists(self, name: str) -> bool:
             return name in streams
 
+        def listdir(self):
+            return [[name] for name in streams]
+
         def openstream(self, name: str):
             return SimpleNamespace(read=lambda: streams[name])
 
@@ -210,7 +213,7 @@ def test_word_binary_errors_name_the_reason(fake_ole, monkeypatch) -> None:
     encrypted = bytearray(_word6_stream("geheim"))
     struct.pack_into("<H", encrypted, 0x0A, 0x0100)
     fake_ole["WordDocument"] = bytes(encrypted)
-    with pytest.raises(fallbacks.WordBinaryError, match="encrypted"):
+    with pytest.raises(fallbacks.WordBinaryError, match="password-protected"):
         fallbacks.word_binary_text("x.doc")
     fake_ole["WordDocument"] = b"\x00" * 16
     with pytest.raises(fallbacks.WordBinaryError, match="too short"):
@@ -241,4 +244,5 @@ def test_doc_reader_falls_back_to_the_word_binary_reader(tmp_path: Path, monkeyp
     fake_ole.clear()
     content, _ = pipeline._read_doc_file(str(path))
     assert ingest.placeholder_kind(content) == "error"
-    assert "antiword: I'm afraid the text stream of this file is too small to handle." in content and "no WordDocument stream" in content
+    # A container without a WordDocument stream never reaches antiword (2026-11-19)
+    assert "OLE2 file of another application" in content

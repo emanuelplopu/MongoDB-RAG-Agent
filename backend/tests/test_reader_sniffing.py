@@ -62,6 +62,7 @@ def test_doc_with_unknown_binary_content_is_an_error_not_a_document(pipeline, tm
 def test_antiword_failure_carries_its_reason(pipeline, tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "ALT_169.DOC"
     path.write_bytes(OLE2 + b"\x00" * 600)
+    monkeypatch.setattr(ingest, "ole_container_kind", lambda p: ("word", ""))  # the stream check is tested on its own
     monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/antiword")
     monkeypatch.setattr(
         subprocess, "run",
@@ -76,6 +77,7 @@ def test_antiword_failure_carries_its_reason(pipeline, tmp_path: Path, monkeypat
 def test_antiword_success_and_empty_output(pipeline, tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "Klage.doc"
     path.write_bytes(OLE2 + b"\x00" * 600)
+    monkeypatch.setattr(ingest, "ole_container_kind", lambda p: ("word", ""))
     monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/antiword")
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="Klage wegen EUR 5.000,--\n", stderr=""))
     assert pipeline._read_doc_file(str(path)) == ("Klage wegen EUR 5.000,--", None)
@@ -87,6 +89,7 @@ def test_antiword_success_and_empty_output(pipeline, tmp_path: Path, monkeypatch
 def test_word_binary_without_antiword_is_reported_as_such(pipeline, tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "Klage.doc"
     path.write_bytes(OLE2 + b"\x00" * 600)
+    monkeypatch.setattr(ingest, "ole_container_kind", lambda p: ("word", ""))
     monkeypatch.setattr("shutil.which", lambda name: None)
     content, _ = pipeline._read_doc_file(str(path))
     assert content == "[Error: Could not read file Klage.doc (antiword is not installed)]"
@@ -125,7 +128,8 @@ class _Failing:
 def test_failed_docx_conversion_reports_the_cause_and_stores_nothing(pipeline, tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(ingest, "create_document_converter", lambda *a, **k: _Failing())
     path = tmp_path / "Gerichtskostennote.docx"
-    path.write_bytes(b"PK plain ascii bytes that a text read would accept")
+    # A zip signature, so the package reader runs (text under a .docx name is read as text since 2026-11-19)
+    path.write_bytes(bytes.fromhex("504b0304") + b" plain ascii bytes that a text read would accept")
     content, document = pipeline._read_document(str(path))
     assert document is None and ingest.placeholder_kind(content) == "error"
     assert content.startswith("[Error: Could not read file Gerichtskostennote.docx (KeyError: ")

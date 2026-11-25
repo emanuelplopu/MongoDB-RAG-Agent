@@ -27,7 +27,7 @@ from backend.routers.auth import require_admin, UserResponse
 from backend.routers.backup import trigger_post_ingestion_backup
 from backend.services.activity_events import get_activity_recorder
 from backend.services.file_registry import FileRegistryService
-from backend.services.ingestion_counters import apply_stats_counts
+from backend.services.ingestion_counters import apply_stats_counts, counts_as_failure
 from backend.services.ingestion_eta import count_by_extension, extension_of, job_eta
 from backend.services.ingestion_schedule import ConcurrencyController, EffectiveLimits
 from backend.services.worker_liveness import choose_ui_job_runner
@@ -444,9 +444,12 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
     retry_errors = config.get("retry_errors", False) if config else False
     retry_no_chunks = config.get("retry_no_chunks", False) if config else False
     retry_media = bool(config.get("retry_media", False)) if config else False
+    retry_tiny_images = bool(config.get("retry_tiny_images", False)) if config else False
     skip_image_only_pdfs = config.get("skip_image_only_pdfs", False) if config else False
     
-    any_retry_filter = retry_image_only_pdfs or retry_timeouts or retry_errors or retry_no_chunks or retry_media
+    any_retry_filter = (
+        retry_image_only_pdfs or retry_timeouts or retry_errors or retry_no_chunks or retry_media or retry_tiny_images
+    )
     from src.ingestion.ingest import is_media_file
     profile_key = config.get("profile", "") if config else ""
     
@@ -578,6 +581,8 @@ async def _build_pending_files_queue(pipeline, incremental: bool = True, job_sta
                     classifications_to_retry.append(FileClassification.NO_CHUNKS.value)
                 if retry_media:
                     classifications_to_retry.append(FileClassification.MEDIA_DEFERRED.value)
+                if retry_tiny_images:
+                    classifications_to_retry.append(FileClassification.TINY_IMAGE.value)
                 
                 for path, entry in registry_by_path.items():
                     if entry.get("classification") in classifications_to_retry:
@@ -1056,6 +1061,9 @@ async def run_ingestion(
         "timeout_files": 0,  # Files that timed out
         "error_files": 0,  # Files with processing errors
         "media_deferred_files": 0,  # Audio/video left to a media run (retry_media)
+        "images_without_text": 0,  # Images whose OCR found no text (not failures)
+        "empty_files": 0,  # Files without any text (not failures)
+        "tiny_images": 0,  # Raster images below images.min_pixels / min_bytes, skipped unconverted
         "avg_processing_time_ms": 0.0,
         "total_size_bytes": 0,
         "files_per_hour": 0.0,
@@ -1289,6 +1297,8 @@ async def run_ingestion(
         # INGEST_MEDIA_* / the settings) and whether this is a media run (retry_media)
         media_config = perf_config.get("media")
         media_only = bool(config.get("retry_media"))
+        # Raster images below the stored images section's minimums are skipped as tiny_image
+        image_policy = perf_config.get("images")
 
         logger.info(
             f"Running ingestion with max_concurrent_files={max_concurrent}, "
@@ -1353,6 +1363,7 @@ async def run_ingestion(
                 slot_limit=slot_controller.current,
                 media_config=media_config,
                 media_only=media_only,
+                image_policy=image_policy,
             )
         finally:
             config_refresh.cancel()
@@ -1367,9 +1378,11 @@ async def run_ingestion(
             1 for r in results 
             if r.errors and len(r.errors) > 0 and "Duplicate of:" in r.errors[0]
         )
+        # Deliberate skips (duplicates, deferred media, tiny images) are not failures, and
+        # neither is a file read fine but without text (a photo, an empty attachment stub)
         actual_failures = sum(
-            1 for r in results 
-            if r.errors and len(r.errors) > 0 and "Duplicate of:" not in r.errors[0]
+            1 for r in results
+            if counts_as_failure(r.errors) and not getattr(r, "no_text", None)
         )
         
         # Calculate extended metrics from ingestion_stats
@@ -1401,6 +1414,9 @@ async def run_ingestion(
             timeout_files=extended_metrics.get("timeout", 0),
             error_files=extended_metrics.get("error", 0),
             media_deferred_files=extended_metrics.get("media_deferred", 0),
+            images_without_text=extended_metrics.get("image_no_text", 0),
+            empty_files=extended_metrics.get("empty_file", 0),
+            tiny_images=extended_metrics.get("tiny_image", 0),
             avg_processing_time_ms=extended_metrics.get("avg_processing_time_ms", 0),
             total_size_bytes=extended_metrics.get("total_size_bytes", 0),
             files_per_hour=files_per_hour,
@@ -1848,6 +1864,9 @@ async def list_ingestion_runs(
             timeout_files=doc.get("timeout_files", 0),
             error_files=doc.get("error_files", 0),
             media_deferred_files=doc.get("media_deferred_files", 0),
+            images_without_text=doc.get("images_without_text", 0),
+            empty_files=doc.get("empty_files", 0),
+            tiny_images=doc.get("tiny_images", 0),
             avg_processing_time_ms=doc.get("avg_processing_time_ms", 0.0),
             total_size_bytes=doc.get("total_size_bytes", 0),
             files_per_hour=doc.get("files_per_hour", 0.0),

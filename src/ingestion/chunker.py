@@ -82,6 +82,11 @@ def furniture_serializer_params() -> Optional[Any]:
     return provider.get_serializer(DoclingDocument(name="probe")).params
 
 
+def markdown_without_images(markdown: Optional[str]) -> str:
+    """The Markdown without Docling's picture placeholders (``<!-- image -->``)."""
+    return (markdown or "").replace("<!-- image -->", "")
+
+
 class ChunkingDeadlineExceeded(RuntimeError):
     """Chunking ran past the deadline it was given (see :func:`chunking_deadline`)."""
 
@@ -437,7 +442,9 @@ class DoclingHybridChunker:
         metadata: Optional[Dict[str, Any]],
         docling_doc: Optional[DoclingDocument],
     ) -> List[DocumentChunk]:
-        if not content.strip():
+        # Picture placeholders are no content: a document of pictures without text has none
+        text = markdown_without_images(content)
+        if not text.strip():
             return []
 
         base_metadata = {
@@ -506,6 +513,18 @@ class DoclingHybridChunker:
                 document_chunks, self.config.max_tokens, lambda t: len(self.tokenizer.encode(t)),
                 limit_tokens=self.config.embed_max_tokens,
             )
+            if not document_chunks:
+                # The HybridChunker makes no chunk of a document that holds only headings
+                # (a dated photo album, a map with its title) or only page headers/footers
+                # (the chunker ignores the furniture layer): chunk the Markdown instead, so
+                # a file with text never ends as no_chunks (docs/26, 2026-11-19)
+                text = markdown_without_images(content).strip()
+                if text:
+                    logger.info(
+                        f"HybridChunker produced no chunk for {len(text)} characters of text; "
+                        "chunking the Markdown instead"
+                    )
+                    return self._simple_fallback_chunk(text, base_metadata)
             logger.info(f"Created {len(document_chunks)} chunks using HybridChunker")
             return document_chunks
 
@@ -520,6 +539,7 @@ class DoclingHybridChunker:
         content: str,
         base_metadata: Dict[str, Any]
     ) -> List[DocumentChunk]:
+        """Sliding-window chunks of ``content`` (the Markdown), the chunker of last resort."""
         """
         Simple fallback chunking when HybridChunker can't be used.
 
